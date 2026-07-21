@@ -16,9 +16,8 @@ struct RootSidebar: View {
 
     let selectedDestination: RootTabs.SidebarDestination
     let isDrawerLayout: Bool
-    let showsDismissButton: Bool
+    let isDismissButtonEnabled: Bool
     let selectDestination: (RootTabs.SidebarDestination) -> Void
-    let selectSettingsRoute: (SettingsRoute) -> Void
     let hideSidebar: () -> Void
 
     var body: some View {
@@ -104,17 +103,10 @@ struct RootSidebar: View {
                 self.selectSidebarDestination(.settings)
             }
 
-            if self.isDrawerLayout, self.showsDismissButton {
-                Button(action: self.dismissSidebar) {
-                    Image(systemName: "xmark")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(width: 40, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(OpenClawSidebarPalette.accent)
-                .accessibilityLabel(String(localized: "Hide Sidebar"))
-                .accessibilityIdentifier(RootTabs.sidebarHideButtonAccessibilityIdentifier)
+            if self.isDrawerLayout {
+                OpenClawSidebarControlButton(action: self.dismissAction)
+                    .allowsHitTesting(self.isDismissButtonEnabled)
+                    .accessibilityHidden(!self.isDismissButtonEnabled)
             }
         }
         .padding(.leading, 8)
@@ -122,6 +114,16 @@ struct RootSidebar: View {
         .padding(.vertical, 8)
         .background(OpenClawSidebarPalette.background)
         .overlay(alignment: .bottom) { self.separator }
+    }
+
+    private var dismissAction: OpenClawSidebarHeaderAction {
+        OpenClawSidebarHeaderAction(
+            systemName: "xmark",
+            accessibilityLabel: .localized("Hide Sidebar"),
+            accessibilityIdentifier: self.isDismissButtonEnabled
+                ? RootTabs.sidebarHideButtonAccessibilityIdentifier
+                : nil,
+            action: self.dismissSidebar)
     }
 
     /// Prototype-style agent roster: up to `visibleAgentCount` rows inline

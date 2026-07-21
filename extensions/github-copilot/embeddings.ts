@@ -1,4 +1,5 @@
 // Github Copilot plugin module implements embeddings behavior.
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   buildRemoteBaseUrlPolicy,
   sanitizeAndNormalizeEmbedding,
@@ -107,7 +108,11 @@ async function discoverEmbeddingModels(params: {
   });
   try {
     if (!response.ok) {
-      const detail = await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES);
+      // Copilot requests carry a bearer token, so reflected upstream text must
+      // be sanitized independently of the operator's log-redaction setting.
+      const detail = redactToolPayloadText(
+        await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+      );
       throw new Error(`GitHub Copilot model discovery HTTP ${response.status}: ${detail}`);
     }
     const payload = await readProviderJsonResponse(response, "github-copilot.model-discovery");
@@ -249,7 +254,9 @@ async function createGitHubCopilotEmbeddingProvider(
       },
       onResponse: async (response) => {
         if (!response.ok) {
-          const detail = await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES);
+          const detail = redactToolPayloadText(
+            await readResponseTextLimited(response, COPILOT_ERROR_BODY_LIMIT_BYTES),
+          );
           throw new Error(`GitHub Copilot embeddings HTTP ${response.status}: ${detail}`);
         }
 

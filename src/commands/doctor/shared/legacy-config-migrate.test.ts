@@ -2858,6 +2858,81 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   });
 });
 
+describe("gateway.port out-of-range repair migrate", () => {
+  it("removes gateway.port above TCP max and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536 },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed out-of-range gateway.port (65536). Valid TCP ports are 1–65535; the gateway will use the default port 18789.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("removes gateway.port zero and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 0 },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed out-of-range gateway.port (0). Valid TCP ports are 1–65535; the gateway will use the default port 18789.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("preserves valid gateway.port values", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_535 },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("preserves other gateway keys when removing the port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536, bind: "loopback" },
+    });
+
+    expect(res.config?.gateway).toEqual({ bind: "loopback" });
+    expect(res.changes.length).toBeGreaterThan(0);
+  });
+
+  it("seeds non-loopback Control UI origins with the fallback port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536, bind: "lan" },
+    });
+
+    expect(res.config?.gateway).toMatchObject({
+      bind: "lan",
+      controlUi: {
+        allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+      },
+    });
+  });
+
+  it("is idempotent for out-of-range values", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { port: 65_536 },
+    });
+    expect(first.changes.length).toBe(1);
+    expect(first.config).not.toHaveProperty("gateway");
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
+  });
+
+  it("leaves gateway.port set to 1 (valid minimum) untouched", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 1 },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+});
+
 describe("legacy model compat migrate", () => {
   it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
     const raw = {

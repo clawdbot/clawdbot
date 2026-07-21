@@ -3930,6 +3930,7 @@ export const en: TranslationMap = {
     },
     messages: {
       activity: "Activity",
+      copySelection: "Copy",
       forkFromHere: "Fork from here",
       hide: "Hide",
       hideConfirm: "Hide this message in this browser? The agent still sees it.",
@@ -4476,6 +4477,9 @@ export const en: TranslationMap = {
       wakeModeHelp: "Now triggers immediately. Next heartbeat waits for the next cycle.",
       action: "Action",
       command: "Command",
+      script: "Script",
+      readOnlyPayloadHelp:
+        "This payload was created outside Control UI. Its contents stay read-only and are preserved when you save other changes.",
       systemEvent: "Post to main timeline",
       agentTurn: "Run agent task",
       systemEventHelp: "Sends your text to the gateway main timeline (good for reminders).",

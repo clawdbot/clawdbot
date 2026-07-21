@@ -77,6 +77,8 @@ export type ConversationCapabilityProfileParams = {
   skillsSnapshot?: SkillSnapshot;
   sandboxToolPolicy?: SandboxToolPolicy;
   runtimeToolAllowlist?: string[];
+  /** Persist the runtime allowlist as real parent authority on spawned children. */
+  inheritRuntimeToolAllowlist?: boolean;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   inputProvenance?: InputProvenance;
   /** Trusted in-process completion handoff; public callers cannot set this fact. */
@@ -171,6 +173,7 @@ export type ResolvedConversationCapabilityProfile = {
     inheritedToolPolicy?: SandboxToolPolicy;
     delegated: boolean;
     requesterPolicySource: RequesterToolPolicySource;
+    runtimeToolPolicyForInheritance?: ToolPolicyLike;
     inheritancePolicies: Array<ToolPolicyLike | undefined>;
     explicitToolAllowlist: string[];
     /** Explicit config/runtime grants only; excludes built-in profile expansion. */
@@ -241,6 +244,8 @@ export function resolveConversationCapabilityProfile(
   const runtimeToolPolicy = params.runtimeToolAllowlist
     ? { allow: params.runtimeToolAllowlist }
     : undefined;
+  const runtimeToolPolicyForInheritance =
+    params.inheritRuntimeToolAllowlist === true ? runtimeToolPolicy : undefined;
   const runtimeToolAlsoAllowlist = uniqueStrings(
     (params.runtimePluginToolGrant?.toolNames ?? []).map((entry) => entry.trim()).filter(Boolean),
   );
@@ -249,12 +254,19 @@ export function resolveConversationCapabilityProfile(
     return merged.length > 0 ? merged : undefined;
   };
   const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
-  const inheritancePolicies = [
+  const explicitToolAllowlistPolicies = [
     profilePolicy,
     providerProfilePolicy,
     ...configuredOverridePolicies,
     inheritedToolPolicy,
     runtimeToolPolicy,
+  ];
+  const inheritancePolicies = [
+    profilePolicy,
+    providerProfilePolicy,
+    ...configuredOverridePolicies,
+    inheritedToolPolicy,
+    runtimeToolPolicyForInheritance,
   ];
 
   return {
@@ -351,10 +363,11 @@ export function resolveConversationCapabilityProfile(
       inheritedToolPolicy,
       delegated: requesterPolicies.delegated,
       requesterPolicySource: requesterPolicies.requesterPolicySource,
+      runtimeToolPolicyForInheritance,
       inheritancePolicies,
-      explicitToolAllowlist: collectExplicitAllowlist(inheritancePolicies),
+      explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
       explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
-      explicitToolDenylist: collectExplicitDenylist(inheritancePolicies),
+      explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
       runtimePluginToolGrant: params.runtimePluginToolGrant,
     },
   };

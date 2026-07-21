@@ -284,6 +284,30 @@ describe("qqbot config", () => {
     },
   );
 
+  it.each([
+    { value: "   ", secret: "", source: "none", configured: false },
+    { value: "  fixture-secret  ", secret: "fixture-secret", source: "env", configured: true },
+  ])(
+    "normalizes QQBOT_CLIENT_SECRET environment fallback %#",
+    ({ value, secret, source, configured }) => {
+      const cfg = { channels: { qqbot: { appId: "123456" } } } as OpenClawConfig;
+      const previous = process.env.QQBOT_CLIENT_SECRET;
+      process.env.QQBOT_CLIENT_SECRET = value;
+      try {
+        const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID);
+        expect(resolved.clientSecret).toBe(secret);
+        expect(resolved.secretSource).toBe(source);
+        expect(qqbotSetupPlugin.config.isConfigured?.(resolved, cfg)).toBe(configured);
+      } finally {
+        if (previous === undefined) {
+          delete process.env.QQBOT_CLIENT_SECRET;
+        } else {
+          process.env.QQBOT_CLIENT_SECRET = previous;
+        }
+      }
+    },
+  );
+
   it("resolves env SecretRefs on runtime resolution", () => {
     const cfg = makeQqbotSecretRefConfig();
     const previous = process.env.QQBOT_CLIENT_SECRET;

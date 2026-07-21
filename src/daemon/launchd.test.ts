@@ -57,8 +57,8 @@ const state = vi.hoisted(() => ({
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
   scheduleDetachedLaunchdRestartHandoff: vi.fn<
-    (_params: unknown) => { ok: true; value: number | undefined } | { ok: false; error: string }
-  >(() => ({ ok: true, value: 7331 })),
+    (_params: unknown) => { ok: true; value: Promise<boolean> } | { ok: false; error: string }
+  >(() => ({ ok: true, value: Promise.resolve(true) })),
 }));
 type CleanStaleGatewayProcessesOptions = {
   protectedPid?: number;
@@ -455,7 +455,7 @@ beforeEach(() => {
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
     ok: true,
-    value: 7331,
+    value: Promise.resolve(true),
   });
   vi.clearAllMocks();
 });

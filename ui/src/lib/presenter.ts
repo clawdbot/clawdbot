@@ -74,6 +74,9 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "command") {
     return `Command: ${p.argv.join(" ")}`;
   }
+  if (p.kind === "script") {
+    return `Script: ${p.script}`;
+  }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;
   if (delivery && delivery.mode !== "none") {

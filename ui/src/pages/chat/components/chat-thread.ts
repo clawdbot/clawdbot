@@ -38,6 +38,7 @@ import {
   combineSideChatComposerDraft,
 } from "../../../lib/chat/side-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { copyToClipboard } from "../../../lib/clipboard.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -787,6 +788,18 @@ function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThre
   });
 }
 
+function selectionIntersectsElement(selection: Selection | null, element: Element): boolean {
+  if (!selection || selection.isCollapsed) {
+    return false;
+  }
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    if (selection.getRangeAt(index).intersectsNode(element)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (event.composedPath().some((target) => target instanceof HTMLAnchorElement)) {
     return;
@@ -828,6 +841,10 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (!canReply && !canRewind && !canHide && !canOpenInCanvas && !canCopy && !canFork) {
     return;
   }
+
+  const selection = window.getSelection();
+  const selectedText = selectionIntersectsElement(selection, bubble) ? selection?.toString() : "";
+
   event.preventDefault();
   event.stopPropagation();
   removeReplyContextMenu();
@@ -838,6 +855,19 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
+  if (selectedText) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.copySelection"),
+      disabled: false,
+      tooltip: t("chat.messages.copySelection"),
+      onClick: () => {
+        void copyToClipboard(selectedText);
+        removeReplyContextMenu();
+      },
+    });
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
   if (canReply) {
     const replyMessageId = messageId || stableReplyMessageId(senderLabel, text);
     const replyButton = createReplyContextMenuButton(() => {

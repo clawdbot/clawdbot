@@ -1042,6 +1042,7 @@ function formatInstalledConfiguredPluginChange(params: {
 
 async function installCandidate(params: {
   candidate: DownloadableInstallCandidate;
+  config: OpenClawConfig;
   records: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
   updateChannel?: UpdateChannel;
@@ -1118,6 +1119,7 @@ async function installCandidate(params: {
     const clawhubInstallSpecLabel = sanitizeTerminalText(clawhubInstallSpec);
     const clawhubResult = await installPluginFromClawHub({
       spec: clawhubInstallSpec,
+      config: params.config,
       extensionsDir,
       env: params.env,
       expectedPluginId: candidate.pluginId,
@@ -1191,6 +1193,7 @@ async function installCandidate(params: {
   const npmInstallMode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
   let result = await installPluginFromNpmSpec({
     spec: npmInstallSpec,
+    config: params.config,
     extensionsDir,
     npmDir,
     expectedPluginId: candidate.pluginId,
@@ -1203,6 +1206,7 @@ async function installCandidate(params: {
   if (!result.ok && npmInstallMode === "install" && isPluginAlreadyExistsError(result.error)) {
     result = await installPluginFromNpmSpec({
       spec: npmInstallSpec,
+      config: params.config,
       extensionsDir,
       npmDir,
       expectedPluginId: candidate.pluginId,
@@ -2126,6 +2130,7 @@ async function repairMissingPluginInstalls(params: {
     const previousRecords = nextRecords;
     const installed = await installCandidate({
       candidate,
+      config: params.cfg,
       records: nextRecords,
       env,
       updateChannel,

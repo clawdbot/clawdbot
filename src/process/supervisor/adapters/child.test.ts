@@ -15,7 +15,11 @@ import {
 const { spawnWithFallbackMock, signalProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
   () => ({
     spawnWithFallbackMock: vi.fn(),
-    signalProcessTreeMock: vi.fn(),
+    signalProcessTreeMock: vi.fn(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        opts?.onComplete?.();
+      },
+    ),
     createWindowsOutputDecoderMock: vi.fn(() => ({
       decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
       flush: () => "",
@@ -202,13 +206,16 @@ describe("createChildAdapter", () => {
     }
 
     adapter.kill();
+    await Promise.resolve();
 
     // Detachment flag is now passed to signalProcessTree so it knows whether
     // it can safely group-kill via -pid. (#71662)
     const expectedDetached = process.platform !== "win32" && !process.env.OPENCLAW_SERVICE_MARKER;
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", {
-      detached: expectedDetached,
-    });
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(
+      4321,
+      "SIGKILL",
+      expect.objectContaining({ detached: expectedDetached }),
+    );
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
@@ -228,8 +235,13 @@ describe("createChildAdapter", () => {
     });
 
     adapter.kill();
+    await Promise.resolve();
 
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(8888, "SIGKILL", { detached: false });
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(
+      8888,
+      "SIGKILL",
+      expect.objectContaining({ detached: false }),
+    );
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
@@ -238,7 +250,12 @@ describe("createChildAdapter", () => {
     try {
       const { adapter, killMock } = await createAdapterHarness({ pid: 9999 });
       adapter.kill();
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(9999, "SIGKILL", { detached: false });
+      await Promise.resolve();
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(
+        9999,
+        "SIGKILL",
+        expect.objectContaining({ detached: false }),
+      );
       expect(killMock).toHaveBeenCalledWith("SIGKILL");
     } finally {
       delete process.env.OPENCLAW_SERVICE_MARKER;
@@ -375,7 +392,106 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("settles wait from exit state on Windows even when close never arrives", async () => {
+  it("waits for Windows tree-kill completion before forced stream settlement", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    let resolveTreeKill: (() => void) | undefined;
+    signalProcessTreeMock.mockImplementationOnce(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        resolveTreeKill = opts?.onComplete;
+      },
+    );
+
+    const stub = createStubChild(9753);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-closed",
+    });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    adapter.kill("SIGKILL");
+    stub.emitExit(null, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(stub.child.stdout?.destroyed).toBe(false);
+    expect(stub.child.stderr?.destroyed).toBe(false);
+
+    resolveTreeKill?.();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+    expect(stub.child.stdout?.destroyed).toBe(true);
+    expect(stub.child.stderr?.destroyed).toBe(true);
+  });
+
+  it("blocks Windows child close until tree-kill completion", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    let resolveTreeKill: (() => void) | undefined;
+    signalProcessTreeMock.mockImplementationOnce(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        resolveTreeKill = opts?.onComplete;
+      },
+    );
+
+    const stub = createStubChild(9754);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-closed",
+    });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    adapter.kill("SIGKILL");
+    stub.emitExit(null, "SIGKILL");
+    stub.emitClose(null, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).not.toHaveBeenCalled();
+
+    resolveTreeKill?.();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+  });
+
+  it("blocks drained Windows streams until tree-kill completion", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    let resolveTreeKill: (() => void) | undefined;
+    signalProcessTreeMock.mockImplementationOnce(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        resolveTreeKill = opts?.onComplete;
+      },
+    );
+
+    const stub = createStubChild(9755);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-closed",
+    });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    adapter.kill("SIGKILL");
+    stub.emitExit(null, "SIGKILL");
+    stub.child.stdout?.emit("end");
+    stub.child.stderr?.emit("end");
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+
+    resolveTreeKill?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+  });
+
+  it("preserves descendant output after ordinary Windows child exit", async () => {
     vi.useFakeTimers();
     setPlatform("win32");
 
@@ -391,6 +507,10 @@ describe("createChildAdapter", () => {
       });
       return { ...stub, adapter: adapterLocal };
     })();
+    const stdout = vi.fn();
+    const stderr = vi.fn();
+    adapter.onStdout(stdout);
+    adapter.onStderr(stderr);
 
     const settled = vi.fn();
     void adapter.wait().then((result) => {
@@ -398,11 +518,43 @@ describe("createChildAdapter", () => {
     });
 
     emitExit(0, null);
-    child.stdout?.emit("end");
-    child.stderr?.emit("end");
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(child.stdout?.destroyed).toBe(false);
+    expect(child.stderr?.destroyed).toBe(false);
 
+    const stdoutPipe = child.stdout as PassThrough;
+    const stderrPipe = child.stderr as PassThrough;
+    stdoutPipe.write("late stdout");
+    stderrPipe.write("late stderr");
+    stdoutPipe.end();
+    stderrPipe.end();
+    await vi.runAllTimersAsync();
+
+    expect(stdout).toHaveBeenCalledWith("late stdout");
+    expect(stderr).toHaveBeenCalledWith("late stderr");
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
+  });
+
+  it("settles ordinary Windows exit when streams drain before exit and close is missing", async () => {
+    setPlatform("win32");
+    const stub = createStubChild(9756);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "process.exit(0)"],
+      stdinMode: "pipe-closed",
+    });
+    const waitPromise = adapter.wait();
+    const settled = vi.fn();
+    void waitPromise.then(settled);
+
+    stub.child.stdout?.emit("end");
+    stub.child.stderr?.emit("end");
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+
+    stub.emitExit(0, null);
+    await expect(waitPromise).resolves.toEqual({ code: 0, signal: null });
   });
 
   it("disables detached mode in service-managed runtime", async () => {

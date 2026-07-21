@@ -976,12 +976,17 @@ export class AcpGatewayAgent implements Agent {
       return;
     }
 
-    const pending = params.runId
-      ? this.findPendingBySessionKey(params.sessionKey, params.runId)
-      : this.findUniquePendingBySessionKey(params.sessionKey);
+    const pending = this.findPendingForApproval(params);
     if (!pending) {
       return;
     }
+    const pendingToolCall = approvalEvent.toolCallId
+      ? pending.toolCalls?.get(approvalEvent.toolCallId)
+      : undefined;
+    const correlatedApprovalEvent =
+      !approvalEvent.title && pendingToolCall?.kind === "execute"
+        ? { ...approvalEvent, title: pendingToolCall.title }
+        : approvalEvent;
 
     const relay: PendingApprovalRelay = {
       approvalId: approvalEvent.approvalId,
@@ -991,7 +996,36 @@ export class AcpGatewayAgent implements Agent {
       state: "active",
     };
     this.approvalRelays.set(relay.approvalId, relay);
-    void this.runApprovalRelay(relay, approvalEvent);
+    void this.runApprovalRelay(relay, correlatedApprovalEvent);
+  }
+
+  private findPendingForApproval(params: {
+    sessionKey: string;
+    runId?: string;
+    approvalEvent: GatewayExecApprovalEvent;
+  }): PendingPrompt | undefined {
+    if (params.runId) {
+      return this.findPendingBySessionKey(params.sessionKey, params.runId);
+    }
+    const toolCallId = params.approvalEvent.toolCallId;
+    if (!toolCallId) {
+      return this.findUniquePendingBySessionKey(params.sessionKey);
+    }
+
+    let match: PendingPrompt | undefined;
+    for (const pending of this.pendingPrompts.values()) {
+      if (
+        pending.sessionKey !== params.sessionKey ||
+        pending.toolCalls?.get(toolCallId)?.kind !== "execute"
+      ) {
+        continue;
+      }
+      if (match) {
+        return undefined;
+      }
+      match = pending;
+    }
+    return match;
   }
 
   private async runApprovalRelay(

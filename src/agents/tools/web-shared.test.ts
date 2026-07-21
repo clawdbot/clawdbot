@@ -3,6 +3,7 @@
 import { MAX_TIMER_TIMEOUT_SECONDS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  normalizeCacheKey,
   readCache,
   readResponseText,
   resolvePositiveTimeoutSeconds,
@@ -49,6 +50,17 @@ function responseFromReader(params: {
     headers: new Headers({ "content-type": params.contentType ?? "text/plain; charset=utf-8" }),
   } as Response;
 }
+
+describe("web cache keys", () => {
+  it("keeps case-sensitive request components distinct in cache keys", () => {
+    const upper = normalizeCacheKey(" fetch:https://example.com/get?marker=OpenClawCase ");
+    const lower = normalizeCacheKey("fetch:https://example.com/get?marker=openclawcase");
+
+    expect(upper).toBe("fetch:https://example.com/get?marker=OpenClawCase");
+    expect(lower).toBe("fetch:https://example.com/get?marker=openclawcase");
+    expect(upper).not.toBe(lower);
+  });
+});
 
 describe("web shared timeout seconds", () => {
   it("caps timeoutSeconds at the shared timer-safe ceiling", () => {

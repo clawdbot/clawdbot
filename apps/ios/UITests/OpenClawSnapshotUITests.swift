@@ -177,6 +177,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             thenDragTo: end,
             withVelocity: .slow,
             thenHoldForDuration: 0.1)
+        self.attachScreenshot(named: "sidebar-pushed-screen-after-back-swipe")
 
         self.waitForHittable(false, of: app.buttons["RootTabs.Sidebar.Hide"])
         self.waitForHittable(true, of: appearance)
@@ -981,7 +982,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         line: UInt = #line) throws
     {
         let app = try XCTUnwrap(self.app, file: file, line: line)
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5))
+        // Start inside the exposed sidebar, not on the translated detail card.
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.72, dy: 0.5))
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
         start.press(
             forDuration: 0.1,

@@ -249,6 +249,34 @@ describe("resolveConversationCapabilityProfile", () => {
     }
   });
 
+  it("keeps runtime allowlists local unless the caller opts into inheritance", () => {
+    const localRuntimeProfile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+    });
+
+    expect(localRuntimeProfile.policy.explicitToolAllowlist).toEqual([
+      "sessions_spawn",
+      "memory_search",
+    ]);
+    expect(localRuntimeProfile.policy.explicitToolOverrideAllowlist).toEqual([
+      "sessions_spawn",
+      "memory_search",
+    ]);
+    expect(localRuntimeProfile.policy.runtimeToolPolicyForInheritance).toBeUndefined();
+
+    const inheritedRuntimeProfile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+      inheritRuntimeToolAllowlist: true,
+    });
+
+    expect(inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance).toEqual({
+      allow: ["sessions_spawn", "memory_search"],
+    });
+    expect(inheritedRuntimeProfile.policy.inheritancePolicies).toContain(
+      inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance,
+    );
+  });
+
   it("does not classify the conversation as shared from a dropped caller group id", () => {
     // Non-group session key cannot vouch for the caller-supplied group facts:
     // the trust check drops them, so scope must stay unknown instead of

@@ -1051,13 +1051,15 @@ function renderPromptSection(
   props: CronProps,
   ctx: { payloadLocked: boolean; isAgentTurn: boolean },
 ) {
+  const lockedPayloadLabel =
+    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
   const promptLabel = ctx.payloadLocked
-    ? t("cron.form.command")
+    ? lockedPayloadLabel
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.mainTimelineMessage")
       : t("cron.form.assistantTaskPrompt");
   const promptHelp = ctx.payloadLocked
-    ? undefined
+    ? t("cron.form.readOnlyPayloadHelp")
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.systemEventHelp")
       : t("cron.form.agentTurnHelp");
@@ -1096,7 +1098,7 @@ function renderPromptSection(
           <input
             id="cron-payload-kind"
             class="settings-input"
-            .value=${t("cron.form.command")}
+            .value=${lockedPayloadLabel}
             readonly
           />
         `

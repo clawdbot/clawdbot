@@ -91,7 +91,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 260,
+      "line": 261,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "System event",
       "surface": "android",
@@ -99,7 +99,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 263,
+      "line": 264,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "Thinking $it",
       "surface": "android",
@@ -107,7 +107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 264,
+      "line": 265,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "Agent turn",
       "surface": "android",
@@ -115,7 +115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 266,
+      "line": 267,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "Command",
       "surface": "android",
@@ -123,7 +123,31 @@
     },
     {
       "kind": "ui-call",
-      "line": 267,
+      "line": 269,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
+      "source": "Timeout ${it}s",
+      "surface": "android",
+      "id": "native.android.83c33792ce758e6b"
+    },
+    {
+      "kind": "ui-call",
+      "line": 270,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
+      "source": "$it tools",
+      "surface": "android",
+      "id": "native.android.bb754576303ae39a"
+    },
+    {
+      "kind": "ui-call",
+      "line": 271,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
+      "source": "Script",
+      "surface": "android",
+      "id": "native.android.43528ba5a11e44fd"
+    },
+    {
+      "kind": "ui-call",
+      "line": 273,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "Payload",
       "surface": "android",
@@ -131,7 +155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 279,
+      "line": 285,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "Account $it",
       "surface": "android",
@@ -139,7 +163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 285,
+      "line": 291,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "Off",
       "surface": "android",
@@ -147,7 +171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 286,
+      "line": 292,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "Default",
       "surface": "android",
@@ -155,7 +179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 289,
+      "line": 295,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "After $it",
       "surface": "android",
@@ -163,7 +187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 293,
+      "line": 299,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "Cooldown ${formatCronInterval(it)}",
       "surface": "android",
@@ -171,7 +195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 295,
+      "line": 301,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobDetail.kt",
       "source": "On",
       "surface": "android",
@@ -179,7 +203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 307,
+      "line": 311,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobManagement.kt",
       "source": "Automation is not due yet.",
       "surface": "android",
@@ -187,7 +211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 308,
+      "line": 312,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobManagement.kt",
       "source": "Automation is already running.",
       "surface": "android",
@@ -195,7 +219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 309,
+      "line": 313,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobManagement.kt",
       "source": "Gateway restart recovery is still in progress.",
       "surface": "android",
@@ -203,7 +227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 310,
+      "line": 314,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobManagement.kt",
       "source": "Automation has an invalid configuration.",
       "surface": "android",
@@ -211,7 +235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 311,
+      "line": 315,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobManagement.kt",
       "source": "Cron scheduler is stopped.",
       "surface": "android",
@@ -219,7 +243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 340,
+      "line": 344,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobManagement.kt",
       "source": "Automation run finished.",
       "surface": "android",
@@ -227,7 +251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 341,
+      "line": 345,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobManagement.kt",
       "source": "Automation run skipped.",
       "surface": "android",
@@ -235,7 +259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 342,
+      "line": 346,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobManagement.kt",
       "source": "Automation run failed.",
       "surface": "android",
@@ -243,7 +267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 343,
+      "line": 347,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/CronJobManagement.kt",
       "source": "Automation run finished with an unknown status.",
       "surface": "android",
@@ -2947,7 +2971,23 @@
     },
     {
       "kind": "ui-call",
-      "line": 577,
+      "line": 557,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
+      "source": "Script",
+      "surface": "android",
+      "id": "native.android.d9c4873f21d6d410"
+    },
+    {
+      "kind": "ui-call",
+      "line": 563,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
+      "source": "Script payloads are preserved unchanged. Use the CLI to edit this script.",
+      "surface": "android",
+      "id": "native.android.79ac1e41ef639f65"
+    },
+    {
+      "kind": "ui-call",
+      "line": 592,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Recent Runs",
       "surface": "android",
@@ -2955,7 +2995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 583,
+      "line": 598,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Loading",
       "surface": "android",
@@ -2963,7 +3003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 583,
+      "line": 598,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Reload",
       "surface": "android",
@@ -2971,7 +3011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 597,
+      "line": 612,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Loading recent runs…",
       "surface": "android",
@@ -2979,7 +3019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 597,
+      "line": 612,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "No recent runs yet.",
       "surface": "android",
@@ -2987,7 +3027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 619,
+      "line": 634,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "One time",
       "surface": "android",
@@ -2995,7 +3035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 620,
+      "line": 635,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Interval",
       "surface": "android",
@@ -3003,7 +3043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 621,
+      "line": 636,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Cron",
       "surface": "android",
@@ -3011,7 +3051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 622,
+      "line": 637,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "On command exit",
       "surface": "android",
@@ -3019,7 +3059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 627,
+      "line": 642,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "System event",
       "surface": "android",
@@ -3027,7 +3067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 628,
+      "line": 643,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Agent turn",
       "surface": "android",
@@ -3035,7 +3075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 629,
+      "line": 644,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Command",
       "surface": "android",
@@ -3043,7 +3083,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 639,
+      "line": 645,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
+      "source": "Script · read-only",
+      "surface": "android",
+      "id": "native.android.2e2395bd65d3a411"
+    },
+    {
+      "kind": "ui-call",
+      "line": 655,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Next heartbeat",
       "surface": "android",
@@ -3051,7 +3099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 640,
+      "line": 656,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Now",
       "surface": "android",
@@ -3059,7 +3107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 647,
+      "line": 663,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "${durationMs}ms",
       "surface": "android",
@@ -3067,7 +3115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 651,
+      "line": 667,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "No details",
       "surface": "android",
@@ -3075,7 +3123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 655,
+      "line": 671,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Delivered",
       "surface": "android",
@@ -3083,7 +3131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 656,
+      "line": 672,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Not delivered",
       "surface": "android",
@@ -3091,7 +3139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 658,
+      "line": 674,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Not requested",
       "surface": "android",
@@ -3099,7 +3147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 665,
+      "line": 681,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Issue",
       "surface": "android",
@@ -3107,7 +3155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 666,
+      "line": 682,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Skipped",
       "surface": "android",
@@ -3115,7 +3163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 667,
+      "line": 683,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt",
       "source": "Unknown",
       "surface": "android",
@@ -8845,13 +8893,21 @@
       "kind": "ui-call",
       "line": 3012,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Script",
+      "surface": "android",
+      "id": "native.android.8aed9c94ef7f917f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 3013,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Payload Text",
       "surface": "android",
       "id": "native.android.f36439e78187c554"
     },
     {
       "kind": "ui-call",
-      "line": 3042,
+      "line": 3043,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "No apps selected. Nothing forwards until you add apps.",
       "surface": "android",
@@ -8859,7 +8915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3044,
+      "line": 3045,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "$selectedCount app allowed to forward.",
       "surface": "android",
@@ -8867,7 +8923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3046,
+      "line": 3047,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "$selectedCount apps allowed to forward.",
       "surface": "android",
@@ -8875,7 +8931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3050,
+      "line": 3051,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "No apps blocked. Apps can forward unless you add blocks.",
       "surface": "android",
@@ -8883,7 +8939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3052,
+      "line": 3053,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "$selectedCount app blocked from forwarding.",
       "surface": "android",
@@ -8891,7 +8947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3054,
+      "line": 3055,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "$selectedCount apps blocked from forwarding.",
       "surface": "android",
@@ -8899,7 +8955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3080,
+      "line": 3081,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Due",
       "surface": "android",
@@ -8907,7 +8963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3085,
+      "line": 3086,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "${days}d",
       "surface": "android",
@@ -8915,7 +8971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3086,
+      "line": 3087,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "${hours}h",
       "surface": "android",
@@ -8923,7 +8979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3087,
+      "line": 3088,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "${minutes}m",
       "surface": "android",
@@ -8931,7 +8987,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3088,
+      "line": 3089,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Soon",
       "surface": "android",
@@ -8939,7 +8995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3093,
+      "line": 3094,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "None",
       "surface": "android",
@@ -20379,7 +20435,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 452,
+      "line": 457,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Request ID: %@",
       "surface": "apple",
@@ -20387,7 +20443,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 642,
+      "line": 647,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -20395,7 +20451,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 672,
+      "line": 677,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Gateway %@",
       "surface": "apple",
@@ -20403,7 +20459,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 679,
+      "line": 684,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Online",
       "surface": "apple",
@@ -20411,7 +20467,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 681,
+      "line": 686,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -20419,7 +20475,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 683,
+      "line": 688,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Attention",
       "surface": "apple",
@@ -20427,7 +20483,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 685,
+      "line": 690,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "Offline",
       "surface": "apple",
@@ -25971,7 +26027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 77,
+      "line": 76,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -25979,7 +26035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 102,
+      "line": 101,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Settings",
       "surface": "apple",
@@ -25987,7 +26043,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 116,
+      "line": 122,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -25995,7 +26051,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 207,
+      "line": 209,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Selected",
       "surface": "apple",
@@ -26003,7 +26059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 231,
+      "line": 233,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "More Agents",
       "surface": "apple",
@@ -26011,7 +26067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 334,
+      "line": 336,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Search sessions",
       "surface": "apple",
@@ -26019,7 +26075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 345,
+      "line": 347,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Clear session search",
       "surface": "apple",
@@ -26027,7 +26083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 373,
+      "line": 375,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Loading sessions",
       "surface": "apple",
@@ -26035,7 +26091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 381,
+      "line": 383,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "No recent sessions",
       "surface": "apple",
@@ -26043,7 +26099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 391,
+      "line": 393,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Recent",
       "surface": "apple",
@@ -26051,7 +26107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 407,
+      "line": 409,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "All Sessions…",
       "surface": "apple",
@@ -26059,7 +26115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 437,
+      "line": 439,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Edit Pages",
       "surface": "apple",
@@ -26067,7 +26123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 461,
+      "line": 463,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Home",
       "surface": "apple",
@@ -26075,7 +26131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 670,
+      "line": 672,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Unread",
       "surface": "apple",
@@ -26083,7 +26139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 696,
+      "line": 698,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Attention",
       "surface": "apple",
@@ -26091,7 +26147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 736,
+      "line": 738,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "New Chat",
       "surface": "apple",
@@ -26099,7 +26155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 765,
+      "line": 767,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Connection",
       "surface": "apple",
@@ -26107,7 +26163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 770,
+      "line": 772,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Online",
       "surface": "apple",
@@ -26115,7 +26171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 771,
+      "line": 773,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -26123,7 +26179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 772,
+      "line": 774,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Needs attention",
       "surface": "apple",
@@ -26131,7 +26187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 773,
+      "line": 775,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Offline",
       "surface": "apple",
@@ -26139,7 +26195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 872,
+      "line": 874,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Pinned pages stay in the sidebar. Home is always shown.",
       "surface": "apple",
@@ -26147,7 +26203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 876,
+      "line": 878,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Pages",
       "surface": "apple",
@@ -26155,7 +26211,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 883,
+      "line": 885,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Done",
       "surface": "apple",
@@ -26163,7 +26219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 922,
+      "line": 924,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Pinned",
       "surface": "apple",
@@ -26171,7 +26227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 923,
+      "line": 925,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Not pinned",
       "surface": "apple",
@@ -26179,7 +26235,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 359,
+      "line": 251,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Overview",
       "surface": "apple",
@@ -26187,7 +26243,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 387,
+      "line": 279,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Agents",
       "surface": "apple",
@@ -26195,7 +26251,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 394,
+      "line": 286,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Instances",
       "surface": "apple",
@@ -26203,7 +26259,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 405,
+      "line": 297,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Files",
       "surface": "apple",
@@ -26211,7 +26267,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 412,
+      "line": 304,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -26219,7 +26275,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 419,
+      "line": 311,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Usage",
       "surface": "apple",
@@ -26227,7 +26283,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 426,
+      "line": 318,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Automations",
       "surface": "apple",
@@ -26235,7 +26291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 517,
+      "line": 408,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -26243,7 +26299,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 523,
+      "line": 414,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Show Sidebar",
       "surface": "apple",
@@ -26251,7 +26307,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 717,
+      "line": 541,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Close canvas",
       "surface": "apple",
@@ -26259,7 +26315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 980,
+      "line": 804,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -26267,7 +26323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 980,
+      "line": 804,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -26275,7 +26331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1016,
+      "line": 840,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -26283,7 +26339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1016,
+      "line": 840,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -26291,7 +26347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1016,
+      "line": 840,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Routed on this phone",
       "surface": "apple",
@@ -30275,7 +30331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 373,
+      "line": 443,
       "path": "apps/macos/Sources/OpenClaw/CronModels.swift",
       "source": "Untitled job",
       "surface": "apple",
@@ -30451,7 +30507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 52,
+      "line": 53,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Delete…",
       "surface": "apple",
@@ -30459,7 +30515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 71,
+      "line": 72,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Enabled",
       "surface": "apple",
@@ -30467,7 +30523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 76,
+      "line": 77,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Run",
       "surface": "apple",
@@ -30475,7 +30531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 79,
+      "line": 80,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Transcript",
       "surface": "apple",
@@ -30483,15 +30539,31 @@
     },
     {
       "kind": "ui-call",
-      "line": 84,
+      "line": 85,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Edit",
       "surface": "apple",
       "id": "native.apple.4bffda5fcd7a290d"
     },
     {
+      "kind": "conditional-branch",
+      "line": 94,
+      "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
+      "source": "Edit automation",
+      "surface": "apple",
+      "id": "native.apple.919c9d3727497989"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 95,
+      "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
+      "source": "Command and script payloads are read-only in the macOS app",
+      "surface": "apple",
+      "id": "native.apple.3587c8ad6de422b3"
+    },
+    {
       "kind": "ui-call",
-      "line": 96,
+      "line": 102,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Schedule",
       "surface": "apple",
@@ -30499,7 +30571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 98,
+      "line": 104,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Auto-delete",
       "surface": "apple",
@@ -30507,7 +30579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 98,
+      "line": 104,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "after success",
       "surface": "apple",
@@ -30515,7 +30587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 101,
+      "line": 107,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Description",
       "surface": "apple",
@@ -30523,7 +30595,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 104,
+      "line": 110,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Agent",
       "surface": "apple",
@@ -30531,7 +30603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 106,
+      "line": 112,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Session",
       "surface": "apple",
@@ -30539,7 +30611,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 107,
+      "line": 113,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Wake",
       "surface": "apple",
@@ -30547,7 +30619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 108,
+      "line": 114,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Next run",
       "surface": "apple",
@@ -30555,7 +30627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 115,
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Last run",
       "surface": "apple",
@@ -30563,7 +30635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 117,
+      "line": 123,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "\\(date.formatted(date: .abbreviated, time: .standard)) · \\(relativeAge(from: date))",
       "surface": "apple",
@@ -30571,7 +30643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 123,
+      "line": 129,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Last status",
       "surface": "apple",
@@ -30579,7 +30651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 142,
+      "line": 148,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Run history",
       "surface": "apple",
@@ -30587,7 +30659,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 148,
+      "line": 154,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -30595,7 +30667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 159,
+      "line": 165,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "No run log entries yet.",
       "surface": "apple",
@@ -30603,7 +30675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 185,
+      "line": 191,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "\\(ms)ms",
       "surface": "apple",
@@ -30611,7 +30683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 211,
+      "line": 217,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Payload",
       "surface": "apple",
@@ -30619,7 +30691,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 225,
+      "line": 231,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "think \\(thinking)",
       "surface": "apple",
@@ -30627,15 +30699,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 226,
-      "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
-      "source": "\\(timeoutSeconds)s",
-      "surface": "apple",
-      "id": "native.apple.a513a17d658a1aa2"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 231,
+      "line": 237,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "announce",
       "surface": "apple",
@@ -30643,11 +30707,43 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 237,
+      "line": 243,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "no delivery",
       "surface": "apple",
       "id": "native.apple.6e5597dd202288ee"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 255,
+      "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
+      "source": "command · read-only",
+      "surface": "apple",
+      "id": "native.apple.c27e3019dfe8e877"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 266,
+      "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
+      "source": "script · read-only",
+      "surface": "apple",
+      "id": "native.apple.5e02b5f297de21b0"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 267,
+      "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
+      "source": "\\(timeoutSeconds)s",
+      "surface": "apple",
+      "id": "native.apple.a513a17d658a1aa2"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 268,
+      "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
+      "source": "\\(toolBudget) tools",
+      "surface": "apple",
+      "id": "native.apple.b42d8e457b71b478"
     },
     {
       "kind": "ui-named-argument",

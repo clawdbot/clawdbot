@@ -1883,6 +1883,7 @@ export function createExecTool(
         if (host === "node") {
           return executeNodeHostCommand({
             command: params.command,
+            toolCallId,
             workdir,
             env,
             requestedEnv,

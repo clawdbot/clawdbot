@@ -842,6 +842,35 @@ describe("cron view editor", () => {
     expect(systemEvent.querySelector("#cron-payload-model")).toBeNull();
   });
 
+  it("renders script payloads as read-only without exposing script authoring", () => {
+    const script = "const result = await agent('check status')";
+    const job = createJob("job-script", {
+      name: "Status script",
+      payload: { kind: "script", script },
+    });
+    const container = renderView({
+      jobs: [job],
+      editingJobId: job.id,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        name: job.name,
+        payloadKind: "script",
+        payloadLocked: true,
+        payloadText: script,
+      },
+    });
+
+    const payload = getElement(container, "#cron-payload-text", HTMLTextAreaElement);
+    expect(payload.readOnly).toBe(true);
+    expect(payload.value).toBe(script);
+    expect(container.querySelector("#cron-payload-kind")?.getAttribute("value")).toBeNull();
+    expect((container.querySelector("#cron-payload-kind") as HTMLInputElement).value).toBe(
+      "Script",
+    );
+    expect(container.textContent).toContain("contents stay read-only");
+    expect(container.querySelector('option[value="script"]')).toBeNull();
+  });
+
   it("disables submit and lists blocking fields when validation fails", () => {
     const container = renderView({
       createOpen: true,

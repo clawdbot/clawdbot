@@ -695,6 +695,50 @@ describe("gateway config methods", () => {
     expect(after.payload?.hash).toBe(current.payload?.hash);
   });
 
+  it("accepts messages.groupChat.historyLimit: 0 through config.patch", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    let previousConfig: string | null = null;
+    try {
+      try {
+        previousConfig = await fs.readFile(configPath, "utf-8");
+      } catch (error) {
+        if ((error as { code?: string }).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ messages: { groupChat: { historyLimit: 1 } } }, null, 2)}\n`,
+        "utf-8",
+      );
+      resetConfigRuntimeState();
+
+      const current = await rpcReq<{ hash?: string }>(requireWs(), "config.get", {});
+      expect(current.ok).toBe(true);
+      expect(typeof current.payload?.hash).toBe("string");
+
+      const res = await rpcReq<{
+        config?: { messages?: { groupChat?: { historyLimit?: number } } };
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ messages: { groupChat: { historyLimit: 0 } } }),
+        baseHash: current.payload?.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      expect(res.payload?.config?.messages?.groupChat?.historyLimit).toBe(0);
+    } finally {
+      if (previousConfig === null) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
+      resetConfigRuntimeState();
+    }
+  });
+
   it("rejects config.patch when raw is null", async () => {
     const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
       raw: "null",

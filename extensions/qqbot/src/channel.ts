@@ -35,6 +35,7 @@ import {
   looksLikeQQBotTarget,
   parseTarget,
 } from "./engine/messaging/target-parser.js";
+import { normalizeOptionalString } from "./engine/utils/string-normalize.js";
 import { resolveQQBotGroupToolPolicy } from "./group-policy.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
@@ -438,7 +439,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
 
       const resolved = resolveQQBotAccount((changed ? nextCfg : cfg) as OpenClawConfig, accountId);
       const loggedOut = resolved.secretSource === "none";
-      const envToken = Boolean(process.env.QQBOT_CLIENT_SECRET);
+      const envToken = Boolean(normalizeOptionalString(process.env.QQBOT_CLIENT_SECRET));
 
       return { ok: true, cleared, envToken, loggedOut };
     },

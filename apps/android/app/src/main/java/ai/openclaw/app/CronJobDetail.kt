@@ -157,7 +157,7 @@ internal fun parseGatewayCronJobDetail(job: JsonObject?): GatewayCronJobDetail? 
   val payloadKind = payload.string("kind") ?: return null
   val scheduleKind = schedule.string("kind") ?: return null
   if (scheduleKind !in setOf("at", "every", "cron", "on-exit")) return null
-  if (payloadKind !in setOf("systemEvent", "agentTurn", "command")) return null
+  if (payloadKind !in setOf("systemEvent", "agentTurn", "command", "script")) return null
   val state = value["state"].asObjectOrNull() ?: return null
 
   return GatewayCronJobDetail(
@@ -252,6 +252,7 @@ private fun cronPayloadText(payload: JsonObject): String? =
       (payload["argv"] as? JsonArray)
         ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { value -> value.isNotEmpty() } }
         ?.joinToString(" ")
+    "script" -> payload["script"].asStringOrNull()
     else -> null
   }
 
@@ -264,6 +265,11 @@ private fun cronPayloadLabel(payload: JsonObject): NativeText =
       joinedNativeText(" · ", listOfNotNull(nativeText("Agent turn"), model, thinking))
     }
     "command" -> nativeText("Command")
+    "script" -> {
+      val timeout = payload.long("timeoutSeconds")?.let { nativeText("Timeout \${it}s", it) }
+      val budget = payload.long("toolBudget")?.let { nativeText("\$it tools", it) }
+      joinedNativeText(" · ", listOfNotNull(nativeText("Script"), timeout, budget))
+    }
     else -> nativeText("Payload")
   }
 

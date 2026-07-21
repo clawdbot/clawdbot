@@ -3009,6 +3009,7 @@ private fun cronPayloadTextTitle(job: GatewayCronJobDetail): String =
     "systemEvent" -> nativeString("System Event Text")
     "agentTurn" -> nativeString("Agent Prompt")
     "command" -> nativeString("Command")
+    "script" -> nativeString("Script")
     else -> nativeString("Payload Text")
   }
 

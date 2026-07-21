@@ -166,10 +166,11 @@ describeControlUiE2e("Control UI chat message actions", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
+      const commandPaletteShortcut = process.platform === "darwin" ? "⌘K" : "Ctrl K";
       await expectHoverTooltip(page.getByRole("button", { name: "New thread" }), "New thread");
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
-        "Open command palette (⌘K)",
+        `Open command palette (${commandPaletteShortcut})`,
       );
       await expectHoverTooltip(
         page.getByRole("button", { name: "Collapse sidebar" }),
@@ -251,8 +252,49 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await screenshot(page, "02-reply-preview.png");
       await replyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
-      await bubble.click({ button: "right" });
       const menu = page.locator(".chat-reply-context-menu");
+      const selectedText = "context menu";
+      await bubble.evaluate((element, text) => {
+        const selection = window.getSelection();
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let textNode: Text | null = null;
+        let start = -1;
+        while (walker.nextNode()) {
+          const candidate = walker.currentNode;
+          const candidateText = candidate.textContent ?? "";
+          const candidateStart = candidateText.indexOf(text);
+          if (candidate instanceof Text && candidateStart >= 0) {
+            textNode = candidate;
+            start = candidateStart;
+            break;
+          }
+        }
+        if (!textNode) {
+          throw new Error(`Could not find selectable text: ${text}`);
+        }
+        const range = document.createRange();
+        range.setStart(textNode, start);
+        range.setEnd(textNode, start + text.length);
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }, selectedText);
+      await bubble.click({ button: "right" });
+      await menu.waitFor({ state: "visible" });
+      expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
+        "Copy",
+        "Reply",
+        "Hide message",
+        "Open in canvas",
+        "Copy as markdown",
+      ]);
+      await screenshot(page, "03-selected-text-context-menu.png");
+      await menu.getByRole("menuitem", { name: "Copy", exact: true }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(selectedText);
+
+      await page.evaluate(() => window.getSelection()?.removeAllRanges());
+      await bubble.click({ button: "right" });
       await menu.waitFor({ state: "visible" });
       expect(await menu.getByRole("menuitem").allTextContents()).toEqual([
         "Reply",
@@ -263,7 +305,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(
         await menu.getByRole("menuitem", { name: "Reply to message" }).locator("svg").count(),
       ).toBe(0);
-      await screenshot(page, "03-context-menu.png");
+      await screenshot(page, "04-context-menu.png");
 
       await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
       await expect

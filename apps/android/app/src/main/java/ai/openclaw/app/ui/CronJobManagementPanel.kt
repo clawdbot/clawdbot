@@ -550,6 +550,21 @@ private fun CronPayloadEditor(
         )
       }
     }
+    is GatewayCronPayloadEdit.ReadOnlyScript -> {
+      ClawTextField(
+        value = payload.script,
+        onValueChange = {},
+        placeholder = nativeString("Script"),
+        label = nativeString("Script · read-only"),
+        enabled = false,
+        minLines = 4,
+      )
+      Text(
+        text = nativeString("Script payloads are preserved unchanged. Use the CLI to edit this script."),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
+    }
   }
 }
 
@@ -627,6 +642,7 @@ private fun cronPayloadKindLabel(payload: GatewayCronPayloadEdit): String =
     is GatewayCronPayloadEdit.SystemEvent -> nativeString("System event")
     is GatewayCronPayloadEdit.AgentTurn -> nativeString("Agent turn")
     is GatewayCronPayloadEdit.Command -> nativeString("Command")
+    is GatewayCronPayloadEdit.ReadOnlyScript -> nativeString("Script · read-only")
   }
 
 internal data class CronWakeModeOption(

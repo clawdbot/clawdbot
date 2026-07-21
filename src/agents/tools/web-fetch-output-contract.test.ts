@@ -149,6 +149,26 @@ describe("web_fetch output contract", () => {
     expect(second).not.toHaveProperty("spillTruncated");
   });
 
+  it("shares cached responses across equivalent URL scheme and host casing", async () => {
+    mockHttpResponse("canonical URL body");
+    const tool = createContractTool({ cacheTtlMinutes: 1 });
+
+    const first = requireDetails(
+      (await tool?.execute("cache-case-first", {
+        url: "HTTPS://EXAMPLE.COM/cache-case-contract",
+      }))!,
+    );
+    const second = requireDetails(
+      (await tool?.execute("cache-case-second", {
+        url: "https://example.com/cache-case-contract",
+      }))!,
+    );
+
+    expect(first.cached).toBeUndefined();
+    expect(second.cached).toBe(true);
+    expect(fetchWithWebToolsNetworkGuardMock).toHaveBeenCalledTimes(1);
+  });
+
   it("validates nested spill metadata", async () => {
     mockHttpResponse("spill body ".repeat(1_000));
     const result = await createContractTool({ maxChars: 300 })?.execute("spill", {

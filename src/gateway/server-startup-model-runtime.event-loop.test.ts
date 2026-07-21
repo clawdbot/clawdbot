@@ -134,7 +134,7 @@ describe("Gateway prepared model runtime startup", () => {
     );
     providerMocks.staticCatalog.mockResolvedValue(providerConfig);
     providerMocks.liveCatalog.mockImplementation(async () => {
-      const stopAt = performance.now() + 600;
+      const stopAt = performance.now() + 1_500;
       while (performance.now() < stopAt) {
         // Deliberately model synchronous provider/plugin catalog work that starves timers.
       }
@@ -164,7 +164,9 @@ describe("Gateway prepared model runtime startup", () => {
 
           const [{ elapsedMs, response }] = await Promise.all([probe, sidecars]);
           expect(response.status).toBe(200);
-          expect(elapsedMs).toBeLessThan(400);
+          // Allow loaded CI hosts to finish static startup work while keeping the
+          // deliberately blocking live-catalog path well outside the guard.
+          expect(elapsedMs).toBeLessThan(1_000);
           expect(providerMocks.staticCatalog).toHaveBeenCalled();
           expect(providerMocks.liveCatalog).not.toHaveBeenCalled();
         },

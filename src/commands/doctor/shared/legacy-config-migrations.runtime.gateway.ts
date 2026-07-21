@@ -14,6 +14,13 @@ import {
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
 
+const GATEWAY_PORT_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "port"],
+  message:
+    'gateway.port is outside the valid TCP range (1–65535) and will be removed to avoid startup failure. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "number" && (value < 1 || value > 65_535),
+};
+
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
   message:
@@ -86,6 +93,31 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         delete raw.gateway;
       }
       changes.push("Removed retired gateway.webchat config.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.port-oob-repair",
+    describe: "Remove out-of-range gateway.port to avoid post-schema-tightening startup failures",
+    legacyRules: [GATEWAY_PORT_OOB_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "port")) {
+        return;
+      }
+      const port = gateway.port;
+      if (typeof port !== "number" || (port >= 1 && port <= 65_535)) {
+        return;
+      }
+      delete gateway.port;
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
+      changes.push(
+        `Removed out-of-range gateway.port (${String(port)}). ` +
+          `Valid TCP ports are 1–65535; the gateway will use the default port ${DEFAULT_GATEWAY_PORT}.`,
+      );
     },
   }),
   defineLegacyConfigMigration({

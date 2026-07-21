@@ -169,6 +169,7 @@ async function prepareTriggerRuntime(params: {
         allowGatewaySubagentBinding: true,
         includeCoreTools: toolPlan.includeCoreTools,
         runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
+        inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
         toolConstructionPlan: toolPlan.codingToolConstructionPlan,
       })
     : [];

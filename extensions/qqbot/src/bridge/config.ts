@@ -11,6 +11,7 @@ import {
   resolveAccountBase,
   resolveDefaultAccountId,
 } from "../engine/config/resolve.js";
+import { normalizeOptionalString } from "../engine/utils/string-normalize.js";
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "../types.js";
 
 export const DEFAULT_ACCOUNT_ID = ENGINE_DEFAULT_ACCOUNT_ID;
@@ -149,9 +150,12 @@ export function resolveQQBotAccount(
     } catch {
       secretSource = "none";
     }
-  } else if (process.env.QQBOT_CLIENT_SECRET && base.accountId === DEFAULT_ACCOUNT_ID) {
-    clientSecret = process.env.QQBOT_CLIENT_SECRET;
-    secretSource = "env";
+  } else {
+    const envClientSecret = normalizeOptionalString(process.env.QQBOT_CLIENT_SECRET);
+    if (envClientSecret && base.accountId === DEFAULT_ACCOUNT_ID) {
+      clientSecret = envClientSecret;
+      secretSource = "env";
+    }
   }
 
   return {

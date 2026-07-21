@@ -594,7 +594,7 @@ export const MentionPatternsPolicySchema = z
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
-    historyLimit: z.number().int().positive().optional(),
+    historyLimit: z.number().int().min(0).optional(),
     unmentionedInbound: AmbientGroupInboundSchema.optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
   })

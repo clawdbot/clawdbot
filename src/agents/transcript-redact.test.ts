@@ -84,6 +84,61 @@ describe("redactTranscriptMessage", () => {
     expect(text).toContain("end");
   });
 
+  it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "feishu_doc",
+          arguments: {
+            page_token: "PGabc123XYZ",
+            next_page_token: "NXTpage456",
+            page_cursor: "PC789",
+            doc_token: "DOCsecret999",
+            app_secret: "REALSECRETzzz",
+          },
+        },
+      ],
+    } as unknown as AgentMessage;
+    const args = (
+      msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
+        arguments: Record<string, string>;
+      }>
+    )[0]!.arguments;
+    // Pagination cursors are opaque paging state — replaying a "***" mask as a
+    // real cursor silently pages from the start, so keep them intact.
+    expect(args.page_token).toBe("PGabc123XYZ");
+    expect(args.next_page_token).toBe("NXTpage456");
+    expect(args.page_cursor).toBe("PC789");
+    // Genuine credentials stay masked.
+    expect(args.doc_token).toBe("***");
+    expect(args.app_secret).toBe("***");
+  });
+
+  it("still masks a secret-shaped value even under an exempt pagination key (#104992)", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "feishu_doc",
+          arguments: { page_token: "sk-abcdef1234567890xyz" },
+        },
+      ],
+    } as unknown as AgentMessage;
+    const args = (
+      msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
+        arguments: Record<string, string>;
+      }>
+    )[0]!.arguments;
+    // Value-pattern redaction still runs on exempt keys, so an embedded real
+    // secret shape is masked even though the key itself is allowed through.
+    expect(args.page_token).not.toContain("sk-abcdef1234567890xyz");
+  });
+
   it("redacts thinking block", () => {
     const msg = {
       role: "assistant",
