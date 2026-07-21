@@ -179,11 +179,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!session) {
       return;
     }
-    const cancelled = session.cancel();
+    session.cancel();
     const status = readWizardStatus(session);
-    if (cancelled || status.status !== "running") {
-      context.wizardSessions.delete(sessionId);
-    }
+    context.purgeWizardSession(sessionId);
     respond(true, status, undefined);
   },
   "wizard.status": ({ params, respond, context }) => {
@@ -196,9 +194,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     const status = readWizardStatus(session);
-    if (status.status !== "running") {
-      context.wizardSessions.delete(sessionId);
-    }
+    context.purgeWizardSession(sessionId);
     respond(true, status, undefined);
   },
 };

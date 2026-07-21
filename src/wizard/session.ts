@@ -237,6 +237,7 @@ export class WizardSession {
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
   private cancellationLocked = false;
+  private settled = false;
   private pendingExternalUrl: string | undefined;
   private answerDeferred = new Map<
     string,
@@ -432,6 +433,7 @@ export class WizardSession {
         this.error = String(err);
       }
     } finally {
+      this.settled = true;
       if (this.expiryTimer) {
         clearTimeout(this.expiryTimer);
       }
@@ -468,6 +470,11 @@ export class WizardSession {
 
   getStatus(): WizardSessionStatus {
     return this.status;
+  }
+
+  /** Whether the runner has stopped and can no longer mutate setup state. */
+  isSettled(): boolean {
+    return this.settled;
   }
 
   getError(): string | undefined {

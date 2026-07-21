@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
+import { createDeferred } from "../../shared/deferred.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -103,4 +104,80 @@ describe("hosted wizard runtime isolation", () => {
       }
     },
   );
+});
+
+describe("wizard setup ownership", () => {
+  it("blocks a replacement wizard until the cancelled runner settles", async () => {
+    const runnerSettled = createDeferred();
+    const tracker = createWizardSessionTracker();
+    const context = {
+      ...tracker,
+      wizardRunner: async (_opts: unknown, _runtime: RuntimeEnv, prompter: WizardPrompter) => {
+        prompter.progress("working");
+        await runnerSettled.promise;
+      },
+    };
+
+    const startRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizard.start test invariant",
+    )({
+      params: { mode: "local" },
+      respond: startRespond,
+      context,
+    } as never);
+    const [, start] = startRespond.mock.calls[0] ?? [];
+    expect(start).toMatchObject({ status: "running" });
+
+    const cancelRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.cancel"],
+      "wizard.cancel test invariant",
+    )({
+      params: { sessionId: start.sessionId },
+      respond: cancelRespond,
+      context,
+    } as never);
+    expect(cancelRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "cancelled" }),
+      undefined,
+    );
+
+    const blockedRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizard.start test invariant",
+    )({
+      params: { mode: "local" },
+      respond: blockedRespond,
+      context,
+    } as never);
+    expect(blockedRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+
+    runnerSettled.resolve();
+    await vi.waitFor(() => {
+      expect(tracker.wizardSessions.get(start.sessionId)?.isSettled()).toBe(true);
+    });
+
+    const replacementRespond = vi.fn();
+    await expectDefined(
+      wizardHandlers["wizard.start"],
+      "wizard.start test invariant",
+    )({
+      params: { mode: "local" },
+      respond: replacementRespond,
+      context,
+    } as never);
+    expect(replacementRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
+
+    for (const session of tracker.wizardSessions.values()) {
+      session.cancel();
+    }
+  });
 });
