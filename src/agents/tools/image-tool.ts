@@ -957,9 +957,7 @@ export function createImageTool(options?: {
       // in image processing loops. The DEFAULT_MAX_IMAGES floor is unchanged.
       const maxImagesRaw = readPositiveIntegerParam(record, "maxImages");
       const maxImages =
-        maxImagesRaw === undefined
-          ? DEFAULT_MAX_IMAGES
-          : Math.min(maxImagesRaw, MAX_IMAGES_CAP);
+        maxImagesRaw === undefined ? DEFAULT_MAX_IMAGES : Math.min(maxImagesRaw, MAX_IMAGES_CAP);
       if (imageInputs.length > maxImages) {
         return {
           content: [
