@@ -54,6 +54,12 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+For direct numeric parsing, range checks, timestamp conversion, and bounded
+timer arithmetic, import `openclaw/plugin-sdk/number-runtime`. The subpath
+exposes the same finite-number and timer-limit helpers used by official
+plugins, so external plugin packages do not need host-internal imports or
+duplicate JavaScript timer bounds.
+
 Use inbound `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically.
 
 Channel plugins that expose this behavior to operators should prefer the shared `channels.defaults.botLoopProtection` shape for baseline budgets, then layer channel/provider-specific overrides on top. The shared config uses seconds because it is user-facing:

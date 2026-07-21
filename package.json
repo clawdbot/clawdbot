@@ -125,7 +125,6 @@
     "!dist/plugin-sdk/migration-runtime.d.ts",
     "!dist/plugin-sdk/music-generation.d.ts",
     "!dist/plugin-sdk/node-host.d.ts",
-    "!dist/plugin-sdk/number-runtime.d.ts",
     "!dist/plugin-sdk/outbound-media.d.ts",
     "!dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
     "!dist/plugin-sdk/plugin-state-runtime.d.ts",
@@ -556,6 +555,7 @@
       "default": "./dist/plugin-sdk/expect-runtime.js"
     },
     "./plugin-sdk/number-runtime": {
+      "types": "./dist/plugin-sdk/number-runtime.d.ts",
       "default": "./dist/plugin-sdk/number-runtime.js"
     },
     "./plugin-sdk/secure-random-runtime": {
