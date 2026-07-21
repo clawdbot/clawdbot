@@ -141,16 +141,23 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const dbPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
 
-  if (scope.light) {
-    return listSqliteSessionEntriesLight(scope);
-  }
-
+  // Cache hit: derive both light and full results from cached entries.
   if (isSessionStoreCacheEnabled()) {
     const cached = readSessionStoreCache({ storePath: dbPath, clone: false });
     if (cached) {
       let entries = Object.entries(cached)
         .filter(([key]) => !isInternalSessionEffectsKey(key))
-        .map(([sessionKey, entry]) => ({ sessionKey, entry }));
+        .map(([sessionKey, entry]) => {
+          if (scope.light) {
+            const {
+              systemPromptReport: _systemPromptReport,
+              skillsSnapshot: _skillsSnapshot,
+              ...lightEntry
+            } = entry;
+            return { sessionKey, entry: lightEntry as SessionEntry };
+          }
+          return { sessionKey, entry };
+        });
       if (scope.offset) {
         entries = entries.slice(scope.offset);
       }
@@ -161,21 +168,20 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
     }
   }
 
-  const result = listSqliteSessionEntriesFromDatabase(database, false, scope.limit, scope.offset);
+  const result = listSqliteSessionEntriesFromDatabase(
+    database,
+    scope.light,
+    scope.limit,
+    scope.offset,
+  );
 
-  if (isSessionStoreCacheEnabled()) {
+  // Only cache unpaginated complete loads so the cache always holds the full store.
+  if (!scope.limit && !scope.offset && isSessionStoreCacheEnabled()) {
     const storeRecord = readSqliteSessionEntryStore(database);
     writeSessionStoreCache({ storePath: dbPath, store: storeRecord, takeOwnership: true });
   }
 
   return result;
-}
-
-/** Lists session entries with heavy list-view fields stripped from each entry. */
-function listSqliteSessionEntriesLight(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
-  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return listSqliteSessionEntriesFromDatabase(database, true, scope.limit, scope.offset);
 }
 
 /**
@@ -223,7 +229,11 @@ function listSqliteSessionEntriesFromDatabase(
         return undefined;
       }
       if (light) {
-        const { systemPromptReport: _systemPromptReport, skillsSnapshot: _skillsSnapshot, ...lightEntry } = entry;
+        const {
+          systemPromptReport: _systemPromptReport,
+          skillsSnapshot: _skillsSnapshot,
+          ...lightEntry
+        } = entry;
         return { sessionKey: row.session_key, entry: lightEntry as SessionEntry };
       }
       return { sessionKey: row.session_key, entry };
