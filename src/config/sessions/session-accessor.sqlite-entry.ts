@@ -151,8 +151,12 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
       let entries = Object.entries(cached)
         .filter(([key]) => !isInternalSessionEffectsKey(key))
         .map(([sessionKey, entry]) => ({ sessionKey, entry }));
-      if (scope.offset) entries = entries.slice(scope.offset);
-      if (scope.limit) entries = entries.slice(0, scope.limit);
+      if (scope.offset) {
+        entries = entries.slice(scope.offset);
+      }
+      if (scope.limit) {
+        entries = entries.slice(0, scope.limit);
+      }
       return entries;
     }
   }
@@ -168,9 +172,7 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
 }
 
 /** Lists session entries with heavy list-view fields stripped from each entry. */
-export function listSqliteSessionEntriesLight(
-  scope: SessionEntryListScope = {},
-): SessionEntrySummary[] {
+function listSqliteSessionEntriesLight(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return listSqliteSessionEntriesFromDatabase(database, true, scope.limit, scope.offset);
