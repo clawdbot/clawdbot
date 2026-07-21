@@ -122,7 +122,6 @@ function createOpenAICompletionsClient(
     ...buildOpenAISdkClientOptions(model),
   });
 }
-
 function buildOpenAICompletionsClientConfig(
   model: Model,
   context: Context,
@@ -139,7 +138,7 @@ function buildOpenAICompletionsClientConfig(
 
   try {
     const parsed = new URL(model.baseUrl);
-    isAzureHost = isAzureOpenAICompatibleHost(parsed.hostname.toLowerCase());
+    isAzureHost = isAzureOpenAICompatibleHostname(parsed.hostname.toLowerCase());
     parsed.searchParams.forEach((value, key) => {
       if (value) {
         defaultQuery[key] = value;

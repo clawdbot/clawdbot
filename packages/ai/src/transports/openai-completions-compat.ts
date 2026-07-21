@@ -38,6 +38,7 @@ type OpenAICompletionsCompatDefaults = {
   requiresNonEmptyUserOrAssistantMessage: boolean;
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   sessionAffinityFormat: Exclude<OpenAICompletionsSessionAffinity, "none">;
+  supportsPromptCacheKey: boolean;
   supportsLongCacheRetention: boolean;
 };
 
@@ -59,6 +60,32 @@ export type ResolvedOpenAICompletionsCompat = Omit<
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
   return provider !== undefined && ids.includes(provider);
+}
+
+/** Matches Azure OpenAI-compatible API hostnames (shared with the completions transport). */
+export function isAzureOpenAICompatibleHostname(hostname: string): boolean {
+  return (
+    hostname.endsWith(".openai.azure.com") ||
+    hostname.endsWith(".services.ai.azure.com") ||
+    hostname.endsWith(".cognitiveservices.azure.com") ||
+    hostname.endsWith(".api.cognitive.microsoft.com")
+  );
+}
+
+function normalizeBaseUrlHostname(baseUrl: string | undefined): string | undefined {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return new URL(trimmed).hostname.toLowerCase();
+  } catch {
+    try {
+      return new URL(`https://${trimmed}`).hostname.toLowerCase();
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 /** Resolves default request flags for an OpenAI-compatible completions endpoint. */
@@ -114,6 +141,20 @@ function resolveOpenAICompletionsCompatDefaults(
       isDefaultRouteProvider(input.provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
   const isOpenRouterLike = input.provider === "openrouter" || endpointClass === "openrouter";
   const isLocalEndpoint = endpointClass === "local";
+  const baseUrlHostname = normalizeBaseUrlHostname(input.baseUrl);
+  // Only first-party OpenAI and Azure OpenAI chat completions honor prompt_cache_key.
+  // Other OpenAI-compatible proxies may reject the field, so it stays off by default.
+  // With the inert package host every route resolves to the "default" endpoint class,
+  // so the default route only counts as first-party OpenAI when no custom base URL
+  // overrides the destination.
+  const supportsPromptCacheKey =
+    endpointClass === "openai-public" ||
+    endpointClass === "azure-openai" ||
+    baseUrlHostname === "api.openai.com" ||
+    (isDefaultRoute &&
+      isDefaultRouteProvider(provider, "openai") &&
+      baseUrlHostname === undefined) ||
+    (baseUrlHostname !== undefined && isAzureOpenAICompatibleHostname(baseUrlHostname));
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
@@ -163,6 +204,7 @@ function resolveOpenAICompletionsCompatDefaults(
         ? "anthropic"
         : undefined,
     sessionAffinityFormat: isOpenRouterLike ? "openrouter" : "openai",
+    supportsPromptCacheKey,
     supportsLongCacheRetention:
       provider !== "cloudflare-workers-ai" &&
       provider !== "cloudflare-ai-gateway" &&
@@ -270,7 +312,7 @@ export function resolveOpenAICompletionsCompat(
       configured?.supportsJsonSchemaResponseFormat ?? defaults.supportsJsonSchemaResponseFormat,
     cacheControlFormat: configured?.cacheControlFormat ?? defaults.cacheControlFormat,
     sessionAffinity: resolveSessionAffinity(model, defaults.sessionAffinityFormat),
-    supportsPromptCacheKey: configured?.supportsPromptCacheKey ?? false,
+    supportsPromptCacheKey: configured?.supportsPromptCacheKey ?? defaults.supportsPromptCacheKey,
     supportsLongCacheRetention:
       configured?.supportsLongCacheRetention ?? defaults.supportsLongCacheRetention,
     visibleReasoningDetailTypes:

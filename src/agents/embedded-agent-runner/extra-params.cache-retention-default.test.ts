@@ -347,3 +347,69 @@ describe("cacheRetention default behavior", () => {
     ).toBeUndefined();
   });
 });
+
+describe("transport-resolved prompt cache key support", () => {
+  const azureCfg = {
+    agents: {
+      defaults: {
+        models: {
+          "azure-openai/gpt-5.6-luna": {
+            params: { cacheRetention: "long" as const },
+          },
+        },
+      },
+    },
+  };
+
+  function applyAndInvoke(model: Parameters<typeof applyExtraParamsToAgent>[8]) {
+    const underlying = vi.fn();
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying as unknown as StreamFn };
+    applyExtraParamsToAgent(
+      agent,
+      azureCfg,
+      "azure-openai",
+      "gpt-5.6-luna",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      model,
+    );
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+    void agent.streamFn(
+      model as Parameters<StreamFn>[0],
+      undefined as unknown as Parameters<StreamFn>[1],
+      {},
+    );
+    return underlying;
+  }
+
+  it("propagates configured retention when Azure support is transport-resolved", () => {
+    // Regression: without an explicit compat flag the wrapper must consume the
+    // transport-resolved prompt-cache default so configured retention survives.
+    const model = {
+      api: "openai-completions",
+      provider: "azure-openai",
+      id: "gpt-5.6-luna",
+      baseUrl: "https://myres.openai.azure.com/openai/v1",
+    } as Parameters<typeof applyExtraParamsToAgent>[8];
+    const underlying = applyAndInvoke(model);
+    expect(underlying).toHaveBeenCalledTimes(1);
+    expect(underlying.mock.calls[0]?.[2]).toMatchObject({ cacheRetention: "long" });
+  });
+
+  it("keeps an explicit supportsPromptCacheKey=false override authoritative", () => {
+    const model = {
+      api: "openai-completions",
+      provider: "azure-openai",
+      id: "gpt-5.6-luna",
+      baseUrl: "https://myres.openai.azure.com/openai/v1",
+      compat: { supportsPromptCacheKey: false },
+    } as Parameters<typeof applyExtraParamsToAgent>[8];
+    const underlying = applyAndInvoke(model);
+    expect(underlying).toHaveBeenCalledTimes(1);
+    expect(underlying.mock.calls[0]?.[2] ?? {}).not.toHaveProperty("cacheRetention");
+  });
+});

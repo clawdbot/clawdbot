@@ -1013,6 +1013,31 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedRetention).toBe("24h");
   });
 
+  it("enables prompt cache keys for Azure OpenAI endpoints", async () => {
+    let capturedCacheKey: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...model,
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/deployments/luna",
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        sessionId: "session-123",
+        onPayload(payload) {
+          capturedCacheKey = (payload as { prompt_cache_key?: unknown }).prompt_cache_key;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedCacheKey).toBe("session-123");
+  });
+
   it("strips the internal cache boundary from OpenAI-compatible system prompts", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
