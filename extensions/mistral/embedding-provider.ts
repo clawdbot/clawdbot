@@ -16,7 +16,7 @@ type MistralEmbeddingClient = {
 };
 
 export const DEFAULT_MISTRAL_EMBEDDING_MODEL = "mistral-embed";
-const DEFAULT_MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
+export const DEFAULT_MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
 
 function normalizeMistralModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({

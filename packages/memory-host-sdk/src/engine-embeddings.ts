@@ -51,6 +51,7 @@ export {
 } from "./host/batch-utils.js";
 export { enforceEmbeddingMaxInputTokens } from "./host/embedding-chunk-limits.js";
 export {
+  buildEmbeddingEndpointCacheIdentity,
   isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,

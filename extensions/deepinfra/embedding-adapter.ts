@@ -5,14 +5,16 @@ import type {
   EmbeddingProviderAdapter,
   EmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
-import type {
-  MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderCreateOptions,
+import {
+  buildEmbeddingEndpointCacheIdentity,
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createDeepInfraEmbeddingProvider,
   DEFAULT_DEEPINFRA_EMBEDDING_MODEL,
 } from "./embedding-provider.js";
+import { DEEPINFRA_BASE_URL } from "./media-models.js";
 import type { DeepInfraSurfaceModel } from "./provider-models.js";
 
 function textFromEmbeddingInput(input: EmbeddingInput): string {
@@ -73,6 +75,11 @@ export function buildDeepInfraEmbeddingAdapter(options?: {
           id: "deepinfra",
           cacheKeyData: {
             provider: "deepinfra",
+            ...buildEmbeddingEndpointCacheIdentity({
+              baseUrl: client.baseUrl,
+              defaultBaseUrl: DEEPINFRA_BASE_URL,
+              headers: client.headers,
+            }),
             model: client.model,
           },
         },

@@ -12,6 +12,7 @@ vi.mock("./embedding-provider.js", () => ({
 }));
 
 import { deepinfraEmbeddingProviderAdapter } from "./embedding-adapter.js";
+import { DEEPINFRA_BASE_URL } from "./media-models.js";
 
 const memoryProvider: MemoryEmbeddingProvider = {
   id: "deepinfra",
@@ -25,9 +26,15 @@ const memoryProvider: MemoryEmbeddingProvider = {
 describe("DeepInfra generic embedding adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // resolveRemoteEmbeddingClient always resolves a base URL and headers, so the
+    // stub carries them too — the adapter now reads both to scope cache identity.
     mocks.createDeepInfraEmbeddingProvider.mockResolvedValue({
       provider: memoryProvider,
-      client: { model: "BAAI/bge-m3-resolved" },
+      client: {
+        model: "BAAI/bge-m3-resolved",
+        baseUrl: DEEPINFRA_BASE_URL,
+        headers: { Authorization: "Bearer redacted" }, // pragma: allowlist secret
+      },
     });
   });
 
@@ -123,5 +130,57 @@ describe("DeepInfra generic embedding adapter", () => {
       signal: abortController.signal,
     });
     expect(memoryProvider.close).toHaveBeenCalledOnce();
+  });
+
+  describe("cache identity", () => {
+    async function cacheKeyData(client: {
+      baseUrl: string;
+      headers: Record<string, string>;
+      model: string;
+    }): Promise<Record<string, unknown>> {
+      mocks.createDeepInfraEmbeddingProvider.mockResolvedValue({
+        provider: memoryProvider,
+        client,
+      });
+      const result = await deepinfraEmbeddingProviderAdapter.create({} as never);
+      return result.runtime.cacheKeyData as Record<string, unknown>;
+    }
+
+    it("keeps the shipped default identity for the default endpoint", async () => {
+      expect(
+        await cacheKeyData({
+          baseUrl: DEEPINFRA_BASE_URL,
+          headers: { Authorization: "Bearer redacted" }, // pragma: allowlist secret
+          model: "BAAI/bge-m3",
+        }),
+      ).toEqual({ provider: "deepinfra", model: "BAAI/bge-m3" });
+    });
+
+    it("scopes cache identity by base URL when a custom endpoint is configured", async () => {
+      expect(
+        await cacheKeyData({
+          baseUrl: "https://deepinfra.proxy.internal/v1/openai",
+          headers: { Authorization: "Bearer redacted" }, // pragma: allowlist secret
+          model: "BAAI/bge-m3",
+        }),
+      ).toEqual({
+        provider: "deepinfra",
+        baseUrl: "https://deepinfra.proxy.internal/v1/openai",
+        model: "BAAI/bge-m3",
+      });
+    });
+
+    it("hashes custom header identity without leaking raw values", async () => {
+      const data = await cacheKeyData({
+        baseUrl: DEEPINFRA_BASE_URL,
+        headers: {
+          Authorization: "Bearer redacted", // pragma: allowlist secret
+          "X-Tenant": "tenant-a",
+        },
+        model: "BAAI/bge-m3",
+      });
+      expect(data.headersHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(JSON.stringify(data)).not.toContain("tenant-a");
+    });
   });
 });
