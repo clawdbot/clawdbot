@@ -486,6 +486,58 @@ describe("openshell backend manager", () => {
     }
   });
 
+  it("preserves workspace skill roots when mirror sync downloads modified copies", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    const projectSkill = path.join(workspaceDir, "skills", "demo", "SKILL.md");
+    const agentsSkill = path.join(workspaceDir, ".agents", "skills", "demo", "SKILL.md");
+    await fs.mkdir(path.dirname(projectSkill), { recursive: true });
+    await fs.mkdir(path.dirname(agentsSkill), { recursive: true });
+    await fs.writeFile(projectSkill, "local skill", "utf8");
+    await fs.writeFile(agentsSkill, "local agent skill", "utf8");
+    cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
+      if (args[0] === "sandbox" && args[1] === "download") {
+        const tmpDir = expectDefined(args[4], "OpenShell download destination");
+        await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
+        await fs.mkdir(path.join(tmpDir, "skills", "demo"), { recursive: true });
+        await fs.writeFile(path.join(tmpDir, "skills", "demo", "SKILL.md"), "tampered", "utf8");
+        await fs.mkdir(path.join(tmpDir, ".agents", "skills", "demo"), { recursive: true });
+        await fs.writeFile(
+          path.join(tmpDir, ".agents", "skills", "demo", "SKILL.md"),
+          "tampered",
+          "utf8",
+        );
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    });
+
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "openshell",
+        mode: "mirror",
+      }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    await backend.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: undefined,
+    });
+
+    await expect(fs.readFile(projectSkill, "utf8")).resolves.toBe("local skill");
+    await expect(fs.readFile(agentsSkill, "utf8")).resolves.toBe("local agent skill");
+    await expect(fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8")).resolves.toBe(
+      "remote",
+    );
+  });
+
   it("drops non-directory materialized sandbox skills from mirror downloads", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
     cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
@@ -1352,6 +1404,90 @@ describe("openshell fs bridges", () => {
     ).rejects.toThrow(/read-only/);
     expect(await fs.readFile(shadowFile, "utf8")).toContain("workspace shadow");
     expect(backend["syncLocalPathToRemote"]).not.toHaveBeenCalled();
+  });
+
+  it("rejects mutations of workspace skill roots through the mirror bridge", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const projectSkill = path.join(workspaceDir, "skills", "demo", "SKILL.md");
+    const agentsSkill = path.join(workspaceDir, ".agents", "skills", "demo", "SKILL.md");
+    await fs.mkdir(path.dirname(projectSkill), { recursive: true });
+    await fs.mkdir(path.dirname(agentsSkill), { recursive: true });
+    await fs.writeFile(projectSkill, "original", "utf8");
+    await fs.writeFile(agentsSkill, "original", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "notes.txt"), "notes", "utf8");
+
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workspaceAccess: "rw",
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(
+      bridge.writeFile({ filePath: "/sandbox/skills/demo/SKILL.md", data: "updated" }),
+    ).rejects.toThrow(/read-only/);
+    await expect(
+      bridge.writeFile({ filePath: ".agents/skills/demo/SKILL.md", data: "updated" }),
+    ).rejects.toThrow(/read-only/);
+    await expect(bridge.writeFile({ filePath: projectSkill, data: "updated" })).rejects.toThrow(
+      /read-only/,
+    );
+    await expect(
+      bridge.writeFile({ filePath: "/sandbox/skills/../skills/demo/SKILL.md", data: "updated" }),
+    ).rejects.toThrow(/read-only/);
+    await expect(bridge.mkdirp({ filePath: "skills/injected" })).rejects.toThrow(/read-only/);
+    await expect(
+      bridge.remove({ filePath: "/sandbox/.agents/skills/demo/SKILL.md" }),
+    ).rejects.toThrow(/read-only/);
+    await expect(bridge.rename({ from: "skills/demo/SKILL.md", to: "stolen.md" })).rejects.toThrow(
+      /read-only/,
+    );
+    await expect(
+      bridge.rename({ from: "notes.txt", to: "skills/demo/planted.md" }),
+    ).rejects.toThrow(/read-only/);
+
+    await expect(bridge.readFile({ filePath: "skills/demo/SKILL.md" })).resolves.toEqual(
+      Buffer.from("original"),
+    );
+    await bridge.writeFile({ filePath: "notes.txt", data: "updated" });
+
+    await expect(fs.readFile(projectSkill, "utf8")).resolves.toBe("original");
+    await expect(fs.readFile(agentsSkill, "utf8")).resolves.toBe("original");
+    await expect(fs.readFile(path.join(workspaceDir, "notes.txt"), "utf8")).resolves.toBe(
+      "updated",
+    );
+    await expectPathMissing(path.join(workspaceDir, "skills", "injected"));
+    expect(backend["syncLocalPathToRemote"]).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps missing workspace skill roots writable in the mirror bridge", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workspaceAccess: "rw",
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await bridge.writeFile({ filePath: "skills/demo/SKILL.md", data: "created", mkdir: true });
+
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "demo", "SKILL.md"), "utf8"),
+    ).resolves.toBe("created");
   });
 
   it("rejects reads of a symlinked leaf", async () => {

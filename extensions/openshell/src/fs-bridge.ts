@@ -1,4 +1,5 @@
 // Openshell plugin module implements fs bridge behavior.
+import fsSync from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
@@ -21,6 +22,10 @@ type FsSafeRoot = Awaited<ReturnType<typeof fsRoot>>;
 type FsSafeStat = Awaited<ReturnType<FsSafeRoot["stat"]>>;
 
 const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "skills"] as const;
+const WORKSPACE_SKILL_ROOT_PARTS: readonly (readonly string[])[] = [
+  ["skills"],
+  [".agents", "skills"],
+];
 
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
@@ -269,7 +274,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
           ? path.posix.join(workspaceContainerRoot, relative)
           : workspaceContainerRoot,
         mountHostRoot: workspaceRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
+        writable:
+          this.sandbox.workspaceAccess === "rw" &&
+          !isProtectedWorkspaceSkillPath({ mountRoot: workspaceRoot, relative }),
         source: "workspace",
       };
     }
@@ -287,7 +294,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
           ? path.posix.join(agentContainerRoot, relative)
           : agentContainerRoot,
         mountHostRoot: agentRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
+        writable:
+          this.sandbox.workspaceAccess === "rw" &&
+          !isProtectedWorkspaceSkillPath({ mountRoot: agentRoot, relative }),
         source: "agent",
       };
     }
@@ -316,7 +325,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
           ? path.posix.join(workspaceContainerRoot, relative)
           : workspaceContainerRoot,
         mountHostRoot: workspaceRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
+        writable:
+          this.sandbox.workspaceAccess === "rw" &&
+          !isProtectedWorkspaceSkillPath({ mountRoot: workspaceRoot, relative }),
         source: "workspace",
       };
     }
@@ -346,7 +357,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
           ? path.posix.join(agentContainerRoot, relative)
           : agentContainerRoot,
         mountHostRoot: agentRoot,
-        writable: this.sandbox.workspaceAccess === "rw",
+        writable:
+          this.sandbox.workspaceAccess === "rw" &&
+          !isProtectedWorkspaceSkillPath({ mountRoot: agentRoot, relative }),
         source: "agent",
       };
     }
@@ -509,6 +522,21 @@ function isNotFoundError(err: unknown): boolean {
       "code" in err &&
       (err as { code?: unknown }).code === "ENOENT")
   );
+}
+
+function isProtectedWorkspaceSkillPath(params: { mountRoot: string; relative: string }): boolean {
+  for (const parts of WORKSPACE_SKILL_ROOT_PARTS) {
+    const root = path.posix.join(...parts);
+    if (params.relative !== root && !params.relative.startsWith(`${root}/`)) {
+      continue;
+    }
+    try {
+      return fsSync.lstatSync(path.join(params.mountRoot, ...parts)).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function resolveProtectedSkillTarget(params: {

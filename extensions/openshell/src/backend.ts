@@ -46,6 +46,11 @@ type PendingExec = {
 };
 
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
+const PROTECTED_SKILL_ROOT_PARTS: readonly (readonly string[])[] = [
+  MATERIALIZED_SKILLS_REMOTE_PARTS,
+  ["skills"],
+  [".agents", "skills"],
+];
 function buildOpenShellDirectoryUploadArgs(params: {
   sandboxName: string;
   localPath: string;
@@ -812,10 +817,17 @@ class OpenShellSandboxBackendImpl {
           throw new Error(result.stderr.trim() || "openshell sandbox download failed");
         }
         await removeMaterializedSkillsFromDownloadedWorkspace(tmpDir);
-        const preservedSandboxSkills = await moveMaterializedSkillsShadowAside({
-          workspaceDir: this.params.createParams.workspaceDir,
-          tmpDir,
-        });
+        const preservedSkillRoots: PreservedSkillRoot[] = [];
+        for (const parts of PROTECTED_SKILL_ROOT_PARTS) {
+          const preserved = await moveProtectedSkillRootAside({
+            workspaceDir: this.params.createParams.workspaceDir,
+            tmpDir,
+            parts,
+          });
+          if (preserved) {
+            preservedSkillRoots.push({ parts, preserved });
+          }
+        }
         try {
           await replaceDirectoryContents({
             sourceDir: tmpDir,
@@ -825,9 +837,9 @@ class OpenShellSandboxBackendImpl {
             excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
           });
         } finally {
-          await restoreMaterializedSkillsShadow({
+          await restoreProtectedSkillRoots({
             workspaceDir: this.params.createParams.workspaceDir,
-            preserved: preservedSandboxSkills,
+            preservedSkillRoots,
           });
         }
       },
@@ -929,11 +941,35 @@ async function removeMaterializedSkillsFromDownloadedWorkspace(tmpDir: string): 
   }
 }
 
-async function moveMaterializedSkillsShadowAside(params: {
+type PreservedSkillRoot = {
+  parts: readonly string[];
+  preserved: { preservedPath: string; preserveRoot: string };
+};
+
+async function restoreProtectedSkillRoots(params: {
+  workspaceDir: string;
+  preservedSkillRoots: PreservedSkillRoot[];
+}): Promise<void> {
+  const restores = await Promise.allSettled(
+    params.preservedSkillRoots.map(
+      async ({ parts, preserved }) =>
+        await restoreProtectedSkillRoot({ workspaceDir: params.workspaceDir, preserved, parts }),
+    ),
+  );
+  const failedRestore = restores.find(
+    (entry): entry is PromiseRejectedResult => entry.status === "rejected",
+  );
+  if (failedRestore) {
+    throw failedRestore.reason;
+  }
+}
+
+async function moveProtectedSkillRootAside(params: {
   workspaceDir: string;
   tmpDir: string;
+  parts: readonly string[];
 }): Promise<{ preservedPath: string; preserveRoot: string } | undefined> {
-  const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
+  const shadowPath = path.join(params.workspaceDir, ...params.parts);
   const parentStats = await fs.lstat(path.dirname(shadowPath)).catch(() => null);
   if (!parentStats?.isDirectory() || parentStats.isSymbolicLink()) {
     return undefined;
@@ -945,25 +981,25 @@ async function moveMaterializedSkillsShadowAside(params: {
   const preserveRoot = await fs.mkdtemp(
     path.join(path.dirname(params.tmpDir), "openclaw-openshell-preserve-"),
   );
-  const preservedPath = path.join(preserveRoot, "sandbox-skills");
+  const preservedPath = path.join(preserveRoot, "preserved");
   await movePathWithCopyFallback({ from: shadowPath, to: preservedPath });
   return { preservedPath, preserveRoot };
 }
 
-async function restoreMaterializedSkillsShadow(params: {
+async function restoreProtectedSkillRoot(params: {
   workspaceDir: string;
-  preserved?: { preservedPath: string; preserveRoot: string };
+  preserved: { preservedPath: string; preserveRoot: string };
+  parts: readonly string[];
 }): Promise<void> {
-  if (!params.preserved) {
-    return;
-  }
   let restored = false;
   try {
-    const shadowPath = path.join(params.workspaceDir, ...MATERIALIZED_SKILLS_REMOTE_PARTS);
+    const shadowPath = path.join(params.workspaceDir, ...params.parts);
     const parentPath = path.dirname(shadowPath);
     const parentStats = await fs.lstat(parentPath).catch(() => null);
     if (parentStats?.isSymbolicLink()) {
-      throw new Error(`Refusing to restore sandbox skills through symlink parent: ${parentPath}`);
+      throw new Error(
+        `Refusing to restore protected skill root through symlink parent: ${parentPath}`,
+      );
     }
     if (parentStats && !parentStats.isDirectory()) {
       await fs.rm(parentPath, { recursive: true, force: true });
