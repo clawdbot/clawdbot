@@ -68,6 +68,7 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
+const MAX_PDF_MB_CAP = 100;
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
@@ -87,7 +88,7 @@ const PdfToolSchema = Type.Object({
   ),
   password: Type.Optional(Type.String({ description: "Password for encrypted PDFs." })),
   model: Type.Optional(Type.String()),
-  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
+  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0, maximum: MAX_PDF_MB_CAP }),
 });
 
 function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
@@ -453,12 +454,18 @@ export function createPdfTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
-      const maxBytesMb =
+      const maxBytesMbRaw =
         readFiniteNumberParam(record, "maxBytesMb", {
           min: 0,
           minExclusive: true,
           message: "maxBytesMb must be greater than 0",
-        }) ?? configuredMaxBytesMb;
+        });
+      // Model-supplied maxBytesMb is clamped to prevent pathological allocations
+      // in PDF processing pipelines. Operator config (mediaMaxMb) is not clamped.
+      const maxBytesMb =
+        maxBytesMbRaw === undefined
+          ? configuredMaxBytesMb
+          : Math.min(maxBytesMbRaw, MAX_PDF_MB_CAP);
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
