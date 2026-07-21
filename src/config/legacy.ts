@@ -3,7 +3,10 @@ import { LEGACY_CONFIG_MIGRATION_RULES as LEGACY_CONFIG_RULES } from "../command
 import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
 
-/** Automatically materialize the agent every shipped pre-roster install implicitly owned. */
+/**
+ * Missing agents.list means a shipped implicit-main config; explicit [] marks staged new-world setup.
+ * Only the absent key takes the automatic upgrade path.
+ */
 export function migratePersistedImplicitMainRoster(raw: unknown): {
   config: unknown;
   changed: boolean;

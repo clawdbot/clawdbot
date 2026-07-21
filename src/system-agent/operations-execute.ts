@@ -1,6 +1,6 @@
 // Public operation dispatcher. Parsing and mutation helpers live in focused modules.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createAgent } from "../agents/agent-create.js";
+import { createAgent, hasValidRawAgentIdCharacters } from "../agents/agent-create.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
@@ -351,6 +351,9 @@ export async function executeSystemAgentOperation(
       return result;
     }
     case "create-agent": {
+      if (!hasValidRawAgentIdCharacters(operation.agentId)) {
+        throw new Error(`Agent id "${operation.agentId}" has no valid id characters.`);
+      }
       if (isReservedSystemAgentId(operation.agentId)) {
         throw new Error(
           `Agent id "${normalizeAgentId(operation.agentId)}" is reserved for the system agent. Choose a different agent id.`,

@@ -88,7 +88,10 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: replaceConfigFileMock,
 }));
 
-vi.mock("../agents/agent-create.js", () => ({ createAgent: createAgentMock }));
+vi.mock("../agents/agent-create.js", () => ({
+  createAgent: createAgentMock,
+  hasValidRawAgentIdCharacters: (value: string) => /[a-z0-9]/iu.test(value),
+}));
 
 vi.mock("../agents/agent-scope-config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/agent-scope-config.js")>();
@@ -242,6 +245,15 @@ describe("agents add command", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
+  it("rejects an agent name with no valid id characters", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+    await agentsAddCommand({ name: "###", workspace: "/tmp/work" }, runtime, {
+      hasFlags: true,
+    });
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("no valid id characters"));
+    expect(createAgentMock).not.toHaveBeenCalled();
+  });
+
   it.each(RESERVED_SYSTEM_AGENT_IDS_FOR_TEST)(
     "rejects reserved system-agent id %s",
     async (name) => {
@@ -323,6 +335,11 @@ describe("agents add command", () => {
       "/tmp/openclaw-jon",
       runtime,
       expect.objectContaining({ agentId: "jon" }),
+    );
+    expect(commitConfigWithPendingPluginInstallsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({ agents: expect.objectContaining({ list: [] }) }),
+      }),
     );
   });
 

@@ -46,6 +46,7 @@ type CreateAgentResult =
         | "reserved-id"
         | "already-exists"
         | "deletion-pending"
+        | "legacy-session-migration-required"
         | "invalid-bindings"
         | "unsafe-identity-file";
       agentId?: string;
@@ -80,6 +81,11 @@ function createError(
   return { status: "error", reason, message, ...(agentId ? { agentId } : {}) };
 }
 
+/** True when raw user input contains a character that can survive agent-id normalization. */
+export function hasValidRawAgentIdCharacters(value: string): boolean {
+  return /[a-z0-9]/iu.test(value);
+}
+
 async function writeIdentityFile(params: {
   workspaceDir: string;
   identity: NonNullable<ReturnType<typeof createAgentIdentityConfig>>;
@@ -107,7 +113,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     return createError("invalid-name", "agent name is required");
   }
   const rawId = params.entry?.id ?? rawName;
-  if (!/[a-z0-9]/iu.test(rawId)) {
+  if (!hasValidRawAgentIdCharacters(rawId)) {
     return createError("invalid-name", `agent name "${rawName}" has no valid id characters`);
   }
   const agentId = normalizeAgentId(rawId);
@@ -143,6 +149,23 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           `agent "${agentId}" deletion cleanup is still pending`,
           agentId,
         );
+      }
+      if (
+        agentId === "main" &&
+        listAgentEntries(lockedConfig).some(
+          (entry) => entry.default === true && normalizeAgentId(entry.id) !== "main",
+        )
+      ) {
+        const { maybeMigrateLegacyDefaultMainSessionKeys } =
+          await import("../commands/doctor/shared/legacy-main-session-keys.js");
+        const migration = await maybeMigrateLegacyDefaultMainSessionKeys(lockedConfig);
+        if (migration.warnings.length > 0) {
+          return createError(
+            "legacy-session-migration-required",
+            `Cannot create agent "main" until legacy session ownership is repaired. Run \`openclaw doctor --fix\` first.`,
+            agentId,
+          );
+        }
       }
       const persistedConfigExists = (await readConfigFileSnapshot()).exists;
       const { maybeRepairAgentRoster } =

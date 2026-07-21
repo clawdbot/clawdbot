@@ -39,4 +39,18 @@ describe("persisted implicit-main roster migration", () => {
       changed: false,
     });
   });
+
+  it("preserves a persisted explicit empty new-world roster", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify({ agents: { list: [] } }));
+      resetConfigRuntimeState();
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.sourceConfig.agents?.list).toEqual([]);
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({ agents: { list: [] } });
+    });
+  });
 });

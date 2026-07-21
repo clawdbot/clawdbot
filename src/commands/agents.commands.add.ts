@@ -5,7 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createAgent } from "../agents/agent-create.js";
+import { createAgent, hasValidRawAgentIdCharacters } from "../agents/agent-create.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -124,6 +124,11 @@ export async function agentsAddCommand(
       runtime.exit(1);
       return;
     }
+    if (!hasValidRawAgentIdCharacters(nameInput)) {
+      runtime.error(`Agent name "${nameInput}" has no valid id characters.`);
+      runtime.exit(1);
+      return;
+    }
     const agentId = normalizeAgentId(nameInput);
     if (agentId !== nameInput) {
       runtime.log(`Normalized agent id to "${agentId}".`);
@@ -213,6 +218,10 @@ export async function agentsAddCommand(
       }));
 
     const agentName = normalizeOptionalString(name) ?? "";
+    if (!hasValidRawAgentIdCharacters(agentName)) {
+      await prompter.outro(`Agent name "${agentName}" has no valid id characters.`);
+      return;
+    }
     const agentId = normalizeAgentId(agentName);
     if (isReservedSystemAgentId(agentId)) {
       await prompter.outro(`"${agentId}" is reserved. Choose another name.`);
@@ -414,7 +423,7 @@ export async function agentsAddCommand(
       ? listAgentEntries(nextConfig).find((entry) => normalizeAgentId(entry.id) === agentId)
       : undefined;
     const configToCommit = firstAgent
-      ? { ...nextConfig, agents: { ...nextConfig.agents, list: undefined } }
+      ? { ...nextConfig, agents: { ...nextConfig.agents, list: [] } }
       : nextConfig;
     const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: configToCommit,

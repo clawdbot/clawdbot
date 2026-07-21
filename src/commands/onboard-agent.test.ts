@@ -6,7 +6,10 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
 }));
 
-vi.mock("../agents/agent-create.js", () => ({ createAgent: mocks.createAgent }));
+vi.mock("../agents/agent-create.js", () => ({
+  createAgent: mocks.createAgent,
+  hasValidRawAgentIdCharacters: (value: string) => /[a-z0-9]/iu.test(value),
+}));
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: mocks.readConfigFileSnapshot }));
 
 const { ensureOnboardingAgent, stageOnboardingAgent } = await import("./onboard-agent.js");
@@ -85,6 +88,12 @@ describe("onboarding agent creation", () => {
     ]);
     expect(result.agent).toMatchObject({ agentId: "research-buddy" });
     expect(mocks.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("rejects a staged name with no valid id characters", () => {
+    expect(() => stageOnboardingAgent({ config: {}, name: "###", workspace: "/tmp/work" })).toThrow(
+      "no valid id characters",
+    );
   });
 
   it("accepts main when legacy repair materialized it before duplicate detection", async () => {

@@ -160,6 +160,7 @@ export async function setupCommand(
     ...cfg,
     agents: {
       ...cfg.agents,
+      list: cfg.agents?.list ?? [],
       defaults: {
         ...defaults,
         workspace,

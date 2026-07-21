@@ -433,7 +433,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       baseParams({ expectedConfigHash: null, agentName: "Research Buddy" }),
     );
 
-    expect(candidates.map((candidate) => candidate.agents?.list)).toEqual([undefined, undefined]);
+    expect(candidates.map((candidate) => candidate.agents?.list)).toEqual([[], []]);
     expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
   });
 

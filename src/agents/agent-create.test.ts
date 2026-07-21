@@ -17,6 +17,12 @@ const mocks = vi.hoisted(() => ({
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   claimCompletedAgentDeletion: vi.fn(() => true),
   maybeRepairAgentRoster: vi.fn((config: Record<string, unknown>) => ({ config, changes: [] })),
+  maybeMigrateLegacyDefaultMainSessionKeys: vi.fn(
+    async (): Promise<{ changes: string[]; warnings: string[] }> => ({
+      changes: [],
+      warnings: [],
+    }),
+  ),
 }));
 
 vi.mock("node:fs/promises", () => ({ default: { mkdir: mocks.mkdir } }));
@@ -54,6 +60,10 @@ vi.mock("../commands/doctor/shared/agent-roster-repair.js", () => ({
   maybeRepairAgentRoster: mocks.maybeRepairAgentRoster,
 }));
 
+vi.mock("../commands/doctor/shared/legacy-main-session-keys.js", () => ({
+  maybeMigrateLegacyDefaultMainSessionKeys: mocks.maybeMigrateLegacyDefaultMainSessionKeys,
+}));
+
 vi.mock("./workspace.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./workspace.js")>();
   return { ...actual, ensureAgentWorkspace: mocks.ensureAgentWorkspace };
@@ -83,6 +93,7 @@ describe("createAgent", () => {
     mocks.persisted = {};
     mocks.readAgentDeletionJournal.mockReturnValue(undefined);
     mocks.claimCompletedAgentDeletion.mockReturnValue(true);
+    mocks.maybeMigrateLegacyDefaultMainSessionKeys.mockResolvedValue({ changes: [], warnings: [] });
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/default-researcher");
     mocks.resolveAgentDir.mockReturnValue("/tmp/agent-researcher");
     mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => ({
@@ -142,6 +153,25 @@ describe("createAgent", () => {
     });
     expect(mocks.persisted).toMatchObject({
       agents: { list: [{ id: "main", default: true }] },
+    });
+  });
+
+  it("migrates legacy non-main-default keys before creating main", async () => {
+    mocks.config = { agents: { list: [{ id: "ops", default: true }] } };
+    await expect(createAgent({ name: "main" })).resolves.toMatchObject({ status: "created" });
+    expect(mocks.maybeMigrateLegacyDefaultMainSessionKeys).toHaveBeenCalledOnce();
+  });
+
+  it("rejects main creation when legacy keys need doctor repair", async () => {
+    mocks.config = { agents: { list: [{ id: "ops", default: true }] } };
+    mocks.maybeMigrateLegacyDefaultMainSessionKeys.mockResolvedValue({
+      changes: [],
+      warnings: ["ambiguous"],
+    });
+    await expect(createAgent({ name: "main" })).resolves.toMatchObject({
+      status: "error",
+      reason: "legacy-session-migration-required",
+      message: expect.stringContaining("openclaw doctor --fix"),
     });
   });
 

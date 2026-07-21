@@ -1,5 +1,9 @@
 // First-run onboarding agent creation through the canonical agent service.
-import { createAgent, type CreateAgentEntry } from "../agents/agent-create.js";
+import {
+  createAgent,
+  type CreateAgentEntry,
+  hasValidRawAgentIdCharacters,
+} from "../agents/agent-create.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createAgentIdentityConfig, sanitizeAgentIdentityLine } from "../agents/identity-file.js";
 import { readConfigFileSnapshot } from "../config/config.js";
@@ -31,6 +35,9 @@ export function stageOnboardingAgent(params: {
   const rawName = params.name.trim();
   if (!rawName) {
     throw new Error("agent name is required");
+  }
+  if (!hasValidRawAgentIdCharacters(rawName)) {
+    throw new Error(`agent name "${rawName}" has no valid id characters`);
   }
   const agentId = normalizeAgentId(rawName);
   if (isReservedSystemAgentId(agentId)) {

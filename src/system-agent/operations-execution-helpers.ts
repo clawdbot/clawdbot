@@ -1,4 +1,5 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
+import { hasValidRawAgentIdCharacters } from "../agents/agent-create.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -480,7 +481,11 @@ export async function executeSetup(
     );
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());
-  const requestedAgentName = normalizeAgentId(operation.agentId?.trim() || "main");
+  const rawAgentName = operation.agentId?.trim() || "main";
+  if (!hasValidRawAgentIdCharacters(rawAgentName)) {
+    throw new Error(`Agent id "${rawAgentName}" has no valid id characters.`);
+  }
+  const requestedAgentName = normalizeAgentId(rawAgentName);
   return await applyPersistentOperation({
     auditOperation: "openclaw.setup",
     operation,
