@@ -36,6 +36,7 @@ export async function authenticate(
 
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new UrbitAuthError("auth_failed", `Login failed with status ${response.status}`);
     }
 

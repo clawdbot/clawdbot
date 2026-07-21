@@ -4,6 +4,8 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./auth.js";
 
+const privateLookupFn = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+
 describe("tlon urbit auth ssrf", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -30,11 +32,10 @@ describe("tlon urbit auth ssrf", () => {
     });
     const mockFetch = vi.fn().mockResolvedValue(response);
     vi.stubGlobal("fetch", mockFetch);
-    const lookupFn = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
 
     const cookie = await authenticate("http://127.0.0.1:8080", "code", {
       ssrfPolicy: { allowPrivateNetwork: true },
-      lookupFn,
+      lookupFn: privateLookupFn,
       fetchImpl: mockFetch as typeof fetch,
     });
     expect(cookie).toContain("urbauth-~zod=123");
@@ -61,14 +62,38 @@ describe("tlon urbit auth ssrf", () => {
 
     const mockFetch = vi.fn().mockResolvedValue(response);
     vi.stubGlobal("fetch", mockFetch);
-    const lookupFn = (async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
 
     const cookie = await authenticate("http://127.0.0.1:8080", "code", {
       ssrfPolicy: { allowPrivateNetwork: true },
-      lookupFn,
+      lookupFn: privateLookupFn,
       fetchImpl: mockFetch as typeof fetch,
     });
     expect(cookie).toContain("urbauth-~zod=789");
+    expect(canceled).toBe(true);
+  });
+
+  it("cancels failed login bodies before throwing", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("login failed"));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 401 },
+    );
+    const mockFetch = vi.fn().mockResolvedValue(response);
+
+    await expect(
+      authenticate("http://127.0.0.1:8080", "bad-code", {
+        ssrfPolicy: { allowPrivateNetwork: true },
+        lookupFn: privateLookupFn,
+        fetchImpl: mockFetch as typeof fetch,
+      }),
+    ).rejects.toMatchObject({ code: "auth_failed" });
     expect(canceled).toBe(true);
   });
 });
