@@ -252,7 +252,7 @@ describe("runGuidedOnboarding", () => {
         surface: "cli",
       }),
     );
-    expect(text).not.toHaveBeenCalled();
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ initialValue: "main" }));
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/work", surface: "cli" }),
@@ -455,7 +455,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true }, runtime, deps);
 
-    expect(text).not.toHaveBeenCalled();
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ initialValue: "main" }));
     expect(deps.activate).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/configured" }),
     );
@@ -470,7 +470,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true }, runtime, deps);
 
-    expect(text).not.toHaveBeenCalled();
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ initialValue: "main" }));
     expect(deps.activate).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/openclaw-workspace" }),
     );
@@ -714,7 +714,7 @@ describe("runGuidedOnboarding", () => {
         apiKey: enteredValue,
       }),
     );
-    expect(text).toHaveBeenLastCalledWith(expect.objectContaining({ sensitive: true }));
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ sensitive: true }));
     expect(detect.mock.invocationCallOrder[0]).toBeLessThan(text.mock.invocationCallOrder[0]!);
     expect(JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls)).not.toContain(
       enteredValue,
@@ -774,7 +774,7 @@ describe("runGuidedOnboarding", () => {
       runtime,
       prompter,
     });
-    expect(text).not.toHaveBeenCalled();
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ initialValue: "main" }));
   });
 
   it("lets the grouped provider picker skip without opening AI chat", async () => {
@@ -886,7 +886,7 @@ describe("runGuidedOnboarding", () => {
   });
 
   it("applies setup and hatches with the explicit workspace after activation", async () => {
-    const text = vi.fn(async () => "unexpected");
+    const text = vi.fn(async () => "Research Buddy");
     const prompter = createWizardPrompter({ text });
     const runSystemAgentChat = vi.fn(async () => {});
     const deps = setupDeps({
@@ -897,9 +897,10 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(text).not.toHaveBeenCalled();
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ initialValue: "main" }));
     expect(deps.applySetup).toHaveBeenCalledWith({
       workspace: "/tmp/work",
+      agentName: "Research Buddy",
       surface: "cli",
       runtime,
     });

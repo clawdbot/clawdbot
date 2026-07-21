@@ -24,7 +24,7 @@ import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -205,7 +205,7 @@ export async function agentsAddCommand(
             return "Required";
           }
           const normalized = normalizeAgentId(value);
-          if (normalized === DEFAULT_AGENT_ID || isReservedSystemAgentId(normalized)) {
+          if (isReservedSystemAgentId(normalized)) {
             return `"${normalized}" is reserved. Choose another name.`;
           }
           return undefined;
@@ -214,7 +214,7 @@ export async function agentsAddCommand(
 
     const agentName = normalizeOptionalString(name) ?? "";
     const agentId = normalizeAgentId(agentName);
-    if (agentId === DEFAULT_AGENT_ID || isReservedSystemAgentId(agentId)) {
+    if (isReservedSystemAgentId(agentId)) {
       await prompter.outro(`"${agentId}" is reserved. Choose another name.`);
       return;
     }

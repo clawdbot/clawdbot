@@ -111,13 +111,23 @@ describe("createAgent", () => {
       status: "error",
       reason: "invalid-name",
     });
-    for (const name of ["main", "OpenClaw", "crestodian"]) {
+    for (const name of ["OpenClaw", "crestodian"]) {
       await expect(createAgent({ name })).resolves.toMatchObject({
         status: "error",
         reason: "reserved-id",
       });
     }
     expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("allows main and marks the first created agent as default", async () => {
+    await expect(createAgent({ name: "main" })).resolves.toMatchObject({
+      status: "created",
+      agentId: "main",
+    });
+    expect(mocks.persisted).toMatchObject({
+      agents: { list: [{ id: "main", default: true }] },
+    });
   });
 
   it("defaults the workspace through the agent-scoped resolver", async () => {
@@ -170,6 +180,7 @@ describe("createAgent", () => {
       agents: {
         entries: {
           researcher: {
+            default: true,
             name: "Researcher",
             workspace: "/tmp/work",
             agentDir: "/tmp/agent-researcher",

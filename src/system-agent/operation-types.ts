@@ -22,7 +22,7 @@ export type SystemAgentOperation =
       id: string;
       provider?: string;
     }
-  | { kind: "setup"; workspace?: string; model?: string }
+  | { kind: "setup"; agentId?: string; workspace?: string; model?: string }
   | { kind: "model-setup"; workspace?: string }
   | { kind: "channel-list" }
   | { kind: "channel-info"; channel: string }

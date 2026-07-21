@@ -8,8 +8,9 @@ import {
 } from "../commands/agents.config.js";
 import { transformConfigFileWithRetry, withConfigMutationExclusive } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
@@ -55,6 +56,8 @@ type CreateAgentParams = {
   emoji?: unknown;
   avatar?: unknown;
   agentDir?: string;
+  skipBootstrap?: boolean;
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   bindingSpecs?: string[];
   transformConfig?: typeof transformConfigFileWithRetry;
 };
@@ -97,7 +100,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     return createError("invalid-name", "agent name is required");
   }
   const agentId = normalizeAgentId(rawName);
-  if (agentId === DEFAULT_AGENT_ID || isReservedSystemAgentId(agentId)) {
+  if (isReservedSystemAgentId(agentId)) {
     return createError("reserved-id", `"${agentId}" is reserved`, agentId);
   }
 
@@ -172,8 +175,13 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           // finishes before the final entry becomes visible to readers or delete flows.
           const workspace = await ensureAgentWorkspace({
             dir: workspaceDir,
-            ensureBootstrapFiles: !nextConfig.agents?.defaults?.skipBootstrap,
-            skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+            ensureBootstrapFiles:
+              params.skipBootstrap === undefined
+                ? !nextConfig.agents?.defaults?.skipBootstrap
+                : !params.skipBootstrap,
+            skipOptionalBootstrapFiles:
+              params.skipOptionalBootstrapFiles ??
+              nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
           });
           if (workspace.dir !== workspaceDir) {
             nextConfig = applyAgentConfig(nextConfig, {

@@ -18,6 +18,36 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
 
+vi.mock("../commands/onboard-agent.js", () => ({
+  ensureOnboardingAgent: async ({
+    config,
+    name,
+    workspace,
+  }: {
+    config: OpenClawConfig;
+    name: string;
+    workspace: string;
+  }) => ({
+    config: {
+      ...config,
+      agents: {
+        ...config.agents,
+        list: [
+          {
+            id: name,
+            name,
+            workspace,
+            agentDir: path.join(process.env.OPENCLAW_STATE_DIR ?? "", "agent"),
+            default: true,
+          },
+        ],
+      },
+    },
+    agentId: name,
+    bootstrapPending: true,
+  }),
+}));
+
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
 type ResolvePluginProvidersRuntime =

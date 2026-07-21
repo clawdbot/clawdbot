@@ -480,6 +480,7 @@ export async function executeSetup(
     );
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());
+  const agentId = normalizeAgentId(operation.agentId?.trim() || "main");
   return await applyPersistentOperation({
     auditOperation: "openclaw.setup",
     operation,
@@ -496,6 +497,7 @@ export async function executeSetup(
           await applySetup(
             {
               workspace,
+              agentName: agentId,
               expectedInferenceRoute: verified.route,
               surface,
               runtime: ctx.runtime,
@@ -512,9 +514,11 @@ export async function executeSetup(
       return {
         summary: "Bootstrapped setup workspace",
         bootstrapPending: applied.bootstrapPending,
+        agentId,
         configPath: after.path || applied.configPath,
         details: {
           workspace,
+          agentId,
           model: verified.modelRef,
           modelSource: "live-verified default model",
           inferenceLatencyMs: verified.latencyMs,

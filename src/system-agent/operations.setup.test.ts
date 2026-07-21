@@ -44,7 +44,7 @@ function expectAuditRecord(
 }
 
 const mockConfig = vi.hoisted(() => {
-  const initial = {};
+  const initial = { agents: { list: [{ id: "main", default: true }] } };
   const state = {
     path: "/tmp/openclaw.json",
     exists: true,
@@ -74,7 +74,7 @@ const mockConfig = vi.hoisted(() => {
     reset() {
       state.path = "/tmp/openclaw.json";
       state.exists = true;
-      state.config = {};
+      state.config = { agents: { list: [{ id: "main", default: true }] } };
       state.hash = "mock-hash-0";
     },
     missing(pathLocal: string) {
@@ -87,6 +87,14 @@ const mockConfig = vi.hoisted(() => {
       return cloneConfig();
     },
     setConfig(config: TestConfig) {
+      const agents =
+        typeof config.agents === "object" && config.agents !== null
+          ? (config.agents as Record<string, unknown>)
+          : {};
+      if (!Object.hasOwn(agents, "list")) {
+        agents.list = [{ id: "main", default: true }];
+      }
+      config.agents = agents;
       state.config = structuredClone(config);
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
@@ -228,6 +236,7 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).toHaveBeenCalledWith(
       {
         workspace: "/tmp/work",
+        agentName: "main",
         expectedInferenceRoute: expect.any(Object),
         surface: "cli",
         runtime,
@@ -427,10 +436,11 @@ describe("parseSystemAgentOperation", () => {
       },
     );
 
-    expect(result).toEqual({ applied: true, bootstrapPending: false });
+    expect(result).toEqual({ applied: true, bootstrapPending: false, agentId: "main" });
     expect(applySetup).toHaveBeenCalledWith(
       {
         workspace: "/tmp/work",
+        agentName: "main",
         expectedInferenceRoute: expect.any(Object),
         surface: "cli",
         runtime,
@@ -707,7 +717,7 @@ describe("parseSystemAgentOperation", () => {
     },
   ])(
     "aborts when concurrent $field changes invalidate the verified route",
-    async ({ initial, change }) => {
+    async ({ field, initial, change }) => {
       const tempDir = opTempDirs.make("openclaw-route-conflict-");
       setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
       mockConfig.setConfig(initial);
@@ -727,7 +737,11 @@ describe("parseSystemAgentOperation", () => {
             deps: { verifyInferenceConfig },
           },
         ),
-      ).rejects.toThrow("inference route changed during verification");
+      ).rejects.toThrow(
+        field === "default marker"
+          ? "expected exactly one default=true entry"
+          : "inference route changed during verification",
+      );
 
       expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
       expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");

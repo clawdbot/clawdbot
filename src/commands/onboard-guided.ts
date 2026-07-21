@@ -141,7 +141,7 @@ async function runGuidedOnboardingFlow(
     runtime.exit(1);
     return null;
   }
-  const existingConfig =
+  let existingConfig =
     snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const acknowledgedConfig = await requireRiskAcknowledgement({
     opts,
@@ -440,11 +440,20 @@ async function runGuidedOnboardingFlow(
     // would, then hand off to the hatch instead of parking in the OpenClaw chat.
     const applySetup =
       deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
+    const firstAgentName =
+      (existingConfig.agents?.list?.length ?? 0) === 0
+        ? await prompter.text({
+            message: "What should we call your first agent?",
+            initialValue: "main",
+            validate: (value) => (value?.trim() ? undefined : "Agent name is required"),
+          })
+        : undefined;
     const applyProgress = prompter.progress(t("wizard.guided.settingUp"));
     try {
       const applied = await withConsoleSubsystemsSuppressed(() =>
         applySetup({
           workspace,
+          ...(firstAgentName ? { agentName: firstAgentName } : {}),
           ...(allowWorkspaceChange ? { allowWorkspaceChange: true } : {}),
           surface: "cli",
           runtime,

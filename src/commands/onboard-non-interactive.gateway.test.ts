@@ -108,6 +108,28 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
 }));
 
+vi.mock("./onboard-agent.js", () => ({
+  ensureOnboardingAgent: async ({
+    config,
+    name,
+    workspace,
+  }: {
+    config: OpenClawConfig;
+    name: string;
+    workspace: string;
+  }) => ({
+    config: {
+      ...config,
+      agents: {
+        ...config.agents,
+        list: [{ id: name, name, workspace, default: true }],
+      },
+    },
+    agentId: name,
+    bootstrapPending: true,
+  }),
+}));
+
 vi.mock("./onboard-helpers.js", () => {
   const normalizeGatewayTokenInput = (value: unknown): string => {
     if (typeof value !== "string") {

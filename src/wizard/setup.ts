@@ -516,6 +516,25 @@ async function runSetupWizardOnce(
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
+  if ((nextConfig.agents?.list?.length ?? 0) === 0) {
+    const agentName = await prompter.text({
+      message: "What should we call your first agent?",
+      initialValue: "main",
+      validate: (value) => (value?.trim() ? undefined : "Agent name is required"),
+    });
+    const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
+    const created = await ensureOnboardingAgent({
+      config: nextConfig,
+      name: agentName.trim() || "main",
+      workspace: workspaceDir,
+    });
+    nextConfig = applyLocalSetupWorkspaceConfig(created.config, requestedWorkspaceDir, {
+      allowWorkspaceChange,
+    });
+    if (opts.skipBootstrap) {
+      nextConfig = applySkipBootstrapConfig(nextConfig);
+    }
+  }
 
   if (!keepExistingModelConfig) {
     const modelAuth = await runSetupModelAuthStep({
