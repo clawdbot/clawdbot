@@ -30,6 +30,7 @@ import {
 } from "./session-accessor.sqlite-session-row.js";
 import { parseSqliteSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { invalidateSessionStoreCache } from "./store-cache.js";
 import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
@@ -358,6 +359,7 @@ export function deleteSqliteSessionEntryRows(
     database.db,
     db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
   );
+  invalidateSessionStoreCache(database.path);
 }
 
 /** Remove the logical entry while retaining its node-owned transcript windows. */
@@ -397,6 +399,7 @@ function clearSqliteSessionEntryPreservingWindows(
       .values({ session_key: params.sessionKey, ...cleared })
       .onConflict((conflict) => conflict.column("session_key").doUpdateSet(cleared)),
   );
+  invalidateSessionStoreCache(database.path);
 }
 
 export function deleteSqliteLifecycleTargetRows(
@@ -480,6 +483,7 @@ export function deleteLegacySessionEntryRows(
       db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
     );
   }
+  invalidateSessionStoreCache(database.path);
 }
 
 /** Move retained generations to the canonical node before removing key aliases. */
@@ -634,6 +638,7 @@ export function writeSessionEntry(
       updatedAt,
     });
   }
+  invalidateSessionStoreCache(database.path);
 }
 
 /** Resolves the parent fork decision using SQLite transcript rows when totals are stale. */

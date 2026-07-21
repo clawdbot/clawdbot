@@ -67,6 +67,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readSqliteSessionEntriesByStatus } from "./session-accessor.sqlite-status.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { invalidateSessionStoreCache } from "./store-cache.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -278,6 +279,7 @@ export async function applySqliteSessionStoreProjection<T>(params: {
       { operationLabel: "session.store-projection" },
     );
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    invalidateSessionStoreCache(database.path);
     return operation.result;
   });
 }

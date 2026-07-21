@@ -36,6 +36,7 @@ import {
   readSqliteLifecycleTargetSnapshot,
   readSqliteSessionEntrySelectionSnapshot,
   readSqliteSessionIdentitySnapshot,
+  readSqliteSessionEntryStore,
   rehomeSqliteSessionWindows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -68,6 +69,11 @@ import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lin
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import {
+  isSessionStoreCacheEnabled,
+  readSessionStoreCache,
+  writeSessionStoreCache,
+} from "./store-cache.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
 
@@ -134,7 +140,21 @@ export function listSqliteSessionEntries(
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return listSqliteSessionEntriesFromDatabase(database);
+  const dbPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+  if (isSessionStoreCacheEnabled()) {
+    const cached = readSessionStoreCache({ storePath: dbPath, clone: false });
+    if (cached) {
+      return Object.entries(cached)
+        .filter(([key]) => !isInternalSessionEffectsKey(key))
+        .map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    }
+  }
+  const result = listSqliteSessionEntriesFromDatabase(database);
+  if (isSessionStoreCacheEnabled()) {
+    const storeRecord = readSqliteSessionEntryStore(database);
+    writeSessionStoreCache({ storePath: dbPath, store: storeRecord, takeOwnership: true });
+  }
+  return result;
 }
 
 /**
