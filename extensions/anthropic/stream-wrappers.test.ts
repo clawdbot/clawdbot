@@ -1,5 +1,5 @@
-import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 // Anthropic tests cover stream wrappers plugin behavior.
+import { configureAiTransportHost, getAiTransportHost, type AiTransportHost } from "@openclaw/ai";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -17,20 +17,22 @@ const OAUTH_BETA = "oauth-2025-04-20";
 const DEFAULT_BETA_HEADER =
   "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
 const OAUTH_BETA_HEADER = `claude-code-20250219,${OAUTH_BETA},${DEFAULT_BETA_HEADER}`;
-const initialTransportHost = getAiTransportHost();
+let initialAiTransportHost: AiTransportHost;
 
 beforeAll(() => {
+  initialAiTransportHost = getAiTransportHost();
   configureAiTransportHost({
-    ...initialTransportHost,
+    ...initialAiTransportHost,
     resolveProviderRequestCapabilities: (input) => ({
-      ...initialTransportHost.resolveProviderRequestCapabilities(input),
-      allowsAnthropicServiceTier: input.provider === "anthropic",
+      ...initialAiTransportHost.resolveProviderRequestCapabilities(input),
+      allowsAnthropicServiceTier:
+        input.provider === "anthropic" && input.api === "anthropic-messages",
     }),
   });
 });
 
 afterAll(() => {
-  configureAiTransportHost(initialTransportHost);
+  configureAiTransportHost(initialAiTransportHost);
 });
 
 function runWrapper(apiKey: string | undefined): Record<string, string> | undefined {

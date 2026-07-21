@@ -304,6 +304,7 @@ describe("provider-runtime", () => {
         error: vi.fn(),
       }),
     }));
+    await import("../agents/ai-transport-runtime-host.js");
     ({
       augmentModelCatalogWithProviderPlugins,
       buildProviderAuthDoctorHintWithPlugin,
