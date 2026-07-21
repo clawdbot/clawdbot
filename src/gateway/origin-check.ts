@@ -157,6 +157,15 @@ function isTrustedSameOriginHost(hostHeader: string, isLocalClient?: boolean): b
   if (isLoopbackHost(hostname)) {
     return isLocalClient !== false;
   }
+  // The Host header is attacker-controlled. A remote client can set both
+  // Host and Origin to any private IP or .local/.ts.net hostname to make
+  // them match. Only trust the Host-derived hostname for same-origin
+  // validation when the request actually originates from a local client.
+  // Non-local clients must use explicit allowedOrigins or the opt-in
+  // allowHostHeaderOriginFallback instead.
+  if (isLocalClient === false) {
+    return false;
+  }
   if (net.isIP(hostname) !== 0) {
     return isPrivateOrLoopbackIpAddress(hostname);
   }

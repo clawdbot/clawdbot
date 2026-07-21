@@ -28,20 +28,49 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
-      name: "accepts same-origin private LAN host without dangerous fallback",
+      name: "accepts same-origin private LAN host for local clients",
       input: {
         requestHost: "192.168.0.202:18789",
         origin: "http://192.168.0.202:18789",
+        isLocalClient: true,
       },
       expected: { ok: true as const, matchedBy: "private-same-origin" as const },
     },
     {
-      name: "accepts same-origin tailnet host without dangerous fallback",
+      name: "rejects same-origin private LAN host for non-local clients (Host header spoof)",
+      input: {
+        requestHost: "192.168.0.202:18789",
+        origin: "http://192.168.0.202:18789",
+        isLocalClient: false,
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "accepts same-origin tailnet host for local clients",
       input: {
         requestHost: "peters-mac-studio-1.example.ts.net:18789",
         origin: "http://peters-mac-studio-1.example.ts.net:18789",
+        isLocalClient: true,
       },
       expected: { ok: true as const, matchedBy: "private-same-origin" as const },
+    },
+    {
+      name: "rejects same-origin tailnet host for non-local clients (Host header spoof)",
+      input: {
+        requestHost: "peters-mac-studio-1.example.ts.net:18789",
+        origin: "http://peters-mac-studio-1.example.ts.net:18789",
+        isLocalClient: false,
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "rejects same-origin .local host for non-local clients (Host header spoof)",
+      input: {
+        requestHost: "gateway.local:18789",
+        origin: "http://gateway.local:18789",
+        isLocalClient: false,
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
       name: "accepts same-origin loopback host for local clients",
