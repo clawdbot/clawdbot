@@ -87,17 +87,83 @@ function sleepExecApprovalsSyncLockRetry(): void {
   }
 }
 
+function syncLockPayloadMatchesStablePath(lock: ExecApprovalsSyncLock): boolean {
+  const expected = Buffer.from(lock.raw, "utf8");
+  let descriptor: number | undefined;
+  try {
+    const before = fs.lstatSync(lock.lockPath);
+    if (!before.isFile() || before.size !== expected.byteLength) {
+      return false;
+    }
+    const openFlags =
+      fs.constants.O_RDONLY |
+      (process.platform !== "win32" && typeof fs.constants.O_NOFOLLOW === "number"
+        ? fs.constants.O_NOFOLLOW
+        : 0) |
+      (typeof fs.constants.O_NONBLOCK === "number" ? fs.constants.O_NONBLOCK : 0);
+    descriptor = fs.openSync(lock.lockPath, openFlags);
+    const opened = fs.fstatSync(descriptor);
+    if (!opened.isFile() || opened.size !== expected.byteLength) {
+      return false;
+    }
+
+    // Read at most one byte beyond the owned payload so a raced replacement
+    // cannot force an unbounded allocation before ownership fails closed.
+    const current = Buffer.allocUnsafe(expected.byteLength + 1);
+    let bytesRead = 0;
+    while (bytesRead < current.byteLength) {
+      const count = fs.readSync(
+        descriptor,
+        current,
+        bytesRead,
+        current.byteLength - bytesRead,
+        bytesRead,
+      );
+      if (count === 0) {
+        break;
+      }
+      bytesRead += count;
+    }
+
+    const after = fs.lstatSync(lock.lockPath);
+    return (
+      after.isFile() &&
+      before.dev === after.dev &&
+      before.ino === after.ino &&
+      after.size === expected.byteLength &&
+      bytesRead === expected.byteLength &&
+      expected.equals(current.subarray(0, bytesRead))
+    );
+  } catch {
+    return false;
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor);
+      } catch {
+        // Best-effort verification cleanup; retaining the sidecar fails closed.
+      }
+    }
+  }
+}
+
 function removeOwnedExecApprovalsLock(
   lock: ExecApprovalsSyncLock,
   options: { requirePayloadMatch: boolean },
 ): void {
   try {
-    const current = fs.lstatSync(lock.lockPath);
-    if (
-      current.dev === lock.device &&
-      current.ino === lock.inode &&
-      (!options.requirePayloadMatch || fs.readFileSync(lock.lockPath, "utf8") === lock.raw)
-    ) {
+    // Normal release uses the per-acquisition nonce in the exact payload, so
+    // acquisition-fd/path drift cannot strand a lock. Pin the current pathname
+    // during its bounded read; failed-write cleanup keeps the acquisition
+    // identity check because the expected payload may be partial.
+    let stillOwned: boolean;
+    if (options.requirePayloadMatch) {
+      stillOwned = syncLockPayloadMatchesStablePath(lock);
+    } else {
+      const current = fs.lstatSync(lock.lockPath);
+      stillOwned = current.dev === lock.device && current.ino === lock.inode;
+    }
+    if (stillOwned) {
       fs.rmSync(lock.lockPath, { force: true });
     }
   } catch {
