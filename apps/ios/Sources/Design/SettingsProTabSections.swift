@@ -1006,8 +1006,19 @@ extension SettingsProTab {
                    let accessLevelText = self.locationSettingsPresentation.accessLevelText
                 {
                     Divider()
-                    Button {
-                        self.showLocationAccessDialog = true
+                    Menu {
+                        Button {
+                            self.selectLocationAccessLevel(.whileUsing)
+                        } label: {
+                            Text("While Using the App")
+                                .font(OpenClawType.subheadSemiBold)
+                        }
+                        Button {
+                            self.selectLocationAccessLevel(.always)
+                        } label: {
+                            Text("Always")
+                                .font(OpenClawType.subheadSemiBold)
+                        }
                     } label: {
                         HStack(alignment: .firstTextBaseline) {
                             Text("Access Level")

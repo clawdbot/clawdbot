@@ -6,7 +6,11 @@ import type { Model } from "@openclaw/llm-core";
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import {
+  configureAiTransportHost,
+  getAiTransportHost,
+  type AiInlineContentBlock,
+} from "../host.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
@@ -14,6 +18,16 @@ const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
 }));
 
 const coreTransportHost = getAiTransportHost();
+
+function configureTestAnthropicImageNormalizer(): void {
+  configureAiTransportHost({
+    ...getAiTransportHost(),
+    normalizeAnthropicInlineContentBlocks: async (content) =>
+      content.map((block) =>
+        block.type === "image" ? { ...block, mimeType: "image/jpeg" } : block,
+      ),
+  });
+}
 
 function resolveTestEndpointClass(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
@@ -3485,6 +3499,118 @@ describe("anthropic transport stream", () => {
       },
     ]);
     expect(toolResult.is_error).toBe(false);
+  });
+
+  it("normalizes unsupported user image blocks before Anthropic transport payloads", async () => {
+    configureTestAnthropicImageNormalizer();
+    const imageData = Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+    ]).toString("base64");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", data: imageData, mimeType: "image/heic" },
+            ],
+          },
+        ],
+      } as AnthropicStreamContext,
+      { apiKey: "test-api-key" } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const imageBlock = findRecord(userMessage.content, (record) => record.type === "image");
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: imageData },
+    });
+  });
+
+  it("preserves an omission placeholder for non-vision image-only turns", async () => {
+    const normalizer = vi.fn(async (content: readonly AiInlineContentBlock[]) => [...content]);
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      normalizeAnthropicInlineContentBlocks: normalizer,
+    });
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({ input: ["text"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", data: "not-base64", mimeType: "image/heic" }],
+          },
+        ],
+      } as AnthropicStreamContext,
+      { apiKey: "test-api-key" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(normalizer).not.toHaveBeenCalled();
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    expect(JSON.stringify(userMessage.content)).toContain("image omitted");
+  });
+
+  it("normalizes unsupported tool result images before Anthropic transport payloads", async () => {
+    configureTestAnthropicImageNormalizer();
+    const imageData = Buffer.from("tool-image").toString("base64");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            toolName: "screenshot",
+            content: [{ type: "image", data: imageData, mimeType: "image/tiff" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as AnthropicStreamContext,
+      { apiKey: "test-api-key" } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const toolResult = findRecord(userMessage.content, (record) => record.type === "tool_result");
+    const imageBlock = findRecord(toolResult.content, (record) => record.type === "image");
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: imageData },
+    });
   });
 
   it("serializes structured non-image blocks in tool results as JSON text", async () => {

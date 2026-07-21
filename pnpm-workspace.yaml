@@ -98,14 +98,14 @@ blockExoticSubdeps: true
 
 overrides:
   "@anthropic-ai/sdk": 0.109.1
-  "@opentelemetry/core": 2.8.0
+  "@opentelemetry/core": 2.9.0
   "@aws-sdk/core": 3.974.27
   "@aws-sdk/credential-provider-node": 3.972.61
   "@aws-sdk/xml-builder": 3.972.33
   hono: 4.12.25
   "@hono/node-server": 1.19.14
   axios: 1.18.0
-  fast-uri: 3.1.2
+  fast-uri: 3.1.3
   follow-redirects: 1.16.0
   defu: 6.1.5
   fast-xml-parser: 5.7.0

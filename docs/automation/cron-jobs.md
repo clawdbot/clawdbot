@@ -371,8 +371,11 @@ For template files, keep the language instruction in the rendered prompt and ver
 ## Managing jobs
 
 ```bash
-# List all jobs
+# List enabled jobs
 openclaw cron list
+
+# Include disabled jobs
+openclaw cron list --all
 
 # Get one stored job as JSON
 openclaw cron get <jobId>

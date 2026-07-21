@@ -16,11 +16,34 @@ vi.mock("../gateway-rpc.js", async () => {
 });
 
 const { registerCronSimpleCommands } = await import("./register.cron-simple.js");
+const originalStderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
 
 async function runCronShow(id: string): Promise<void> {
   const cron = new Command();
   registerCronSimpleCommands(cron);
   await cron.parseAsync(["show", id, "--json"], { from: "user" });
+}
+
+async function runCronToggle(command: "enable" | "disable"): Promise<void> {
+  const program = new Command();
+  program.exitOverride();
+  registerCronSimpleCommands(program);
+  await program.parseAsync([command, "job-1"], { from: "user" });
+}
+
+function setStderrIsTTY(value: boolean): void {
+  Object.defineProperty(process.stderr, "isTTY", {
+    value,
+    configurable: true,
+  });
+}
+
+function restoreStderrIsTTY(): void {
+  if (originalStderrIsTTY) {
+    Object.defineProperty(process.stderr, "isTTY", originalStderrIsTTY);
+  } else {
+    Reflect.deleteProperty(process.stderr, "isTTY");
+  }
 }
 
 describe("cron show pagination guard (regression for #83856)", () => {
@@ -83,5 +106,44 @@ describe("cron show pagination guard (regression for #83856)", () => {
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("cron job not found: missing"),
     );
+  });
+});
+
+describe("cron disable hint", () => {
+  beforeEach(() => {
+    callGatewayFromCli.mockReset();
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      return { ok: true };
+    });
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    restoreStderrIsTTY();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { command: "disable" as const, tty: false, expectedHint: false },
+    { command: "disable" as const, tty: true, expectedHint: true },
+    { command: "enable" as const, tty: true, expectedHint: false },
+  ])("$command with stderr TTY=$tty emits hint=$expectedHint", async (params) => {
+    setStderrIsTTY(params.tty);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await runCronToggle(params.command);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: { enabled: params.command === "enable" },
+    });
+    if (params.expectedHint) {
+      expect(stderrWrite).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
+    } else {
+      expect(stderrWrite).not.toHaveBeenCalled();
+    }
   });
 });

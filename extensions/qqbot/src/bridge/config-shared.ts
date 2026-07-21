@@ -30,6 +30,7 @@ export const qqbotMeta = {
   docsPath: "/channels/qqbot",
   blurb: "Connect to QQ via official QQ Bot API",
   order: 50,
+  preferSessionLookupForAnnounceTarget: true,
 } as const;
 
 function validateQQBotSetupInput(params: {

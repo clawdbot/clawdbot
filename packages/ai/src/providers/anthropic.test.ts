@@ -78,6 +78,21 @@ function makeSonnet5PrefillContext(): Context {
   };
 }
 
+function tinyJpegBase64(): string {
+  return Buffer.from([
+    0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+  ]).toString("base64");
+}
+
+function configureTestAnthropicImageNormalizer(): void {
+  configureAiTransportHost({
+    normalizeAnthropicInlineContentBlocks: async (content) =>
+      content.map((block) =>
+        block.type === "image" ? { ...block, mimeType: "image/jpeg" } : block,
+      ),
+  });
+}
+
 describe("Anthropic provider", () => {
   beforeEach(() => {
     anthropicMockState.configs = [];
@@ -1237,6 +1252,139 @@ describe("Anthropic provider", () => {
       { type: "text", text: expect.stringContaining('{"type":"resource"') },
       { type: "text", text: "after image" },
     ]);
+  });
+
+  it("normalizes unsupported user image blocks before Anthropic payloads", async () => {
+    configureTestAnthropicImageNormalizer();
+    let capturedPayload: unknown;
+    const imageData = tinyJpegBase64();
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", mimeType: "image/heic", data: imageData },
+            ],
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    const [userMessage] = (capturedPayload as { messages: [Record<string, unknown>] }).messages;
+    const imageBlock = (userMessage.content as Array<Record<string, unknown>>)[1];
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: imageData },
+    });
+  });
+
+  it("keeps non-vision image downgrade behavior without invoking normalization", async () => {
+    configureAiTransportHost({
+      normalizeAnthropicInlineContentBlocks: async () => {
+        throw new Error("non-vision images should be downgraded before normalization");
+      },
+    });
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text"] }),
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "look" },
+              { type: "image", mimeType: "image/heic", data: "not-base64" },
+            ],
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    const [userMessage] = (capturedPayload as { messages: [Record<string, unknown>] }).messages;
+    expect(userMessage.content).toMatchObject([
+      { type: "text", text: "look" },
+      { type: "text", text: "(image omitted: model does not support images)" },
+    ]);
+  });
+
+  it("normalizes unsupported tool result image blocks before Anthropic payloads", async () => {
+    configureTestAnthropicImageNormalizer();
+    let capturedPayload: unknown;
+    const imageData = tinyJpegBase64();
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            toolName: "screenshot",
+            content: [{ type: "image", data: imageData, mimeType: "image/tiff" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "test-api-key",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    const [, userMessage] = (
+      capturedPayload as { messages: [Record<string, unknown>, Record<string, unknown>] }
+    ).messages;
+    const [toolResult] = userMessage.content as [Record<string, unknown>];
+    const imageBlock = (toolResult.content as Array<Record<string, unknown>>)[1];
+    expect(imageBlock).toMatchObject({
+      type: "image",
+      source: { type: "base64", media_type: "image/jpeg", data: imageData },
+    });
   });
 
   it("does not emit Anthropic image blocks or placeholders for payload-less tool media", async () => {

@@ -1,9 +1,11 @@
 import type {
   AssistantMessageDiagnostic,
   Context,
+  ImageContent,
   Model,
   SimpleStreamOptions,
   StreamFn,
+  TextContent,
   ThinkingLevel,
   Usage,
 } from "@openclaw/llm-core";
@@ -15,6 +17,12 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
+import {
+  createAnthropicInlineImageBudget,
+  normalizeAnthropicInlineContent,
+  resolveAnthropicImageMediaType,
+  type AnthropicInlineImageBudget,
+} from "../internal/anthropic-inline-images.js";
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
@@ -362,7 +370,13 @@ function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
-function convertContentBlocks(content: readonly unknown[], model: { input: readonly string[] }) {
+const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
+
+async function convertContentBlocks(
+  content: readonly unknown[],
+  model: { input: readonly string[] },
+  imageBudget: AnthropicInlineImageBudget,
+) {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
   const hasImages = model.input.includes("image") && content.some(isImageWithMediaPayload);
@@ -390,12 +404,25 @@ function convertContentBlocks(content: readonly unknown[], model: { input: reado
     if (!isImageWithMediaPayload(record)) {
       continue;
     }
+    const [normalizedImage] = await normalizeAnthropicInlineContent(
+      [
+        {
+          type: "image" as const,
+          data: typeof record.data === "string" ? record.data : "",
+          mimeType: typeof record.mimeType === "string" ? record.mimeType : "image/png",
+        },
+      ],
+      imageBudget,
+    );
+    if (normalizedImage?.type !== "image") {
+      continue;
+    }
     blocks.push({
       type: "image" as const,
       source: {
         type: "base64",
-        media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
-        data: record.data,
+        media_type: resolveAnthropicImageMediaType(normalizedImage.mimeType),
+        data: normalizedImage.data,
       },
     });
   }
@@ -409,7 +436,7 @@ function normalizeToolCallId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function convertAnthropicMessages(
+async function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
@@ -418,8 +445,9 @@ function convertAnthropicMessages(
     cacheBreakpointOptOutMessageIndexes: Set<number>;
     replayThinkingEnabled?: boolean;
   },
-): Array<Record<string, unknown>> {
+): Promise<Array<Record<string, unknown>>> {
   const params: Array<Record<string, unknown>> = [];
+  const imageBudget = createAnthropicInlineImageBudget();
   const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
   const replayThinkingEnabled = options.replayThinkingEnabled !== false;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
@@ -446,13 +474,23 @@ function convertAnthropicMessages(
         }
         continue;
       }
+      const normalizedContent = model.input.includes("image")
+        ? await normalizeAnthropicInlineContent(
+            msg.content as readonly (TextContent | ImageContent)[],
+            imageBudget,
+          )
+        : msg.content.map((item) =>
+            item.type === "image"
+              ? { type: "text" as const, text: NON_VISION_USER_IMAGE_PLACEHOLDER }
+              : item,
+          );
       const blocks: Array<
         | { type: "text"; text: string }
         | {
             type: "image";
             source: { type: "base64"; media_type: string; data: string };
           }
-      > = msg.content.map((item) =>
+      > = normalizedContent.map((item) =>
         item.type === "text"
           ? {
               type: "text",
@@ -462,7 +500,7 @@ function convertAnthropicMessages(
               type: "image",
               source: {
                 type: "base64",
-                media_type: item.mimeType,
+                media_type: resolveAnthropicImageMediaType(item.mimeType),
                 data: item.data,
               },
             },
@@ -580,7 +618,7 @@ function convertAnthropicMessages(
         {
           type: "tool_result",
           tool_use_id: toolResult.toolCallId,
-          content: convertContentBlocks(toolResult.content, model),
+          content: await convertContentBlocks(toolResult.content, model, imageBudget),
           is_error: toolResult.isError,
         },
       ];
@@ -593,7 +631,7 @@ function convertAnthropicMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content, model),
+          content: await convertContentBlocks(nextMsg.content, model, imageBudget),
           is_error: nextMsg.isError,
         });
         j += 1;
@@ -1011,15 +1049,15 @@ function createAnthropicTransportClient(params: {
   };
 }
 
-function buildAnthropicParams(
+async function buildAnthropicParams(
   model: AnthropicTransportModel,
   context: Context,
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
-): {
+): Promise<{
   params: Record<string, unknown>;
   toolProjection?: AnthropicToolProjection;
-} {
+}> {
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const maxTokens = resolveAnthropicMessagesMaxTokens({
@@ -1042,7 +1080,7 @@ function buildAnthropicParams(
   // Transient runtime-context carrier indexes skip cache anchoring so the breakpoint
   // stays on the last stable user turn; conversion-to-policy must not splice messages.
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
-  const messages = convertAnthropicMessages(context.messages, model, isOAuthToken, {
+  const messages = await convertAnthropicMessages(context.messages, model, isOAuthToken, {
     allowReasoningContentReplay: supportsReasoningContentReplay(model),
     cacheBreakpointOptOutMessageIndexes,
     replayThinkingEnabled,
@@ -1261,7 +1299,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           apiKey,
           options: transportOptions,
         });
-        const builtParams = buildAnthropicParams(
+        const builtParams = await buildAnthropicParams(
           model,
           requestContext,
           isOAuthToken,

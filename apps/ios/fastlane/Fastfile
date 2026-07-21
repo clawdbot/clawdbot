@@ -1311,6 +1311,35 @@ def validate_app_store_ipa!(ipa_path, expected_commit:, expected_build_timestamp
   ]))
 end
 
+def verify_snapshot_test_result!(result_bundle_path, device)
+  UI.user_error!("Screenshot test result bundle is missing for #{device}: #{result_bundle_path}") unless File.directory?(result_bundle_path)
+
+  stdout, stderr, status = Open3.capture3(
+    "xcrun",
+    "xcresulttool",
+    "get",
+    "test-results",
+    "summary",
+    "--path",
+    result_bundle_path,
+    "--compact"
+  )
+  unless status.success?
+    detail = stderr.to_s.strip
+    detail = stdout.to_s.strip if detail.empty?
+    UI.user_error!("Failed to inspect screenshot test results for #{device}: #{detail}")
+  end
+
+  summary = JSON.parse(stdout)
+  failed_tests = summary.fetch("failedTests")
+  result = summary.fetch("result")
+  return if result == "Passed" && failed_tests.zero?
+
+  UI.test_failure!("Screenshot UI tests failed on #{device}: result=#{result}, failedTests=#{failed_tests}.")
+rescue JSON::ParserError, KeyError => e
+  UI.user_error!("Invalid screenshot test result summary for #{device}: #{e.message}")
+end
+
 def build_app_store_release(context)
   version = context[:version]
   project_path = File.join(ios_root, "OpenClaw.xcodeproj")
@@ -1529,11 +1558,12 @@ platform :ios do
         screenshots(release_version: context[:version], build_number: context[:build_number])
       end
     end
+    verify_apple_release_source!(release_sha)
+    build = build_app_store_release(context)
+
     ENV["DELIVER_SCREENSHOTS"] = "1"
     ENV["DELIVER_RELEASE_NOTES"] = "1"
     metadata(release_version: context[:short_version])
-
-    build = build_app_store_release(context)
 
     upload_to_testflight(
       api_key: context[:api_key],
@@ -1636,25 +1666,46 @@ platform :ios do
     sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
     sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
 
-    capture_ios_screenshots(
-      project: File.join(ios_root, "OpenClaw.xcodeproj"),
-      scheme: "OpenClawUITests",
-      configuration: "Debug",
-      devices: snapshot_devices,
-      languages: ["en-US"],
-      # The scheme also carries functional UI tests (share extension); the
-      # screenshot lane must only drive the deterministic snapshot suite.
-      only_testing: ["OpenClawUITests/OpenClawSnapshotUITests"],
-      launch_arguments: ["--openclaw-screenshot-mode"],
-      output_directory: File.join(ios_root, "fastlane", "screenshots"),
-      clear_previous_screenshots: true,
-      reinstall_app: true,
-      concurrent_simulators: false,
-      override_status_bar: true,
-      override_status_bar_arguments: SNAPSHOT_STATUS_BAR_ARGUMENTS,
-      skip_open_summary: true,
-      xcargs: "-allowProvisioningUpdates"
-    )
+    output_directory = File.join(ios_root, "fastlane", "screenshots")
+    result_bundle_path = File.join(output_directory, "test_output", "en-US", "OpenClawUITests.xcresult")
+    result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")
+    derived_data_path = File.join(ios_root, "build", "SnapshotDerivedData")
+    FileUtils.rm_rf(result_bundle_archive_directory)
+    FileUtils.mkdir_p(result_bundle_archive_directory)
+    FileUtils.rm_rf(derived_data_path)
+    snapshot_devices.each_with_index do |device, index|
+      capture_ios_screenshots(
+        project: File.join(ios_root, "OpenClaw.xcodeproj"),
+        scheme: "OpenClawUITests",
+        configuration: "Debug",
+        devices: [device],
+        languages: ["en-US"],
+        # The scheme also carries functional UI tests (share extension); the
+        # screenshot lane must only drive the deterministic snapshot suite.
+        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests"],
+        launch_arguments: ["--openclaw-screenshot-mode"],
+        output_directory: output_directory,
+        clear_previous_screenshots: index.zero?,
+        derived_data_path: derived_data_path,
+        result_bundle: true,
+        number_of_retries: 0,
+        stop_after_first_error: true,
+        reinstall_app: true,
+        concurrent_simulators: false,
+        override_status_bar: true,
+        override_status_bar_arguments: SNAPSHOT_STATUS_BAR_ARGUMENTS,
+        skip_open_summary: true,
+        xcargs: "-allowProvisioningUpdates"
+      )
+      verify_snapshot_test_result!(result_bundle_path, device)
+      archived_result_bundle_path = File.join(result_bundle_archive_directory, "#{device}.xcresult")
+      FileUtils.rm_rf(archived_result_bundle_path)
+      FileUtils.mv(result_bundle_path, archived_result_bundle_path)
+    end
+
+    # Snapshot fixes its result bundles under the screenshot root. Keep successful
+    # evidence in build/ so Deliver sees only locale directories during validation.
+    FileUtils.rm_rf(File.join(output_directory, "test_output"))
 
     watch_screenshot(release_version: release_version, build_number: build_number)
   end

@@ -196,21 +196,21 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(permissions.waitForExistence(timeout: 8))
         permissions.tap()
 
-        let offMode = try XCTUnwrap(self.app?.buttons["Off"])
-        if !offMode.isSelected {
-            offMode.tap()
-            XCTAssertTrue(offMode.isSelected)
+        let sharingToggle = try XCTUnwrap(self.app?.buttons["settings-location-sharing-toggle"])
+        XCTAssertTrue(sharingToggle.waitForExistence(timeout: 5))
+        if sharingToggle.value as? String != "Off" {
+            sharingToggle.tap()
+            self.waitForValue("Off", of: sharingToggle)
+            self.waitForEnabled(sharingToggle)
         }
-        let alwaysMode = try XCTUnwrap(self.app?.buttons["Always"])
-        XCTAssertTrue(alwaysMode.waitForExistence(timeout: 5))
-        alwaysMode.tap()
+        sharingToggle.tap()
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let prompt = springboard.alerts.firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        self.waitForValue("On", of: sharingToggle)
         Thread.sleep(forTimeInterval: 3)
         XCTAssertTrue(prompt.exists)
-        XCTAssertTrue(alwaysMode.isSelected)
         XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
         self.attachFullScreenScreenshot(named: "location-always-first-prompt-after-3s")
 
@@ -219,26 +219,44 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(firstAllow.exists)
         firstAllow.tap()
 
-        if prompt.waitForExistence(timeout: 5) {
-            Thread.sleep(forTimeInterval: 3)
-            XCTAssertTrue(prompt.exists)
-            XCTAssertTrue(alwaysMode.isSelected)
-            XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
-            self.attachFullScreenScreenshot(named: "location-always-upgrade-prompt-after-3s")
+        self.app?.activate()
+        XCTAssertTrue(
+            self.app?.staticTexts["Requesting iOS location permission…"].waitForNonExistence(timeout: 5) == true)
 
-            let changeToAlways = prompt.buttons.matching(
-                NSPredicate(format: "label CONTAINS[c] 'Change to Always'")).firstMatch
-            XCTAssertTrue(changeToAlways.exists)
-            changeToAlways.tap()
-        }
+        let accessLevel = try XCTUnwrap(
+            self.app?.descendants(matching: .any)["settings-location-access-level"])
+        XCTAssertTrue(accessLevel.waitForExistence(timeout: 5))
+        self.waitForValue("While Using the App", of: accessLevel)
+        let accessLevelButton = try XCTUnwrap(self.app?.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Access Level")).firstMatch)
+        XCTAssertTrue(accessLevelButton.waitForExistence(timeout: 3))
+        self.waitForEnabled(accessLevelButton)
+        accessLevelButton.tap()
+        let appAlwaysAction = try XCTUnwrap(self.app?.descendants(matching: .any)["Always"])
+        let systemAlwaysAction = springboard.descendants(matching: .any)["Always"]
+        let alwaysAction = appAlwaysAction.waitForExistence(timeout: 1)
+            ? appAlwaysAction
+            : systemAlwaysAction
+        XCTAssertTrue(alwaysAction.waitForExistence(timeout: 3))
+        alwaysAction.tap()
+
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        self.waitForValue("Always", of: accessLevel)
+        Thread.sleep(forTimeInterval: 3)
+        XCTAssertTrue(prompt.exists)
+        XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
+        self.attachFullScreenScreenshot(named: "location-always-upgrade-prompt-after-3s")
+
+        let changeToAlways = prompt.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'Change to Always'")).firstMatch
+        XCTAssertTrue(changeToAlways.exists)
+        changeToAlways.tap()
 
         self.app?.activate()
-        XCTAssertTrue(alwaysMode.waitForExistence(timeout: 5))
-        XCTAssertTrue(alwaysMode.isSelected)
-        XCTAssertFalse(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
-        let backgroundAllowed = try XCTUnwrap(self.app?.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Background location requests")).firstMatch)
-        XCTAssertTrue(backgroundAllowed.waitForExistence(timeout: 5))
+        XCTAssertTrue(accessLevel.waitForExistence(timeout: 5))
+        self.waitForValue("Always", of: accessLevel)
+        XCTAssertTrue(
+            self.app?.staticTexts["Requesting iOS location permission…"].waitForNonExistence(timeout: 5) == true)
         Thread.sleep(forTimeInterval: 1)
         self.attachScreenshot(named: "location-always-granted-after-slow-prompt")
     }
@@ -255,21 +273,21 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(permissions.waitForExistence(timeout: 8))
         permissions.tap()
 
-        let offMode = try XCTUnwrap(self.app?.buttons["Off"])
-        if !offMode.isSelected {
-            offMode.tap()
-            XCTAssertTrue(offMode.isSelected)
+        let sharingToggle = try XCTUnwrap(self.app?.buttons["settings-location-sharing-toggle"])
+        XCTAssertTrue(sharingToggle.waitForExistence(timeout: 5))
+        if sharingToggle.value as? String != "Off" {
+            sharingToggle.tap()
+            self.waitForValue("Off", of: sharingToggle)
+            self.waitForEnabled(sharingToggle)
         }
-        let whileUsingMode = try XCTUnwrap(self.app?.buttons["While Using"])
-        XCTAssertTrue(whileUsingMode.waitForExistence(timeout: 5))
-        whileUsingMode.tap()
+        sharingToggle.tap()
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let prompt = springboard.alerts.firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        self.waitForValue("On", of: sharingToggle)
         Thread.sleep(forTimeInterval: 3)
         XCTAssertTrue(prompt.exists)
-        XCTAssertTrue(whileUsingMode.isSelected)
         XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
 
         let allow = prompt.buttons.matching(
@@ -278,12 +296,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
         allow.tap()
 
         self.app?.activate()
-        XCTAssertTrue(whileUsingMode.waitForExistence(timeout: 5))
-        XCTAssertTrue(whileUsingMode.isSelected)
-        XCTAssertFalse(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
-        let foregroundAllowed = try XCTUnwrap(self.app?.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH %@", "Foreground location requests")).firstMatch)
-        XCTAssertTrue(foregroundAllowed.waitForExistence(timeout: 5))
+        let accessLevel = try XCTUnwrap(
+            self.app?.descendants(matching: .any)["settings-location-access-level"])
+        XCTAssertTrue(accessLevel.waitForExistence(timeout: 5))
+        self.waitForValue("While Using the App", of: accessLevel)
+        XCTAssertTrue(
+            self.app?.staticTexts["Requesting iOS location permission…"].waitForNonExistence(timeout: 5) == true)
 
         self.launchApp(for: ScreenshotTarget(
             initialTab: "settings",
@@ -293,7 +311,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
             self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
         XCTAssertTrue(relaunchedPermissions.waitForExistence(timeout: 8))
         relaunchedPermissions.tap()
-        XCTAssertTrue(self.app?.buttons["While Using"].isSelected == true)
+        let relaunchedToggle = try XCTUnwrap(self.app?.buttons["settings-location-sharing-toggle"])
+        XCTAssertTrue(relaunchedToggle.waitForExistence(timeout: 5))
+        self.waitForValue("On", of: relaunchedToggle)
+        let relaunchedAccessLevel = try XCTUnwrap(
+            self.app?.descendants(matching: .any)["settings-location-access-level"])
+        XCTAssertTrue(relaunchedAccessLevel.waitForExistence(timeout: 5))
+        self.waitForValue("While Using the App", of: relaunchedAccessLevel)
     }
 
     func testGatewaySettingsOpenedFromChatUsesRootSidebarNavigation() throws {
@@ -572,14 +596,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         }
 
         let app = XCUIApplication()
-        setupSnapshot(app)
-        app.launchArguments += [
-            "--openclaw-reset-onboarding",
-            "--openclaw-initial-tab",
-            "settings",
-            "--openclaw-initial-destination",
-            "settings",
-        ]
+        app.launchArguments += ["--openclaw-reset-onboarding"]
         app.launch()
         self.app = app
 
@@ -617,11 +634,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "settings",
             initialDestination: "settings",
-            name: "appearance-compact"), appearance: nil, screenshotMode: false)
+            name: "appearance-compact"), appearance: nil)
 
-        if self.app?.buttons["Close"].waitForExistence(timeout: 2) == true {
-            self.app?.buttons["Close"].tap()
-        }
         let row = try XCTUnwrap(self.app?.buttons["settings-appearance-row"])
         XCTAssertTrue(row.waitForExistence(timeout: 8))
         XCTAssertFalse(self.app?.buttons["settings-appearance-menu"].exists == true)
@@ -923,6 +937,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
             predicate: NSPredicate(format: "value == %@", value),
             object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 3), .completed)
+    }
+
+    private func waitForEnabled(_ element: XCUIElement) {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
     }
 
     private func waitForHittable(_ isHittable: Bool, of element: XCUIElement) {
