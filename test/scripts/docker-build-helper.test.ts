@@ -4846,6 +4846,9 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain(
       "lets authorized gateway-style plugin commands escape plugin-owned bindings",
     );
+    expect(runner).not.toContain(
+      "lets authorized plugin-owned binding commands fall through to command processing",
+    );
     expect(runner).toContain(
       "keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin",
     );
