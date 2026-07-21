@@ -2,6 +2,7 @@ import Foundation
 import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
+import OpenClawProtocol
 
 @MainActor
 struct ChatSessionSidebarModelTests {
@@ -383,6 +384,14 @@ struct ChatSessionSidebarModelTests {
         let data = try #require("""
         {
           "key": "agent:main:child",
+          "presentation": {
+            "title": "Child session",
+            "titleSource": "generated",
+            "family": "subagent",
+            "agentId": "main",
+            "isMain": false,
+            "isBackground": true
+          },
           "parentSessionKey": "agent:main:main",
           "spawnedBy": "agent:main:controller",
           "childSessions": ["agent:main:grandchild"],
@@ -401,6 +410,13 @@ struct ChatSessionSidebarModelTests {
         let entry = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: data)
 
         #expect(entry.parentSessionKey == "agent:main:main")
+        #expect(entry.presentation == SessionPresentation(
+            title: "Child session",
+            titlesource: "generated",
+            family: "subagent",
+            agentid: "main",
+            ismain: false,
+            isbackground: true))
         #expect(entry.spawnedBy == "agent:main:controller")
         #expect(entry.childSessions == ["agent:main:grandchild"])
         #expect(entry.status == "running")
