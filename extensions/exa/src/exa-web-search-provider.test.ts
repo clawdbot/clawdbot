@@ -53,6 +53,25 @@ function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }
   };
 }
 
+function createExaTool() {
+  const tool = createExaWebSearchProvider().createTool({
+    config: {
+      plugins: {
+        entries: {
+          exa: {
+            config: { webSearch: { apiKey: "exa-secret" } },
+          },
+        },
+      },
+    },
+    searchConfig: {},
+  });
+  if (!tool) {
+    throw new Error("Expected tool definition");
+  }
+  return tool;
+}
+
 describe("exa web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {
     const provider = createExaWebSearchProvider();
@@ -227,16 +246,7 @@ describe("exa web search provider", () => {
   });
 
   it("exposes newer documented Exa search types and count limits", () => {
-    const provider = createExaWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = createExaTool();
 
     const parameters = tool.parameters as {
       properties?: {
@@ -263,16 +273,7 @@ describe("exa web search provider", () => {
   });
 
   it("returns validation errors for conflicting time filters", async () => {
-    const provider = createExaWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = createExaTool();
 
     const result = await tool.execute({
       query: "latest gpu news",
@@ -289,16 +290,7 @@ describe("exa web search provider", () => {
   });
 
   it("returns validation errors for invalid date input", async () => {
-    const provider = createExaWebSearchProvider();
-    const tool = provider.createTool({
-      config: {
-        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-secret" } } } } },
-      },
-      searchConfig: {},
-    });
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+    const tool = createExaTool();
 
     const result = await tool.execute({
       query: "latest gpu news",
