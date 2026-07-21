@@ -9,6 +9,7 @@ import {
 import { transformConfigFileWithRetry, withConfigMutationExclusive } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
@@ -64,6 +65,126 @@ type CreateAgentParams = {
 
 class DuplicateAgentError extends Error {}
 class InvalidAgentBindingsError extends Error {}
+
+type LegacyAgentCreationPreparation = {
+  config: OpenClawConfig;
+  makeDefault: boolean;
+  persistedHash?: string | null;
+};
+
+async function prepareLegacyAgentCreationFromConfig(params: {
+  config: OpenClawConfig;
+  transformConfig: typeof transformConfigFileWithRetry;
+}): Promise<LegacyAgentCreationPreparation> {
+  const [
+    { maybeRepairAgentRoster },
+    {
+      completeLegacyMainFirstAgentDefaultIntent,
+      hasPendingLegacyMainFirstAgentDefaultIntent,
+      isLegacyImplicitMainOnlyRoster,
+      migrateLegacyMainSessionStateOrThrow,
+      reconcileLegacyMainFirstAgentDefaultIntent,
+      recordLegacyMainFirstAgentDefaultIntent,
+    },
+  ] = await Promise.all([
+    import("../commands/doctor/shared/agent-roster-repair.js"),
+    import("../commands/doctor/shared/legacy-main-session-migration.js"),
+  ]);
+  reconcileLegacyMainFirstAgentDefaultIntent(params.config);
+  const plannedRepair = maybeRepairAgentRoster(params.config);
+  const retryingLegacyMigration = isLegacyImplicitMainOnlyRoster(params.config);
+  if (plannedRepair.changes.length === 0 && !retryingLegacyMigration) {
+    if (hasPendingLegacyMainFirstAgentDefaultIntent()) {
+      completeLegacyMainFirstAgentDefaultIntent();
+    }
+    return { config: params.config, makeDefault: false };
+  }
+
+  let config = params.config;
+  let persistedHash: string | null | undefined;
+  if (plannedRepair.changes.length > 0) {
+    recordLegacyMainFirstAgentDefaultIntent();
+    const repaired = await params.transformConfig<boolean>({
+      afterWrite: { mode: "auto" },
+      maxAttempts: 1,
+      transform: async (currentConfig) => {
+        const repair = maybeRepairAgentRoster(currentConfig);
+        return { nextConfig: repair.config, result: repair.changes.length > 0 };
+      },
+    });
+    config = repaired.nextConfig;
+    persistedHash = repaired.persistedHash;
+    if (repaired.result !== true && !isLegacyImplicitMainOnlyRoster(config)) {
+      completeLegacyMainFirstAgentDefaultIntent();
+      return {
+        config,
+        makeDefault: false,
+        ...(persistedHash !== undefined ? { persistedHash } : {}),
+      };
+    }
+  }
+
+  await migrateLegacyMainSessionStateOrThrow(config);
+  return {
+    config,
+    makeDefault:
+      isLegacyImplicitMainOnlyRoster(config) && hasPendingLegacyMainFirstAgentDefaultIntent(),
+    ...(persistedHash !== undefined ? { persistedHash } : {}),
+  };
+}
+
+export async function prepareLegacyAgentCreation(params: {
+  transformConfig: typeof transformConfigFileWithRetry;
+}): Promise<LegacyAgentCreationPreparation> {
+  return await withConfigMutationExclusive(async (lockedConfig) =>
+    prepareLegacyAgentCreationFromConfig({ ...params, config: lockedConfig }),
+  );
+}
+
+export async function shouldTransferLegacyMainDefault(
+  config: OpenClawConfig,
+  agentId: string,
+): Promise<boolean> {
+  const { hasPendingLegacyMainFirstAgentDefaultIntent, isLegacyImplicitMainOnlyRoster } =
+    await import("../commands/doctor/shared/legacy-main-session-migration.js");
+  return (
+    isLegacyImplicitMainOnlyRoster(config) && hasPendingLegacyMainFirstAgentDefaultIntent(agentId)
+  );
+}
+
+export async function claimLegacyAgentCreationDefault(agentId: string): Promise<boolean> {
+  const { claimLegacyMainFirstAgentDefaultIntent } =
+    await import("../commands/doctor/shared/legacy-main-session-migration.js");
+  return claimLegacyMainFirstAgentDefaultIntent(agentId);
+}
+
+export function assignSoleDefaultAgent(config: OpenClawConfig, agentId: string): OpenClawConfig {
+  const list = structuredClone(listAgentEntries(config));
+  for (const entry of list) {
+    if (normalizeAgentId(entry.id) === agentId) {
+      entry.default = true;
+    } else {
+      delete entry.default;
+    }
+  }
+  return {
+    ...config,
+    agents: {
+      ...config.agents,
+      list,
+    },
+  };
+}
+
+export async function completeLegacyAgentCreation(): Promise<void> {
+  const { completeLegacyMainFirstAgentDefaultIntent } =
+    await import("../commands/doctor/shared/legacy-main-session-migration.js");
+  try {
+    completeLegacyMainFirstAgentDefaultIntent();
+  } catch {
+    // Once the roster contains the named agent, a stale intent is inert; cleanup can retry later.
+  }
+}
 
 function createError(
   reason: CreateError["reason"],
@@ -129,6 +250,13 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           agentId,
         );
       }
+      const legacyPreparation = await prepareLegacyAgentCreationFromConfig({
+        config: lockedConfig,
+        transformConfig,
+      });
+      const claimedLegacyDefault = legacyPreparation.makeDefault
+        ? await claimLegacyAgentCreationDefault(agentId)
+        : false;
       let tombstoneClaimed = false;
       if (
         deletion?.cleanupCompleted &&
@@ -158,6 +286,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             model,
             identity,
           });
+          if (
+            claimedLegacyDefault &&
+            (await shouldTransferLegacyMainDefault(currentConfig, agentId))
+          ) {
+            nextConfig = assignSoleDefaultAgent(nextConfig, agentId);
+          }
           const bindingParse = parseBindingSpecs({
             agentId,
             specs: params.bindingSpecs,
@@ -218,6 +352,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         !claimCompletedAgentDeletion(agentId, deletion.operationId)
       ) {
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
+      }
+      if (claimedLegacyDefault && committed.result?.status === "created") {
+        await completeLegacyAgentCreation();
       }
       return committed.result!;
     });

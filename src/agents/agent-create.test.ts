@@ -15,6 +15,20 @@ const mocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   claimCompletedAgentDeletion: vi.fn(() => true),
+  maybeRepairAgentRoster: vi.fn(
+    (config: Record<string, unknown>): { config: Record<string, unknown>; changes: string[] } => ({
+      config,
+      changes: [],
+    }),
+  ),
+  completeLegacyMainFirstAgentDefaultIntent: vi.fn(),
+  claimLegacyMainFirstAgentDefaultIntent: vi.fn((_agentId: string) => false),
+  hasPendingLegacyMainFirstAgentDefaultIntent: vi.fn((_agentId?: string) => false),
+  isLegacyImplicitMainOnlyRoster: vi.fn((_config: Record<string, unknown>) => false),
+  migrateLegacyMainSessionStateOrThrow: vi.fn(async () => ({ changed: false })),
+  readPendingLegacyMainFirstAgentDefaultIntent: vi.fn(() => undefined as string | undefined),
+  reconcileLegacyMainFirstAgentDefaultIntent: vi.fn(),
+  recordLegacyMainFirstAgentDefaultIntent: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", () => ({ default: { mkdir: mocks.mkdir } }));
@@ -47,6 +61,21 @@ vi.mock("../state/agent-deletion-journal.js", () => ({
   readAgentDeletionJournal: mocks.readAgentDeletionJournal,
 }));
 
+vi.mock("../commands/doctor/shared/agent-roster-repair.js", () => ({
+  maybeRepairAgentRoster: mocks.maybeRepairAgentRoster,
+}));
+
+vi.mock("../commands/doctor/shared/legacy-main-session-migration.js", () => ({
+  claimLegacyMainFirstAgentDefaultIntent: mocks.claimLegacyMainFirstAgentDefaultIntent,
+  completeLegacyMainFirstAgentDefaultIntent: mocks.completeLegacyMainFirstAgentDefaultIntent,
+  hasPendingLegacyMainFirstAgentDefaultIntent: mocks.hasPendingLegacyMainFirstAgentDefaultIntent,
+  isLegacyImplicitMainOnlyRoster: mocks.isLegacyImplicitMainOnlyRoster,
+  migrateLegacyMainSessionStateOrThrow: mocks.migrateLegacyMainSessionStateOrThrow,
+  readPendingLegacyMainFirstAgentDefaultIntent: mocks.readPendingLegacyMainFirstAgentDefaultIntent,
+  reconcileLegacyMainFirstAgentDefaultIntent: mocks.reconcileLegacyMainFirstAgentDefaultIntent,
+  recordLegacyMainFirstAgentDefaultIntent: mocks.recordLegacyMainFirstAgentDefaultIntent,
+}));
+
 vi.mock("./workspace.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./workspace.js")>();
   return { ...actual, ensureAgentWorkspace: mocks.ensureAgentWorkspace };
@@ -67,7 +96,7 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => {
   };
 });
 
-import { createAgent } from "./agent-create.js";
+import { createAgent, prepareLegacyAgentCreation } from "./agent-create.js";
 
 describe("createAgent", () => {
   beforeEach(() => {
@@ -76,6 +105,13 @@ describe("createAgent", () => {
     mocks.persisted = {};
     mocks.readAgentDeletionJournal.mockReturnValue(undefined);
     mocks.claimCompletedAgentDeletion.mockReturnValue(true);
+    mocks.completeLegacyMainFirstAgentDefaultIntent.mockClear();
+    mocks.claimLegacyMainFirstAgentDefaultIntent.mockReturnValue(false);
+    mocks.maybeRepairAgentRoster.mockImplementation((config) => ({ config, changes: [] }));
+    mocks.hasPendingLegacyMainFirstAgentDefaultIntent.mockReturnValue(false);
+    mocks.readPendingLegacyMainFirstAgentDefaultIntent.mockReturnValue(undefined);
+    mocks.isLegacyImplicitMainOnlyRoster.mockReturnValue(false);
+    mocks.migrateLegacyMainSessionStateOrThrow.mockResolvedValue({ changed: false });
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/default-researcher");
     mocks.resolveAgentDir.mockReturnValue("/tmp/agent-researcher");
     mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => ({
@@ -128,6 +164,52 @@ describe("createAgent", () => {
     expect(mocks.persisted).toMatchObject({
       agents: { list: [{ id: "main", default: true }] },
     });
+  });
+
+  it("completes stale default-transfer intent once the roster is populated", async () => {
+    mocks.hasPendingLegacyMainFirstAgentDefaultIntent.mockReturnValue(true);
+    const config = { agents: { list: [{ id: "ops", default: true }] } };
+    mocks.config = config;
+
+    await expect(
+      prepareLegacyAgentCreation({
+        transformConfig: mocks.transformConfigFileWithRetry,
+      }),
+    ).resolves.toEqual({ config, makeDefault: false });
+    expect(mocks.completeLegacyMainFirstAgentDefaultIntent).toHaveBeenCalledOnce();
+  });
+
+  it("preserves repaired legacy-main default transfer across creation retries", async () => {
+    mocks.config = { agents: { list: [{ id: "main", default: true }] } };
+    mocks.hasPendingLegacyMainFirstAgentDefaultIntent.mockReturnValue(true);
+    mocks.isLegacyImplicitMainOnlyRoster.mockReturnValue(true);
+    mocks.claimLegacyMainFirstAgentDefaultIntent.mockReturnValue(true);
+    mocks.migrateLegacyMainSessionStateOrThrow.mockResolvedValue({ changed: false });
+
+    await expect(createAgent({ name: "ops", workspace: "/tmp/ops" })).resolves.toMatchObject({
+      status: "created",
+      agentId: "ops",
+    });
+
+    expect(mocks.persisted).toMatchObject({
+      agents: {
+        list: [{ id: "main" }, expect.objectContaining({ id: "ops", default: true })],
+      },
+    });
+    expect(mocks.completeLegacyMainFirstAgentDefaultIntent).toHaveBeenCalledOnce();
+  });
+
+  it("does not create an agent while legacy-main migration still needs repair", async () => {
+    mocks.config = { agents: { list: [{ id: "main", default: true }] } };
+    mocks.isLegacyImplicitMainOnlyRoster.mockReturnValue(true);
+    mocks.migrateLegacyMainSessionStateOrThrow.mockRejectedValue(
+      new Error("Legacy main session migration requires repair"),
+    );
+
+    await expect(createAgent({ name: "ops", workspace: "/tmp/ops" })).rejects.toThrow(
+      "Legacy main session migration requires repair",
+    );
+    expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
   });
 
   it("defaults the workspace through the agent-scoped resolver", async () => {

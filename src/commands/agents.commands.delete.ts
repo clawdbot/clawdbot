@@ -131,6 +131,9 @@ export async function agentsDeleteCommand(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = resolveAgentDir(cfg, agentId);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const { reconcileLegacyMainFirstAgentDefaultIntent } =
+    await import("./doctor/shared/legacy-main-session-migration.js");
+  reconcileLegacyMainFirstAgentDefaultIntent(cfg);
   const result = pruneAgentConfig(cfg, agentId);
 
   const gatewayResult = await maybeDeleteAgentThroughGateway({

@@ -5,7 +5,14 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createAgent } from "../agents/agent-create.js";
+import {
+  assignSoleDefaultAgent,
+  claimLegacyAgentCreationDefault,
+  completeLegacyAgentCreation,
+  createAgent,
+  prepareLegacyAgentCreation,
+  shouldTransferLegacyMainDefault,
+} from "../agents/agent-create.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -84,9 +91,9 @@ async function copyPortableAuthProfiles(params: {
 
 function formatSkippedOAuthProfilesMessage(params: {
   sourceAgentId: string;
-  sourceIsInheritedMain: boolean;
+  sourceIsInheritedDefault: boolean;
 }): string {
-  return params.sourceIsInheritedMain
+  return params.sourceIsInheritedDefault
     ? `OAuth profiles stay shared from "${params.sourceAgentId}" unless this agent signs in separately.`
     : `OAuth profiles were not copied from "${params.sourceAgentId}"; sign in separately for this agent.`;
 }
@@ -101,8 +108,8 @@ export async function agentsAddCommand(
   if (!configSnapshot) {
     return;
   }
-  const cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
-  const baseHash = configSnapshot.hash;
+  let cfg = configSnapshot.sourceConfig ?? configSnapshot.config;
+  let baseHash = configSnapshot.hash;
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
@@ -222,6 +229,14 @@ export async function agentsAddCommand(
       await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
     }
 
+    const legacyPreparation = await prepareLegacyAgentCreation({
+      transformConfig: transformConfigWithPendingPluginInstalls,
+    });
+    cfg = legacyPreparation.config;
+    if (legacyPreparation.persistedHash !== undefined) {
+      baseHash = legacyPreparation.persistedHash ?? undefined;
+    }
+
     const existingAgent = listAgentEntries(cfg).find(
       (agent) => normalizeAgentId(agent.id) === agentId,
     );
@@ -236,7 +251,9 @@ export async function agentsAddCommand(
       }
     }
 
-    const workspaceDefault = resolveAgentWorkspaceDir(cfg, agentId);
+    const workspaceResolutionConfig =
+      listAgentEntries(cfg).length === 0 ? applyAgentConfig(cfg, { agentId }) : cfg;
+    const workspaceDefault = resolveAgentWorkspaceDir(workspaceResolutionConfig, agentId);
     const workspaceInput = await prompter.text({
       message: "Workspace directory",
       initialValue: workspaceDefault,
@@ -254,18 +271,20 @@ export async function agentsAddCommand(
       agentDir,
     });
 
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    if (defaultAgentId !== agentId) {
-      const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
+    const sourceDefaultAgentId =
+      listAgentEntries(cfg).length > 0 ? resolveDefaultAgentId(cfg) : undefined;
+    if (sourceDefaultAgentId && sourceDefaultAgentId !== agentId) {
+      const sourceAgentDir = resolveAgentDir(cfg, sourceDefaultAgentId);
       const sourceAuthPath = resolveAuthStorePath(sourceAgentDir);
       const destAuthPath = resolveAuthStorePath(agentDir);
-      const mainAuthPath = resolveAuthStorePath(undefined);
+      const inheritedMainAuthPath = resolveAuthStorePath(resolveAgentDir({}, "main"));
       const sameAuthPath =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
         normalizeLowercaseStringOrEmpty(path.resolve(destAuthPath));
-      const sourceIsInheritedMain =
+      const sourceIsInheritedDefault =
+        !legacyPreparation.makeDefault &&
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
-        normalizeLowercaseStringOrEmpty(path.resolve(mainAuthPath));
+          normalizeLowercaseStringOrEmpty(path.resolve(inheritedMainAuthPath));
       if (!sameAuthPath) {
         const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir);
         const destStore = loadPersistedAuthProfileStore(agentDir);
@@ -278,7 +297,7 @@ export async function agentsAddCommand(
           Object.keys(destStore?.profiles ?? {}).length === 0
         ) {
           const shouldCopy = await prompter.confirm({
-            message: `Copy portable auth profiles from "${defaultAgentId}"?`,
+            message: `Copy portable auth profiles from "${sourceDefaultAgentId}"?`,
             initialValue: false,
           });
           if (shouldCopy) {
@@ -290,20 +309,20 @@ export async function agentsAddCommand(
             const skippedText =
               portable.skippedProfileIds.length > 0
                 ? ` ${formatSkippedOAuthProfilesMessage({
-                    sourceAgentId: defaultAgentId,
-                    sourceIsInheritedMain,
+                    sourceAgentId: sourceDefaultAgentId,
+                    sourceIsInheritedDefault,
                   })}`
                 : "";
             await prompter.note(
-              `Copied ${portable.copiedProfileIds.length} portable auth profile${portable.copiedProfileIds.length === 1 ? "" : "s"} from "${defaultAgentId}".${skippedText}`,
+              `Copied ${portable.copiedProfileIds.length} portable auth profile${portable.copiedProfileIds.length === 1 ? "" : "s"} from "${sourceDefaultAgentId}".${skippedText}`,
               "Auth profiles",
             );
           }
         } else if ((portable?.skippedProfileIds.length ?? 0) > 0) {
           await prompter.note(
             formatSkippedOAuthProfilesMessage({
-              sourceAgentId: defaultAgentId,
-              sourceIsInheritedMain,
+              sourceAgentId: sourceDefaultAgentId,
+              sourceIsInheritedDefault,
             }),
             "Auth profiles",
           );
@@ -407,11 +426,21 @@ export async function agentsAddCommand(
       }
     }
 
+    const claimedLegacyDefault = legacyPreparation.makeDefault
+      ? await claimLegacyAgentCreationDefault(agentId)
+      : false;
+    if (claimedLegacyDefault && (await shouldTransferLegacyMainDefault(cfg, agentId))) {
+      nextConfig = assignSoleDefaultAgent(nextConfig, agentId);
+    }
+
     const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig,
       ...(baseHash !== undefined ? { baseHash } : {}),
     });
     nextConfig = committed.config;
+    if (claimedLegacyDefault) {
+      await completeLegacyAgentCreation();
+    }
     logConfigUpdated(runtime);
     const target = resolveOnboardingAgentTarget(nextConfig, agentId);
     await ensureOnboardingAgentWorkspace(target, runtime, {
