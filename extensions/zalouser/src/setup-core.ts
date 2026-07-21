@@ -11,11 +11,14 @@ const t = createSetupTranslator();
 
 const channel = "zalouser" as const;
 
-export const zalouserSetupAdapter = createPatchedAccountSetupAdapter({
-  channelKey: channel,
-  validateInput: () => null,
-  buildPatch: () => ({}),
-});
+export const zalouserSetupAdapter = {
+  ...createPatchedAccountSetupAdapter({
+    channelKey: channel,
+    validateInput: () => null,
+    buildPatch: () => ({}),
+  }),
+  singleAccountKeysToMove: [],
+};
 
 export const zalouserSetupContract = defineChannelSetupContract({
   fields: {},

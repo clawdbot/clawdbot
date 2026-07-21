@@ -15,40 +15,50 @@ type GoogleChatSetupInput = ChannelSetupInput & {
   webhookUrl?: string;
 };
 
-export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
-  channelKey: channel,
-  validateInput: createSetupInputPresenceValidator({
-    defaultAccountOnlyEnvError:
-      "GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.",
-    whenNotUseEnv: [
-      {
-        someOf: ["token", "tokenFile"],
-        message: "Google Chat requires --token (service account JSON) or --token-file.",
-      },
-    ],
+export const googlechatSetupAdapter = {
+  ...createPatchedAccountSetupAdapter({
+    channelKey: channel,
+    validateInput: createSetupInputPresenceValidator({
+      defaultAccountOnlyEnvError:
+        "GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.",
+      whenNotUseEnv: [
+        {
+          someOf: ["token", "tokenFile"],
+          message: "Google Chat requires --token (service account JSON) or --token-file.",
+        },
+      ],
+    }),
+    buildPatch: (input) => {
+      const setupInput = input as GoogleChatSetupInput;
+      const patch = setupInput.useEnv
+        ? {}
+        : setupInput.tokenFile
+          ? { serviceAccountFile: setupInput.tokenFile }
+          : setupInput.token
+            ? { serviceAccount: setupInput.token }
+            : {};
+      const audienceType = setupInput.audienceType?.trim();
+      const audience = setupInput.audience?.trim();
+      const webhookPath = setupInput.webhookPath?.trim();
+      const webhookUrl = setupInput.webhookUrl?.trim();
+      return {
+        ...patch,
+        ...(audienceType ? { audienceType } : {}),
+        ...(audience ? { audience } : {}),
+        ...(webhookPath ? { webhookPath } : {}),
+        ...(webhookUrl ? { webhookUrl } : {}),
+      };
+    },
   }),
-  buildPatch: (input) => {
-    const setupInput = input as GoogleChatSetupInput;
-    const patch = setupInput.useEnv
-      ? {}
-      : setupInput.tokenFile
-        ? { serviceAccountFile: setupInput.tokenFile }
-        : setupInput.token
-          ? { serviceAccount: setupInput.token }
-          : {};
-    const audienceType = setupInput.audienceType?.trim();
-    const audience = setupInput.audience?.trim();
-    const webhookPath = setupInput.webhookPath?.trim();
-    const webhookUrl = setupInput.webhookUrl?.trim();
-    return {
-      ...patch,
-      ...(audienceType ? { audienceType } : {}),
-      ...(audience ? { audience } : {}),
-      ...(webhookPath ? { webhookPath } : {}),
-      ...(webhookUrl ? { webhookUrl } : {}),
-    };
-  },
-});
+  singleAccountKeysToMove: [
+    "serviceAccount",
+    "serviceAccountFile",
+    "audienceType",
+    "audience",
+    "webhookPath",
+    "webhookUrl",
+  ],
+};
 
 export const googlechatSetupContract = defineChannelSetupContract({
   fields: {

@@ -107,6 +107,16 @@ describe("googlechat setup", () => {
     ).toBe("GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.");
   });
 
+  it("exposes config-promotion declarations on the setup adapter", () => {
+    expect(googlechatSetupAdapter.singleAccountKeysToMove).toEqual(
+      expect.arrayContaining(["serviceAccount", "serviceAccountFile"]),
+    );
+    expect(googlechatSetupAdapter.singleAccountKeysToMove).toContain("audienceType");
+    expect(googlechatSetupAdapter.singleAccountKeysToMove).toContain("audience");
+    expect(googlechatSetupAdapter.singleAccountKeysToMove).toContain("webhookPath");
+    expect(googlechatSetupAdapter.singleAccountKeysToMove).toContain("webhookUrl");
+  });
+
   it("requires inline or file credentials when env auth is not used", () => {
     if (!googlechatSetupAdapter.validateInput) {
       throw new Error("Expected googlechatSetupAdapter.validateInput to be defined");
