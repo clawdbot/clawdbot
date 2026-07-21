@@ -16,7 +16,11 @@ import {
   type LatestSubagentRunReadIndex,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
+import {
+  getSubagentRunsSnapshotForChildSession,
+  getSubagentRunsSnapshotForController,
+  getSubagentRunsSnapshotForRead,
+} from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
@@ -43,7 +47,7 @@ export function buildLatestSubagentRunReadIndex(): LatestSubagentRunReadIndex {
 /** Lists runs controlled by a session key. */
 export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
   return listRunsForControllerFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
+    getSubagentRunsSnapshotForController(subagentRuns, controllerSessionKey),
     controllerSessionKey,
   );
 }
@@ -67,7 +71,7 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
 /** Returns the preferred run for a child session, favoring active over ended runs. */
 export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
   return getSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
+    getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey),
     childSessionKey,
   );
 }
@@ -129,7 +133,10 @@ export function getSessionDisplaySubagentRunByChildSessionKey(
     return latestInMemoryActive ?? latestInMemoryEnded;
   }
 
-  return getSubagentRunByChildSessionKey(key);
+  return getSubagentRunByChildSessionKeyFromRuns(
+    getSubagentRunsSnapshotForChildSession(subagentRuns, key),
+    key,
+  );
 }
 
 /** Returns the most recently created run for a child session from readable registry state. */
@@ -142,7 +149,7 @@ export function getLatestSubagentRunByChildSessionKey(
   }
 
   let latest: SubagentRunRecord | null = null;
-  for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+  for (const entry of getSubagentRunsSnapshotForChildSession(subagentRuns, key).values()) {
     if (entry.childSessionKey !== key) {
       continue;
     }

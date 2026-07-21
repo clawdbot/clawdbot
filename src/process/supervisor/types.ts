@@ -44,6 +44,8 @@ export type ManagedRun = {
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
   cancel: (reason?: TerminationReason) => void;
+  /** Stop delivering output callbacks before owner teardown kills the child. */
+  detachOutput?: () => void;
 };
 
 export type ManagedRunStdin = {

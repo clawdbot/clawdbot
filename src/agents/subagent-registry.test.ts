@@ -176,6 +176,12 @@ const mocks = vi.hoisted(() => ({
   getSubagentRunsSnapshotForRead: vi.fn(
     (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
   ),
+  getSubagentRunsSnapshotForChildSession: vi.fn(
+    (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
+  ),
+  getSubagentRunsSnapshotForController: vi.fn(
+    (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
+  ),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
   runSubagentAnnounceFlow: vi.fn(async () => true),
@@ -243,6 +249,8 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
 
 vi.mock("./subagent-registry-state.js", () => ({
   clearSubagentRunsReadCacheForTest: mocks.clearSubagentRunsReadCacheForTest,
+  getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
+  getSubagentRunsSnapshotForController: mocks.getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow: mocks.persistSubagentRunsToDiskOrThrow,
@@ -319,6 +327,12 @@ describe("subagent registry seam flow", () => {
     mocks.scheduleOrphanRecovery.mockReset();
     mocks.resolveAgentTimeoutMs.mockReturnValue(1_000);
     mocks.restoreSubagentRunsFromDisk.mockReturnValue(0);
+    mocks.getSubagentRunsSnapshotForChildSession
+      .mockReset()
+      .mockImplementation((runs) => new Map(runs));
+    mocks.getSubagentRunsSnapshotForController
+      .mockReset()
+      .mockImplementation((runs) => new Map(runs));
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
         return {
@@ -360,6 +374,34 @@ describe("subagent registry seam flow", () => {
     swarmSchedulerTesting.reset();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+  });
+
+  it("routes controller and child lookups through scoped snapshots", () => {
+    const controllerSessionKey = "agent:main:controller";
+    const childSessionKey = "agent:main:subagent:scoped";
+    const run = {
+      runId: "run-scoped",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      controllerSessionKey,
+      task: "scoped registry run",
+      cleanup: "keep" as const,
+      createdAt: Date.now(),
+    };
+    mocks.getSubagentRunsSnapshotForController.mockReturnValue(new Map([[run.runId, run]]));
+    mocks.getSubagentRunsSnapshotForChildSession.mockReturnValue(new Map([[run.runId, run]]));
+
+    expect(mod.listSubagentRunsForController(controllerSessionKey)).toEqual([run]);
+    expect(mod.getLatestSubagentRunByChildSessionKey(childSessionKey)).toEqual(run);
+    expect(mocks.getSubagentRunsSnapshotForController).toHaveBeenCalledWith(
+      expect.any(Map),
+      controllerSessionKey,
+    );
+    expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledWith(
+      expect.any(Map),
+      childSessionKey,
+    );
   });
 
   it("keeps a sweeper archive mutation root-admitted until deletion settles", async () => {

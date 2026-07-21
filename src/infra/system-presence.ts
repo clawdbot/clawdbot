@@ -182,7 +182,7 @@ type SystemPresencePayload = {
   platform?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
-  lastInputSeconds?: number;
+  lastInputSeconds?: number | null;
   mode?: string;
   reason?: string;
   roles?: string[];
@@ -230,7 +230,9 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     modelIdentifier: payload.modelIdentifier ?? existing.modelIdentifier,
     mode: payload.mode ?? parsed.mode ?? existing.mode,
     lastInputSeconds:
-      payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds,
+      payload.lastInputSeconds === null
+        ? undefined
+        : (payload.lastInputSeconds ?? parsed.lastInputSeconds ?? existing.lastInputSeconds),
     reason: payload.reason ?? parsed.reason ?? existing.reason,
     deviceId: payload.deviceId ?? existing.deviceId,
     roles: mergeStringList(existing.roles, payload.roles),

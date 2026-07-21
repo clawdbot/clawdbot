@@ -1,0 +1,87 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聊天"</string>
+    <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"工作階段"</string>
+    <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"模型"</string>
+    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"上一個 %1$s"</string>
+    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"下一個 %1$s"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"控制項"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"說話"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手錶音訊失敗"</string>
+    <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"語音輸入"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"即時"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"對話串"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← 滑動 →"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"按住"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"點一下"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"輕觸兩下"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"啟動 Live 即可在此查看對話。"</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"新增"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"輸入"</string>
+    <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"訊息"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"傳訊息給代理程式"</string>
+    <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"傳送"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"與您的代理程式交談"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"停止說話"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"朗讀最新回覆"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在說話"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在聆聽"</string>
+    <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在連線"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在思考"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在輸入"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在傳送"</string>
+    <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"代理程式正在處理"</string>
+    <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"錯誤"</string>
+    <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"就緒"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"您"</string>
+    <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"代理程式"</string>
+    <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"系統"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開始對話"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在手錶上說話或輸入文字。配對的手機會透過已驗證的 OpenClaw 工作階段傳送訊息。"</string>
+    <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"目前的工作階段"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"外觀"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"深色"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"淺色"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"自動朗讀回覆"</string>
+    <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"回覆通知"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"啟用通知"</string>
+    <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"中止執行"</string>
+    <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開啟通知設定"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開啟"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"關閉"</string>
+    <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"連線"</string>
+    <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
+    <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"安全性"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"由手機控制"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 憑證和身分資訊會保留在配對的手機上。手錶僅使用 Wear Data Layer。"</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在檢查手機"</string>
+    <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在讀取代理程式、工作階段和聊天"</string>
+    <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手機已就緒"</string>
+    <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 已連線"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 離線"</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"請在已配對手機上的 OpenClaw 中重新連線 Gateway。"</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在手機上開啟 OpenClaw"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手錶本身不會啟動 Gateway 或進行驗證。"</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法連上手機"</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"請將已配對的手機放在附近，並安裝相符的 OpenClaw 應用程式。"</string>
+    <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"所選項目已無法使用"</string>
+    <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"操作未被接受"</string>
+    <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"發生錯誤"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"請重新整理清單，然後再試一次。"</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"請從手錶再試一次。"</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要更新"</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"請更新手機和手錶上的 OpenClaw。"</string>
+    <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"重新整理"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"重試"</string>
+    <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 回覆"</string>
+    <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"回覆"</string>
+    <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 回覆"</string>
+    <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"回覆未傳送"</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手機無法使用。點選「回覆」以重試。"</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開啟 OpenClaw 以回覆"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"您的偏好手機已變更。回覆前，請開啟應用程式以重新載入工作階段。"</string>
+    <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開啟工作階段，並透過已配對的手機回覆"</string>
+    <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開啟"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手機代理"</string>
+</resources>

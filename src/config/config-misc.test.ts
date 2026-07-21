@@ -148,6 +148,28 @@ describe("model provider localService config", () => {
     }
   });
 
+  it("revalidates materialized bundled provider overlays", () => {
+    const first = validateConfigObjectRaw({
+      models: {
+        providers: {
+          google: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      throw new Error("expected bundled provider overlay to pass initial validation");
+    }
+    expect(first.config.models?.providers?.google?.baseUrl).toBe("");
+    expect(first.config.models?.providers?.google?.models).toEqual([]);
+
+    const second = validateConfigObjectRaw(first.config);
+    expect(second.ok).toBe(true);
+  });
+
   it("rejects standalone timeout overlays for unknown model providers", () => {
     const result = OpenClawSchema.safeParse({
       models: {

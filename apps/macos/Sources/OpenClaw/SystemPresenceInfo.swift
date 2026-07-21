@@ -3,10 +3,6 @@ import Foundation
 import OpenClawKit
 
 enum SystemPresenceInfo {
-    static func lastInputSeconds() -> Int? {
-        self.lastInputSeconds(state: .combinedSessionState)
-    }
-
     static func lastHardwareInputSeconds() -> Int? {
         self.lastInputSeconds(state: .hidSystemState)
     }

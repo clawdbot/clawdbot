@@ -79,6 +79,21 @@
       "translated": "명령"
     },
     {
+      "id": "native.android.83c33792ce758e6b",
+      "source": "Timeout ${it}s",
+      "translated": "시간 초과 ${it}초"
+    },
+    {
+      "id": "native.android.bb754576303ae39a",
+      "source": "$it tools",
+      "translated": "도구 $it개"
+    },
+    {
+      "id": "native.android.43528ba5a11e44fd",
+      "source": "Script",
+      "translated": "스크립트"
+    },
+    {
       "id": "native.android.09e08fc62e2902fc",
       "source": "Payload",
       "translated": "페이로드"
@@ -1564,6 +1579,11 @@
       "translated": "${days}일"
     },
     {
+      "id": "native.android.936714892af1b0f9",
+      "source": ":${uri.port}",
+      "translated": ":${uri.port}"
+    },
+    {
       "id": "native.android.c4a902430c22030c",
       "source": "Delete",
       "translated": "삭제"
@@ -1839,6 +1859,16 @@
       "translated": "gateway는 이 경로를 변경할 수 있지만 기존 경로를 지울 수는 없습니다."
     },
     {
+      "id": "native.android.d9c4873f21d6d410",
+      "source": "Script",
+      "translated": "스크립트"
+    },
+    {
+      "id": "native.android.79ac1e41ef639f65",
+      "source": "Script payloads are preserved unchanged. Use the CLI to edit this script.",
+      "translated": "스크립트 페이로드는 변경 없이 보존됩니다. 이 스크립트를 편집하려면 CLI를 사용하세요."
+    },
+    {
       "id": "native.android.b0de849068a82211",
       "source": "Recent Runs",
       "translated": "최근 실행"
@@ -1897,6 +1927,11 @@
       "id": "native.android.09bb59bcf0c7e009",
       "source": "Command",
       "translated": "명령"
+    },
+    {
+      "id": "native.android.2e2395bd65d3a411",
+      "source": "Script · read-only",
+      "translated": "스크립트 · 읽기 전용"
     },
     {
       "id": "native.android.54465889774765e9",
@@ -3677,6 +3712,26 @@
       "id": "native.android.4832c0d0e9774283",
       "source": "${tokens / 1_000}k",
       "translated": "${tokens / 1_000}k"
+    },
+    {
+      "id": "native.android.ae8ffaf0304344ff",
+      "source": "Back",
+      "translated": "뒤로"
+    },
+    {
+      "id": "native.android.09fa98489fd0881b",
+      "source": "Dashboard",
+      "translated": "대시보드"
+    },
+    {
+      "id": "native.android.285be3399daf82ee",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "대시보드를 사용하려면 Gateway에 연결해야 합니다"
+    },
+    {
+      "id": "native.android.a1881da010cb4b9f",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "이 세션 대시보드를 열려면 Gateway에 연결하세요."
     },
     {
       "id": "native.android.a5845742daecb4ba",
@@ -5504,6 +5559,11 @@
       "translated": "명령"
     },
     {
+      "id": "native.android.8aed9c94ef7f917f",
+      "source": "Script",
+      "translated": "스크립트"
+    },
+    {
       "id": "native.android.f36439e78187c554",
       "source": "Payload Text",
       "translated": "페이로드 텍스트"
@@ -5572,6 +5632,11 @@
       "id": "native.android.bafe2765892cc6fa",
       "source": "Home",
       "translated": "홈"
+    },
+    {
+      "id": "native.android.d5b302e1a7695a7a",
+      "source": "Dashboard",
+      "translated": "대시보드"
     },
     {
       "id": "native.android.30d8b822fa68d6c4",
@@ -7529,9 +7594,14 @@
       "translated": "사용 가능한 미리보기가 없습니다"
     },
     {
-      "id": "native.android.a50e44d8f380f9ad",
-      "source": "Thinking...",
-      "translated": "생각 중..."
+      "id": "native.android.66aef4de5e07438f",
+      "source": "Working",
+      "translated": "작업 중"
+    },
+    {
+      "id": "native.android.6e7be1773c946de3",
+      "source": "· $phrase",
+      "translated": "· $phrase"
     },
     {
       "id": "native.android.ff4a092a02bd5d17",
@@ -7739,6 +7809,11 @@
       "translated": "채팅 새로고침"
     },
     {
+      "id": "native.android.6966ae8bbad7347d",
+      "source": "Dashboard",
+      "translated": "대시보드"
+    },
+    {
       "id": "native.android.b57a1b542cff8f55",
       "source": "Background tasks",
       "translated": "백그라운드 작업"
@@ -7874,6 +7949,16 @@
       "translated": "말하는 중…"
     },
     {
+      "id": "native.android.bd78ce1e86e900b3",
+      "source": "Close",
+      "translated": "닫기"
+    },
+    {
+      "id": "native.android.b686b1bc61494ee2",
+      "source": "View all",
+      "translated": "모두 보기"
+    },
+    {
       "id": "native.android.781f84dfaf7da9d6",
       "source": "Tools running",
       "translated": "도구 실행 중"
@@ -7887,16 +7972,6 @@
       "id": "native.android.0fd6b75cadc0ce75",
       "source": "+${toolCalls.size - 4} more",
       "translated": "+${toolCalls.size - 4}개 더"
-    },
-    {
-      "id": "native.android.7e0aea1dca378135",
-      "source": "Thinking",
-      "translated": "생각 중"
-    },
-    {
-      "id": "native.android.98a0d4d5bba788c4",
-      "source": "OpenClaw is preparing a response.",
-      "translated": "OpenClaw가 응답을 준비하고 있습니다."
     },
     {
       "id": "native.android.22d747642a3887cd",
@@ -8092,6 +8167,146 @@
       "id": "native.android.3200f8564c25a1fa",
       "source": "Max",
       "translated": "최대"
+    },
+    {
+      "id": "native.android.c2dc3a65302976c0",
+      "source": "1 token",
+      "translated": "토큰 1개"
+    },
+    {
+      "id": "native.android.e7059e3a756908c4",
+      "source": "$count tokens",
+      "translated": "토큰 $count개"
+    },
+    {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "$duration 만에 완료"
+    },
+    {
+      "id": "native.android.d2797e7488fe5021",
+      "source": "${decimal(count / 1_000_000.0)}M",
+      "translated": "${decimal(count / 1_000_000.0)}M"
+    },
+    {
+      "id": "native.android.4206e3e68c56767a",
+      "source": "${thousands}k",
+      "translated": "${thousands}k"
+    },
+    {
+      "id": "native.android.5e758e9851ded127",
+      "source": "${days}d",
+      "translated": "${days}일"
+    },
+    {
+      "id": "native.android.4fe67b5100cb91b1",
+      "source": "${hours}h",
+      "translated": "${hours}시간"
+    },
+    {
+      "id": "native.android.92a53292eaf7c63e",
+      "source": "${minutes}m",
+      "translated": "${minutes}분"
+    },
+    {
+      "id": "native.android.6d5683b5537bdbaf",
+      "source": "${seconds}s",
+      "translated": "${seconds}초"
+    },
+    {
+      "id": "native.android.e2f387a31240c8a3",
+      "source": "Shelling",
+      "translated": "껍데기 다듬는 중"
+    },
+    {
+      "id": "native.android.70a6de7c24baffb7",
+      "source": "Scuttling",
+      "translated": "종종걸음 치는 중"
+    },
+    {
+      "id": "native.android.0ed1354a65faa07e",
+      "source": "Clawing",
+      "translated": "집게질하는 중"
+    },
+    {
+      "id": "native.android.42d24b16fc658ed3",
+      "source": "Pinching",
+      "translated": "꼬집는 중"
+    },
+    {
+      "id": "native.android.69d5b3ca23a7bec3",
+      "source": "Molting",
+      "translated": "탈피하는 중"
+    },
+    {
+      "id": "native.android.80bfb2d6720f8dc5",
+      "source": "Bubbling",
+      "translated": "보글거리는 중"
+    },
+    {
+      "id": "native.android.e984f80d309c2d01",
+      "source": "Tiding",
+      "translated": "파도 타는 중"
+    },
+    {
+      "id": "native.android.60bb819ee08cbbc1",
+      "source": "Reefing",
+      "translated": "암초를 누비는 중"
+    },
+    {
+      "id": "native.android.7f465ae2654f0c25",
+      "source": "Cracking",
+      "translated": "껍데기 깨는 중"
+    },
+    {
+      "id": "native.android.cfc143346cf262c8",
+      "source": "Sifting",
+      "translated": "걸러내는 중"
+    },
+    {
+      "id": "native.android.72b67956ab234898",
+      "source": "Brining",
+      "translated": "소금물에 담그는 중"
+    },
+    {
+      "id": "native.android.3ecce1d21d8ab752",
+      "source": "Nautiling",
+      "translated": "앵무조개처럼 헤엄치는 중"
+    },
+    {
+      "id": "native.android.305ed08fbb829753",
+      "source": "Krilling",
+      "translated": "크릴처럼 헤엄치는 중"
+    },
+    {
+      "id": "native.android.c39933b1ec86d7a9",
+      "source": "Barnacling",
+      "translated": "따개비 붙이기"
+    },
+    {
+      "id": "native.android.32a8072679db94bb",
+      "source": "Lobstering",
+      "translated": "바닷가재 잡기"
+    },
+    {
+      "id": "native.android.de205a44a6d159fb",
+      "source": "Tidepooling",
+      "translated": "조수 웅덩이 탐사"
+    },
+    {
+      "id": "native.android.8d97a105339c7a20",
+      "source": "Pearling",
+      "translated": "진주 채취"
+    },
+    {
+      "id": "native.android.7bdb054d45ca1b23",
+      "source": "Snapping",
+      "translated": "찰칵"
+    },
+    {
+      "id": "native.android.c2210ea40e357fcd",
+      "source": "Surfacing",
+      "translated": "수면 위로 올라오기"
     },
     {
       "id": "native.android.3df4e24a0fc8810b",
@@ -8614,6 +8829,426 @@
       "translated": "빌드 타임스탬프가 복사되었습니다"
     },
     {
+      "id": "native.android.342644995c7fa39d",
+      "source": "Chat",
+      "translated": "채팅"
+    },
+    {
+      "id": "native.android.f08059cbbd74d290",
+      "source": "Session",
+      "translated": "세션"
+    },
+    {
+      "id": "native.android.14c9261466ef05af",
+      "source": "Model",
+      "translated": "모델"
+    },
+    {
+      "id": "native.android.15cab72e6f01fd53",
+      "source": "Previous %1$s",
+      "translated": "이전 %1$s"
+    },
+    {
+      "id": "native.android.3d3306e0ee9e21ee",
+      "source": "Next %1$s",
+      "translated": "다음 %1$s"
+    },
+    {
+      "id": "native.android.27f269e3449860eb",
+      "source": "Controls",
+      "translated": "제어"
+    },
+    {
+      "id": "native.android.162045314bf6d856",
+      "source": "Talk",
+      "translated": "말하기"
+    },
+    {
+      "id": "native.android.1e47fb0c88ffb1bd",
+      "source": "Watch audio failed",
+      "translated": "Watch 오디오 실패"
+    },
+    {
+      "id": "native.android.64e07fdfab3f96c5",
+      "source": "Dictate",
+      "translated": "받아쓰기"
+    },
+    {
+      "id": "native.android.aa64f5544405ffed",
+      "source": "Live",
+      "translated": "라이브"
+    },
+    {
+      "id": "native.android.5d4de99dd6fd6764",
+      "source": "Thread",
+      "translated": "스레드"
+    },
+    {
+      "id": "native.android.4863e4958bf9a886",
+      "source": "← Swipe →",
+      "translated": "← 스와이프 →"
+    },
+    {
+      "id": "native.android.01979a7d84755f0e",
+      "source": "Hold",
+      "translated": "길게 누르기"
+    },
+    {
+      "id": "native.android.149e4509c9152931",
+      "source": "Tap",
+      "translated": "탭"
+    },
+    {
+      "id": "native.android.9f7fe0147a0b571a",
+      "source": "Double tap",
+      "translated": "두 번 탭"
+    },
+    {
+      "id": "native.android.65caac394b5e4871",
+      "source": "Start Live to see the conversation here.",
+      "translated": "대화를 보려면 Live를 시작하세요."
+    },
+    {
+      "id": "native.android.80256ef5841e2f92",
+      "source": "New",
+      "translated": "새로 만들기"
+    },
+    {
+      "id": "native.android.3091f3e818e51d8a",
+      "source": "Type",
+      "translated": "입력"
+    },
+    {
+      "id": "native.android.d6940b2883503ea3",
+      "source": "Message",
+      "translated": "메시지"
+    },
+    {
+      "id": "native.android.e9035dd5aded082a",
+      "source": "Message agent",
+      "translated": "에이전트에게 메시지 보내기"
+    },
+    {
+      "id": "native.android.66f9ad9c9cd1a92c",
+      "source": "Send",
+      "translated": "보내기"
+    },
+    {
+      "id": "native.android.aed54d9c5e90b843",
+      "source": "Speak to your agent",
+      "translated": "에이전트에게 말하기"
+    },
+    {
+      "id": "native.android.30aa9dbcae2ce3c1",
+      "source": "Stop speaking",
+      "translated": "말하기 중지"
+    },
+    {
+      "id": "native.android.5c8f30c24360b983",
+      "source": "Speak latest reply",
+      "translated": "최근 답변 읽기"
+    },
+    {
+      "id": "native.android.e283a10e79578d3f",
+      "source": "Speaking",
+      "translated": "말하는 중"
+    },
+    {
+      "id": "native.android.0b19cfb5411358fa",
+      "source": "Listening",
+      "translated": "듣는 중"
+    },
+    {
+      "id": "native.android.e40bdbd8bfc185e6",
+      "source": "Connecting",
+      "translated": "연결 중"
+    },
+    {
+      "id": "native.android.42ac9ae6e2a24424",
+      "source": "Thinking",
+      "translated": "생각하는 중"
+    },
+    {
+      "id": "native.android.e87b09e74f59ca70",
+      "source": "Typing",
+      "translated": "입력 중"
+    },
+    {
+      "id": "native.android.5357284dcb751316",
+      "source": "Sending",
+      "translated": "보내는 중"
+    },
+    {
+      "id": "native.android.df216228910e6a31",
+      "source": "Agent working",
+      "translated": "에이전트 작업 중"
+    },
+    {
+      "id": "native.android.0ab95b2723a4b400",
+      "source": "Error",
+      "translated": "오류"
+    },
+    {
+      "id": "native.android.6f790004e204e002",
+      "source": "Ready",
+      "translated": "준비됨"
+    },
+    {
+      "id": "native.android.40984724c43be3ab",
+      "source": "You",
+      "translated": "나"
+    },
+    {
+      "id": "native.android.4aaf8fd6103ce61d",
+      "source": "Agent",
+      "translated": "에이전트"
+    },
+    {
+      "id": "native.android.c09b4d37b7750d4a",
+      "source": "System",
+      "translated": "시스템"
+    },
+    {
+      "id": "native.android.beff51b9bde563db",
+      "source": "Start a conversation",
+      "translated": "대화 시작"
+    },
+    {
+      "id": "native.android.b8de3221042b2fd3",
+      "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.",
+      "translated": "시계에서 말하거나 입력하세요. 페어링된 휴대전화가 인증된 OpenClaw 세션을 통해 메시지를 전송합니다."
+    },
+    {
+      "id": "native.android.44c6bb3c4c7b61ae",
+      "source": "Current session",
+      "translated": "현재 세션"
+    },
+    {
+      "id": "native.android.29e0ff4871a97d3a",
+      "source": "Appearance",
+      "translated": "화면 모드"
+    },
+    {
+      "id": "native.android.f54dda8777a206c0",
+      "source": "Dark",
+      "translated": "다크"
+    },
+    {
+      "id": "native.android.7709ce559ece7079",
+      "source": "Light",
+      "translated": "라이트"
+    },
+    {
+      "id": "native.android.bad64c6d810dd968",
+      "source": "Speak replies automatically",
+      "translated": "답변 자동 음성 재생"
+    },
+    {
+      "id": "native.android.bf13ece69b6f9e6d",
+      "source": "Reply alerts",
+      "translated": "답변 알림"
+    },
+    {
+      "id": "native.android.ab451b22b15fef6a",
+      "source": "Enable alerts",
+      "translated": "알림 사용"
+    },
+    {
+      "id": "native.android.2ac0bfe2c63028e6",
+      "source": "Abort run",
+      "translated": "실행 중단"
+    },
+    {
+      "id": "native.android.1c8ec9bc7a542592",
+      "source": "Open notification settings",
+      "translated": "알림 설정 열기"
+    },
+    {
+      "id": "native.android.cac22bf83ae5e538",
+      "source": "On",
+      "translated": "켜짐"
+    },
+    {
+      "id": "native.android.8b2c37db3d4bfe78",
+      "source": "Off",
+      "translated": "꺼짐"
+    },
+    {
+      "id": "native.android.dcf724e915521154",
+      "source": "Connection",
+      "translated": "연결"
+    },
+    {
+      "id": "native.android.d6576b5ea12e6635",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.5af2a90d687d5ded",
+      "source": "Security",
+      "translated": "보안"
+    },
+    {
+      "id": "native.android.bfa2a9759e56e431",
+      "source": "Phone-controlled",
+      "translated": "휴대전화에서 제어"
+    },
+    {
+      "id": "native.android.9d53b66d3444d63f",
+      "source": "Gateway credentials and identity stay on the paired phone. The watch only uses the Wear Data Layer.",
+      "translated": "Gateway 자격 증명과 ID는 페어링된 휴대전화에 유지됩니다. 시계는 Wear Data Layer만 사용합니다."
+    },
+    {
+      "id": "native.android.e4e15149f5634729",
+      "source": "Checking phone",
+      "translated": "휴대전화 확인 중"
+    },
+    {
+      "id": "native.android.c1b0408a3b9a7855",
+      "source": "Reading agents, sessions, and chat",
+      "translated": "에이전트, 세션 및 채팅을 불러오는 중"
+    },
+    {
+      "id": "native.android.b6cb3ef2de0a91a1",
+      "source": "Phone ready",
+      "translated": "휴대전화 준비 완료"
+    },
+    {
+      "id": "native.android.71511621861ee1f8",
+      "source": "Gateway connected",
+      "translated": "Gateway 연결됨"
+    },
+    {
+      "id": "native.android.e8a185d4eb48abe2",
+      "source": "Gateway offline",
+      "translated": "Gateway 오프라인"
+    },
+    {
+      "id": "native.android.5d98a2a8a4f1f793",
+      "source": "Reconnect the Gateway in OpenClaw on the paired phone.",
+      "translated": "페어링된 휴대전화의 OpenClaw에서 Gateway를 다시 연결하세요."
+    },
+    {
+      "id": "native.android.867011d568b0b0db",
+      "source": "Open OpenClaw on phone",
+      "translated": "휴대전화에서 OpenClaw 열기"
+    },
+    {
+      "id": "native.android.e70d812f3bc1bb40",
+      "source": "The watch never starts or authenticates the Gateway itself.",
+      "translated": "시계 자체에서는 Gateway를 시작하거나 인증하지 않습니다."
+    },
+    {
+      "id": "native.android.be82f33ff358e212",
+      "source": "Phone not reachable",
+      "translated": "휴대전화에 연결할 수 없음"
+    },
+    {
+      "id": "native.android.d6c4dc6d15a4eaac",
+      "source": "Keep the paired phone nearby and install the matching OpenClaw app.",
+      "translated": "페어링된 휴대전화를 가까이 두고 호환되는 OpenClaw 앱을 설치하세요."
+    },
+    {
+      "id": "native.android.bfebf63a2c96e9cd",
+      "source": "Selection no longer available",
+      "translated": "선택 항목을 더 이상 사용할 수 없음"
+    },
+    {
+      "id": "native.android.918aacdecf0e523b",
+      "source": "Action not accepted",
+      "translated": "작업이 수락되지 않음"
+    },
+    {
+      "id": "native.android.375286e6dbb16606",
+      "source": "Something went wrong",
+      "translated": "문제가 발생했습니다"
+    },
+    {
+      "id": "native.android.e0e6d9ff3b7d8970",
+      "source": "Refresh the lists and try again.",
+      "translated": "목록을 새로 고친 후 다시 시도하세요."
+    },
+    {
+      "id": "native.android.e9849178994c7414",
+      "source": "Try again from the watch.",
+      "translated": "시계에서 다시 시도하세요."
+    },
+    {
+      "id": "native.android.3d44911564ea1c5a",
+      "source": "Update required",
+      "translated": "업데이트 필요"
+    },
+    {
+      "id": "native.android.ce39278848b1615d",
+      "source": "Update OpenClaw on both phone and watch.",
+      "translated": "휴대전화와 시계 모두에서 OpenClaw를 업데이트하세요."
+    },
+    {
+      "id": "native.android.b5d6a37fb96f38f1",
+      "source": "Refresh",
+      "translated": "새로 고침"
+    },
+    {
+      "id": "native.android.a64989382158df47",
+      "source": "Retry",
+      "translated": "다시 시도"
+    },
+    {
+      "id": "native.android.6b973e2d4540f1dc",
+      "source": "OpenClaw replies",
+      "translated": "OpenClaw 답변"
+    },
+    {
+      "id": "native.android.daf75f1939c5048f",
+      "source": "Reply",
+      "translated": "답장"
+    },
+    {
+      "id": "native.android.2ab12cfd9399407c",
+      "source": "OpenClaw reply",
+      "translated": "OpenClaw 답장"
+    },
+    {
+      "id": "native.android.289456e2626dd0f4",
+      "source": "Reply not sent",
+      "translated": "답장을 보내지 못했습니다"
+    },
+    {
+      "id": "native.android.bda7ccc6e4728f23",
+      "source": "Phone unavailable. Tap Reply to try again.",
+      "translated": "휴대전화를 사용할 수 없습니다. 다시 시도하려면 답장을 탭하세요."
+    },
+    {
+      "id": "native.android.3ec65645eda5ded7",
+      "source": "Open OpenClaw to reply",
+      "translated": "답장하려면 OpenClaw 열기"
+    },
+    {
+      "id": "native.android.7658464805a4b605",
+      "source": "Your preferred phone changed. Open the app to reload the session before replying.",
+      "translated": "기본 휴대전화가 변경되었습니다. 답장하기 전에 앱을 열어 세션을 다시 불러오세요."
+    },
+    {
+      "id": "native.android.6b2e913641d45f02",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7c74dd9a2bf91d3a",
+      "source": "Open sessions and reply through your paired phone",
+      "translated": "세션을 열고 페어링된 휴대전화를 통해 답장하세요"
+    },
+    {
+      "id": "native.android.6c2e2515598de209",
+      "source": "OPEN",
+      "translated": "열기"
+    },
+    {
+      "id": "native.android.709aff840be1f167",
+      "source": "PHONE PROXY",
+      "translated": "휴대전화 프록시"
+    },
+    {
       "id": "native.apple.8f741d09cc1d5495",
       "source": "OpenClaw Activity",
       "translated": "OpenClaw 활동"
@@ -8722,6 +9357,26 @@
       "id": "native.apple.a811eb3e4d2174d5",
       "source": "that request",
       "translated": "해당 요청"
+    },
+    {
+      "id": "native.apple.91108e396155b531",
+      "source": "Dashboard",
+      "translated": "대시보드"
+    },
+    {
+      "id": "native.apple.8a315564807ba77d",
+      "source": "Done",
+      "translated": "완료"
+    },
+    {
+      "id": "native.apple.1a8ef1f77055764f",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "대시보드를 사용하려면 Gateway 연결이 필요합니다"
+    },
+    {
+      "id": "native.apple.0561fc7c6a99da55",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "이 세션 대시보드를 열려면 Gateway에 연결하세요."
     },
     {
       "id": "native.apple.1696cec8c3c6a511",
@@ -10924,6 +11579,11 @@
       "translated": "세션…"
     },
     {
+      "id": "native.apple.38fb02182bd2430c",
+      "source": "Dashboard",
+      "translated": "대시보드"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "백그라운드 작업"
@@ -12399,26 +13059,6 @@
       "translated": "확인"
     },
     {
-      "id": "native.apple.32230ecb2fbc2378",
-      "source": "Access Level",
-      "translated": "접근 수준"
-    },
-    {
-      "id": "native.apple.7ed27029e9c313cc",
-      "source": "While Using the App",
-      "translated": "앱 사용 중"
-    },
-    {
-      "id": "native.apple.b975064b240c9fd6",
-      "source": "Always",
-      "translated": "항상"
-    },
-    {
-      "id": "native.apple.756ff21ca904b2d8",
-      "source": "Choose when OpenClaw may share this iPhone's location with gateway tools.",
-      "translated": "OpenClaw가 이 iPhone의 위치를 Gateway 도구와 공유할 시점을 선택하세요."
-    },
-    {
       "id": "native.apple.9515109ce97ec94e",
       "source": "Forget %@?",
       "translated": "%@을(를) 삭제할까요?"
@@ -13339,6 +13979,16 @@
       "translated": "위치 공유"
     },
     {
+      "id": "native.apple.29e2ea3e063e4553",
+      "source": "While Using the App",
+      "translated": "앱을 사용하는 동안"
+    },
+    {
+      "id": "native.apple.b7e8bf7dae32ab59",
+      "source": "Always",
+      "translated": "항상"
+    },
+    {
       "id": "native.apple.aadb749ebce75251",
       "source": "Access Level",
       "translated": "접근 수준"
@@ -13399,14 +14049,24 @@
       "translated": "페어링된 Gateway"
     },
     {
-      "id": "native.apple.9a6bd720a544ec04",
-      "source": "Switch gateways without pairing again.",
-      "translated": "다시 페어링하지 않고 Gateway를 전환합니다."
+      "id": "native.apple.0c5dae9bc264aaa1",
+      "source": "Keep multiple gateways connected and switch which one is in focus.",
+      "translated": "여러 Gateway의 연결을 유지하고 포커스할 Gateway를 전환하세요."
     },
     {
-      "id": "native.apple.5f33cfe2d21e6dc6",
-      "source": "Active Gateway",
-      "translated": "활성 Gateway"
+      "id": "native.apple.a1d2ffbfe64ef4ce",
+      "source": "Focused Gateway",
+      "translated": "포커스된 Gateway"
+    },
+    {
+      "id": "native.apple.f819d2ea384fe6ed",
+      "source": "Disconnect Gateway",
+      "translated": "Gateway 연결 해제"
+    },
+    {
+      "id": "native.apple.10d41627b8261536",
+      "source": "Keep Gateway Connected",
+      "translated": "Gateway 연결 유지"
     },
     {
       "id": "native.apple.4e1792b1044ec4a9",
@@ -14387,6 +15047,11 @@
       "id": "native.apple.f21a8e304b607dc8",
       "source": "Copy",
       "translated": "복사"
+    },
+    {
+      "id": "native.apple.7896bc893de41eae",
+      "source": "Reconnecting…",
+      "translated": "다시 연결하는 중…"
     },
     {
       "id": "native.apple.760dbcb0180666e1",
@@ -16034,11 +16699,6 @@
       "translated": "Gateway 설정 열기"
     },
     {
-      "id": "native.apple.f90c1fb8880c70c0",
-      "source": "[\\(host)]",
-      "translated": "[\\(host)]"
-    },
-    {
       "id": "native.apple.3b21081fb5ce84ba",
       "source": "Not checked",
       "translated": "확인되지 않음"
@@ -16497,6 +17157,11 @@
       "id": "native.apple.00887489a998411e",
       "source": "%@ permission denied",
       "translated": "%@ 권한이 거부됨"
+    },
+    {
+      "id": "native.apple.944004de80cfc8b7",
+      "source": "[\\(host)]",
+      "translated": "[\\(host)]"
     },
     {
       "id": "native.apple.12a4a51d251f65c0",
@@ -18419,6 +19084,16 @@
       "translated": "편집"
     },
     {
+      "id": "native.apple.919c9d3727497989",
+      "source": "Edit automation",
+      "translated": "자동화 편집"
+    },
+    {
+      "id": "native.apple.3587c8ad6de422b3",
+      "source": "Command and script payloads are read-only in the macOS app",
+      "translated": "명령 및 스크립트 페이로드는 macOS 앱에서 읽기 전용입니다"
+    },
+    {
       "id": "native.apple.04c710cf31471ebd",
       "source": "Schedule",
       "translated": "일정"
@@ -18504,11 +19179,6 @@
       "translated": "생각 \\(thinking)"
     },
     {
-      "id": "native.apple.a513a17d658a1aa2",
-      "source": "\\(timeoutSeconds)s",
-      "translated": "\\(timeoutSeconds)초"
-    },
-    {
       "id": "native.apple.41cd997805bd59e3",
       "source": "announce",
       "translated": "알림"
@@ -18517,6 +19187,26 @@
       "id": "native.apple.6e5597dd202288ee",
       "source": "no delivery",
       "translated": "전달 없음"
+    },
+    {
+      "id": "native.apple.c27e3019dfe8e877",
+      "source": "command · read-only",
+      "translated": "명령 · 읽기 전용"
+    },
+    {
+      "id": "native.apple.5e02b5f297de21b0",
+      "source": "script · read-only",
+      "translated": "스크립트 · 읽기 전용"
+    },
+    {
+      "id": "native.apple.a513a17d658a1aa2",
+      "source": "\\(timeoutSeconds)s",
+      "translated": "\\(timeoutSeconds)초"
+    },
+    {
+      "id": "native.apple.b42d8e457b71b478",
+      "source": "\\(toolBudget) tools",
+      "translated": "도구 \\(toolBudget)개"
     },
     {
       "id": "native.apple.5eea57b14cab3876",
@@ -19092,6 +19782,121 @@
       "id": "native.apple.4bd8ea604f3c21fa",
       "source": "unknown error",
       "translated": "unknown error"
+    },
+    {
+      "id": "native.apple.e0b70da297ef8a61",
+      "source": "Remove Gateway?",
+      "translated": "Gateway를 제거하시겠습니까?"
+    },
+    {
+      "id": "native.apple.983c58888b89f27f",
+      "source": "Remove",
+      "translated": "제거"
+    },
+    {
+      "id": "native.apple.7b53872a9637b308",
+      "source": "\\(profile.name) and its saved credentials will be removed. Its open windows will close.",
+      "translated": "\\(profile.name) 및 저장된 자격 증명이 제거됩니다. 열려 있는 창도 닫힙니다."
+    },
+    {
+      "id": "native.apple.a4d437ba492adc8b",
+      "source": "Gateway Error",
+      "translated": "Gateway 오류"
+    },
+    {
+      "id": "native.apple.33c3c61e0fb62195",
+      "source": "OK",
+      "translated": "확인"
+    },
+    {
+      "id": "native.apple.bfd13b43b2fd425c",
+      "source": "Gateways",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.1ff05976802ac6c9",
+      "source": "Save Gateway connections for chat windows. The primary Gateway under Connection still owns Mac integrations and Talk Mode.",
+      "translated": "채팅 창용 Gateway 연결을 저장합니다. 연결 아래의 기본 Gateway는 계속해서 Mac 통합 및 대화 모드를 관리합니다."
+    },
+    {
+      "id": "native.apple.7fdfccfafd3ff368",
+      "source": "Loading Gateways…",
+      "translated": "Gateway를 불러오는 중…"
+    },
+    {
+      "id": "native.apple.593c7f1b06caf821",
+      "source": "No Gateways saved",
+      "translated": "저장된 Gateway 없음"
+    },
+    {
+      "id": "native.apple.9053ce4456cc06f0",
+      "source": "Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.",
+      "translated": "여기에 Gateway를 추가한 다음, 해당 Gateway용 창을 하나 더 열고 싶을 때마다 파일 → 새로운 Gateway 창… (⌘N)을 사용하세요."
+    },
+    {
+      "id": "native.apple.5b3b79e66c434e33",
+      "source": "Saved Gateways",
+      "translated": "저장된 Gateway"
+    },
+    {
+      "id": "native.apple.c49f6831863c8dae",
+      "source": "Open Window",
+      "translated": "창 열기"
+    },
+    {
+      "id": "native.apple.3c90290e04c6dc5f",
+      "source": "Remove \\(profile.name)",
+      "translated": "\\(profile.name) 제거"
+    },
+    {
+      "id": "native.apple.98935e9c19760b62",
+      "source": "Add Gateway",
+      "translated": "Gateway 추가"
+    },
+    {
+      "id": "native.apple.fb5076533e3003a3",
+      "source": "Credentials are stored with this profile in your Mac Keychain.",
+      "translated": "자격 증명은 이 프로필과 함께 Mac 키체인에 저장됩니다."
+    },
+    {
+      "id": "native.apple.a7ee8d846fd61525",
+      "source": "Name",
+      "translated": "이름"
+    },
+    {
+      "id": "native.apple.c65e3cdc3d2c9b36",
+      "source": "Studio",
+      "translated": "스튜디오"
+    },
+    {
+      "id": "native.apple.ce48afbb966a6933",
+      "source": "Gateway URL",
+      "translated": "Gateway URL"
+    },
+    {
+      "id": "native.apple.aeb21e4c3192125f",
+      "source": "wss://gateway.example.com",
+      "translated": "wss://gateway.example.com"
+    },
+    {
+      "id": "native.apple.f585ed08c1f6a65e",
+      "source": "Token",
+      "translated": "토큰"
+    },
+    {
+      "id": "native.apple.9a090d8a5c8fb7cb",
+      "source": "Password",
+      "translated": "비밀번호"
+    },
+    {
+      "id": "native.apple.f3448df352fdd5d4",
+      "source": "Optional",
+      "translated": "선택 사항"
+    },
+    {
+      "id": "native.apple.1f1c9084eb6a2982",
+      "source": "Cancel",
+      "translated": "취소"
     },
     {
       "id": "native.apple.7b5eaba753440639",
@@ -19737,6 +20542,11 @@
       "id": "native.apple.01e6a456cdadce81",
       "source": "Critical",
       "translated": "심각"
+    },
+    {
+      "id": "native.apple.130664b1dd61cbbf",
+      "source": "New Gateway Window…",
+      "translated": "새 Gateway 윈도우…"
     },
     {
       "id": "native.apple.13f96467014cf344",
@@ -22089,6 +22899,11 @@
       "translated": "연결"
     },
     {
+      "id": "native.apple.1d96f676261a5a05",
+      "source": "Gateways",
+      "translated": "Gateway"
+    },
+    {
       "id": "native.apple.8c2b0262f3a5ebea",
       "source": "Permissions",
       "translated": "권한"
@@ -22604,34 +23419,34 @@
       "translated": "에이전트가 이 Mac에서 허용 목록 확인 없이 셸 명령을 실행할 수 있습니다."
     },
     {
-      "id": "native.apple.c8e6fc08f04b8d9f",
+      "id": "native.apple.5184684dc4a62edb",
       "source": "Block agent shell commands on this Mac.",
       "translated": "이 Mac에서 에이전트 셸 명령을 차단합니다."
     },
     {
-      "id": "native.apple.e9371d48f629b039",
+      "id": "native.apple.bf1e546102919d3f",
       "source": "Allow trusted command patterns and handle misses with prompts.",
-      "translated": "신뢰할 수 있는 명령 패턴을 허용하고 일치하지 않는 항목은 프롬프트로 처리합니다."
+      "translated": "신뢰할 수 있는 명령 패턴을 허용하고 일치하지 않는 경우 메시지로 확인합니다."
     },
     {
-      "id": "native.apple.935c981496e8689b",
+      "id": "native.apple.84214f3fae821163",
       "source": "Allow shell commands without checking the allowlist.",
       "translated": "허용 목록을 확인하지 않고 셸 명령을 허용합니다."
     },
     {
-      "id": "native.apple.c494c0bb6a4182a2",
+      "id": "native.apple.d7404aa083ad6d58",
       "source": "Never show approval prompts.",
-      "translated": "승인 프롬프트를 표시하지 않음."
+      "translated": "승인 메시지를 표시하지 않습니다."
     },
     {
-      "id": "native.apple.c04df969fed1b2ca",
+      "id": "native.apple.093c3c01af530076",
       "source": "Ask only when a command is not trusted yet.",
-      "translated": "명령이 아직 신뢰되지 않은 경우에만 묻기."
+      "translated": "명령이 아직 신뢰되지 않은 경우에만 묻습니다."
     },
     {
-      "id": "native.apple.19950d3e6e99ee47",
+      "id": "native.apple.a5161a377e784404",
       "source": "Ask before every shell command.",
-      "translated": "모든 셸 명령 전에 묻기."
+      "translated": "모든 셸 명령을 실행하기 전에 묻습니다."
     },
     {
       "id": "native.apple.b18215308bc4e7cf",
@@ -23004,14 +23819,19 @@
       "translated": "트리거 단어 제거"
     },
     {
-      "id": "native.apple.65b2687f8f16f9b2",
-      "source": "Language \\(self.index + 2)",
-      "translated": "언어 \\(self.index + 2)"
+      "id": "native.apple.dd0278dbfd438cdb",
+      "source": "Language %lld",
+      "translated": "언어 %lld"
     },
     {
       "id": "native.apple.a767de022c4a06db",
       "source": "Fallback recognition language.",
       "translated": "대체 인식 언어."
+    },
+    {
+      "id": "native.apple.65b2687f8f16f9b2",
+      "source": "Language \\(self.index + 2)",
+      "translated": "언어 \\(self.index + 2)"
     },
     {
       "id": "native.apple.cfab77826c9ac1d1",
@@ -23067,6 +23887,16 @@
       "id": "native.apple.26960f2b7ebad5f9",
       "source": "Voice wake detected!",
       "translated": "음성 깨우기가 감지되었습니다!"
+    },
+    {
+      "id": "native.apple.7dd4d4d2fc36ffce",
+      "source": "Could Not Open Gateway Window",
+      "translated": "Gateway 창을 열 수 없음"
+    },
+    {
+      "id": "native.apple.93ad62dac611bdcd",
+      "source": "Talk mode uses the primary Gateway window",
+      "translated": "대화 모드는 기본 Gateway 창을 사용합니다"
     },
     {
       "id": "native.apple.282d11786f2f4c4b",
@@ -23314,6 +24144,21 @@
       "translated": "스레드"
     },
     {
+      "id": "native.apple.02f0965fdca227b2",
+      "source": "Branches",
+      "translated": "브랜치"
+    },
+    {
+      "id": "native.apple.82ca9989fa432b38",
+      "source": "Untitled branch",
+      "translated": "제목 없는 브랜치"
+    },
+    {
+      "id": "native.apple.8d0ae98818aa39e8",
+      "source": "^[\\(count) message](inflect: true)",
+      "translated": "^[\\(count)개 메시지](inflect: true)"
+    },
+    {
       "id": "native.apple.284b2b94c272591d",
       "source": "Add Image",
       "translated": "이미지 추가"
@@ -23542,6 +24387,26 @@
       "id": "native.apple.fccc8a9ba3da1426",
       "source": "Agent avatar",
       "translated": "에이전트 아바타"
+    },
+    {
+      "id": "native.apple.9d4cffc5588d8730",
+      "source": "Show less",
+      "translated": "간략히 보기"
+    },
+    {
+      "id": "native.apple.b0b4af1981ac0818",
+      "source": "Show more",
+      "translated": "더 보기"
+    },
+    {
+      "id": "native.apple.29122616e14321b1",
+      "source": "Collapsed",
+      "translated": "접힘"
+    },
+    {
+      "id": "native.apple.aa75dc50a6ff606c",
+      "source": "Expanded",
+      "translated": "펼침"
     },
     {
       "id": "native.apple.6426e369511b043c",
@@ -24289,14 +25154,14 @@
       "translated": "축소됨"
     },
     {
-      "id": "native.apple.c4e808a2ec8d49f5",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3"
+      "id": "native.apple.c83fc1ba73fd0776",
+      "source": "'queued', 'sending', 'awaiting_confirmation', 'failed'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation', 'failed'"
     },
     {
-      "id": "native.apple.4e7e29be3f05b828",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'"
+      "id": "native.apple.ee4ea4d701fa5d07",
+      "source": "'queued', 'sending', 'awaiting_confirmation'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation'"
     },
     {
       "id": "native.apple.e743b1178c2fdec8",
@@ -24677,6 +25542,116 @@
       "id": "native.apple.6239ced0b86e86f8",
       "source": "Compact Thread",
       "translated": "스레드 압축"
+    },
+    {
+      "id": "native.apple.fb7ba381b79044e1",
+      "source": "Shelling",
+      "translated": "껍데기 다듬는 중"
+    },
+    {
+      "id": "native.apple.27d2c232c46158f8",
+      "source": "Scuttling",
+      "translated": "종종걸음치는 중"
+    },
+    {
+      "id": "native.apple.146d26a76f1f661d",
+      "source": "Clawing",
+      "translated": "집게발질하는 중"
+    },
+    {
+      "id": "native.apple.9e590066459c45cf",
+      "source": "Pinching",
+      "translated": "집게로 꼬집는 중"
+    },
+    {
+      "id": "native.apple.98bce06ad906ac35",
+      "source": "Molting",
+      "translated": "탈피하는 중"
+    },
+    {
+      "id": "native.apple.0a1991f9ac99e5b2",
+      "source": "Bubbling",
+      "translated": "거품을 내는 중"
+    },
+    {
+      "id": "native.apple.693de3befb7eaf8a",
+      "source": "Tiding",
+      "translated": "물결치는 중"
+    },
+    {
+      "id": "native.apple.3f77525b4b5bff6e",
+      "source": "Reefing",
+      "translated": "산호초를 누비는 중"
+    },
+    {
+      "id": "native.apple.e8726dfe7fa3a577",
+      "source": "Cracking",
+      "translated": "껍데기를 깨는 중"
+    },
+    {
+      "id": "native.apple.c861cd13f466af46",
+      "source": "Sifting",
+      "translated": "체질하는 중"
+    },
+    {
+      "id": "native.apple.c58b34716364e0ef",
+      "source": "Brining",
+      "translated": "소금물에 담그는 중"
+    },
+    {
+      "id": "native.apple.f98d6769fad9ef63",
+      "source": "Nautiling",
+      "translated": "앵무조개처럼 헤엄치는 중"
+    },
+    {
+      "id": "native.apple.40dbb800afe19da8",
+      "source": "Krilling",
+      "translated": "크릴을 잡는 중"
+    },
+    {
+      "id": "native.apple.e92c5bb2e5342ce6",
+      "source": "Barnacling",
+      "translated": "따개비를 채집하는 중"
+    },
+    {
+      "id": "native.apple.2f27f7676f6a5406",
+      "source": "Lobstering",
+      "translated": "바닷가재를 잡는 중"
+    },
+    {
+      "id": "native.apple.089a07837ab1cce7",
+      "source": "Tidepooling",
+      "translated": "조수 웅덩이를 탐험하는 중"
+    },
+    {
+      "id": "native.apple.a17076dab69dac74",
+      "source": "Pearling",
+      "translated": "진주를 캐는 중"
+    },
+    {
+      "id": "native.apple.5715a7bb435c57e8",
+      "source": "Snapping",
+      "translated": "집게질하는 중"
+    },
+    {
+      "id": "native.apple.6fbcf8a03da3315a",
+      "source": "Surfacing",
+      "translated": "수면 위로 떠오르는 중"
+    },
+    {
+      "id": "native.apple.578503dfeef25502",
+      "source": "Done in %@",
+      "translated": "%@ 만에 완료"
+    },
+    {
+      "id": "native.apple.4fb1ae0d89560d73",
+      "source": "1 token",
+      "translated": "토큰 1개"
+    },
+    {
+      "id": "native.apple.3f968fd475a91bb1",
+      "source": "%@ tokens",
+      "translated": "토큰 %@개"
     },
     {
       "id": "native.apple.fa10740f9e272e83",

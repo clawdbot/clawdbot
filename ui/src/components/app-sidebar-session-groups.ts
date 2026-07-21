@@ -1,5 +1,6 @@
 import { state } from "lit/decorators.js";
 import {
+  parseSidebarEntry,
   SIDEBAR_NAV_ROUTES,
   serializeSidebarEntry,
   type SidebarNavRoute,
@@ -51,6 +52,15 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     this.draggingSidebarEntry = serializeSidebarEntry({ type: "route", route });
   }
 
+  protected startSidebarWorkboardDrag(event: DragEvent, boardId: string) {
+    if (!event.dataTransfer) {
+      return;
+    }
+    const entry = serializeSidebarEntry({ type: "workboard", boardId });
+    writeSidebarRouteDragData(event.dataTransfer, entry);
+    this.draggingSidebarEntry = entry;
+  }
+
   protected finishSidebarEntryDrag() {
     this.draggingSidebarEntry = null;
     this.draggingSessionKey = null;
@@ -62,6 +72,10 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     const route = readSidebarRouteDragData(dataTransfer);
     if (route && SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)) {
       return serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute });
+    }
+    const dynamicEntry = parseSidebarEntry(route);
+    if (dynamicEntry?.type === "workboard") {
+      return serializeSidebarEntry(dynamicEntry);
     }
     const sessionKey = readSessionDragData(dataTransfer);
     return sessionKey ? serializeSidebarEntry({ type: "session", key: sessionKey }) : null;
@@ -172,12 +186,17 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
   }
 
   protected handleSessionListDrop(event: DragEvent) {
-    const route = readSidebarRouteDragData(event.dataTransfer);
-    if (route && SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)) {
+    const draggedNavigation = readSidebarRouteDragData(event.dataTransfer);
+    const dynamicEntry = parseSidebarEntry(draggedNavigation);
+    const entry =
+      draggedNavigation && SIDEBAR_NAV_ROUTES.includes(draggedNavigation as SidebarNavRoute)
+        ? ({ type: "route", route: draggedNavigation as SidebarNavRoute } as const)
+        : dynamicEntry?.type === "workboard"
+          ? dynamicEntry
+          : null;
+    if (entry) {
       event.preventDefault();
-      this.removeSidebarEntry(
-        serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
-      );
+      this.removeSidebarEntry(serializeSidebarEntry(entry));
       this.finishSidebarEntryDrag();
       return;
     }

@@ -267,10 +267,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       pinnedRows,
       SIDEBAR_NAV_ROUTES,
       knownUnpinnedKeys,
+      this.workboardBoards,
+      this.enabledRouteIds?.includes("workboard") ?? true,
+      this.workboardBoardsReady,
     );
     return {
       ...reconciled,
       sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
+      workboardRows: new Map(this.workboardBoards.map((board) => [board.id, board])),
     };
   }
 

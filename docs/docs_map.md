@@ -66,6 +66,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: How cron works
   - H2: Schedule types
+  - H3: Stream sources
   - H3: Dynamic cadence (pacing)
   - H3: Day-of-month and day-of-week use OR logic
   - H2: Event triggers (condition watchers)
@@ -1363,6 +1364,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: openclaw clawbot
   - H2: Migration
   - H2: Related
+
+## cli/claws.md
+
+- Route: /cli/claws
+- Headings:
+  - H1: openclaw claws
+  - H2: Create a grouped manifest
+  - H2: Inspect and preview
+  - H2: Command reference
+  - H2: See also
 
 ## cli/commitments.md
 

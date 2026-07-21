@@ -356,9 +356,19 @@ export function bootstrapApplication(): ApplicationRuntime {
   });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
-    if (options?.search !== undefined || options?.hash !== undefined) {
+    const activeMatch = router.getState().matches[0];
+    const activeDynamicPath =
+      activeMatch?.routeId === routeId && routeId === "workboard"
+        ? activeMatch.location.pathname
+        : null;
+    if (
+      options?.pathname !== undefined ||
+      options?.search !== undefined ||
+      options?.hash !== undefined
+    ) {
       return {
         ...location,
+        pathname: options?.pathname ?? activeDynamicPath ?? location.pathname,
         search: options?.search ?? "",
         hash: options?.hash ?? "",
       };

@@ -222,7 +222,8 @@ describe("AppSidebar session catalog pagination", () => {
     ]);
     const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
     const remote = section?.querySelector('[data-session-catalog-host="node:build"]');
-    expect(local?.textContent).toContain("Gateway Mac");
+    expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
+    expect(local?.textContent).not.toContain("Gateway Mac");
     expect(local?.textContent).toContain("Local plan");
     expect(local?.querySelector(".session-row-badge--pull-request")?.getAttribute("title")).toBe(
       "#111751, #111772 · Merged",

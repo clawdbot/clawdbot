@@ -1,4 +1,5 @@
 package ai.openclaw.app.chat
+
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -24,6 +25,21 @@ data class ChatMessage(
   val content: List<ChatMessageContent>,
   val timestampMs: Long?,
   val idempotencyKey: String? = null,
+  /** Canonical transcript-tree identity supplied by chat.history. */
+  val entryId: String? = null,
+)
+
+/** One selectable transcript branch returned by sessions.branches.list. */
+data class SessionBranch(
+  val leafEntryId: String,
+  val headline: String,
+  val messageCount: Int,
+  val updatedAt: String?,
+  val active: Boolean,
+)
+
+data class SessionRewindResult(
+  val editorText: String?,
 )
 
 data class ChatTranscriptAnchorState(

@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "agent": {
+    "id": "incident-response",
+    "name": "Incident Response",
+    "description": "Triages incidents and prepares response updates.",
+    "identity": {
+      "name": "Incident Response",
+      "emoji": "siren"
+    },
+    "groupChat": {
+      "mentionPatterns": ["@incident-response"]
+    },
+    "sandbox": {
+      "mode": "all",
+      "scope": "agent",
+      "workspaceAccess": "rw"
+    },
+    "tools": {
+      "allow": ["read", "write", "web_fetch"],
+      "deny": ["exec", "browser"]
+    },
+    "heartbeat": {
+      "every": "30m",
+      "lightContext": true,
+      "isolatedSession": true,
+      "skipWhenBusy": true,
+      "timeoutSeconds": 120
+    }
+  },
+  "workspace": {
+    "bootstrapFiles": {
+      "SOUL.md": { "source": "workspace/SOUL.md" },
+      "HEARTBEAT.md": { "source": "workspace/HEARTBEAT.md" }
+    }
+  },
+  "packages": [
+    {
+      "kind": "skill",
+      "source": "clawhub",
+      "ref": "incident-triage",
+      "version": "1.0.0"
+    },
+    {
+      "kind": "plugin",
+      "source": "clawhub",
+      "ref": "@openclaw/plugin-pager-duty",
+      "version": "2.4.0"
+    }
+  ],
+  "mcpServers": {
+    "statuspage": {
+      "command": "npx",
+      "args": ["--yes", "@acme/statuspage-mcp@1.0.0"],
+      "env": {
+        "STATUSPAGE_TOKEN": "${STATUSPAGE_TOKEN}"
+      }
+    }
+  },
+  "cronJobs": [
+    {
+      "id": "heartbeat-summary",
+      "name": "Incident heartbeat summary",
+      "schedule": {
+        "cron": "0 * * * *",
+        "timezone": "UTC"
+      },
+      "session": "isolated",
+      "message": "Review active incidents and prepare a concise status summary.",
+      "delivery": {
+        "mode": "announce",
+        "channel": "last"
+      }
+    }
+  ]
+}

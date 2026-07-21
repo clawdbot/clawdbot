@@ -22,6 +22,15 @@ type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-k
 export type CronServiceRunResult = CronRunResult;
 export type CronServiceRunOptions = {
   payload?: CronPayload;
+  /** Internal event-source runs keep their persisted trigger on force execution. */
+  evaluateTrigger?: boolean;
+  /** Current stream batch exposed to trigger scripts as trigger.streamBatch. */
+  streamBatch?: string;
+  /** Source schedule identity checked under the cron store lock before admission. */
+  streamScheduleKey?: string;
+  /** Logical source identity; rejects retired batches under same-schedule ABA. */
+  streamSourceIdentity?: string;
+  onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
 };
 
 /** Public cron service facade used by gateway, plugin SDK, and tests. */

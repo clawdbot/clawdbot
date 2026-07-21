@@ -737,7 +737,7 @@ extension OnboardingView {
                 ForEach(Capability.importanceOrdered, id: \.self) { cap in
                     PermissionRow(
                         capability: cap,
-                        status: self.permissionMonitor.status[cap] ?? false,
+                        status: self.permissionMonitor.status[cap] ?? .notGranted,
                         compact: true)
                     {
                         Task { await self.request(cap) }

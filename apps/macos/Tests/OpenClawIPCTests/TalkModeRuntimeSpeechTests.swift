@@ -11,6 +11,7 @@ struct TalkModeRuntimeSpeechTests {
 
         #expect(request.shouldReportPartialResults)
         #expect(request.taskHint == .dictation)
+        #expect(!request.requiresOnDeviceRecognition)
     }
 
     @Test func `playback plan routes unsupported local providers through gateway speak`() {

@@ -13,6 +13,19 @@
   --workboard-control-border-hover: color-mix(in srgb, var(--accent) 36%, var(--border-strong));
 }
 
+.workboard-page-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.workboard-board-glyph--header {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
 .workboard-main {
   display: flex;
   flex-direction: column;
@@ -373,6 +386,11 @@
   max-width: 236px;
 }
 
+.workboard-select--toolbar-board {
+  width: min(224px, 100%);
+  max-width: 224px;
+}
+
 .workboard-select::part(form-control-label) {
   position: absolute;
   width: 1px;
@@ -409,6 +427,11 @@
 
 .workboard-select__option {
   color: var(--text);
+}
+
+.workboard-select [slot="start"] {
+  display: inline-flex;
+  align-items: center;
 }
 
 .workboard-select__label {

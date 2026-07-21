@@ -17,6 +17,7 @@ import {
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { pluginTabSearch } from "../pages/plugin/route.ts";
+import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 import { icons, type IconName } from "./icons.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -158,6 +159,7 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   position: SidebarMenuPosition | null;
   basePath: string;
   activeRouteId: NavigationRouteId | undefined;
+  activeWorkboardBoardId: string;
   sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onEditPinnedItems: () => void;
@@ -166,7 +168,9 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
 };
 
 function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavRoute) {
-  const active = isSidebarRouteActive(params.activeRouteId, routeId);
+  const active =
+    isSidebarRouteActive(params.activeRouteId, routeId) &&
+    !(routeId === "workboard" && params.activeWorkboardBoardId);
   return html`
     <wa-dropdown-item
       value=${routeId}
@@ -251,7 +255,10 @@ type SidebarCustomizeMenuParams = {
   position: SidebarMenuPosition | null;
   sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
+  workboardBoards: readonly SidebarWorkboardBoard[];
+  workboardRenderers?: SidebarWorkboardRenderers;
   onToggleRoute: (routeId: SidebarNavRoute) => void;
+  onToggleWorkboardBoard: (boardId: string) => void;
   onReset: () => void;
   onTabAway: () => void;
   onClose: (restoreFocus: boolean) => void;
@@ -275,6 +282,11 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           const value = event.detail.item.value;
           if (value === "reset") {
             params.onReset();
+          } else if (value?.startsWith("workboard:")) {
+            const boardId = value.slice("workboard:".length);
+            if (params.workboardBoards.some((board) => board.id === boardId)) {
+              params.onToggleWorkboardBoard(boardId);
+            }
           } else if (value && SIDEBAR_NAV_ROUTES.includes(value as SidebarNavRoute)) {
             params.onToggleRoute(value as SidebarNavRoute);
           }
@@ -310,6 +322,12 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
             </wa-dropdown-item>
           `;
         })}
+        ${params.isRouteEnabled("workboard") && params.workboardBoards.length > 0
+          ? params.workboardRenderers?.renderCustomize(
+              params.workboardBoards,
+              params.sidebarEntries,
+            )
+          : nothing}
         <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="reset">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
@@ -323,11 +341,14 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
 /** More row carries the active highlight when the current route lives inside its menu. */
 export function sidebarMoreMenuHoldsActiveRoute(params: {
   activeRouteId: NavigationRouteId | undefined;
+  activeWorkboardBoardId?: string;
   sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
 }): boolean {
   return sidebarMoreRoutes(params.sidebarEntries).some(
     (routeId) =>
-      params.isRouteEnabled(routeId) && isSidebarRouteActive(params.activeRouteId, routeId),
+      params.isRouteEnabled(routeId) &&
+      isSidebarRouteActive(params.activeRouteId, routeId) &&
+      !(routeId === "workboard" && params.activeWorkboardBoardId),
   );
 }

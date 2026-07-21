@@ -14,7 +14,9 @@ import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
 import {
   applyExistingCronSchedulePatch,
+  applyExistingStreamSchedulePatch,
   resolveCronEditScheduleRequest,
+  validateStreamScheduleMetadata,
 } from "./schedule-options.js";
 import {
   getCronChannelOptions,
@@ -103,6 +105,12 @@ export function registerCronEditCommand(cron: Command) {
       .option("--pacing-max <duration>", "Set maximum delay for a dynamic next check")
       .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
       .option("--cron <expr>", "Set cron expression")
+      .option("--stream-command <json>", "Set stream source argv as a JSON array of strings")
+      .option("--stream-cwd <path>", "Set stream source working directory")
+      .option("--stream-mode <mode>", "Set stream selection mode (line|match)")
+      .option("--stream-match <regex>", "Set stream match regex source")
+      .option("--stream-batch-ms <n>", "Set stream quiet-window delay in milliseconds")
+      .option("--stream-max-batch-bytes <n>", "Set maximum UTF-8 bytes per stream batch")
       .option(
         "--tz <iana>",
         "Timezone for cron expressions (IANA; cron default: Gateway host local timezone)",
@@ -337,12 +345,37 @@ export function registerCronEditCommand(cron: Command) {
             at: opts.at,
             cron: opts.cron,
             every: opts.every,
+            streamCommand: opts.streamCommand,
+            streamCwd: opts.streamCwd,
+            streamMode: opts.streamMode,
+            streamMatch: opts.streamMatch,
+            streamBatchMs: opts.streamBatchMs,
+            streamMaxBatchBytes: opts.streamMaxBatchBytes,
             exact: opts.exact,
             stagger: opts.stagger,
             tz: opts.tz,
           });
           if (scheduleRequest.kind === "direct") {
-            if (
+            if (scheduleRequest.schedule.kind === "stream") {
+              const existing = await readCronJobForEdit(opts, String(id));
+              if (existing.schedule.kind === "stream") {
+                const metadataRequest = resolveCronEditScheduleRequest({
+                  streamCwd: opts.streamCwd,
+                  streamMode: opts.streamMode,
+                  streamMatch: opts.streamMatch,
+                  streamBatchMs: opts.streamBatchMs,
+                  streamMaxBatchBytes: opts.streamMaxBatchBytes,
+                });
+                const merged =
+                  metadataRequest.kind === "patch-existing-stream"
+                    ? applyExistingStreamSchedulePatch(existing.schedule, metadataRequest)
+                    : existing.schedule;
+                patch.schedule = { ...merged, command: scheduleRequest.schedule.command };
+              } else {
+                validateStreamScheduleMetadata(scheduleRequest.schedule);
+                patch.schedule = scheduleRequest.schedule;
+              }
+            } else if (
               scheduleRequest.schedule.kind === "cron" &&
               scheduleRequest.schedule.tz === undefined
             ) {
@@ -357,6 +390,9 @@ export function registerCronEditCommand(cron: Command) {
           } else if (scheduleRequest.kind === "patch-existing-cron") {
             const existing = await readCronJobForEdit(opts, String(id));
             patch.schedule = applyExistingCronSchedulePatch(existing.schedule, scheduleRequest);
+          } else if (scheduleRequest.kind === "patch-existing-stream") {
+            const existing = await readCronJobForEdit(opts, String(id));
+            patch.schedule = applyExistingStreamSchedulePatch(existing.schedule, scheduleRequest);
           }
 
           Object.assign(

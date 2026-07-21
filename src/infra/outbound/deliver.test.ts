@@ -3281,6 +3281,54 @@ describe("deliverOutboundPayloads", () => {
     });
   });
 
+  it("passes ordered source indexes through adapter batch normalization", async () => {
+    const normalizePayloadBatch = vi.fn<
+      NonNullable<ChannelOutboundAdapter["normalizePayloadBatch"]>
+    >(({ payloads }) => [
+      {
+        ...payloads[0]?.payload,
+        channelData: { merged: payloads.map((entry) => entry.index) },
+      },
+      null,
+    ]);
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "merged",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              normalizePayloadBatch,
+              sendText: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "First" }, { text: "Second" }],
+    });
+
+    expect(normalizePayloadBatch).toHaveBeenCalledTimes(1);
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(sendPayload, "sendPayload").payload).toMatchObject({
+      text: "First",
+      channelData: { merged: [0, 1] },
+    });
+  });
+
   it("strips internal runtime scaffolding copied into rendered and normalized nested payloads", async () => {
     const sendPayload = vi.fn().mockResolvedValue({
       channel: "matrix" as const,

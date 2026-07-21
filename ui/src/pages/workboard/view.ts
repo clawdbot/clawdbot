@@ -58,7 +58,6 @@ import {
 import {
   buildBoardFilterOptions,
   matchesBoardFilter,
-  normalizeActiveBoardFilter,
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "./board-filter.ts";
 import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
@@ -2026,7 +2025,10 @@ export function renderWorkboard(props: WorkboardProps) {
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);
   const boardOptions = buildBoardFilterOptions(state.boards, state.cards);
-  const activeBoardFilter = normalizeActiveBoardFilter(boardOptions, state.boardFilter);
+  // A valid route can outlive a deleted board. Keep that id as the active
+  // filter so the page becomes empty instead of silently showing every card.
+  const activeBoardFilter = state.boardFilter;
+  const showBoardSwitcher = boardOptions.length >= 3;
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
@@ -2145,7 +2147,7 @@ export function renderWorkboard(props: WorkboardProps) {
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
-            ${boardOptions.length > 2
+            ${showBoardSwitcher
               ? renderWorkboardSelect({
                   value: activeBoardFilter,
                   options: boardOptions,

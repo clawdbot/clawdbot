@@ -482,6 +482,32 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun guardedReplacementPreservesComposerEditsMadeWhileActionWasInFlight() {
+    val draft =
+      ChatDraft(
+        text = "rewound text",
+        placement = ChatDraftPlacement.Replace,
+        expectedExistingText = "before",
+      )
+
+    assertEquals(null, mergeChatDraft(draft, "typed while waiting"))
+    assertEquals("rewound text", mergeChatDraft(draft, "before"))
+  }
+
+  @Test
+  fun rewindReplacementCanIntentionallyClearTheComposer() {
+    val draft =
+      ChatDraft(
+        text = "",
+        placement = ChatDraftPlacement.Replace,
+        expectedExistingText = "before",
+        acceptsEmptyText = true,
+      )
+
+    assertEquals("", mergeChatDraft(draft, "before"))
+  }
+
+  @Test
   fun replyDraftCanOnlyMergeIntoItsOriginatingOwner() {
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "agent-a", sessionKey = "session-a")
     val draft = ChatDraft(text = "> quoted\n\n", placement = ChatDraftPlacement.BeforeExisting, owner = owner)

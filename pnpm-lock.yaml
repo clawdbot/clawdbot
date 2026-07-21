@@ -7,6 +7,7 @@ settings:
 overrides:
   '@anthropic-ai/sdk': 0.109.1
   '@opentelemetry/core': 2.9.0
+  '@opentelemetry/propagator-jaeger': 2.9.0
   '@aws-sdk/core': 3.974.27
   '@aws-sdk/credential-provider-node': 3.972.61
   '@aws-sdk/xml-builder': 3.972.33

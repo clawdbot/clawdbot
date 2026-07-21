@@ -19,6 +19,7 @@ export type { CronEvent } from "./service/state.js";
 
 /** Public cron service facade that owns mutable scheduler state and delegates to locked ops. */
 export class CronService implements CronServiceContract {
+  stopAndDrain?: () => Promise<void>;
   private readonly state;
   private startInProgress = 0;
   private startState: { generation: number; promise: Promise<void> } | null = null;
@@ -153,6 +154,50 @@ export class CronService implements CronServiceContract {
 
   async readJob(id: string): Promise<CronJob | undefined> {
     return await ops.readJob(this.state, id);
+  }
+
+  async recordExternalFailure(
+    id: string,
+    error: string,
+    statePatch: Partial<CronJob["state"]>,
+    source?: { scheduleKey: string; identity: string },
+  ): Promise<void> {
+    await ops.recordExternalFailure(this.state, id, error, statePatch, source);
+  }
+
+  async updateExternalState(
+    id: string,
+    streamScheduleKey: string,
+    streamSourceIdentity: string,
+    statePatch: Partial<CronJob["state"]>,
+  ): Promise<boolean> {
+    return await ops.updateExternalState(
+      this.state,
+      id,
+      streamScheduleKey,
+      streamSourceIdentity,
+      statePatch,
+    );
+  }
+
+  async retireExternalStreamSource(
+    id: string,
+    streamScheduleKey: string,
+    streamSourceIdentity: string,
+  ): Promise<string | undefined> {
+    return await ops.retireExternalStreamSource(
+      this.state,
+      id,
+      streamScheduleKey,
+      streamSourceIdentity,
+    );
+  }
+
+  async updateExternalCounters(
+    id: string,
+    counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
+  ): Promise<void> {
+    await ops.updateExternalCounters(this.state, id, counters);
   }
 
   getDefaultAgentId(): string | undefined {

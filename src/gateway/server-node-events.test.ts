@@ -2310,6 +2310,42 @@ describe("agent request events", () => {
     expect(updateNodePresenceActivity).not.toHaveBeenCalled();
   });
 
+  it("clears authenticated node activity without requiring Accessibility", async () => {
+    const broadcast = vi.fn();
+    const clearNodePresenceActivity = vi.fn(() => true);
+    const ctx: NodeEventContext = {
+      ...buildCtx(),
+      broadcast,
+      clearNodePresenceActivity,
+    };
+    const result = await handleNodeEvent(
+      ctx,
+      "mac-node",
+      {
+        event: "node.presence.activity",
+        payloadJSON: JSON.stringify({ action: "clear" }),
+      },
+      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: false },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.activity",
+      handled: true,
+      reason: "cleared",
+    });
+    expect(clearNodePresenceActivity).toHaveBeenCalledWith({
+      nodeId: "mac-node",
+      connId: "conn-1",
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "node.presence",
+      { nodeId: "mac-node", lastActiveAtMs: null, presenceUpdatedAtMs: null },
+      { dropIfSlow: true },
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
   it("normalizes unknown node presence alive triggers before persistence", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(

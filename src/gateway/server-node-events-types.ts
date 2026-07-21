@@ -46,6 +46,7 @@ export type NodeEventContext = {
     idleSeconds: number;
     saturated?: boolean;
   }) => { lastActiveAtMs: number; presenceUpdatedAtMs: number } | null;
+  clearNodePresenceActivity?: (params: { nodeId: string; connId?: string }) => boolean | null;
   logGateway: { warn: (msg: string) => void };
 };
 

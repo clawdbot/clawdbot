@@ -11,7 +11,10 @@ import {
   createOpenClawCodingTools,
   resolveToolLoopDetectionConfig,
 } from "../agents/agent-tools.js";
-import type { CodeModeNamespaceDescriptor } from "../agents/code-mode-namespaces.js";
+import type {
+  CodeModeNamespaceDescriptor,
+  SerializedCodeModeNamespaceValue,
+} from "../agents/code-mode-namespaces.js";
 import {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
@@ -196,13 +199,19 @@ async function prepareTriggerRuntime(params: {
   };
 }
 
-function triggerStateNamespace(state: unknown): CodeModeNamespaceDescriptor {
+function triggerStateNamespace(state: unknown, streamBatch?: string): CodeModeNamespaceDescriptor {
+  const entries: Array<[string, SerializedCodeModeNamespaceValue]> = [
+    ["state", { kind: "value", value: state }],
+  ];
+  if (streamBatch !== undefined) {
+    entries.push(["streamBatch", { kind: "value", value: streamBatch }]);
+  }
   return {
     id: "cron:trigger",
     globalName: "trigger",
     scope: {
       kind: "object",
-      entries: [["state", { kind: "value", value: state }]],
+      entries,
     },
   };
 }
@@ -579,6 +588,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       agentId?: string;
       script: string;
       state: unknown;
+      streamBatch?: string;
       toolsAllow?: string[];
       abortSignal?: AbortSignal;
     }): Promise<CronTriggerEvaluationResult> => {
@@ -592,7 +602,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
           wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
           maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
           label: "cron trigger evaluation",
-          namespaces: [triggerStateNamespace(params.state)],
+          namespaces: [triggerStateNamespace(params.state, params.streamBatch)],
         });
         return outcome.kind === "completed" ? parseTriggerResult(outcome.result) : outcome;
       } finally {
@@ -604,6 +614,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       agentId?: string;
       script: string;
       state: unknown;
+      streamBatch?: string;
       toolsAllow?: string[];
       timeoutSeconds?: number;
       toolBudget?: number;
@@ -622,7 +633,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
         wallClockMs: timeoutSeconds * 1000,
         maxToolCalls: toolBudget,
         label: "cron script payload",
-        namespaces: [triggerStateNamespace(params.state)],
+        namespaces: [triggerStateNamespace(params.state, params.streamBatch)],
       });
       return outcome.kind === "completed" ? parseScriptPayloadResult(outcome.result) : outcome;
     },

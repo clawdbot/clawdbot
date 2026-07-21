@@ -62,6 +62,29 @@ describe("system-presence", () => {
     expect(entry?.scopes).toEqual(["operator.admin", "system.run"]);
   });
 
+  it("clears retained input activity on explicit null", () => {
+    const instanceId = `presence-clear-${randomUUID()}`;
+    updateSystemPresence({
+      text: "Node: desk · mode ui",
+      instanceId,
+      host: "desk",
+      mode: "ui",
+      lastInputSeconds: 4,
+    });
+
+    updateSystemPresence({
+      text: "Node: desk · mode ui",
+      instanceId,
+      host: "desk",
+      mode: "ui",
+      lastInputSeconds: null,
+    });
+
+    const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
+    expect(entry?.host).toBe("desk");
+    expect(entry?.lastInputSeconds).toBeUndefined();
+  });
+
   it("parses node presence text and normalizes the update key", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));

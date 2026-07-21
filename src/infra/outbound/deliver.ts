@@ -171,6 +171,9 @@ type ChannelHandler = {
   supportsMedia: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
   normalizePayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  normalizePayloadBatch?: (
+    payloads: NormalizedPayloadForChannelDelivery[],
+  ) => NormalizedPayloadForChannelDelivery[];
   sendTextOnlyErrorPayloads?: boolean;
   renderPresentation?: (payload: ReplyPayload) => Promise<ReplyPayload | null>;
   presentationCapabilities?: ChannelOutboundAdapter["presentationCapabilities"];
@@ -470,6 +473,19 @@ function createPluginHandler(
             cfg: params.cfg,
             accountId: params.accountId,
           })
+      : undefined,
+    normalizePayloadBatch: outbound?.normalizePayloadBatch
+      ? (payloads) => {
+          const normalized = outbound.normalizePayloadBatch!({
+            payloads,
+            cfg: params.cfg,
+            accountId: params.accountId,
+          });
+          return payloads.flatMap((entry, index) => {
+            const payload = normalized[index];
+            return payload ? [{ ...entry, payload }] : [];
+          });
+        }
       : undefined,
     sendTextOnlyErrorPayloads: outbound?.sendTextOnlyErrorPayloads === true,
     presentationCapabilities: outbound?.presentationCapabilities,
@@ -947,7 +963,9 @@ function normalizePayloadsForChannelDelivery(
       normalizedPayloads.push({ index: entry.sourceIndex, payload: normalized });
     }
   }
-  return normalizedPayloads;
+  return handler.normalizePayloadBatch
+    ? handler.normalizePayloadBatch(normalizedPayloads)
+    : normalizedPayloads;
 }
 
 function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {

@@ -51,6 +51,9 @@ internal fun ChatMessageActionHost(
   text: String,
   onReply: (String) -> Unit,
   modifier: Modifier = Modifier,
+  showSessionActions: Boolean = false,
+  onRewind: (() -> Unit)? = null,
+  onFork: (() -> Unit)? = null,
   enabled: Boolean = true,
   listenActive: Boolean = false,
   onToggleListen: (() -> Unit)? = null,
@@ -99,6 +102,20 @@ internal fun ChatMessageActionHost(
       MessageActionItem(label = nativeString("Reply")) {
         onReply(quoteChatMessage(text))
         menuExpanded = false
+      }
+      if (showSessionActions) {
+        onRewind?.let { rewind ->
+          MessageActionItem(label = nativeString("Rewind to here")) {
+            rewind()
+            menuExpanded = false
+          }
+        }
+        onFork?.let { fork ->
+          MessageActionItem(label = nativeString("Fork from here")) {
+            fork()
+            menuExpanded = false
+          }
+        }
       }
     }
   }

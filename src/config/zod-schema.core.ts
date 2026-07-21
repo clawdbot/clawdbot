@@ -502,7 +502,9 @@ export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
 
 const ModelProviderSchema = z
   .object({
-    baseUrl: z.string().min(1).optional(),
+    // Bundled provider overlays are materialized with an empty-string sentinel.
+    // ModelProvidersSchema below still rejects empty baseUrl values for custom providers.
+    baseUrl: z.string().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])

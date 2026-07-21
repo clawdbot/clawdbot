@@ -79,6 +79,21 @@
       "translated": "Komut"
     },
     {
+      "id": "native.android.83c33792ce758e6b",
+      "source": "Timeout ${it}s",
+      "translated": "Zaman aşımı ${it} sn."
+    },
+    {
+      "id": "native.android.bb754576303ae39a",
+      "source": "$it tools",
+      "translated": "$it araç"
+    },
+    {
+      "id": "native.android.43528ba5a11e44fd",
+      "source": "Script",
+      "translated": "Betik"
+    },
+    {
       "id": "native.android.09e08fc62e2902fc",
       "source": "Payload",
       "translated": "Yük"
@@ -1564,6 +1579,11 @@
       "translated": "${days} gün"
     },
     {
+      "id": "native.android.936714892af1b0f9",
+      "source": ":${uri.port}",
+      "translated": ":${uri.port}"
+    },
+    {
       "id": "native.android.c4a902430c22030c",
       "source": "Delete",
       "translated": "Sil"
@@ -1839,6 +1859,16 @@
       "translated": "Gateway bu yolu değiştirebilir ancak mevcut bir yolu temizleyemez."
     },
     {
+      "id": "native.android.d9c4873f21d6d410",
+      "source": "Script",
+      "translated": "Betik"
+    },
+    {
+      "id": "native.android.79ac1e41ef639f65",
+      "source": "Script payloads are preserved unchanged. Use the CLI to edit this script.",
+      "translated": "Betik yükleri değiştirilmeden korunur. Bu betiği düzenlemek için CLI'ı kullanın."
+    },
+    {
       "id": "native.android.b0de849068a82211",
       "source": "Recent Runs",
       "translated": "Son Çalıştırmalar"
@@ -1897,6 +1927,11 @@
       "id": "native.android.09bb59bcf0c7e009",
       "source": "Command",
       "translated": "Komut"
+    },
+    {
+      "id": "native.android.2e2395bd65d3a411",
+      "source": "Script · read-only",
+      "translated": "Betik · salt okunur"
     },
     {
       "id": "native.android.54465889774765e9",
@@ -3677,6 +3712,26 @@
       "id": "native.android.4832c0d0e9774283",
       "source": "${tokens / 1_000}k",
       "translated": "${tokens / 1_000}k"
+    },
+    {
+      "id": "native.android.ae8ffaf0304344ff",
+      "source": "Back",
+      "translated": "Geri"
+    },
+    {
+      "id": "native.android.09fa98489fd0881b",
+      "source": "Dashboard",
+      "translated": "Gösterge paneli"
+    },
+    {
+      "id": "native.android.285be3399daf82ee",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "Gösterge paneli için bağlı bir Gateway gerekir"
+    },
+    {
+      "id": "native.android.a1881da010cb4b9f",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "Bu oturumun gösterge panelini açmak için Gateway'inize bağlanın."
     },
     {
       "id": "native.android.a5845742daecb4ba",
@@ -5504,6 +5559,11 @@
       "translated": "Komut"
     },
     {
+      "id": "native.android.8aed9c94ef7f917f",
+      "source": "Script",
+      "translated": "Betik"
+    },
+    {
       "id": "native.android.f36439e78187c554",
       "source": "Payload Text",
       "translated": "Yük Metni"
@@ -5572,6 +5632,11 @@
       "id": "native.android.bafe2765892cc6fa",
       "source": "Home",
       "translated": "Ana Sayfa"
+    },
+    {
+      "id": "native.android.d5b302e1a7695a7a",
+      "source": "Dashboard",
+      "translated": "Gösterge paneli"
     },
     {
       "id": "native.android.30d8b822fa68d6c4",
@@ -7529,9 +7594,14 @@
       "translated": "Önizleme yok"
     },
     {
-      "id": "native.android.a50e44d8f380f9ad",
-      "source": "Thinking...",
-      "translated": "Düşünüyor..."
+      "id": "native.android.66aef4de5e07438f",
+      "source": "Working",
+      "translated": "Çalışıyor"
+    },
+    {
+      "id": "native.android.6e7be1773c946de3",
+      "source": "· $phrase",
+      "translated": "· $phrase"
     },
     {
       "id": "native.android.ff4a092a02bd5d17",
@@ -7739,6 +7809,11 @@
       "translated": "Sohbeti yenile"
     },
     {
+      "id": "native.android.6966ae8bbad7347d",
+      "source": "Dashboard",
+      "translated": "Gösterge paneli"
+    },
+    {
       "id": "native.android.b57a1b542cff8f55",
       "source": "Background tasks",
       "translated": "Arka plan görevleri"
@@ -7874,6 +7949,16 @@
       "translated": "Konuşuyor…"
     },
     {
+      "id": "native.android.bd78ce1e86e900b3",
+      "source": "Close",
+      "translated": "Kapat"
+    },
+    {
+      "id": "native.android.b686b1bc61494ee2",
+      "source": "View all",
+      "translated": "Tümünü görüntüle"
+    },
+    {
       "id": "native.android.781f84dfaf7da9d6",
       "source": "Tools running",
       "translated": "Araçlar çalışıyor"
@@ -7887,16 +7972,6 @@
       "id": "native.android.0fd6b75cadc0ce75",
       "source": "+${toolCalls.size - 4} more",
       "translated": "+${toolCalls.size - 4} daha"
-    },
-    {
-      "id": "native.android.7e0aea1dca378135",
-      "source": "Thinking",
-      "translated": "Düşünüyor"
-    },
-    {
-      "id": "native.android.98a0d4d5bba788c4",
-      "source": "OpenClaw is preparing a response.",
-      "translated": "OpenClaw bir yanıt hazırlıyor."
     },
     {
       "id": "native.android.22d747642a3887cd",
@@ -8092,6 +8167,146 @@
       "id": "native.android.3200f8564c25a1fa",
       "source": "Max",
       "translated": "Maks."
+    },
+    {
+      "id": "native.android.c2dc3a65302976c0",
+      "source": "1 token",
+      "translated": "1 token"
+    },
+    {
+      "id": "native.android.e7059e3a756908c4",
+      "source": "$count tokens",
+      "translated": "$count token"
+    },
+    {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "$duration içinde tamamlandı"
+    },
+    {
+      "id": "native.android.d2797e7488fe5021",
+      "source": "${decimal(count / 1_000_000.0)}M",
+      "translated": "${decimal(count / 1_000_000.0)} Mn"
+    },
+    {
+      "id": "native.android.4206e3e68c56767a",
+      "source": "${thousands}k",
+      "translated": "${thousands} B"
+    },
+    {
+      "id": "native.android.5e758e9851ded127",
+      "source": "${days}d",
+      "translated": "${days} g"
+    },
+    {
+      "id": "native.android.4fe67b5100cb91b1",
+      "source": "${hours}h",
+      "translated": "${hours} sa"
+    },
+    {
+      "id": "native.android.92a53292eaf7c63e",
+      "source": "${minutes}m",
+      "translated": "${minutes} dk"
+    },
+    {
+      "id": "native.android.6d5683b5537bdbaf",
+      "source": "${seconds}s",
+      "translated": "${seconds} sn"
+    },
+    {
+      "id": "native.android.e2f387a31240c8a3",
+      "source": "Shelling",
+      "translated": "Kabuklanıyor"
+    },
+    {
+      "id": "native.android.70a6de7c24baffb7",
+      "source": "Scuttling",
+      "translated": "Yan yan ilerliyor"
+    },
+    {
+      "id": "native.android.0ed1354a65faa07e",
+      "source": "Clawing",
+      "translated": "Pençeliyor"
+    },
+    {
+      "id": "native.android.42d24b16fc658ed3",
+      "source": "Pinching",
+      "translated": "Kıstırıyor"
+    },
+    {
+      "id": "native.android.69d5b3ca23a7bec3",
+      "source": "Molting",
+      "translated": "Kabuk değiştiriyor"
+    },
+    {
+      "id": "native.android.80bfb2d6720f8dc5",
+      "source": "Bubbling",
+      "translated": "Kabarcıklanıyor"
+    },
+    {
+      "id": "native.android.e984f80d309c2d01",
+      "source": "Tiding",
+      "translated": "Gelgit yapıyor"
+    },
+    {
+      "id": "native.android.60bb819ee08cbbc1",
+      "source": "Reefing",
+      "translated": "Resifleniyor"
+    },
+    {
+      "id": "native.android.7f465ae2654f0c25",
+      "source": "Cracking",
+      "translated": "Çatlıyor"
+    },
+    {
+      "id": "native.android.cfc143346cf262c8",
+      "source": "Sifting",
+      "translated": "Elüyor"
+    },
+    {
+      "id": "native.android.72b67956ab234898",
+      "source": "Brining",
+      "translated": "Salamura ediyor"
+    },
+    {
+      "id": "native.android.3ecce1d21d8ab752",
+      "source": "Nautiling",
+      "translated": "Nautiluyor"
+    },
+    {
+      "id": "native.android.305ed08fbb829753",
+      "source": "Krilling",
+      "translated": "Krilliyor"
+    },
+    {
+      "id": "native.android.c39933b1ec86d7a9",
+      "source": "Barnacling",
+      "translated": "Kekamozlanma"
+    },
+    {
+      "id": "native.android.32a8072679db94bb",
+      "source": "Lobstering",
+      "translated": "Istakoz avlama"
+    },
+    {
+      "id": "native.android.de205a44a6d159fb",
+      "source": "Tidepooling",
+      "translated": "Gelgit havuzlarını keşfetme"
+    },
+    {
+      "id": "native.android.8d97a105339c7a20",
+      "source": "Pearling",
+      "translated": "İnci avlama"
+    },
+    {
+      "id": "native.android.7bdb054d45ca1b23",
+      "source": "Snapping",
+      "translated": "Şaklatma"
+    },
+    {
+      "id": "native.android.c2210ea40e357fcd",
+      "source": "Surfacing",
+      "translated": "Yüzeye çıkma"
     },
     {
       "id": "native.android.3df4e24a0fc8810b",
@@ -8614,6 +8829,426 @@
       "translated": "Derleme zaman damgası kopyalandı"
     },
     {
+      "id": "native.android.342644995c7fa39d",
+      "source": "Chat",
+      "translated": "Sohbet"
+    },
+    {
+      "id": "native.android.f08059cbbd74d290",
+      "source": "Session",
+      "translated": "Oturum"
+    },
+    {
+      "id": "native.android.14c9261466ef05af",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
+      "id": "native.android.15cab72e6f01fd53",
+      "source": "Previous %1$s",
+      "translated": "Önceki %1$s"
+    },
+    {
+      "id": "native.android.3d3306e0ee9e21ee",
+      "source": "Next %1$s",
+      "translated": "Sonraki %1$s"
+    },
+    {
+      "id": "native.android.27f269e3449860eb",
+      "source": "Controls",
+      "translated": "Kontroller"
+    },
+    {
+      "id": "native.android.162045314bf6d856",
+      "source": "Talk",
+      "translated": "Konuş"
+    },
+    {
+      "id": "native.android.1e47fb0c88ffb1bd",
+      "source": "Watch audio failed",
+      "translated": "Saatteki ses başarısız oldu"
+    },
+    {
+      "id": "native.android.64e07fdfab3f96c5",
+      "source": "Dictate",
+      "translated": "Dikte et"
+    },
+    {
+      "id": "native.android.aa64f5544405ffed",
+      "source": "Live",
+      "translated": "Canlı"
+    },
+    {
+      "id": "native.android.5d4de99dd6fd6764",
+      "source": "Thread",
+      "translated": "Konu"
+    },
+    {
+      "id": "native.android.4863e4958bf9a886",
+      "source": "← Swipe →",
+      "translated": "← Kaydır →"
+    },
+    {
+      "id": "native.android.01979a7d84755f0e",
+      "source": "Hold",
+      "translated": "Basılı tut"
+    },
+    {
+      "id": "native.android.149e4509c9152931",
+      "source": "Tap",
+      "translated": "Dokun"
+    },
+    {
+      "id": "native.android.9f7fe0147a0b571a",
+      "source": "Double tap",
+      "translated": "Çift dokunun"
+    },
+    {
+      "id": "native.android.65caac394b5e4871",
+      "source": "Start Live to see the conversation here.",
+      "translated": "Konuşmayı burada görmek için Canlı'yı başlatın."
+    },
+    {
+      "id": "native.android.80256ef5841e2f92",
+      "source": "New",
+      "translated": "Yeni"
+    },
+    {
+      "id": "native.android.3091f3e818e51d8a",
+      "source": "Type",
+      "translated": "Yazın"
+    },
+    {
+      "id": "native.android.d6940b2883503ea3",
+      "source": "Message",
+      "translated": "Mesaj"
+    },
+    {
+      "id": "native.android.e9035dd5aded082a",
+      "source": "Message agent",
+      "translated": "Temsilciye mesaj gönderin"
+    },
+    {
+      "id": "native.android.66f9ad9c9cd1a92c",
+      "source": "Send",
+      "translated": "Gönder"
+    },
+    {
+      "id": "native.android.aed54d9c5e90b843",
+      "source": "Speak to your agent",
+      "translated": "Temsilcinizle konuşun"
+    },
+    {
+      "id": "native.android.30aa9dbcae2ce3c1",
+      "source": "Stop speaking",
+      "translated": "Konuşmayı durdur"
+    },
+    {
+      "id": "native.android.5c8f30c24360b983",
+      "source": "Speak latest reply",
+      "translated": "Son yanıtı seslendir"
+    },
+    {
+      "id": "native.android.e283a10e79578d3f",
+      "source": "Speaking",
+      "translated": "Konuşuyor"
+    },
+    {
+      "id": "native.android.0b19cfb5411358fa",
+      "source": "Listening",
+      "translated": "Dinliyor"
+    },
+    {
+      "id": "native.android.e40bdbd8bfc185e6",
+      "source": "Connecting",
+      "translated": "Bağlanıyor"
+    },
+    {
+      "id": "native.android.42ac9ae6e2a24424",
+      "source": "Thinking",
+      "translated": "Düşünüyor"
+    },
+    {
+      "id": "native.android.e87b09e74f59ca70",
+      "source": "Typing",
+      "translated": "Yazıyor"
+    },
+    {
+      "id": "native.android.5357284dcb751316",
+      "source": "Sending",
+      "translated": "Gönderiliyor"
+    },
+    {
+      "id": "native.android.df216228910e6a31",
+      "source": "Agent working",
+      "translated": "Temsilci çalışıyor"
+    },
+    {
+      "id": "native.android.0ab95b2723a4b400",
+      "source": "Error",
+      "translated": "Hata"
+    },
+    {
+      "id": "native.android.6f790004e204e002",
+      "source": "Ready",
+      "translated": "Hazır"
+    },
+    {
+      "id": "native.android.40984724c43be3ab",
+      "source": "You",
+      "translated": "Siz"
+    },
+    {
+      "id": "native.android.4aaf8fd6103ce61d",
+      "source": "Agent",
+      "translated": "Aracı"
+    },
+    {
+      "id": "native.android.c09b4d37b7750d4a",
+      "source": "System",
+      "translated": "Sistem"
+    },
+    {
+      "id": "native.android.beff51b9bde563db",
+      "source": "Start a conversation",
+      "translated": "Bir sohbet başlatın"
+    },
+    {
+      "id": "native.android.b8de3221042b2fd3",
+      "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.",
+      "translated": "Saatinizde konuşun veya yazın. Eşleştirilmiş telefon, mesajı kimliği doğrulanmış OpenClaw oturumu üzerinden gönderir."
+    },
+    {
+      "id": "native.android.44c6bb3c4c7b61ae",
+      "source": "Current session",
+      "translated": "Geçerli oturum"
+    },
+    {
+      "id": "native.android.29e0ff4871a97d3a",
+      "source": "Appearance",
+      "translated": "Görünüm"
+    },
+    {
+      "id": "native.android.f54dda8777a206c0",
+      "source": "Dark",
+      "translated": "Koyu"
+    },
+    {
+      "id": "native.android.7709ce559ece7079",
+      "source": "Light",
+      "translated": "Açık"
+    },
+    {
+      "id": "native.android.bad64c6d810dd968",
+      "source": "Speak replies automatically",
+      "translated": "Yanıtları otomatik olarak seslendir"
+    },
+    {
+      "id": "native.android.bf13ece69b6f9e6d",
+      "source": "Reply alerts",
+      "translated": "Yanıt uyarıları"
+    },
+    {
+      "id": "native.android.ab451b22b15fef6a",
+      "source": "Enable alerts",
+      "translated": "Uyarıları etkinleştir"
+    },
+    {
+      "id": "native.android.2ac0bfe2c63028e6",
+      "source": "Abort run",
+      "translated": "Çalıştırmayı iptal et"
+    },
+    {
+      "id": "native.android.1c8ec9bc7a542592",
+      "source": "Open notification settings",
+      "translated": "Bildirim ayarlarını aç"
+    },
+    {
+      "id": "native.android.cac22bf83ae5e538",
+      "source": "On",
+      "translated": "Açık"
+    },
+    {
+      "id": "native.android.8b2c37db3d4bfe78",
+      "source": "Off",
+      "translated": "Kapalı"
+    },
+    {
+      "id": "native.android.dcf724e915521154",
+      "source": "Connection",
+      "translated": "Bağlantı"
+    },
+    {
+      "id": "native.android.d6576b5ea12e6635",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.5af2a90d687d5ded",
+      "source": "Security",
+      "translated": "Güvenlik"
+    },
+    {
+      "id": "native.android.bfa2a9759e56e431",
+      "source": "Phone-controlled",
+      "translated": "Telefon tarafından denetlenir"
+    },
+    {
+      "id": "native.android.9d53b66d3444d63f",
+      "source": "Gateway credentials and identity stay on the paired phone. The watch only uses the Wear Data Layer.",
+      "translated": "Gateway kimlik bilgileri ve kimliği eşleştirilmiş telefonda kalır. Saat yalnızca Wear Data Layer'ı kullanır."
+    },
+    {
+      "id": "native.android.e4e15149f5634729",
+      "source": "Checking phone",
+      "translated": "Telefon kontrol ediliyor"
+    },
+    {
+      "id": "native.android.c1b0408a3b9a7855",
+      "source": "Reading agents, sessions, and chat",
+      "translated": "Aracılar, oturumlar ve sohbet okunuyor"
+    },
+    {
+      "id": "native.android.b6cb3ef2de0a91a1",
+      "source": "Phone ready",
+      "translated": "Telefon hazır"
+    },
+    {
+      "id": "native.android.71511621861ee1f8",
+      "source": "Gateway connected",
+      "translated": "Gateway bağlı"
+    },
+    {
+      "id": "native.android.e8a185d4eb48abe2",
+      "source": "Gateway offline",
+      "translated": "Gateway çevrimdışı"
+    },
+    {
+      "id": "native.android.5d98a2a8a4f1f793",
+      "source": "Reconnect the Gateway in OpenClaw on the paired phone.",
+      "translated": "Eşleştirilmiş telefondaki OpenClaw üzerinden Gateway'i yeniden bağlayın."
+    },
+    {
+      "id": "native.android.867011d568b0b0db",
+      "source": "Open OpenClaw on phone",
+      "translated": "Telefonda OpenClaw'u açın"
+    },
+    {
+      "id": "native.android.e70d812f3bc1bb40",
+      "source": "The watch never starts or authenticates the Gateway itself.",
+      "translated": "Saat, Gateway'i hiçbir zaman kendisi başlatmaz veya doğrulamaz."
+    },
+    {
+      "id": "native.android.be82f33ff358e212",
+      "source": "Phone not reachable",
+      "translated": "Telefona ulaşılamıyor"
+    },
+    {
+      "id": "native.android.d6c4dc6d15a4eaac",
+      "source": "Keep the paired phone nearby and install the matching OpenClaw app.",
+      "translated": "Eşleştirilmiş telefonu yakında tutun ve uyumlu OpenClaw uygulamasını yükleyin."
+    },
+    {
+      "id": "native.android.bfebf63a2c96e9cd",
+      "source": "Selection no longer available",
+      "translated": "Seçim artık kullanılamıyor"
+    },
+    {
+      "id": "native.android.918aacdecf0e523b",
+      "source": "Action not accepted",
+      "translated": "İşlem kabul edilmedi"
+    },
+    {
+      "id": "native.android.375286e6dbb16606",
+      "source": "Something went wrong",
+      "translated": "Bir sorun oluştu"
+    },
+    {
+      "id": "native.android.e0e6d9ff3b7d8970",
+      "source": "Refresh the lists and try again.",
+      "translated": "Listeleri yenileyip tekrar deneyin."
+    },
+    {
+      "id": "native.android.e9849178994c7414",
+      "source": "Try again from the watch.",
+      "translated": "Saatten tekrar deneyin."
+    },
+    {
+      "id": "native.android.3d44911564ea1c5a",
+      "source": "Update required",
+      "translated": "Güncelleme gerekli"
+    },
+    {
+      "id": "native.android.ce39278848b1615d",
+      "source": "Update OpenClaw on both phone and watch.",
+      "translated": "OpenClaw'u hem telefonda hem de saatte güncelleyin."
+    },
+    {
+      "id": "native.android.b5d6a37fb96f38f1",
+      "source": "Refresh",
+      "translated": "Yenile"
+    },
+    {
+      "id": "native.android.a64989382158df47",
+      "source": "Retry",
+      "translated": "Tekrar dene"
+    },
+    {
+      "id": "native.android.6b973e2d4540f1dc",
+      "source": "OpenClaw replies",
+      "translated": "OpenClaw yanıtları"
+    },
+    {
+      "id": "native.android.daf75f1939c5048f",
+      "source": "Reply",
+      "translated": "Yanıtla"
+    },
+    {
+      "id": "native.android.2ab12cfd9399407c",
+      "source": "OpenClaw reply",
+      "translated": "OpenClaw yanıtı"
+    },
+    {
+      "id": "native.android.289456e2626dd0f4",
+      "source": "Reply not sent",
+      "translated": "Yanıt gönderilmedi"
+    },
+    {
+      "id": "native.android.bda7ccc6e4728f23",
+      "source": "Phone unavailable. Tap Reply to try again.",
+      "translated": "Telefon kullanılamıyor. Tekrar denemek için Yanıtla'ya dokunun."
+    },
+    {
+      "id": "native.android.3ec65645eda5ded7",
+      "source": "Open OpenClaw to reply",
+      "translated": "Yanıtlamak için OpenClaw'ı açın"
+    },
+    {
+      "id": "native.android.7658464805a4b605",
+      "source": "Your preferred phone changed. Open the app to reload the session before replying.",
+      "translated": "Tercih ettiğiniz telefon değişti. Yanıtlamadan önce oturumu yeniden yüklemek için uygulamayı açın."
+    },
+    {
+      "id": "native.android.6b2e913641d45f02",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7c74dd9a2bf91d3a",
+      "source": "Open sessions and reply through your paired phone",
+      "translated": "Oturumları açın ve eşleştirilmiş telefonunuz üzerinden yanıtlayın"
+    },
+    {
+      "id": "native.android.6c2e2515598de209",
+      "source": "OPEN",
+      "translated": "AÇ"
+    },
+    {
+      "id": "native.android.709aff840be1f167",
+      "source": "PHONE PROXY",
+      "translated": "TELEFON PROXY'Sİ"
+    },
+    {
       "id": "native.apple.8f741d09cc1d5495",
       "source": "OpenClaw Activity",
       "translated": "OpenClaw Etkinliği"
@@ -8722,6 +9357,26 @@
       "id": "native.apple.a811eb3e4d2174d5",
       "source": "that request",
       "translated": "bu istek"
+    },
+    {
+      "id": "native.apple.91108e396155b531",
+      "source": "Dashboard",
+      "translated": "Gösterge Paneli"
+    },
+    {
+      "id": "native.apple.8a315564807ba77d",
+      "source": "Done",
+      "translated": "Bitti"
+    },
+    {
+      "id": "native.apple.1a8ef1f77055764f",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "Gösterge Paneli için bağlı bir Gateway gerekiyor"
+    },
+    {
+      "id": "native.apple.0561fc7c6a99da55",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "Bu oturumun gösterge panelini açmak için Gateway'inize bağlanın."
     },
     {
       "id": "native.apple.1696cec8c3c6a511",
@@ -10924,6 +11579,11 @@
       "translated": "Oturumlar…"
     },
     {
+      "id": "native.apple.38fb02182bd2430c",
+      "source": "Dashboard",
+      "translated": "Gösterge Paneli"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "Arka Plan Görevleri"
@@ -12399,26 +13059,6 @@
       "translated": "Tamam"
     },
     {
-      "id": "native.apple.32230ecb2fbc2378",
-      "source": "Access Level",
-      "translated": "Erişim Düzeyi"
-    },
-    {
-      "id": "native.apple.7ed27029e9c313cc",
-      "source": "While Using the App",
-      "translated": "Uygulamayı Kullanırken"
-    },
-    {
-      "id": "native.apple.b975064b240c9fd6",
-      "source": "Always",
-      "translated": "Her Zaman"
-    },
-    {
-      "id": "native.apple.756ff21ca904b2d8",
-      "source": "Choose when OpenClaw may share this iPhone's location with gateway tools.",
-      "translated": "OpenClaw'ın bu iPhone'un konumunu gateway araçlarıyla ne zaman paylaşabileceğini seçin."
-    },
-    {
       "id": "native.apple.9515109ce97ec94e",
       "source": "Forget %@?",
       "translated": "%@ unutulsun mu?"
@@ -13339,6 +13979,16 @@
       "translated": "Konum Paylaşımı"
     },
     {
+      "id": "native.apple.29e2ea3e063e4553",
+      "source": "While Using the App",
+      "translated": "Uygulamayı Kullanırken"
+    },
+    {
+      "id": "native.apple.b7e8bf7dae32ab59",
+      "source": "Always",
+      "translated": "Her Zaman"
+    },
+    {
       "id": "native.apple.aadb749ebce75251",
       "source": "Access Level",
       "translated": "Erişim Düzeyi"
@@ -13399,14 +14049,24 @@
       "translated": "Eşleştirilmiş Gateway'ler"
     },
     {
-      "id": "native.apple.9a6bd720a544ec04",
-      "source": "Switch gateways without pairing again.",
-      "translated": "Yeniden eşleştirmeden gateway'ler arasında geçiş yapın."
+      "id": "native.apple.0c5dae9bc264aaa1",
+      "source": "Keep multiple gateways connected and switch which one is in focus.",
+      "translated": "Birden fazla Gateway'i bağlı tutun ve hangisine odaklanacağınızı seçin."
     },
     {
-      "id": "native.apple.5f33cfe2d21e6dc6",
-      "source": "Active Gateway",
-      "translated": "Etkin Gateway"
+      "id": "native.apple.a1d2ffbfe64ef4ce",
+      "source": "Focused Gateway",
+      "translated": "Odaklanılan Gateway"
+    },
+    {
+      "id": "native.apple.f819d2ea384fe6ed",
+      "source": "Disconnect Gateway",
+      "translated": "Gateway Bağlantısını Kes"
+    },
+    {
+      "id": "native.apple.10d41627b8261536",
+      "source": "Keep Gateway Connected",
+      "translated": "Gateway Bağlantısını Açık Tut"
     },
     {
       "id": "native.apple.4e1792b1044ec4a9",
@@ -14387,6 +15047,11 @@
       "id": "native.apple.f21a8e304b607dc8",
       "source": "Copy",
       "translated": "Kopyala"
+    },
+    {
+      "id": "native.apple.7896bc893de41eae",
+      "source": "Reconnecting…",
+      "translated": "Yeniden bağlanılıyor…"
     },
     {
       "id": "native.apple.760dbcb0180666e1",
@@ -16034,11 +16699,6 @@
       "translated": "Gateway Ayarlarını Aç"
     },
     {
-      "id": "native.apple.f90c1fb8880c70c0",
-      "source": "[\\(host)]",
-      "translated": "[\\(host)]"
-    },
-    {
       "id": "native.apple.3b21081fb5ce84ba",
       "source": "Not checked",
       "translated": "Kontrol edilmedi"
@@ -16497,6 +17157,11 @@
       "id": "native.apple.00887489a998411e",
       "source": "%@ permission denied",
       "translated": "%@ izni reddedildi"
+    },
+    {
+      "id": "native.apple.944004de80cfc8b7",
+      "source": "[\\(host)]",
+      "translated": "[\\(host)]"
     },
     {
       "id": "native.apple.12a4a51d251f65c0",
@@ -18419,6 +19084,16 @@
       "translated": "Düzenle"
     },
     {
+      "id": "native.apple.919c9d3727497989",
+      "source": "Edit automation",
+      "translated": "Otomasyonu düzenle"
+    },
+    {
+      "id": "native.apple.3587c8ad6de422b3",
+      "source": "Command and script payloads are read-only in the macOS app",
+      "translated": "Komut ve script yükleri macOS uygulamasında salt okunurdur"
+    },
+    {
       "id": "native.apple.04c710cf31471ebd",
       "source": "Schedule",
       "translated": "Zamanla"
@@ -18504,11 +19179,6 @@
       "translated": "düşün \\(thinking)"
     },
     {
-      "id": "native.apple.a513a17d658a1aa2",
-      "source": "\\(timeoutSeconds)s",
-      "translated": "\\(timeoutSeconds)s"
-    },
-    {
       "id": "native.apple.41cd997805bd59e3",
       "source": "announce",
       "translated": "duyur"
@@ -18517,6 +19187,26 @@
       "id": "native.apple.6e5597dd202288ee",
       "source": "no delivery",
       "translated": "teslimat yok"
+    },
+    {
+      "id": "native.apple.c27e3019dfe8e877",
+      "source": "command · read-only",
+      "translated": "command · salt okunur"
+    },
+    {
+      "id": "native.apple.5e02b5f297de21b0",
+      "source": "script · read-only",
+      "translated": "script · salt okunur"
+    },
+    {
+      "id": "native.apple.a513a17d658a1aa2",
+      "source": "\\(timeoutSeconds)s",
+      "translated": "\\(timeoutSeconds)s"
+    },
+    {
+      "id": "native.apple.b42d8e457b71b478",
+      "source": "\\(toolBudget) tools",
+      "translated": "\\(toolBudget) araç"
     },
     {
       "id": "native.apple.5eea57b14cab3876",
@@ -19092,6 +19782,121 @@
       "id": "native.apple.4bd8ea604f3c21fa",
       "source": "unknown error",
       "translated": "unknown error"
+    },
+    {
+      "id": "native.apple.e0b70da297ef8a61",
+      "source": "Remove Gateway?",
+      "translated": "Gateway kaldırılsın mı?"
+    },
+    {
+      "id": "native.apple.983c58888b89f27f",
+      "source": "Remove",
+      "translated": "Kaldır"
+    },
+    {
+      "id": "native.apple.7b53872a9637b308",
+      "source": "\\(profile.name) and its saved credentials will be removed. Its open windows will close.",
+      "translated": "\\(profile.name) ve kayıtlı kimlik bilgileri kaldırılacak. Açık pencereleri kapatılacak."
+    },
+    {
+      "id": "native.apple.a4d437ba492adc8b",
+      "source": "Gateway Error",
+      "translated": "Gateway Hatası"
+    },
+    {
+      "id": "native.apple.33c3c61e0fb62195",
+      "source": "OK",
+      "translated": "Tamam"
+    },
+    {
+      "id": "native.apple.bfd13b43b2fd425c",
+      "source": "Gateways",
+      "translated": "Gateway'ler"
+    },
+    {
+      "id": "native.apple.1ff05976802ac6c9",
+      "source": "Save Gateway connections for chat windows. The primary Gateway under Connection still owns Mac integrations and Talk Mode.",
+      "translated": "Sohbet pencereleri için Gateway bağlantılarını kaydedin. Bağlantı altındaki birincil Gateway, Mac entegrasyonlarını ve Konuşma Modu'nu yönetmeye devam eder."
+    },
+    {
+      "id": "native.apple.7fdfccfafd3ff368",
+      "source": "Loading Gateways…",
+      "translated": "Gateway'ler yükleniyor…"
+    },
+    {
+      "id": "native.apple.593c7f1b06caf821",
+      "source": "No Gateways saved",
+      "translated": "Kayıtlı Gateway yok"
+    },
+    {
+      "id": "native.apple.9053ce4456cc06f0",
+      "source": "Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.",
+      "translated": "Buraya bir Gateway ekleyin, ardından bunun için başka bir pencere açmak istediğinizde Dosya → Yeni Gateway Penceresi… (⌘N) seçeneğini kullanın."
+    },
+    {
+      "id": "native.apple.5b3b79e66c434e33",
+      "source": "Saved Gateways",
+      "translated": "Kayıtlı Gateway'ler"
+    },
+    {
+      "id": "native.apple.c49f6831863c8dae",
+      "source": "Open Window",
+      "translated": "Pencereyi Aç"
+    },
+    {
+      "id": "native.apple.3c90290e04c6dc5f",
+      "source": "Remove \\(profile.name)",
+      "translated": "\\(profile.name) profilini kaldır"
+    },
+    {
+      "id": "native.apple.98935e9c19760b62",
+      "source": "Add Gateway",
+      "translated": "Gateway ekle"
+    },
+    {
+      "id": "native.apple.fb5076533e3003a3",
+      "source": "Credentials are stored with this profile in your Mac Keychain.",
+      "translated": "Kimlik bilgileri bu profille birlikte Mac Anahtar Zinciri'nizde saklanır."
+    },
+    {
+      "id": "native.apple.a7ee8d846fd61525",
+      "source": "Name",
+      "translated": "Ad"
+    },
+    {
+      "id": "native.apple.c65e3cdc3d2c9b36",
+      "source": "Studio",
+      "translated": "Stüdyo"
+    },
+    {
+      "id": "native.apple.ce48afbb966a6933",
+      "source": "Gateway URL",
+      "translated": "Gateway URL'si"
+    },
+    {
+      "id": "native.apple.aeb21e4c3192125f",
+      "source": "wss://gateway.example.com",
+      "translated": "wss://gateway.example.com"
+    },
+    {
+      "id": "native.apple.f585ed08c1f6a65e",
+      "source": "Token",
+      "translated": "Token"
+    },
+    {
+      "id": "native.apple.9a090d8a5c8fb7cb",
+      "source": "Password",
+      "translated": "Parola"
+    },
+    {
+      "id": "native.apple.f3448df352fdd5d4",
+      "source": "Optional",
+      "translated": "İsteğe bağlı"
+    },
+    {
+      "id": "native.apple.1f1c9084eb6a2982",
+      "source": "Cancel",
+      "translated": "İptal"
     },
     {
       "id": "native.apple.7b5eaba753440639",
@@ -19737,6 +20542,11 @@
       "id": "native.apple.01e6a456cdadce81",
       "source": "Critical",
       "translated": "Kritik"
+    },
+    {
+      "id": "native.apple.130664b1dd61cbbf",
+      "source": "New Gateway Window…",
+      "translated": "Yeni Gateway Penceresi…"
     },
     {
       "id": "native.apple.13f96467014cf344",
@@ -22089,6 +22899,11 @@
       "translated": "Bağlantı"
     },
     {
+      "id": "native.apple.1d96f676261a5a05",
+      "source": "Gateways",
+      "translated": "Gateway'ler"
+    },
+    {
       "id": "native.apple.8c2b0262f3a5ebea",
       "source": "Permissions",
       "translated": "İzinler"
@@ -22604,34 +23419,34 @@
       "translated": "Ajanlar, bu Mac’te allowlist kontrolleri olmadan shell komutları çalıştırabilir."
     },
     {
-      "id": "native.apple.c8e6fc08f04b8d9f",
+      "id": "native.apple.5184684dc4a62edb",
       "source": "Block agent shell commands on this Mac.",
-      "translated": "Bu Mac’te ajan shell komutlarını engelle."
+      "translated": "Bu Mac'te aracı kabuk komutlarını engelle."
     },
     {
-      "id": "native.apple.e9371d48f629b039",
+      "id": "native.apple.bf1e546102919d3f",
       "source": "Allow trusted command patterns and handle misses with prompts.",
       "translated": "Güvenilir komut kalıplarına izin ver ve eşleşmeyenleri istemlerle ele al."
     },
     {
-      "id": "native.apple.935c981496e8689b",
+      "id": "native.apple.84214f3fae821163",
       "source": "Allow shell commands without checking the allowlist.",
-      "translated": "Allowlist kontrolü yapmadan shell komutlarına izin ver."
+      "translated": "İzin verilenler listesini kontrol etmeden kabuk komutlarına izin ver."
     },
     {
-      "id": "native.apple.c494c0bb6a4182a2",
+      "id": "native.apple.d7404aa083ad6d58",
       "source": "Never show approval prompts.",
       "translated": "Onay istemlerini hiçbir zaman gösterme."
     },
     {
-      "id": "native.apple.c04df969fed1b2ca",
+      "id": "native.apple.093c3c01af530076",
       "source": "Ask only when a command is not trusted yet.",
       "translated": "Yalnızca bir komut henüz güvenilir değilse sor."
     },
     {
-      "id": "native.apple.19950d3e6e99ee47",
+      "id": "native.apple.a5161a377e784404",
       "source": "Ask before every shell command.",
-      "translated": "Her shell komutundan önce sor."
+      "translated": "Her kabuk komutundan önce sor."
     },
     {
       "id": "native.apple.b18215308bc4e7cf",
@@ -23004,14 +23819,19 @@
       "translated": "Tetikleyici kelimeyi kaldır"
     },
     {
-      "id": "native.apple.65b2687f8f16f9b2",
-      "source": "Language \\(self.index + 2)",
-      "translated": "Dil \\(self.index + 2)"
+      "id": "native.apple.dd0278dbfd438cdb",
+      "source": "Language %lld",
+      "translated": "Dil %lld"
     },
     {
       "id": "native.apple.a767de022c4a06db",
       "source": "Fallback recognition language.",
       "translated": "Yedek tanıma dili."
+    },
+    {
+      "id": "native.apple.65b2687f8f16f9b2",
+      "source": "Language \\(self.index + 2)",
+      "translated": "Dil \\(self.index + 2)"
     },
     {
       "id": "native.apple.cfab77826c9ac1d1",
@@ -23067,6 +23887,16 @@
       "id": "native.apple.26960f2b7ebad5f9",
       "source": "Voice wake detected!",
       "translated": "Sesle uyandırma algılandı!"
+    },
+    {
+      "id": "native.apple.7dd4d4d2fc36ffce",
+      "source": "Could Not Open Gateway Window",
+      "translated": "Gateway Penceresi Açılamadı"
+    },
+    {
+      "id": "native.apple.93ad62dac611bdcd",
+      "source": "Talk mode uses the primary Gateway window",
+      "translated": "Konuşma modu birincil Gateway penceresini kullanır"
     },
     {
       "id": "native.apple.282d11786f2f4c4b",
@@ -23314,6 +24144,21 @@
       "translated": "Dizi"
     },
     {
+      "id": "native.apple.02f0965fdca227b2",
+      "source": "Branches",
+      "translated": "Dallar"
+    },
+    {
+      "id": "native.apple.82ca9989fa432b38",
+      "source": "Untitled branch",
+      "translated": "Adsız dal"
+    },
+    {
+      "id": "native.apple.8d0ae98818aa39e8",
+      "source": "^[\\(count) message](inflect: true)",
+      "translated": "^[\\(count) ileti](inflect: true)"
+    },
+    {
       "id": "native.apple.284b2b94c272591d",
       "source": "Add Image",
       "translated": "Görsel Ekle"
@@ -23542,6 +24387,26 @@
       "id": "native.apple.fccc8a9ba3da1426",
       "source": "Agent avatar",
       "translated": "Ajan avatarı"
+    },
+    {
+      "id": "native.apple.9d4cffc5588d8730",
+      "source": "Show less",
+      "translated": "Daha az göster"
+    },
+    {
+      "id": "native.apple.b0b4af1981ac0818",
+      "source": "Show more",
+      "translated": "Daha fazla göster"
+    },
+    {
+      "id": "native.apple.29122616e14321b1",
+      "source": "Collapsed",
+      "translated": "Daraltılmış"
+    },
+    {
+      "id": "native.apple.aa75dc50a6ff606c",
+      "source": "Expanded",
+      "translated": "Genişletilmiş"
     },
     {
       "id": "native.apple.6426e369511b043c",
@@ -24289,14 +25154,14 @@
       "translated": "Daraltıldı"
     },
     {
-      "id": "native.apple.c4e808a2ec8d49f5",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3"
+      "id": "native.apple.c83fc1ba73fd0776",
+      "source": "'queued', 'sending', 'awaiting_confirmation', 'failed'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation', 'failed'"
     },
     {
-      "id": "native.apple.4e7e29be3f05b828",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'"
+      "id": "native.apple.ee4ea4d701fa5d07",
+      "source": "'queued', 'sending', 'awaiting_confirmation'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation'"
     },
     {
       "id": "native.apple.e743b1178c2fdec8",
@@ -24677,6 +25542,116 @@
       "id": "native.apple.6239ced0b86e86f8",
       "source": "Compact Thread",
       "translated": "Konuyu sıkıştır"
+    },
+    {
+      "id": "native.apple.fb7ba381b79044e1",
+      "source": "Shelling",
+      "translated": "Kabuklanıyor"
+    },
+    {
+      "id": "native.apple.27d2c232c46158f8",
+      "source": "Scuttling",
+      "translated": "Yan yan ilerliyor"
+    },
+    {
+      "id": "native.apple.146d26a76f1f661d",
+      "source": "Clawing",
+      "translated": "Pençeliyor"
+    },
+    {
+      "id": "native.apple.9e590066459c45cf",
+      "source": "Pinching",
+      "translated": "Kıskaçlıyor"
+    },
+    {
+      "id": "native.apple.98bce06ad906ac35",
+      "source": "Molting",
+      "translated": "Kabuk değiştiriyor"
+    },
+    {
+      "id": "native.apple.0a1991f9ac99e5b2",
+      "source": "Bubbling",
+      "translated": "Köpürüyor"
+    },
+    {
+      "id": "native.apple.693de3befb7eaf8a",
+      "source": "Tiding",
+      "translated": "Gelgit yapıyor"
+    },
+    {
+      "id": "native.apple.3f77525b4b5bff6e",
+      "source": "Reefing",
+      "translated": "Resifleşiyor"
+    },
+    {
+      "id": "native.apple.e8726dfe7fa3a577",
+      "source": "Cracking",
+      "translated": "Çatlıyor"
+    },
+    {
+      "id": "native.apple.c861cd13f466af46",
+      "source": "Sifting",
+      "translated": "Eleniyor"
+    },
+    {
+      "id": "native.apple.c58b34716364e0ef",
+      "source": "Brining",
+      "translated": "Salamura yapılıyor"
+    },
+    {
+      "id": "native.apple.f98d6769fad9ef63",
+      "source": "Nautiling",
+      "translated": "Nautiluslanıyor"
+    },
+    {
+      "id": "native.apple.40dbb800afe19da8",
+      "source": "Krilling",
+      "translated": "Kril avlanıyor"
+    },
+    {
+      "id": "native.apple.e92c5bb2e5342ce6",
+      "source": "Barnacling",
+      "translated": "Kaya midyesi toplanıyor"
+    },
+    {
+      "id": "native.apple.2f27f7676f6a5406",
+      "source": "Lobstering",
+      "translated": "Istakoz avlanıyor"
+    },
+    {
+      "id": "native.apple.089a07837ab1cce7",
+      "source": "Tidepooling",
+      "translated": "Gelgit havuzları araştırılıyor"
+    },
+    {
+      "id": "native.apple.a17076dab69dac74",
+      "source": "Pearling",
+      "translated": "İnci aranıyor"
+    },
+    {
+      "id": "native.apple.5715a7bb435c57e8",
+      "source": "Snapping",
+      "translated": "Şaklatılıyor"
+    },
+    {
+      "id": "native.apple.6fbcf8a03da3315a",
+      "source": "Surfacing",
+      "translated": "Yüzeye çıkılıyor"
+    },
+    {
+      "id": "native.apple.578503dfeef25502",
+      "source": "Done in %@",
+      "translated": "%@ sürede tamamlandı"
+    },
+    {
+      "id": "native.apple.4fb1ae0d89560d73",
+      "source": "1 token",
+      "translated": "1 token"
+    },
+    {
+      "id": "native.apple.3f968fd475a91bb1",
+      "source": "%@ tokens",
+      "translated": "%@ token"
     },
     {
       "id": "native.apple.fa10740f9e272e83",

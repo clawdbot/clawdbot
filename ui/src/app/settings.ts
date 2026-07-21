@@ -124,7 +124,7 @@ export type UiSettings = {
   boardSessionViews?: BoardSessionViews; // Last face and active dashboard tab per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarEntries: string[]; // Ordered routes and pinned sessions below Home
+  sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage

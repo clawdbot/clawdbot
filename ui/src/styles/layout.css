@@ -2334,6 +2334,17 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   color: var(--muted);
 }
 
+.sidebar-customize-menu__group-title {
+  margin: 6px 4px 2px;
+  padding: 7px 6px 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .sidebar-customize-menu__item {
   display: flex;
   align-items: center;
@@ -2768,6 +2779,38 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.workboard-board-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--workboard-board-color, var(--muted)) 34%, transparent);
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--workboard-board-color, var(--muted)) 16%,
+    var(--bg-elevated)
+  );
+  color: var(--workboard-board-color, var(--muted));
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.workboard-board-glyph--sidebar {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  font-size: 9px;
+}
+
+.nav-item--active .workboard-board-glyph {
+  color: var(--workboard-board-color, var(--accent));
 }
 
 .nav-item__text {

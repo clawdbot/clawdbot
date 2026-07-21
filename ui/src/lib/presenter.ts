@@ -63,6 +63,9 @@ export function formatCronSchedule(job: CronJob) {
     // without this branch they fall through and render "Cron undefined".
     return `On exit: ${s.command}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
   }
+  if (s.kind === "stream") {
+    return `Stream: ${s.command.join(" ")}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
+  }
   return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
 }
 

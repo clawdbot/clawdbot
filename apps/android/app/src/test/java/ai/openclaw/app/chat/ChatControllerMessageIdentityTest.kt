@@ -10,6 +10,24 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class ChatControllerMessageIdentityTest {
+  @Test
+  fun reconcileMessageIdsKeepsCanonicalEntryIdentityFromReload() {
+    val previous =
+      ChatMessage(
+        id = "stable-compose-id",
+        role = "user",
+        content = listOf(ChatMessageContent(text = "hello")),
+        timestampMs = 10,
+        entryId = "old-entry",
+      )
+    val incoming = previous.copy(id = "temporary-id", entryId = "canonical-entry")
+
+    val reconciled = reconcileMessageIds(listOf(previous), listOf(incoming)).single()
+
+    assertEquals("stable-compose-id", reconciled.id)
+    assertEquals("canonical-entry", reconciled.entryId)
+  }
+
   private val json = Json { ignoreUnknownKeys = true }
 
   @Test

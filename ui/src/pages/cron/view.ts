@@ -1274,14 +1274,18 @@ function describeFormSchedule(form: CronFormState): string | null {
     const tz = form.cronTz.trim();
     return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
   }
-  return form.scheduleKind === "on-exit" ? t("cron.form.repeatOnExit") : null;
+  if (form.scheduleKind === "on-exit") {
+    return t("cron.form.repeatOnExit");
+  }
+  return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
 }
 
 function renderScheduleSection(props: CronProps) {
   const form = props.form;
   const isOnExit = form.scheduleKind === "on-exit";
-  // on-exit stays selectable only while it is the current value: jobs can
-  // convert to an editable schedule, but never back to a watched command.
+  const isStream = form.scheduleKind === "stream";
+  // Process-backed schedules stay selectable only while current: jobs can
+  // convert to an editable schedule, but never synthesize a command in the UI.
   const kinds: Array<{ value: CronFormState["scheduleKind"]; label: string; testId: string }> = [
     ...(isOnExit
       ? [
@@ -1289,6 +1293,15 @@ function renderScheduleSection(props: CronProps) {
             value: "on-exit" as const,
             label: t("cron.form.repeatOnExit"),
             testId: "cron-schedule-kind-on-exit",
+          },
+        ]
+      : []),
+    ...(isStream
+      ? [
+          {
+            value: "stream" as const,
+            label: t("cron.form.repeatStream"),
+            testId: "cron-schedule-kind-stream",
           },
         ]
       : []),

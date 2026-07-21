@@ -1421,6 +1421,32 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun flushBuildsTheRequestIdentityFromTheCurrentReplacementRowId() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      outbox.seed(
+        ChatOutboxItem(
+          id = "replacement-client-id",
+          sessionKey = "main",
+          text = "retry on the selected branch",
+          thinkingLevel = "off",
+          createdAtMs = System.currentTimeMillis(),
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+          ownerAgentId = "main",
+        ),
+      )
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      assertEquals(listOf("replacement-client-id"), gateway.sentIdempotencyKeys)
+    }
+
+  @Test
   fun queueFullRefusalSurfacesErrorWithoutQueueing() =
     runTest {
       val gateway = FakeGateway()

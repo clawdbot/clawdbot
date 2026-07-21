@@ -424,6 +424,453 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("keeps a stream source running when a conditional or invalid update is rejected", async () => {
+    let resolveWait!: (result: {
+      reason: "manual-cancel";
+      exitCode: null;
+      exitSignal: null;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+      timedOut: false;
+      noOutputTimedOut: false;
+    }) => void;
+    const wait = new Promise<Parameters<typeof resolveWait>[0]>((resolve) => {
+      resolveWait = resolve;
+    });
+    const cancel = vi.fn(() =>
+      resolveWait({
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const detachOutput = vi.fn();
+    const spawn = vi.fn(async () => ({
+      runId: "run-stream",
+      startedAtMs: Date.now(),
+      cancel,
+      detachOutput,
+      wait: () => wait,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-stream-rejected-update");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      const added = await state.cron.add({
+        name: "stream source",
+        enabled: true,
+        schedule: { kind: "stream", command: ["source"] },
+        payload: { kind: "systemEvent", text: "event" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      const streamJob = "job" in added ? added.job : added;
+      const sourceIdentity = streamJob.state.streamSourceIdentity;
+      await expect(
+        state.cron.updateWithPrecondition(streamJob.id, { enabled: false }, () => {
+          throw new Error("revision mismatch");
+        }),
+      ).rejects.toThrow("revision mismatch");
+      await expect(
+        state.cron.update(streamJob.id, {
+          schedule: { kind: "stream", command: [] },
+        }),
+      ).rejects.toThrow("non-empty command argv array");
+      await state.cron.update(streamJob.id, {
+        schedule: { kind: "stream", command: ["source"] },
+      });
+
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(cancel).not.toHaveBeenCalled();
+      expect(detachOutput).not.toHaveBeenCalled();
+      expect(state.cron.getJob(streamJob.id)?.enabled).toBe(true);
+      expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+    }
+  });
+
+  it("discards a stale reconcile list snapshot that raced a direct mutation route", async () => {
+    let resolveWait!: (result: {
+      reason: "manual-cancel";
+      exitCode: null;
+      exitSignal: null;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+      timedOut: false;
+      noOutputTimedOut: false;
+    }) => void;
+    const wait = new Promise<Parameters<typeof resolveWait>[0]>((resolve) => {
+      resolveWait = resolve;
+    });
+    const cancel = vi.fn(() =>
+      resolveWait({
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const detachOutput = vi.fn();
+    const spawn = vi.fn(async () => ({
+      runId: "run-stale-snapshot",
+      startedAtMs: Date.now(),
+      cancel,
+      detachOutput,
+      wait: () => wait,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-stream-stale-snapshot");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      // Gate reconcile's first list call: capture the pre-add (empty) snapshot,
+      // hold it while the add's direct route starts the owner, then release the
+      // stale snapshot. The revision fence must re-list instead of stopping the
+      // freshly started owner as "removed".
+      const originalList = state.cron.list.bind(state.cron);
+      let releaseStaleList!: () => void;
+      const staleListGate = new Promise<void>((resolve) => {
+        releaseStaleList = resolve;
+      });
+      let armed = true;
+      state.cron.list = async (opts?: Parameters<typeof originalList>[0]) => {
+        if (!armed) {
+          return await originalList(opts);
+        }
+        armed = false;
+        const snapshot = await originalList(opts);
+        await staleListGate;
+        return snapshot;
+      };
+
+      const reconciling = state.reconcileStreamWatchers?.();
+      const added = await state.cron.add({
+        name: "stale snapshot stream source",
+        enabled: true,
+        schedule: { kind: "stream", command: ["source"] },
+        payload: { kind: "systemEvent", text: "event" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      const streamJob = "job" in added ? added.job : added;
+      const sourceIdentity = streamJob.state.streamSourceIdentity;
+      expect(spawn).toHaveBeenCalledOnce();
+      releaseStaleList();
+      await reconciling;
+
+      expect(cancel).not.toHaveBeenCalled();
+      expect(detachOutput).not.toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("drains stream teardown once when stop and stopAndDrain overlap", async () => {
+    const cancel = vi.fn();
+    let resolveWait!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      resolveWait = resolve;
+    });
+    const spawn = vi.fn(async () => ({
+      runId: "run-single-drain-stream",
+      startedAtMs: Date.now(),
+      cancel: vi.fn(() => {
+        cancel();
+        resolveWait();
+      }),
+      detachOutput: vi.fn(),
+      wait: async () => {
+        await wait;
+        return {
+          reason: "manual-cancel" as const,
+          exitCode: null,
+          exitSignal: null,
+          durationMs: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        };
+      },
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-stream-single-drain");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.add({
+        name: "single drain stream source",
+        enabled: true,
+        schedule: { kind: "stream", command: ["source"] },
+        payload: { kind: "systemEvent", text: "event" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      // cron.stop launches the asynchronous teardown; stopAndDrain must await
+      // that same drain instead of queueing every owner a second shutdown stop.
+      state.cron.stop();
+      await state.cron.stopAndDrain?.();
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+    }
+  });
+
+  it("retries stream teardown after a prior drain failure", async () => {
+    vi.useFakeTimers();
+    let resolveWait!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      resolveWait = resolve;
+    });
+    let cancelAttempts = 0;
+    const cancel = vi.fn(() => {
+      cancelAttempts += 1;
+      if (cancelAttempts === 2) {
+        resolveWait();
+      }
+    });
+    const spawn = vi.fn(async () => ({
+      runId: "run-retry-drain-stream",
+      startedAtMs: Date.now(),
+      cancel,
+      detachOutput: vi.fn(),
+      wait: async () => {
+        await wait;
+        return {
+          reason: "manual-cancel" as const,
+          exitCode: null,
+          exitSignal: null,
+          durationMs: 10_000,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        };
+      },
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-stream-retry-drain");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.add({
+        name: "retry drain stream source",
+        enabled: true,
+        schedule: { kind: "stream", command: ["source"] },
+        payload: { kind: "systemEvent", text: "event" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+
+      const firstFailure = expect(state.cron.stopAndDrain?.()).rejects.toThrow(
+        "stream source did not exit",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await firstFailure;
+      await expect(state.cron.stopAndDrain?.()).resolves.toBeUndefined();
+      expect(cancel).toHaveBeenCalledTimes(2);
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a committed stream update as successful when source teardown fails", async () => {
+    vi.useFakeTimers();
+    let resolveWait!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      resolveWait = resolve;
+    });
+    let cancelAttempts = 0;
+    const cancel = vi.fn(() => {
+      cancelAttempts += 1;
+      if (cancelAttempts === 2) {
+        resolveWait();
+      }
+    });
+    const spawn = vi.fn(async () => ({
+      runId: "run-stubborn-update-stream",
+      startedAtMs: Date.now(),
+      cancel,
+      detachOutput: vi.fn(),
+      wait: async () => {
+        await wait;
+        return {
+          reason: "manual-cancel" as const,
+          exitCode: null,
+          exitSignal: null,
+          durationMs: 10_000,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        };
+      },
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-stream-update-teardown-failure");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      const added = await state.cron.add({
+        name: "stubborn update stream source",
+        enabled: true,
+        schedule: { kind: "stream", command: ["source"] },
+        payload: { kind: "systemEvent", text: "event" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      const streamJob = "job" in added ? added.job : added;
+      // The durable disable commits before teardown settles; a stop timeout
+      // must not surface as a failed update after the mutation persisted.
+      const updatePromise = state.cron.update(streamJob.id, { enabled: false });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const updated = await updatePromise;
+      expect(updated.enabled).toBe(false);
+      expect(state.cron.getJob(streamJob.id)?.enabled).toBe(false);
+      expect(cancel).toHaveBeenCalled();
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a failed stream removal in an explicit terminal error state", async () => {
+    vi.useFakeTimers();
+    let resolveWait!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      resolveWait = resolve;
+    });
+    let cancelAttempts = 0;
+    const cancel = vi.fn(() => {
+      cancelAttempts += 1;
+      if (cancelAttempts === 2) {
+        resolveWait();
+      }
+    });
+    const detachOutput = vi.fn();
+    const spawn = vi.fn(async () => ({
+      runId: "run-stubborn-stream",
+      startedAtMs: Date.now(),
+      cancel,
+      detachOutput,
+      wait: async () => {
+        await wait;
+        return {
+          reason: "manual-cancel" as const,
+          exitCode: null,
+          exitSignal: null,
+          durationMs: 10_000,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        };
+      },
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-stream-remove-failure");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      const added = await state.cron.add({
+        name: "stubborn stream source",
+        enabled: true,
+        schedule: { kind: "stream", command: ["source"] },
+        payload: { kind: "systemEvent", text: "event" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      const streamJob = "job" in added ? added.job : added;
+      const removal = state.cron.remove(streamJob.id);
+      const removalFailure = expect(removal).rejects.toThrow("stream source did not exit");
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await removalFailure;
+      expect(cancel).toHaveBeenCalledTimes(2);
+      expect(cancel).toHaveBeenCalledWith("manual-cancel");
+      expect(detachOutput).toHaveBeenCalled();
+      expect(state.cron.getJob(streamJob.id)).toMatchObject({
+        enabled: true,
+        state: {
+          streamStatus: "error",
+          streamError: expect.stringContaining("stream source failed to stop"),
+          streamRestartExhausted: true,
+        },
+      });
+
+      await state.stopStreamWatchers?.();
+      expect(state.cron.getJob(streamJob.id)).toMatchObject({
+        state: {
+          streamStatus: "error",
+          streamError: expect.stringContaining("stream source failed to stop"),
+          streamRestartExhausted: true,
+        },
+      });
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("backs off isolated cron setup timeout without gateway restart", async () => {
     vi.useFakeTimers();
     const runnerEntered = createDeferred();

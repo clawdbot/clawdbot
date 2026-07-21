@@ -2123,6 +2123,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
               }
             : null;
         },
+        clearNodePresenceActivity: (activity) =>
+          context.nodeRegistry.clearPresenceActivity(activity),
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(

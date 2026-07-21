@@ -77,9 +77,9 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return anchor + steps * everyMs;
   }
 
-  if (schedule.kind === "on-exit") {
+  if (schedule.kind === "on-exit" || schedule.kind === "stream") {
     // Event-driven trigger: never time-due. The gateway watcher calls
-    // enqueueRun when the watched command exits.
+    // enqueueRun when the watched command exits or a stream batch closes.
     return undefined;
   }
 

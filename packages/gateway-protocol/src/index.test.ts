@@ -776,11 +776,14 @@ describe("validateNodePresenceActivityPayload", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_000, saturated: true })).toBe(
       true,
     );
+    expect(validateNodePresenceActivityPayload({ action: "clear" })).toBe(true);
   });
 
   it("rejects negative, unbounded, and extra fields", () => {
     expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
     expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "clear", idleSeconds: 1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ action: "disable" })).toBe(false);
   });
 });

@@ -63,4 +63,50 @@ describe("reconcileSidebarZone", () => {
       reconcileSidebarZone(["route:usage", "route:plugins"], [], ["usage"]).sidebarEntries,
     ).toEqual(["route:usage"]);
   });
+
+  it("keeps active Workboard boards and drops stale or plugin-off pins", () => {
+    const boards = [
+      { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
+      { id: "ops", total: 0, active: 0, archived: 0, byStatus: {} },
+    ];
+    expect(
+      reconcileSidebarZone(
+        ["workboard:ops", "workboard:deleted", "route:usage"],
+        [],
+        SIDEBAR_NAV_ROUTES,
+        new Set(),
+        boards,
+        true,
+        true,
+      ).sidebarEntries,
+    ).toEqual(["workboard:ops", "route:usage"]);
+    expect(
+      reconcileSidebarZone(
+        ["workboard:ops", "route:usage"],
+        [],
+        SIDEBAR_NAV_ROUTES,
+        new Set(),
+        boards,
+        false,
+        true,
+      ).sidebarEntries,
+    ).toEqual(["route:usage"]);
+  });
+
+  it("preserves Workboard pins until the active plugin's board catalog is authoritative", () => {
+    expect(
+      reconcileSidebarZone(
+        ["workboard:ops", "route:usage"],
+        [],
+        SIDEBAR_NAV_ROUTES,
+        new Set(),
+        [],
+        true,
+        false,
+      ),
+    ).toEqual({
+      entries: [{ type: "route", route: "usage" }],
+      sidebarEntries: ["workboard:ops", "route:usage"],
+    });
+  });
 });

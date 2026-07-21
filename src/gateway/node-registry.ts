@@ -742,6 +742,21 @@ export class NodeRegistry {
     return node;
   }
 
+  /** Clears recent input activity for the exact authenticated node connection. */
+  clearPresenceActivity(params: { nodeId: string; connId?: string }): boolean | null {
+    const node = this.nodesById.get(params.nodeId);
+    if (!node || !params.connId || node.connId !== params.connId) {
+      return null;
+    }
+    if (node.lastActiveAtMs === undefined && node.presenceUpdatedAtMs === undefined) {
+      return false;
+    }
+    node.lastActiveAtMs = undefined;
+    node.presenceUpdatedAtMs = undefined;
+    this.publishActiveNodeContext();
+    return true;
+  }
+
   /** Returns the connected node with the freshest reported local input. */
   getActiveNode(
     connectedNodes: readonly NodeSession[] = this.listConnected(),

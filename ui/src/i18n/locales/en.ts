@@ -1589,6 +1589,7 @@ export const en: TranslationMap = {
     pages: "Pages",
     customize: "Edit pinned items",
     customizeReset: "Reset pinned items",
+    workboardGroup: "WorkBoard",
   },
   terminal: {
     title: "Terminal",
@@ -4441,6 +4442,7 @@ export const en: TranslationMap = {
       repeatInterval: "Interval",
       repeatOnce: "Once",
       repeatOnExit: "On exit",
+      repeatStream: "Stream source",
       onExitHelp: "Runs when a watched command exits. The schedule cannot be edited here.",
       every: "Every",
       at: "At",

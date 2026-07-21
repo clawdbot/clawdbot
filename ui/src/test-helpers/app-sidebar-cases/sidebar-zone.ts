@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { APP_ROUTE_IDS } from "../../app-route-paths.ts";
+import {
+  renderSidebarWorkboardCustomize,
+  renderSidebarWorkboardEntry,
+} from "../../components/app-sidebar-workboard.runtime.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -54,7 +59,22 @@ async function mountZone() {
   ]);
   const { sidebar } = await mountSidebar(gateway, sessions.sessions);
   sidebar.connected = true;
+  sidebar.workboardRenderers = {
+    renderEntry: renderSidebarWorkboardEntry,
+    renderCustomize: renderSidebarWorkboardCustomize,
+  };
   return { sidebar, sessions };
+}
+
+function sidebarBoard(id: string, metadata: { color?: string; icon?: string; name?: string } = {}) {
+  return {
+    id,
+    total: 0,
+    active: 0,
+    archived: 0,
+    byStatus: {},
+    ...metadata,
+  };
 }
 
 describe("AppSidebar interleaved zone", () => {
@@ -217,6 +237,96 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector('[data-sidebar-entry="plugin:logbook/logbook"]')).toBeNull();
   });
 
+  it("renders a pinned Workboard board with its icon, color, label, and route", async () => {
+    const { sidebar } = await mountZone();
+    sidebar.workboardBoards = [
+      sidebarBoard("ops", { name: "Operations", icon: "⚙", color: "#22c55e" }),
+    ];
+    sidebar.workboardBoardsReady = true;
+    sidebar.sidebarEntries = ["workboard:ops"];
+    sidebar.activeRouteId = "workboard";
+    sidebar.activeWorkboardBoardId = "ops";
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    const entry = zoneEntry(sidebar, "workboard:ops");
+    const link = entry.querySelector<HTMLAnchorElement>(".nav-item--workboard-board");
+    const glyph = entry.querySelector<HTMLElement>(".workboard-board-glyph");
+    expect(link?.textContent).toContain("Operations (ops)");
+    expect(link?.href).toContain("/workboard/ops");
+    expect(link?.classList.contains("nav-item--active")).toBe(true);
+    expect(glyph?.textContent?.trim()).toBe("⚙");
+    expect(glyph?.getAttribute("style")).toContain("#22c55e");
+
+    link?.click();
+    expect(onNavigate).toHaveBeenCalledWith("workboard", { pathname: "/workboard/ops" });
+  });
+
+  it("keeps the Workboard parent active when the current board is not pinned", async () => {
+    const { sidebar } = await mountZone();
+    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
+    sidebar.workboardBoardsReady = true;
+    sidebar.sidebarEntries = ["route:workboard"];
+    sidebar.activeRouteId = "workboard";
+    sidebar.activeWorkboardBoardId = "ops";
+    await sidebar.updateComplete;
+
+    expect(
+      sidebar
+        .querySelector('[data-sidebar-entry="route:workboard"] .nav-item')
+        ?.classList.contains("nav-item--active"),
+    ).toBe(true);
+  });
+
+  it("hides Workboard board pins and editor choices when the plugin is inactive", async () => {
+    const { sidebar } = await mountZone();
+    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
+    sidebar.workboardBoardsReady = true;
+    sidebar.sidebarEntries = ["workboard:ops", "route:usage"];
+    sidebar.enabledRouteIds = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector('[data-sidebar-entry="workboard:ops"]')).toBeNull();
+    const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
+    nav?.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 20,
+        clientY: 20,
+      }),
+    );
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-customize-menu__group-title")).toBeNull();
+    expect(sidebar.querySelector('wa-dropdown-item[value="workboard:ops"]')).toBeNull();
+  });
+
+  it("lists active boards in the WorkBoard pin-editor group", async () => {
+    const { sidebar } = await mountZone();
+    sidebar.workboardBoards = [
+      sidebarBoard("default"),
+      sidebarBoard("ops", { name: "Operations", icon: "⚙", color: "#22c55e" }),
+    ];
+    sidebar.workboardBoardsReady = true;
+    const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
+    nav?.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 20,
+        clientY: 20,
+      }),
+    );
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(".sidebar-customize-menu__group-title")?.textContent).toBe(
+      "WorkBoard",
+    );
+    expect(sidebar.querySelector('wa-dropdown-item[value="workboard:default"]')).not.toBeNull();
+    expect(sidebar.querySelector('wa-dropdown-item[value="workboard:ops"]')).not.toBeNull();
+  });
+
   it("writes reordered entries after a route drop", async () => {
     const { sidebar } = await mountZone();
     sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:tasks"];
@@ -292,6 +402,28 @@ describe("AppSidebar interleaved zone", () => {
     dispatchDragEvent(target, "drop", dataTransfer);
 
     expect(onUpdate).toHaveBeenCalledWith(["route:plugins"]);
+  });
+
+  it("unpins a Workboard board dropped into the session-list region", async () => {
+    const { sidebar } = await mountZone();
+    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
+    sidebar.workboardBoardsReady = true;
+    sidebar.sidebarEntries = ["workboard:ops", "route:usage"];
+    const onUpdate = vi.fn();
+    sidebar.onUpdateSidebarEntries = onUpdate;
+    await sidebar.updateComplete;
+    const source = zoneEntry(sidebar, "workboard:ops");
+    const target = sidebar.querySelector('[data-session-section="ungrouped"]');
+    if (!target) {
+      throw new Error("expected session-list region");
+    }
+    const dataTransfer = createDataTransferStub();
+
+    dispatchDragEvent(source, "dragstart", dataTransfer);
+    dispatchDragEvent(target, "dragover", dataTransfer);
+    dispatchDragEvent(target, "drop", dataTransfer);
+
+    expect(onUpdate).toHaveBeenCalledWith(["route:usage"]);
   });
 
   it("prunes only the unpinned session's entry and preserves unknown-agent slots", async () => {

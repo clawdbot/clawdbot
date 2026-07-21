@@ -264,6 +264,10 @@ type AgentRuntimeReplyPayloadLocation = {
 /** Portable reply payload emitted by agent runtimes before channel rendering. */
 type AgentRuntimeReplyPayload = {
   text?: string;
+  fallbackText?: {
+    text: string;
+    replacesPayloadIndex?: number;
+  };
   mediaUrl?: string;
   mediaUrls?: string[];
   trustedLocalMedia?: boolean;

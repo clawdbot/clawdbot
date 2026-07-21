@@ -205,7 +205,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               >${collapsed ? icons.chevronRight : icons.chevronDown}</span
             >
             ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
-            ${hasError || (collapsed && rows.length > 0)
+            ${hasError || rows.length > 0
               ? html`<span
                   class="sidebar-session-group-count ${hasError
                     ? "sidebar-session-group-count--error"
@@ -276,22 +276,26 @@ function renderCatalogHostGroup(
   const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
   const projectGroups =
     params.projectGrouping === "project" ? groupCatalogSessionsByProject(host.sessions) : null;
+  // Gateway errors stay on the catalog header; node headings remain so remote rows keep their owner.
+  const showHostHeading = host.kind !== "gateway";
   return html`
     <section class="sidebar-session-catalog-host" data-session-catalog-host=${host.hostId}>
-      <div
-        class="sidebar-session-catalog-host__head"
-        aria-label=${errorHelp ? `${host.label}: ${errorHelp}` : host.label}
-        title=${errorHelp ?? host.label}
-      >
-        <span class="sidebar-session-catalog-host__label">${host.label}</span>
-        <span
-          class="sidebar-session-catalog-host__count ${host.error
-            ? "sidebar-session-catalog-host__count--error"
-            : ""}"
-          aria-hidden="true"
-          >${host.error ? icons.alertTriangle : host.sessions.length}</span
-        >
-      </div>
+      ${showHostHeading
+        ? html`<div
+            class="sidebar-session-catalog-host__head"
+            aria-label=${errorHelp ? `${host.label}: ${errorHelp}` : host.label}
+            title=${errorHelp ?? host.label}
+          >
+            <span class="sidebar-session-catalog-host__label">${host.label}</span>
+            <span
+              class="sidebar-session-catalog-host__count ${host.error
+                ? "sidebar-session-catalog-host__count--error"
+                : ""}"
+              aria-hidden="true"
+              >${host.error ? icons.alertTriangle : host.sessions.length}</span
+            >
+          </div>`
+        : nothing}
       <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
         ${projectGroups
           ? html`${projectGroups.groups.map((group) => {

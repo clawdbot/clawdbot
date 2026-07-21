@@ -359,12 +359,13 @@ function archiveTestSession(params: {
   });
 }
 
-function createGatewayApi(runtime: PluginRuntime) {
+function createGatewayApi(runtime: PluginRuntime, apiConfig: OpenClawConfig = {}) {
   let provider: SessionCatalogProvider | undefined;
   const registerSessionCatalog = vi.fn((candidate: SessionCatalogProvider) => {
     provider = candidate;
   });
   const api = {
+    config: apiConfig,
     runtime,
     registerSessionCatalog,
   } as unknown as OpenClawPluginApi;
@@ -2892,6 +2893,10 @@ describe("Codex supervision actions", () => {
     });
     expect(registerSessionCatalog).toHaveBeenCalledOnce();
     const provider = getProvider();
+    expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+      model: "openai/gpt-5.6-sol",
+      agentRuntime: "codex",
+    });
     await expect(
       provider?.archive?.({
         hostId: CODEX_LOCAL_SESSION_HOST_ID,
@@ -2923,6 +2928,30 @@ describe("Codex supervision actions", () => {
     expect(control.readThread).toHaveBeenCalledOnce();
     expect(control.archiveThread).toHaveBeenCalledOnce();
     expect(createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("advertises creation from startup config before the live snapshot is available", () => {
+    const startupConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/gpt-5.6-sol": {} },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const { runtime } = createRuntime();
+    const { api, getProvider } = createGatewayApi(runtime, startupConfig);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createEligibleControl(),
+      getRuntimeConfig: () => undefined,
+    });
+
+    expect(getProvider()?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+      model: "openai/gpt-5.6-sol",
+      agentRuntime: "codex",
+    });
   });
 
   it("marks paired-node rows continuable only with complete permitted capabilities", async () => {

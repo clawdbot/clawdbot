@@ -370,6 +370,10 @@ Native macOS nodes can also send authenticated `node.presence.activity` events
 with bounded input idle time. The Gateway derives activity timestamps on its
 own clock, exposes the freshest connected Mac through `node.list` and
 `node.describe`, and broadcasts `node.presence` updates to read-scoped clients.
+The app sends `{ "action": "clear" }` when the user disables activity sharing;
+the Gateway clears timestamps only for that exact authenticated node connection.
+Gateways that predate this acknowledged action return it as unhandled, so the Mac
+node reconnects once and lets disconnect cleanup remove the old connection state.
 See [Active computer presence](/nodes/presence) for selection, privacy, model
 context, and notification-routing behavior.
 

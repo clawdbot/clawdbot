@@ -1,0 +1,87 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聊天"</string>
+    <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"会话"</string>
+    <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"模型"</string>
+    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"上一个 %1$s"</string>
+    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"下一个 %1$s"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"控制"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"说话"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手表音频失败"</string>
+    <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"听写"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"实时"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"对话串"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← 滑动 →"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"按住"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"点按"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"双击"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"启动实时模式后，即可在此处查看对话。"</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"新建"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"输入"</string>
+    <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"消息"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"向智能体发送消息"</string>
+    <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"发送"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"与智能体对话"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"停止朗读"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"朗读最新回复"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在朗读"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在聆听"</string>
+    <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在连接"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在思考"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在输入"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在发送"</string>
+    <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"智能体正在工作"</string>
+    <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"错误"</string>
+    <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"就绪"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"你"</string>
+    <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"智能体"</string>
+    <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"系统"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"开始对话"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在手表上说话或输入文字。已配对的手机会通过其已认证的 OpenClaw 会话发送消息。"</string>
+    <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"当前会话"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"外观"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"深色"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"浅色"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"自动朗读回复"</string>
+    <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"回复提醒"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"启用提醒"</string>
+    <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"中止运行"</string>
+    <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"打开通知设置"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"开"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"关"</string>
+    <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接"</string>
+    <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
+    <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"安全"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"由手机控制"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 凭据和身份信息保留在已配对的手机上。手表仅使用 Wear Data Layer。"</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在检查手机"</string>
+    <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在读取智能体、会话和聊天"</string>
+    <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手机已就绪"</string>
+    <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 已连接"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 离线"</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"请在已配对手机的 OpenClaw 中重新连接 Gateway。"</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在手机上打开 OpenClaw"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手表本身不会启动 Gateway，也不会对其进行身份验证。"</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法连接手机"</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"请将已配对的手机放在附近，并安装匹配的 OpenClaw 应用。"</string>
+    <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"所选项目已不可用"</string>
+    <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"操作未被接受"</string>
+    <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"出现错误"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"请刷新列表后重试。"</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"请在手表上重试。"</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要更新"</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"请更新手机和手表上的 OpenClaw。"</string>
+    <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"刷新"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"重试"</string>
+    <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 回复"</string>
+    <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"回复"</string>
+    <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 回复"</string>
+    <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"回复未发送"</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手机不可用。点按“回复”重试。"</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"打开 OpenClaw 进行回复"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"您的首选手机已更改。回复前请打开应用以重新加载会话。"</string>
+    <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"打开会话并通过已配对的手机回复"</string>
+    <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"打开"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手机代理"</string>
+</resources>

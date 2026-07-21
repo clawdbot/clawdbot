@@ -83,16 +83,18 @@ describe("sidebar entries", () => {
     expect(settingsRoutes).not.toContain("plugins");
   });
 
-  it("round-trips route and session entries", () => {
+  it("round-trips route, Workboard, and session entries", () => {
     expect(parseSidebarEntry("route:usage")).toEqual({ type: "route", route: "usage" });
     expect(parseSidebarEntry("session:agent:main:test")).toEqual({
       type: "session",
       key: "agent:main:test",
     });
+    expect(parseSidebarEntry("workboard:ops")).toEqual({ type: "workboard", boardId: "ops" });
     expect(serializeSidebarEntry({ type: "route", route: "plugins" })).toBe("route:plugins");
     expect(serializeSidebarEntry({ type: "session", key: "agent:main:test" })).toBe(
       "session:agent:main:test",
     );
+    expect(serializeSidebarEntry({ type: "workboard", boardId: "ops" })).toBe("workboard:ops");
   });
 
   it("normalizes persisted entries, dropping malformed and duplicate values", () => {

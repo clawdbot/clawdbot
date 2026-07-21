@@ -4,6 +4,7 @@ import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.SessionBranch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -11,6 +12,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatScreenTest {
+  @Test
+  fun branchMessageCountUsesCountNeutralCopy() {
+    assertEquals("Messages: 1", branchMessageCountText(1))
+    assertEquals("Messages: 2", branchMessageCountText(2))
+    assertEquals(
+      "Messages: 2",
+      branchMetadataText(SessionBranch("leaf", "", 2, updatedAt = null, active = false)),
+    )
+  }
+
   @Test
   fun longUserMessagesProduceABoundedPlainTextPreview() {
     assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("Short prompt"))

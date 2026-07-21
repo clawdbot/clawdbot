@@ -682,6 +682,48 @@ describe("Claude session catalog", () => {
     expect(provider?.resolveCreateSession?.({})).toBeUndefined();
   });
 
+  it("uses the requested agent's model allowlist for creation", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-8" },
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "research",
+            model: { primary: "anthropic/claude-sonnet-4-8" },
+            models: {
+              "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+              "anthropic/claude-sonnet-4-8": { agentRuntime: { id: "claude-cli" } },
+            },
+            modelPolicy: { allow: ["anthropic/claude-sonnet-4-8"] },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config,
+      runtime: { config: { current: () => config } },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+
+    registerClaudeSessionCatalog(api);
+
+    expect(provider?.resolveCreateSession?.({ agentId: "main" })).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      agentRuntime: "claude-cli",
+    });
+    expect(provider?.resolveCreateSession?.({ agentId: "research" })).toBeUndefined();
+  });
+
   it.each([
     {
       label: "CLI binding",

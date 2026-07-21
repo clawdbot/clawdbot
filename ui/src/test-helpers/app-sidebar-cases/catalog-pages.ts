@@ -204,17 +204,21 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "main",
         catalog: {
           ...catalog,
-          hosts: [{ ...host, label: "Progressive Gateway" }],
+          hosts: [{ ...host, hostId: "gateway:progressive" }],
         },
       } satisfies SessionsCatalogHostEvent);
       await sidebar.updateComplete;
-      expect(sidebar.textContent).toContain("Progressive Gateway");
+      expect(
+        sidebar.querySelector('[data-session-catalog-host="gateway:progressive"]'),
+      ).not.toBeNull();
 
       pendingRefetch.resolve(pageTwo);
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
 
-      expect(sidebar.textContent).toContain("Progressive Gateway");
+      expect(
+        sidebar.querySelector('[data-session-catalog-host="gateway:progressive"]'),
+      ).not.toBeNull();
       expect(request).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();

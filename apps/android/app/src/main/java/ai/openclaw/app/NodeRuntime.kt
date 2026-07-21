@@ -27,6 +27,8 @@ import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.SystemSpeechSpeaker
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
@@ -2742,9 +2744,13 @@ class NodeRuntime private constructor(
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
+  val chatSessionBranches: StateFlow<List<SessionBranch>> = chat.sessionBranches
+  val chatSessionBranchesLoading: StateFlow<Boolean> = chat.sessionBranchesLoading
+  val chatSessionBranchSwitching: StateFlow<Boolean> = chat.sessionBranchSwitching
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
   val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
+  val chatOutboxPresentationRestored: StateFlow<Boolean> = chat.outboxPresentationRestored
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = chat.listBackgroundTasks(agentId)
 
@@ -4917,6 +4923,14 @@ class NodeRuntime private constructor(
     parentKey: String,
     ownerAgentId: String? = null,
   ): String? = chat.forkSession(parentKey, ownerAgentId)
+
+  suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chatSessionKey.value, entryId)
+
+  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
+
+  suspend fun refreshChatSessionBranches(): Boolean = chat.refreshSessionBranches()
+
+  suspend fun switchChatSessionBranch(leafEntryId: String): Boolean = chat.switchSessionBranch(chatSessionKey.value, leafEntryId)
 
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)

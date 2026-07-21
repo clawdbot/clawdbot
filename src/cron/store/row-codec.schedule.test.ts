@@ -34,6 +34,28 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
+  it("round-trips a stream schedule through job_json without new columns", () => {
+    expect(
+      roundTrip({
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        cwd: "/repo",
+        mode: "match",
+        match: "^ready:",
+        batchMs: 100,
+        maxBatchBytes: 2_048,
+      }),
+    ).toEqual({
+      kind: "stream",
+      command: ["node", "events.mjs"],
+      cwd: "/repo",
+      mode: "match",
+      match: "^ready:",
+      batchMs: 100,
+      maxBatchBytes: 2_048,
+    });
+  });
+
   it("keeps existing kinds intact (no cross-talk from on-exit column reuse)", () => {
     expect(roundTrip({ kind: "every", everyMs: 60_000 })).toEqual({
       kind: "every",

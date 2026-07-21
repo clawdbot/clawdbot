@@ -107,6 +107,35 @@ describe("cron trigger script evaluator", () => {
     );
   });
 
+  it("injects the current stream batch beside trigger state", async () => {
+    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
+    const { evaluate } = createEvaluator(runHeadless);
+
+    await evaluate({
+      jobId: "job-stream",
+      script: "return result",
+      state: { cursor: 2 },
+      streamBatch: "line one\nline two",
+    });
+
+    expect(runHeadless).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extraNamespaces: [
+          expect.objectContaining({
+            globalName: "trigger",
+            scope: {
+              kind: "object",
+              entries: [
+                ["state", { kind: "value", value: { cursor: 2 } }],
+                ["streamBatch", { kind: "value", value: "line one\nline two" }],
+              ],
+            },
+          }),
+        ],
+      }),
+    );
+  });
+
   it("falls back to the last json output entry when the returned object is not a trigger result", async () => {
     const { evaluate } = createEvaluator(
       vi.fn(async () =>
@@ -401,6 +430,40 @@ describe("cron trigger script evaluator", () => {
 });
 
 describe("cron script payload evaluator", () => {
+  it("exposes a stream batch beside the script payload state", async () => {
+    const config = {} as OpenClawConfig;
+    const runHeadless = vi.fn(async (_params: HeadlessParams) => completed({ value: {} }));
+    const runtime = createCronScriptRuntime({
+      config,
+      runHeadless,
+      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
+    });
+
+    await runtime.executePayload({
+      jobId: "payload-stream",
+      script: "return {}",
+      state: { cursor: 3 },
+      streamBatch: "line one\nline two",
+    });
+
+    expect(runHeadless).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extraNamespaces: [
+          expect.objectContaining({
+            globalName: "trigger",
+            scope: {
+              kind: "object",
+              entries: [
+                ["state", { kind: "value", value: { cursor: 3 } }],
+                ["streamBatch", { kind: "value", value: "line one\nline two" }],
+              ],
+            },
+          }),
+        ],
+      }),
+    );
+  });
+
   it("uses payload-grade capped budgets and exposes frozen trigger state", async () => {
     const config = {} as OpenClawConfig;
     const runHeadless = vi.fn(async (_params: HeadlessParams) =>

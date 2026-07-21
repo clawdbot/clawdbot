@@ -26,6 +26,12 @@ export {
 export type OutboundReplyPayload = {
   /** Plain text reply body. */
   text?: string;
+  /** Visible body a channel adapter may use when native structured content requires text. */
+  fallbackText?: {
+    text: string;
+    /** Batch payload replaced when the adapter adopts this fallback body. */
+    replacesPayloadIndex?: number;
+  };
   /** Ordered media attachments for channels that can send multiple media items. */
   mediaUrls?: string[];
   /** Legacy single media attachment. */

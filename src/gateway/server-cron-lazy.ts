@@ -137,17 +137,21 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
           resolved.state.stopExitWatchers?.();
+          await resolved.state.stopStreamWatchers?.();
           return;
         }
         if (schedulingPaused) {
           resolved.state.cron.pauseScheduling();
           resolved.schedulingPaused = true;
         }
-        // Arm on-exit watchers for jobs loaded from the store at startup (no
+        // Arm process watchers for jobs loaded from the store at startup (no
         // change event fires for already-persisted jobs).
         try {
           if (resolved.state.cronEnabled) {
-            await resolved.state.reconcileExitWatchers?.();
+            await Promise.all([
+              resolved.state.reconcileExitWatchers?.(),
+              resolved.state.reconcileStreamWatchers?.(),
+            ]);
           }
         } catch (err) {
           resolved.phase = startCancelled() ? "stopped" : "started";
@@ -158,6 +162,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
           resolved.state.stopExitWatchers?.();
+          await resolved.state.stopStreamWatchers?.();
           return;
         }
         resolved.phase = "started";
@@ -181,6 +186,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         loaded.underlyingStarted = false;
         loaded.state.cron.stop();
         loaded.state.stopExitWatchers?.();
+        void loaded.state.stopStreamWatchers?.().catch(() => {});
         return;
       }
       const loading = cronStateLoader.peek();
@@ -196,8 +202,27 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
             resolved.underlyingStarted = false;
             resolved.state.cron.stop();
             resolved.state.stopExitWatchers?.();
+            void resolved.state.stopStreamWatchers?.().catch(() => {});
           })
           .catch(() => {});
+      }
+    },
+    async stopAndDrain() {
+      stopped = true;
+      lifecycleGeneration += 1;
+      releaseSchedulingResumeWaiters();
+      const resolved = loaded ?? (cronStateLoader.peek() ? await cronStateLoader.peek() : null);
+      if (!resolved) {
+        return;
+      }
+      resolved.phase = "stopped";
+      resolved.underlyingStarted = false;
+      if (resolved.state.cron.stopAndDrain) {
+        await resolved.state.cron.stopAndDrain();
+      } else {
+        resolved.state.cron.stop();
+        resolved.state.stopExitWatchers?.();
+        await resolved.state.stopStreamWatchers?.();
       }
     },
     pauseScheduling() {

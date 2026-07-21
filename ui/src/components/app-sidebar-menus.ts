@@ -317,6 +317,8 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       position,
       sidebarEntries: this.sidebarEntries,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      workboardBoards: this.workboardBoards,
+      workboardRenderers: this.workboardRenderers,
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
         if (this.customizeMenuPosition !== position) {
@@ -326,6 +328,14 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       },
       onToggleRoute: (routeId) => {
         const entry = serializeSidebarEntry({ type: "route", route: routeId });
+        const canonical = this.reconciledSidebarZone().sidebarEntries;
+        const next = canonical.includes(entry)
+          ? canonical.filter((candidate) => candidate !== entry)
+          : [...canonical, entry];
+        this.onUpdateSidebarEntries?.(next);
+      },
+      onToggleWorkboardBoard: (boardId) => {
+        const entry = serializeSidebarEntry({ type: "workboard", boardId });
         const canonical = this.reconciledSidebarZone().sidebarEntries;
         const next = canonical.includes(entry)
           ? canonical.filter((candidate) => candidate !== entry)
@@ -563,7 +573,9 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       href: chatSearch
         ? `${pathForRoute("chat", this.basePath)}${chatSearch}`
         : pathForRoute(routeId, this.basePath),
-      active: isSidebarRouteActive(this.activeRouteId, routeId),
+      active:
+        isSidebarRouteActive(this.activeRouteId, routeId) &&
+        !(routeId === "workboard" && this.activeWorkboardBoardIsPinned()),
       onNavigate: () => {
         this.onNavigate?.(routeId, chatSearch ? { search: chatSearch } : undefined);
       },
@@ -577,6 +589,9 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       open: this.moreMenuPosition !== null,
       active: sidebarMoreMenuHoldsActiveRoute({
         activeRouteId: this.activeRouteId,
+        activeWorkboardBoardId: this.activeWorkboardBoardIsPinned()
+          ? this.activeWorkboardBoardId
+          : "",
         sidebarEntries: this.sidebarEntries,
         isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       }),
@@ -591,6 +606,9 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       position,
       basePath: this.basePath,
       activeRouteId: this.activeRouteId,
+      activeWorkboardBoardId: this.activeWorkboardBoardIsPinned()
+        ? this.activeWorkboardBoardId
+        : "",
       sidebarEntries: this.sidebarEntries,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       onTabAway: () => trigger?.focus(),
@@ -614,5 +632,14 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
         }
       },
     });
+  }
+
+  private activeWorkboardBoardIsPinned(): boolean {
+    return Boolean(
+      this.activeWorkboardBoardId &&
+      this.reconciledSidebarZone().entries.some(
+        (entry) => entry.type === "workboard" && entry.boardId === this.activeWorkboardBoardId,
+      ),
+    );
   }
 }

@@ -719,6 +719,23 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
                       "minimum": 1,
@@ -731,6 +748,18 @@
                     "kind": {
                       "description": "Schedule kind",
                       "enum": ["at", "every", "cron"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
                       "type": "string"
                     },
                     "staggerMs": {
@@ -1103,6 +1132,23 @@
                       "description": "ISO-8601 time (kind=at)",
                       "type": "string"
                     },
+                    "batchMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "command": {
+                      "description": "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "cwd": {
+                      "description": "Working directory (kind=stream)",
+                      "type": "string"
+                    },
                     "everyMs": {
                       "description": "Interval ms (kind=every)",
                       "minimum": 1,
@@ -1115,6 +1161,18 @@
                     "kind": {
                       "description": "Schedule kind",
                       "enum": ["at", "every", "cron"],
+                      "type": "string"
+                    },
+                    "match": {
+                      "description": "Regex source (stream match mode)",
+                      "type": "string"
+                    },
+                    "maxBatchBytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "mode": {
+                      "enum": ["line", "match"],
                       "type": "string"
                     },
                     "staggerMs": {

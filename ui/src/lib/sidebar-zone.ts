@@ -4,6 +4,7 @@ import {
   type SidebarNavRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
+import type { SidebarWorkboardBoard } from "../components/app-sidebar-workboard.ts";
 
 type SidebarPinnedSession = { key: string };
 
@@ -20,9 +21,13 @@ export function reconcileSidebarZone(
   pinnedSessions: readonly SidebarPinnedSession[],
   validRoutes: readonly SidebarNavRoute[],
   knownUnpinnedKeys: ReadonlySet<string> = new Set(),
+  workboardBoards: readonly SidebarWorkboardBoard[] = [],
+  workboardEnabled = false,
+  workboardBoardsReady = false,
 ): { entries: SidebarZoneEntry[]; sidebarEntries: string[] } {
   const pinnedKeys = new Set(pinnedSessions.map((session) => session.key));
   const validRouteSet = new Set(validRoutes);
+  const validBoardIds = new Set(workboardBoards.map((board) => board.id));
   const seen = new Set<string>();
   const entries: SidebarZoneEntry[] = [];
   const canonical: string[] = [];
@@ -43,6 +48,24 @@ export function reconcileSidebarZone(
       seen.add(canonicalKey);
       entries.push(entry);
       canonical.push(canonicalKey);
+      continue;
+    }
+    if (entry.type === "workboard") {
+      if (!workboardEnabled) {
+        continue;
+      }
+      seen.add(canonicalKey);
+      canonical.push(canonicalKey);
+      // An unloaded catalog cannot distinguish deletion from startup. Preserve
+      // the slot but render nothing until the active plugin returns its ids.
+      if (!workboardBoardsReady) {
+        continue;
+      }
+      if (!validBoardIds.has(entry.boardId)) {
+        canonical.pop();
+        continue;
+      }
+      entries.push(entry);
       continue;
     }
     if (pinnedKeys.has(entry.key)) {

@@ -290,6 +290,8 @@ class RoomChatTranscriptCache internal constructor(
         content = decodeTextParts(row.textPartsJson).map { ChatMessageContent(type = "text", text = it) },
         timestampMs = row.timestampMs,
         idempotencyKey = row.idempotencyKey,
+        // Canonical tree ids stay live-only; cached rows regain actions after history refresh.
+        entryId = null,
       )
     }
   }

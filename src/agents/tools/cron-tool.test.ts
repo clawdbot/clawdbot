@@ -1167,6 +1167,31 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("forwards stream schedules to the Gateway trigger-trust gate", async () => {
+    const tool = createTestCronTool();
+
+    await tool.execute("call-stream-add", {
+      action: "add",
+      job: {
+        name: "watch events",
+        schedule: {
+          kind: "stream",
+          command: ["node", "events.mjs"],
+          mode: "match",
+          match: "^ready:",
+        },
+        payload: { kind: "agentTurn", message: "handle events" },
+      },
+    });
+
+    expect(expectSingleGatewayCallMethod("cron.add")?.schedule).toEqual({
+      kind: "stream",
+      command: ["node", "events.mjs"],
+      mode: "match",
+      match: "^ready:",
+    });
+  });
+
   it.each([
     ["delivery.channel", { channel: " ", to: "chat-1" }],
     ["delivery.channel", { channel: 123, to: "chat-1" }],

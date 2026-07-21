@@ -1,3 +1,4 @@
+import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
@@ -50,6 +51,7 @@ export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
 export type SidebarZoneEntry =
   | { type: "route"; route: SidebarNavRoute }
+  | { type: "workboard"; boardId: string }
   | { type: "session"; key: string };
 
 // Keep the highest-value operational destinations visible on first use. Users
@@ -75,11 +77,18 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
     const key = value.slice("session:".length).trim();
     return key ? { type: "session", key } : null;
   }
+  if (value.startsWith("workboard:")) {
+    const boardId = value.slice("workboard:".length).trim();
+    return isValidWorkboardBoardId(boardId) ? { type: "workboard", boardId } : null;
+  }
   return null;
 }
 
 export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
-  return entry.type === "route" ? `route:${entry.route}` : `session:${entry.key}`;
+  if (entry.type === "route") {
+    return `route:${entry.route}`;
+  }
+  return entry.type === "workboard" ? `workboard:${entry.boardId}` : `session:${entry.key}`;
 }
 
 /**

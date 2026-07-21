@@ -12,7 +12,10 @@ import {
   type SystemInfoResult,
   validateSystemInfoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { validateSystemEventParams } from "../../../packages/gateway-protocol/src/schema.js";
+import {
+  SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
+  validateSystemEventParams,
+} from "../../../packages/gateway-protocol/src/schema.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
@@ -183,10 +186,6 @@ export const systemHandlers: GatewayRequestHandlers = {
     const platform = readStringValue(params.platform);
     const deviceFamily = readStringValue(params.deviceFamily);
     const modelIdentifier = readStringValue(params.modelIdentifier);
-    const lastInputSeconds =
-      typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
-        ? params.lastInputSeconds
-        : undefined;
     const reason = readStringValue(params.reason);
     const roles =
       Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
@@ -199,6 +198,11 @@ export const systemHandlers: GatewayRequestHandlers = {
     const tags =
       Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
         ? params.tags
+        : undefined;
+    const lastInputSeconds = tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
+      ? null
+      : typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
+        ? params.lastInputSeconds
         : undefined;
     const presenceUpdate = updateSystemPresence({
       text,

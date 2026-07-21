@@ -54,7 +54,11 @@ function resolveCronJobOwnerAgentId(job: CronJob): string | undefined {
 }
 
 function isOperatorCommandCronJob(job: CronJob): boolean {
-  return job.payload.kind === "command" || job.schedule.kind === "on-exit";
+  return (
+    job.payload.kind === "command" ||
+    job.schedule.kind === "on-exit" ||
+    job.schedule.kind === "stream"
+  );
 }
 
 export function cronJobMatchesCallerScope(params: {

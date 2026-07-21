@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
+import { pathForRoute, pathForWorkboardBoard } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
   hasOperatorAdminAccess,
@@ -9,8 +10,10 @@ import {
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
+import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { resetDraftState } from "../../lib/workboard/card-state.ts";
 import {
   configureWorkboardLiveRefresh,
@@ -25,7 +28,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
-import { searchForBoardFilter } from "./board-filter.ts";
+import { WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import type { WorkboardRouteData } from "./route.ts";
 import { renderWorkboard } from "./view.ts";
 
@@ -37,6 +40,8 @@ class WorkboardPage extends OpenClawLightDomElement {
 
   private readonly requestPageUpdate = () => this.context?.workboard.notify();
   private observedAgentScopeId: string | null | undefined;
+  private canonicalizedLocation = "";
+  private redirectedMissingBoardId = "";
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.agents,
@@ -69,7 +74,10 @@ class WorkboardPage extends OpenClawLightDomElement {
       () => this.context?.workboard,
       (workboard) => {
         this.syncWorkboardAgentScope();
-        const unsubscribe = workboard.subscribe(() => this.requestUpdate());
+        const unsubscribe = workboard.subscribe(() => {
+          this.syncWorkboardBoardRoute();
+          this.requestUpdate();
+        });
         return () => {
           unsubscribe();
           stopWorkboardLiveRefresh(workboard);
@@ -115,6 +123,8 @@ class WorkboardPage extends OpenClawLightDomElement {
     super.connectedCallback();
     this.ensureInitialData();
     this.syncWorkboardBoardFilter();
+    this.syncCanonicalLocation();
+    this.syncWorkboardBoardRoute();
     this.syncWorkboardRuntime();
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
   }
@@ -122,6 +132,8 @@ class WorkboardPage extends OpenClawLightDomElement {
   override updated(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
       this.syncWorkboardBoardFilter();
+      this.syncCanonicalLocation();
+      this.syncWorkboardBoardRoute();
     }
     this.syncWorkboardRuntime();
     if (this.context?.workboard) {
@@ -238,14 +250,81 @@ class WorkboardPage extends OpenClawLightDomElement {
     context.workboard.notify();
   }
 
+  private syncCanonicalLocation() {
+    const canonical = this.routeData?.canonicalLocation;
+    const context = this.context;
+    if (!canonical) {
+      this.canonicalizedLocation = "";
+      return;
+    }
+    if (!context) {
+      return;
+    }
+    const key = `${canonical.pathname}${canonical.search}${canonical.hash}`;
+    if (this.canonicalizedLocation === key) {
+      return;
+    }
+    this.canonicalizedLocation = key;
+    context.replace("workboard", canonical);
+  }
+
   private setWorkboardBoardFilter(boardFilter: string) {
     const context = this.context;
     if (!context) {
       return;
     }
     context.replace("workboard", {
-      search: searchForBoardFilter(this.routeData?.search ?? "", boardFilter),
+      pathname:
+        boardFilter === WORKBOARD_ALL_BOARDS_FILTER
+          ? pathForRoute("workboard", context.basePath)
+          : pathForWorkboardBoard(boardFilter, context.basePath),
+      search: this.routeData?.search ?? "",
     });
+  }
+
+  private syncWorkboardBoardRoute() {
+    const context = this.context;
+    const boardId = this.routeData?.boardFilter;
+    if (
+      !context ||
+      !boardId ||
+      boardId === WORKBOARD_ALL_BOARDS_FILTER ||
+      !context.workboard.boardsReady
+    ) {
+      this.redirectedMissingBoardId = "";
+      return;
+    }
+    if (context.workboard.state.boards.some((board) => board.id === boardId)) {
+      this.redirectedMissingBoardId = "";
+      return;
+    }
+    if (this.redirectedMissingBoardId === boardId) {
+      return;
+    }
+    this.redirectedMissingBoardId = boardId;
+    context.replace("workboard", {
+      pathname: pathForRoute("workboard", context.basePath),
+      search: this.routeData?.search ?? "",
+    });
+  }
+
+  private selectedBoard() {
+    const context = this.context;
+    const boardId = this.routeData?.boardFilter;
+    if (!context || !boardId || boardId === WORKBOARD_ALL_BOARDS_FILTER) {
+      return null;
+    }
+    const board = context.workboard.state.boards.find((candidate) => candidate.id === boardId);
+    if (board || context.workboard.boardsReady) {
+      return board ?? null;
+    }
+    return {
+      id: boardId,
+      total: 0,
+      active: 0,
+      archived: 0,
+      byStatus: {},
+    };
   }
 
   override render() {
@@ -257,10 +336,23 @@ class WorkboardPage extends OpenClawLightDomElement {
     const config = context.runtimeConfig.state;
     const auth = gateway.hello?.auth ?? null;
     const pluginEnabled = this.pluginEnabled();
+    const selectedBoard = this.selectedBoard();
     return html`
       <section class="content-header content-header--page">
         <div>
-          <div class="page-title">${titleForRoute("workboard")}</div>
+          <div class="page-title workboard-page-title">
+            ${selectedBoard
+              ? renderWorkboardBoardGlyph(selectedBoard, "workboard-board-glyph--header")
+              : nothing}
+            <span
+              >${selectedBoard
+                ? workboardBoardName(selectedBoard)
+                : titleForRoute("workboard")}</span
+            >
+          </div>
+          ${selectedBoard
+            ? html`<div class="page-subtitle">${titleForRoute("workboard")}</div>`
+            : nothing}
         </div>
         ${renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],

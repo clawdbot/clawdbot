@@ -957,6 +957,47 @@ describe("cron controller", () => {
     expect(state.cronFieldErrors).toEqual({});
   });
 
+  it("preserves stream schedules when editing Control UI metadata", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.update") {
+        return { id: "job-stream" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-stream" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-stream",
+      name: "Stream",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "stream" as const, command: ["node", "events.mjs"] },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "report" },
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.name = "Stream renamed";
+    await addCronJob(state);
+
+    const patch = requestPatch(findRequestCall(request.mock.calls, "cron.update"));
+    expect(patch.name).toBe("Stream renamed");
+    expect(patch).not.toHaveProperty("schedule");
+    expect(state.cronFieldErrors).toEqual({});
+  });
+
   it("applies schedule edits when changing an on-exit job to a regular schedule", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {

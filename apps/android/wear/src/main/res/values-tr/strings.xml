@@ -1,0 +1,87 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sohbet"</string>
+    <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Oturum"</string>
+    <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Model"</string>
+    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Önceki %1$s"</string>
+    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sonraki %1$s"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kontroller"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuş"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Saatteki ses başarısız oldu"</string>
+    <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dikte et"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Canlı"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konu"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Kaydır →"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Basılı tut"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dokun"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Çift dokunun"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşmayı burada görmek için Canlı\'yı başlatın."</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yeni"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yazın"</string>
+    <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mesaj"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Temsilciye mesaj gönderin"</string>
+    <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gönder"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Temsilcinizle konuşun"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşmayı durdur"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Son yanıtı seslendir"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konuşuyor"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dinliyor"</string>
+    <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlanıyor"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Düşünüyor"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yazıyor"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gönderiliyor"</string>
+    <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Temsilci çalışıyor"</string>
+    <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hata"</string>
+    <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hazır"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Siz"</string>
+    <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aracı"</string>
+    <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sistem"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bir sohbet başlatın"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Saatinizde konuşun veya yazın. Eşleştirilmiş telefon, mesajı kimliği doğrulanmış OpenClaw oturumu üzerinden gönderir."</string>
+    <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Geçerli oturum"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Görünüm"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Koyu"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Açık"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yanıtları otomatik olarak seslendir"</string>
+    <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yanıt uyarıları"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Uyarıları etkinleştir"</string>
+    <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Çalıştırmayı iptal et"</string>
+    <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bildirim ayarlarını aç"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Açık"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kapalı"</string>
+    <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlantı"</string>
+    <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
+    <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Güvenlik"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon tarafından denetlenir"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway kimlik bilgileri ve kimliği eşleştirilmiş telefonda kalır. Saat yalnızca Wear Data Layer\'ı kullanır."</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon kontrol ediliyor"</string>
+    <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aracılar, oturumlar ve sohbet okunuyor"</string>
+    <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon hazır"</string>
+    <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway bağlı"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway çevrimdışı"</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eşleştirilmiş telefondaki OpenClaw üzerinden Gateway\'i yeniden bağlayın."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefonda OpenClaw\'u açın"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Saat, Gateway\'i hiçbir zaman kendisi başlatmaz veya doğrulamaz."</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefona ulaşılamıyor"</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eşleştirilmiş telefonu yakında tutun ve uyumlu OpenClaw uygulamasını yükleyin."</string>
+    <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Seçim artık kullanılamıyor"</string>
+    <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"İşlem kabul edilmedi"</string>
+    <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bir sorun oluştu"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Listeleri yenileyip tekrar deneyin."</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Saatten tekrar deneyin."</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Güncelleme gerekli"</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw\'u hem telefonda hem de saatte güncelleyin."</string>
+    <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yenile"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tekrar dene"</string>
+    <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw yanıtları"</string>
+    <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yanıtla"</string>
+    <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw yanıtı"</string>
+    <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yanıt gönderilmedi"</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon kullanılamıyor. Tekrar denemek için Yanıtla\'ya dokunun."</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yanıtlamak için OpenClaw\'ı açın"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tercih ettiğiniz telefon değişti. Yanıtlamadan önce oturumu yeniden yüklemek için uygulamayı açın."</string>
+    <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Oturumları açın ve eşleştirilmiş telefonunuz üzerinden yanıtlayın"</string>
+    <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"AÇ"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"TELEFON PROXY\'Sİ"</string>
+</resources>

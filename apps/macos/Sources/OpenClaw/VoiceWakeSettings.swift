@@ -43,6 +43,10 @@ struct VoiceWakeSettings: View {
         MicRefreshSupport.voiceWakeBinding(for: self.state)
     }
 
+    private var selectedLocaleSupportsOnDeviceRecognition: Bool {
+        SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(localeID: self.state.voiceWakeLocaleID)
+    }
+
     private var voiceSummaryPanel: some View {
         let enabled = voiceWakeSupported && self.state.swabbleEnabled
         let pushToTalk = voiceWakeSupported && self.state.voicePushToTalkEnabled
@@ -158,10 +162,14 @@ struct VoiceWakeSettings: View {
                     SettingsCardGroup("Activation") {
                         SettingsCardToggleRow(
                             title: "Enable Voice Wake",
-                            subtitle: """
-                            Listen for a wake phrase before running voice commands. Recognition runs fully on-device.
-                            """,
+                            subtitle: self.selectedLocaleSupportsOnDeviceRecognition
+                                ? """
+                                Listen for a wake phrase before running voice commands. \
+                                Wake-phrase recognition stays on this Mac.
+                                """
+                                : "On-device recognition is unavailable for the selected language on this Mac.",
                             binding: self.voiceWakeBinding)
+                            .disabled(!self.selectedLocaleSupportsOnDeviceRecognition && !self.state.swabbleEnabled)
 
                         SettingsCardToggleRow(
                             title: "Trigger Talk Mode",
@@ -587,6 +595,18 @@ struct VoiceWakeSettings: View {
                 }
                 .labelsHidden()
                 .frame(width: self.controlWidth)
+            }
+
+            if !self.selectedLocaleSupportsOnDeviceRecognition {
+                Text("""
+                Voice Wake needs on-device recognition for its selected language. \
+                Push-to-talk and Talk Mode remain available.
+                """)
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
             }
 
             SettingsCardRow(

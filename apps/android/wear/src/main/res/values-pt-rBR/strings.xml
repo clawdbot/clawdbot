@@ -1,0 +1,87 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chat"</string>
+    <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sessão"</string>
+    <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Modelo"</string>
+    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s anterior"</string>
+    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Próximo %1$s"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Controles"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Falar"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Falha no áudio do relógio"</string>
+    <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ditar"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ao vivo"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversa"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← Deslize →"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mantenha pressionado"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Toque"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Toque duas vezes"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inicie o Live para ver a conversa aqui."</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Novo"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Digitar"</string>
+    <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mensagem"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Enviar mensagem ao agente"</string>
+    <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Enviar"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fale com seu agente"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Parar de falar"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reproduzir a resposta mais recente"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Falando"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ouvindo"</string>
+    <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conectando"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pensando"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Digitando"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Enviando"</string>
+    <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agente trabalhando"</string>
+    <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Erro"</string>
+    <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Pronto"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Você"</string>
+    <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Agente"</string>
+    <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sistema"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Iniciar uma conversa"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fale ou digite no relógio. O telefone pareado envia a mensagem por meio da sessão autenticada do OpenClaw."</string>
+    <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sessão atual"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aparência"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Escuro"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Claro"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Falar respostas automaticamente"</string>
+    <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Alertas de resposta"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ativar alertas"</string>
+    <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Interromper execução"</string>
+    <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Abrir configurações de notificações"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ativado"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Desativado"</string>
+    <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conexão"</string>
+    <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
+    <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Segurança"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Controlado pelo telefone"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"As credenciais e a identidade do Gateway permanecem no telefone pareado. O relógio usa apenas a Wear Data Layer."</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verificando o telefone"</string>
+    <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lendo agentes, sessões e conversas"</string>
+    <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefone pronto"</string>
+    <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway conectado"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway offline"</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reconecte o Gateway no OpenClaw no telefone pareado."</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Abra o OpenClaw no telefone"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"O relógio nunca inicia nem autentica o Gateway por conta própria."</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Não foi possível acessar o telefone"</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mantenha o telefone pareado por perto e instale o aplicativo OpenClaw correspondente."</string>
+    <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"A seleção não está mais disponível"</string>
+    <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ação não aceita"</string>
+    <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Algo deu errado"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Atualize as listas e tente novamente."</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tente novamente pelo relógio."</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Atualização necessária"</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Atualize o OpenClaw no telefone e no relógio."</string>
+    <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Atualizar"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tentar novamente"</string>
+    <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Respostas do OpenClaw"</string>
+    <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Responder"</string>
+    <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Resposta do OpenClaw"</string>
+    <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Resposta não enviada"</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefone indisponível. Toque em Responder para tentar novamente."</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Abra o OpenClaw para responder"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Seu telefone preferido mudou. Abra o app para recarregar a sessão antes de responder."</string>
+    <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Abra sessões e responda usando seu telefone pareado"</string>
+    <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ABRIR"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"PROXY DO TELEFONE"</string>
+</resources>

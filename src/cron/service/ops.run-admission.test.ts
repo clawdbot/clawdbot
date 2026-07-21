@@ -16,8 +16,9 @@ import {
 import { CommandLane } from "../../process/lanes.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStreamScheduleKey } from "../stream-schedule.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
-import { enqueueRun, run, stop, update } from "./ops.js";
+import { enqueueRun, list, run, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -289,6 +290,216 @@ describe("cron service run admission", () => {
     expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.lastRunStatus).toBe(
       undefined,
     );
+  });
+
+  it("cancels a queued stream batch after an A-to-B-to-A source replacement", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.100Z");
+    const activeJob = createDueIsolatedJob({
+      id: "active-before-stream-replacement",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    const streamJob = createDueIsolatedJob({
+      id: "queued-stream-replacement",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    streamJob.schedule = { kind: "stream", command: ["old-source"] };
+    streamJob.state.streamSourceIdentity = "source-a";
+    await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, streamJob] });
+
+    const activeStarted = createDeferred<void>();
+    const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
+    const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
+      if (runningJob.id === activeJob.id) {
+        activeStarted.resolve();
+        return await releaseActive.promise;
+      }
+      return { status: "ok" as const, summary: "stale stream batch" };
+    });
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      testAdmissionLimit: 1,
+      cronConfig: { triggers: { enabled: true } },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const activeRun = run(state, activeJob.id, "force");
+    await activeStarted.promise;
+    const streamScheduleKey = cronStreamScheduleKey(streamJob.schedule);
+    const waitingRun = run(state, streamJob.id, "force", {
+      streamBatch: "stale",
+      streamScheduleKey,
+      streamSourceIdentity: "source-a",
+    });
+    await vi.waitFor(() => {
+      expect(state.queuedRunReservationsByJobId.has(streamJob.id)).toBe(true);
+    });
+    await update(state, streamJob.id, {
+      schedule: { kind: "stream", command: ["new-source"] },
+    });
+    const restored = await update(state, streamJob.id, {
+      schedule: { kind: "stream", command: ["old-source"] },
+    });
+    expect(restored.state.streamSourceIdentity).not.toBe("source-a");
+
+    releaseActive.resolve({ status: "ok", summary: "active" });
+    await activeRun;
+    await expect(waitingRun).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+    await expect(
+      run(state, streamJob.id, "force", {
+        streamBatch: "stale-after-replacement",
+        streamScheduleKey,
+        streamSourceIdentity: "source-a",
+      }),
+    ).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips an immediately-executed stream batch whose schedule key is stale", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.150Z");
+    const streamJob = createDueIsolatedJob({
+      id: "immediate-stale-stream",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    streamJob.schedule = { kind: "stream", command: ["current-source"] };
+    streamJob.state.streamSourceIdentity = "current-source-identity";
+    await saveCronStore(store.storePath, { version: 1, jobs: [streamJob] });
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "ran" }));
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      testAdmissionLimit: 1,
+      cronConfig: { triggers: { enabled: true } },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    // A batch tagged with a schedule key that never matched the current
+    // schedule must be dropped at the execution guard, not fired.
+    await expect(
+      run(state, streamJob.id, "force", {
+        streamBatch: "from-a-retired-schedule",
+        streamScheduleKey: cronStreamScheduleKey({ kind: "stream", command: ["retired-source"] }),
+        streamSourceIdentity: "current-source-identity",
+      }),
+    ).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+    // The definition key alone is not an ownership claim; identity is mandatory.
+    await expect(
+      run(state, streamJob.id, "force", {
+        streamBatch: "missing-source-identity",
+        streamScheduleKey: cronStreamScheduleKey(streamJob.schedule),
+      }),
+    ).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+
+    // A batch tagged with the current source definition and identity still fires.
+    await run(state, streamJob.id, "force", {
+      streamBatch: "from-current-schedule",
+      streamScheduleKey: cronStreamScheduleKey(streamJob.schedule),
+      streamSourceIdentity: "current-source-identity",
+    });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("assigns a source identity to a persisted stream row that lacks one", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.155Z");
+    const streamJob = createDueIsolatedJob({
+      id: "missing-source-identity",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    streamJob.schedule = { kind: "stream", command: ["legacy-source"] };
+    // Hand-imported/pre-identity row: identity is store-owned state, so load
+    // normalization must assign one instead of failing the watcher closed.
+    streamJob.state.streamSourceIdentity = undefined;
+    await saveCronStore(store.storePath, { version: 1, jobs: [streamJob] });
+
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      testAdmissionLimit: 1,
+      cronConfig: { triggers: { enabled: true } },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    // The watcher reconcile feed (cron.list) runs tick normalization and
+    // persists the repaired row durably.
+    await list(state, { includeDisabled: true });
+    const healed = state.store?.jobs.find((entry) => entry.id === streamJob.id);
+    expect(healed?.state.streamSourceIdentity).toEqual(expect.any(String));
+    expect(healed?.state.streamSourceIdentity?.length).toBeGreaterThan(0);
+    const reloaded = await loadCronStore(store.storePath);
+    expect(
+      reloaded.jobs.find((entry) => entry.id === streamJob.id)?.state.streamSourceIdentity,
+    ).toBe(healed?.state.streamSourceIdentity);
+  });
+
+  it("skips a stream batch from a retired source identity under an unchanged schedule key", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.160Z");
+    const streamJob = createDueIsolatedJob({
+      id: "stale-source-identity",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    streamJob.schedule = { kind: "stream", command: ["current-source"] };
+    // The live source identity currently owning this job's batches. A
+    // disable→re-enable or A→B→A edit leaves the schedule key identical but
+    // advances this token, so the schedule-key guard alone cannot tell a retired
+    // retired batch from a live one.
+    streamJob.state.streamSourceIdentity = "2.5";
+    await saveCronStore(store.storePath, { version: 1, jobs: [streamJob] });
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "ran" }));
+    const state = createAdmissionTestState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      testAdmissionLimit: 1,
+      cronConfig: { triggers: { enabled: true } },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const scheduleKey = cronStreamScheduleKey(streamJob.schedule);
+    // Same schedule key, retired source identity: must be dropped, not fired.
+    await expect(
+      run(state, streamJob.id, "force", {
+        streamBatch: "from-a-retired-epoch",
+        streamScheduleKey: scheduleKey,
+        streamSourceIdentity: "1.4",
+      }),
+    ).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+
+    // Same schedule key, current source identity: still fires.
+    await run(state, streamJob.id, "force", {
+      streamBatch: "from-the-live-epoch",
+      streamScheduleKey: scheduleKey,
+      streamSourceIdentity: "2.5",
+    });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
   });
 
   it("revalidates a manual job changed to an unsupported spec while queued", async () => {

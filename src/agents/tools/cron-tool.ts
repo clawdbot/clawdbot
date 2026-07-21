@@ -165,6 +165,17 @@ function createCronScheduleSchema(): TSchema {
           }),
         ),
         staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
+        command: Type.Optional(
+          Type.Array(Type.String({ minLength: 1 }), {
+            minItems: 1,
+            description: "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+          }),
+        ),
+        cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
+        mode: optionalStringEnum(["line", "match"] as const),
+        match: Type.Optional(Type.String({ description: "Regex source (stream match mode)" })),
+        batchMs: optionalNonNegativeIntegerSchema(),
+        maxBatchBytes: optionalNonNegativeIntegerSchema(),
       },
       { additionalProperties: true },
     ),

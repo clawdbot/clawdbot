@@ -37,8 +37,9 @@ openclaw nodes describe --node <idOrNameOrIp>
 Pending pairing requests expire 5 minutes after the device's last retry — a device that keeps reconnecting keeps its one pending request (and `requestId`) alive instead of minting a new prompt every few minutes; see [Node pairing](/gateway/pairing) for the full request/approve lifecycle. If a node retries with changed auth details (role/scopes/public key), the prior pending request is superseded and a new `requestId` is created — clients get a `device.pair.resolved` event for the superseded request, and you should re-run `openclaw devices list` before approving.
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- A connected native Mac with Accessibility permission can report coalesced
-  physical-input activity. The Gateway marks the freshest eligible Mac as
+- A connected native Mac can opt in to coalesced physical-input activity from
+  **Settings -> Permissions -> Active computer detection**. Accessibility is
+  also required. The Gateway marks the freshest eligible Mac as
   `active`, gives the agent a stable node-id hint, and routes node connection
   alerts there before a delayed fallback. See
   [Active computer presence](/nodes/presence) for setup, privacy, timing, and

@@ -73,7 +73,7 @@ enum GatewayLaunchAgentManager {
         }
         let runningPID = self.runningGatewayPID(from: service)
         let configAudit = service["configAudit"] as? [String: Any]
-        let reusablePID: Int32? = if configAudit?["ok"] as? Bool == true,
+        let reusablePID: Int32? = if self.configAuditAllowsReuse(configAudit),
                                      self.gatewayPort(from: service) == port
         {
             runningPID
@@ -81,6 +81,16 @@ enum GatewayLaunchAgentManager {
             nil
         }
         return LoadedGatewayState(runningPID: runningPID, reusablePID: reusablePID)
+    }
+
+    private static func configAuditAllowsReuse(_ audit: [String: Any]?) -> Bool {
+        if audit?["ok"] as? Bool == true {
+            return true
+        }
+        guard let issues = audit?["issues"] as? [[String: Any]], !issues.isEmpty else { return false }
+        // The installer may require an explicit Node bin directory. Its PATH hygiene advisory
+        // must not make a healthy Gateway restart into the same advisory on every app launch.
+        return issues.allSatisfy { $0["code"] as? String == "gateway-path-nonminimal" }
     }
 
     static func runningGatewayPID() async -> Int32? {

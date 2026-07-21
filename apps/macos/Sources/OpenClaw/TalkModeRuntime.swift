@@ -92,8 +92,7 @@ actor TalkModeRuntime {
     private let speechBoostFactor: Double = 6.0
 
     static func configureRecognitionRequest(_ request: SFSpeechAudioBufferRecognitionRequest) {
-        request.shouldReportPartialResults = true
-        request.taskHint = .dictation
+        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
     }
 
     // MARK: - Lifecycle

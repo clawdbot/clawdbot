@@ -442,7 +442,7 @@ describe("AppSidebar catalog session rows", () => {
     return { sidebar, request };
   }
 
-  it("renders local and paired-node rows under persistent host headings", async () => {
+  it("renders local rows directly and keeps paired-node rows under their host heading", async () => {
     vi.useFakeTimers();
     try {
       const { sidebar } = await mountWithCatalog(
@@ -490,9 +490,8 @@ describe("AppSidebar catalog session rows", () => {
       const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
       const local = section?.querySelector('[data-session-catalog-host="gateway:local"]');
       const node = section?.querySelector('[data-session-catalog-host="node:devbox"]');
-      expect(local?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(
-        "Local Codex",
-      );
+      expect(section?.querySelector(".sidebar-session-group-count")?.textContent?.trim()).toBe("2");
+      expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
       expect(local?.textContent).toContain("Local session");
       expect(local?.textContent).not.toContain("Node session");
       expect(node?.querySelector(".sidebar-session-catalog-host__label")?.textContent).toBe(

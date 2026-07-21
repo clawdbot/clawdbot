@@ -1,0 +1,87 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แชท"</string>
+    <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เซสชัน"</string>
+    <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"โมเดล"</string>
+    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ก่อนหน้า"</string>
+    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s ถัดไป"</string>
+    <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การควบคุม"</string>
+    <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พูด"</string>
+    <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เสียงจากนาฬิกาล้มเหลว"</string>
+    <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ป้อนตามคำบอก"</string>
+    <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"สด"</string>
+    <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เธรด"</string>
+    <string name="swipe_between_voice_modes" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"← ปัด →"</string>
+    <string name="hold" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กดค้าง"</string>
+    <string name="tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แตะ"</string>
+    <string name="double_tap" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แตะสองครั้ง"</string>
+    <string name="no_live_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เริ่ม Live เพื่อดูการสนทนาที่นี่"</string>
+    <string name="new_messages" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ใหม่"</string>
+    <string name="type" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พิมพ์"</string>
+    <string name="message" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ข้อความ"</string>
+    <string name="message_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ส่งข้อความถึงเอเจนต์"</string>
+    <string name="send" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ส่ง"</string>
+    <string name="speak_to_agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พูดคุยกับเอเจนต์ของคุณ"</string>
+    <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"หยุดพูด"</string>
+    <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"อ่านคำตอบล่าสุด"</string>
+    <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังพูด"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังฟัง"</string>
+    <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังเชื่อมต่อ"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังคิด"</string>
+    <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังพิมพ์"</string>
+    <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังส่ง"</string>
+    <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เอเจนต์กำลังทำงาน"</string>
+    <string name="error" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ข้อผิดพลาด"</string>
+    <string name="ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พร้อม"</string>
+    <string name="you" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"คุณ"</string>
+    <string name="agent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เอเจนต์"</string>
+    <string name="system" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ระบบ"</string>
+    <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เริ่มการสนทนา"</string>
+    <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พูดหรือพิมพ์บนนาฬิกาของคุณ โทรศัพท์ที่จับคู่ไว้จะส่งข้อความผ่านเซสชัน OpenClaw ที่ผ่านการยืนยันตัวตน"</string>
+    <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เซสชันปัจจุบัน"</string>
+    <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รูปลักษณ์"</string>
+    <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"มืด"</string>
+    <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"สว่าง"</string>
+    <string name="auto_speak" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พูดข้อความตอบกลับโดยอัตโนมัติ"</string>
+    <string name="reply_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การแจ้งเตือนข้อความตอบกลับ"</string>
+    <string name="enable_alerts" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิดใช้การแจ้งเตือน"</string>
+    <string name="abort_run" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ยกเลิกการทำงาน"</string>
+    <string name="open_notification_settings" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิดการตั้งค่าการแจ้งเตือน"</string>
+    <string name="on" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิด"</string>
+    <string name="off" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ปิด"</string>
+    <string name="connection" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การเชื่อมต่อ"</string>
+    <string name="gateway" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
+    <string name="security_boundary" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ความปลอดภัย"</string>
+    <string name="phone_controlled" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ควบคุมโดยโทรศัพท์"</string>
+    <string name="phone_controlled_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ข้อมูลประจำตัวและข้อมูลยืนยันตัวตนของ Gateway จะอยู่ในโทรศัพท์ที่จับคู่ไว้ นาฬิกาจะใช้เฉพาะ Wear Data Layer เท่านั้น"</string>
+    <string name="checking_phone" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังตรวจสอบโทรศัพท์"</string>
+    <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังอ่านเอเจนต์ เซสชัน และแชต"</string>
+    <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"โทรศัพท์พร้อมใช้งาน"</string>
+    <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมต่อ Gateway แล้ว"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ออฟไลน์"</string>
+    <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เชื่อมต่อ Gateway อีกครั้งใน OpenClaw บนโทรศัพท์ที่จับคู่ไว้"</string>
+    <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิด OpenClaw บนโทรศัพท์"</string>
+    <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"นาฬิกาจะไม่เริ่มต้นหรือตรวจสอบสิทธิ์ Gateway ด้วยตัวเอง"</string>
+    <string name="phone_unavailable" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่สามารถติดต่อโทรศัพท์ได้"</string>
+    <string name="phone_unavailable_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"วางโทรศัพท์ที่จับคู่ไว้ใกล้ ๆ และติดตั้งแอป OpenClaw เวอร์ชันที่ตรงกัน"</string>
+    <string name="selection_not_found" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ตัวเลือกนี้ไม่พร้อมใช้งานแล้ว"</string>
+    <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่ยอมรับการดำเนินการ"</string>
+    <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เกิดข้อผิดพลาดบางอย่าง"</string>
+    <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รีเฟรชรายการแล้วลองอีกครั้ง"</string>
+    <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ลองอีกครั้งจากนาฬิกา"</string>
+    <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"จำเป็นต้องอัปเดต"</string>
+    <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"อัปเดต OpenClaw ทั้งบนโทรศัพท์และนาฬิกา"</string>
+    <string name="refresh" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รีเฟรช"</string>
+    <string name="retry" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ลองอีกครั้ง"</string>
+    <string name="notification_channel_name" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การตอบกลับจาก OpenClaw"</string>
+    <string name="notification_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ตอบกลับ"</string>
+    <string name="notification_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การตอบกลับจาก OpenClaw"</string>
+    <string name="notification_reply_failed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่ได้ส่งการตอบกลับ"</string>
+    <string name="notification_reply_failed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"โทรศัพท์ไม่พร้อมใช้งาน แตะตอบกลับเพื่อลองอีกครั้ง"</string>
+    <string name="notification_phone_changed_title" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิด OpenClaw เพื่อตอบกลับ"</string>
+    <string name="notification_phone_changed_text" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"โทรศัพท์ที่คุณเลือกใช้มีการเปลี่ยนแปลง เปิดแอปเพื่อโหลดเซสชันใหม่ก่อนตอบกลับ"</string>
+    <string name="tile_label" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw"</string>
+    <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิดเซสชันและตอบกลับผ่านโทรศัพท์ที่จับคู่ไว้"</string>
+    <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เปิด"</string>
+    <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"พร็อกซีโทรศัพท์"</string>
+</resources>

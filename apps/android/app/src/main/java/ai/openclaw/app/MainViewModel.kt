@@ -15,6 +15,8 @@ import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -71,6 +73,8 @@ internal data class ChatDraft(
   val text: String,
   val placement: ChatDraftPlacement,
   val owner: ChatComposerOwner? = null,
+  val expectedExistingText: String? = null,
+  val acceptsEmptyText: Boolean = false,
 )
 
 internal fun claimChatDraftForOwner(
@@ -633,9 +637,13 @@ class MainViewModel private constructor(
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
+  val chatSessionBranches: StateFlow<List<SessionBranch>> = runtimeState(initial = emptyList()) { it.chatSessionBranches }
+  val chatSessionBranchesLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chatSessionBranchesLoading }
+  val chatSessionBranchSwitching: StateFlow<Boolean> = runtimeState(initial = false) { it.chatSessionBranchSwitching }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
   val chatCommands: StateFlow<List<ChatCommandEntry>> = runtimeState(initial = emptyList<ChatCommandEntry>()) { it.chatCommands }
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = runtimeState(initial = emptyList()) { it.chatOutboxItems }
+  val chatOutboxPresentationRestored: StateFlow<Boolean> = runtimeState(initial = false) { it.chatOutboxPresentationRestored }
   internal val chatMessageSpeech: StateFlow<MessageSpeechState?> =
     runtimeState(initial = null) { it.messageSpeechState }
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
@@ -981,7 +989,7 @@ class MainViewModel private constructor(
       claimed
     }
 
-  private fun setChatDraft(value: ChatDraft?) {
+  internal fun setChatDraft(value: ChatDraft?) {
     synchronized(chatDraftLock) {
       chatDraftState.value = value
     }
@@ -1565,6 +1573,14 @@ class MainViewModel private constructor(
     parentKey: String,
     ownerAgentId: String? = null,
   ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId)
+
+  suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = ensureRuntime().rewindChatAtEntry(entryId)
+
+  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = ensureRuntime().forkChatAtEntry(entryId)
+
+  suspend fun refreshChatSessionBranches(): Boolean = ensureRuntime().refreshChatSessionBranches()
+
+  suspend fun switchChatSessionBranch(leafEntryId: String): Boolean = ensureRuntime().switchChatSessionBranch(leafEntryId)
 
   suspend fun listWorkspaceFiles(
     path: String?,

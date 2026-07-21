@@ -679,7 +679,7 @@ export function createGatewayCloseHandler(
     postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
-    cron: { stop: () => void };
+    cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
     heartbeatRunner: HeartbeatRunner;
     updateCheckStop?: (() => void) | null;
     stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
@@ -883,7 +883,11 @@ export function createGatewayCloseHandler(
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
-      params.cron.stop();
+      if (params.cron.stopAndDrain) {
+        await params.cron.stopAndDrain();
+      } else {
+        params.cron.stop();
+      }
       params.heartbeatRunner.stop();
       await shutdownStep(
         "task-registry-maintenance",

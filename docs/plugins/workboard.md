@@ -105,9 +105,11 @@ poll, and **Refresh** remains available as manual recovery.
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
 and archived boards therefore remain selectable. Cards without an explicit
-board id belong to the canonical `default` board. The selected board is stored
-in the `?board=` query parameter, so the filtered Workboard URL can be bookmarked
-or shared; choosing **All boards** removes the parameter.
+board id belong to the canonical `default` board. Each board has a canonical
+`/workboard/<boardId>` page that can be bookmarked, shared, or pinned in the
+sidebar. The previously shipped `/workboard?board=<boardId>` form remains a
+compatibility alias and redirects to that page while preserving other query
+parameters. Choosing **All boards** returns to `/workboard`.
 
 Cards are stored in the plugin's own Gateway state and move with the rest of
 that Gateway's OpenClaw state (see [Storage](#storage)).

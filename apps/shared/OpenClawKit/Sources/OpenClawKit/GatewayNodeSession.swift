@@ -756,12 +756,40 @@ public actor GatewayNodeSession {
         ]
         do {
             try Task.checkCancellation()
-            try await channel.send(method: "node.event", params: params)
+            if let expectedRoute {
+                try await channel.send(
+                    method: "node.event",
+                    params: params,
+                    ifCurrentConnectionGeneration: expectedRoute.socketGeneration)
+            } else {
+                try await channel.send(method: "node.event", params: params)
+            }
             return true
         } catch {
             self.logger.error("node event failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
+    }
+
+    /// Sends a node event on one captured socket and waits for the Gateway's
+    /// handled result. A nil result is a legacy acknowledgement without the
+    /// modern event contract, not proof that the event was applied.
+    public func requestEventResult(
+        event: String,
+        payloadJSON: String?,
+        timeoutMs: Double = 8000,
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) async throws -> NodeEventResult?
+    {
+        let params: [String: AnyCodable] = [
+            "event": AnyCodable(event),
+            "payloadJSON": AnyCodable(payloadJSON ?? NSNull()),
+        ]
+        let data = try await self.request(
+            method: "node.event",
+            params: params,
+            timeoutMs: timeoutMs,
+            ifCurrentRoute: expectedRoute)
+        return try? self.decoder.decode(NodeEventResult.self, from: data)
     }
 
     public func request(

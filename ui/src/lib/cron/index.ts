@@ -39,9 +39,9 @@ export type CronFormState = {
   clearAgent: boolean;
   enabled: boolean;
   deleteAfterRun: boolean;
-  // on-exit jobs are read-only because the form cannot edit a watched command.
+  // Process-backed schedules are read-only because the form cannot edit their commands.
   // Preserve their schedule verbatim on save instead of rebuilding it.
-  scheduleKind: "at" | "every" | "cron" | "on-exit";
+  scheduleKind: "at" | "every" | "cron" | "on-exit" | "stream";
   scheduleAt: string;
   everyAmount: string;
   everyUnit: "seconds" | "minutes" | "hours" | "days";
@@ -161,7 +161,7 @@ export type CronFieldKey =
 
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
-export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit";
+export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit" | "stream";
 export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
@@ -657,7 +657,8 @@ function resolveCronJobScheduleKind(job: CronJob): string | null {
     scheduleKind === "at" ||
     scheduleKind === "every" ||
     scheduleKind === "cron" ||
-    scheduleKind === "on-exit"
+    scheduleKind === "on-exit" ||
+    scheduleKind === "stream"
   ) {
     return scheduleKind;
   }
@@ -842,7 +843,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     next.staggerAmount = staggerFields.staggerAmount;
     next.staggerUnit = staggerFields.staggerUnit;
   }
-  // Other schedule kinds (e.g. on-exit) are shown read-only in the list and have no
+  // Process-backed schedule kinds are shown read-only in the list and have no
   // editable schedule form fields; leave the cron/at/every fields at their defaults.
 
   return normalizeCronFormState(next);
@@ -1006,12 +1007,13 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       ? state.cronJobs.find((job) => job.id === state.cronEditingJobId)
       : undefined;
     const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
-    // Preserve on-exit only while the edit form still points at on-exit; if the
+    // Preserve a process-backed schedule while the form still points at it; if the
     // user selects an editable schedule kind, the update must apply it.
     const preserveSchedule = Boolean(
       state.cronEditingJobId &&
-      (editingJob?.schedule as { kind?: string } | undefined)?.kind === "on-exit" &&
-      form.scheduleKind === "on-exit",
+      ((editingJob?.schedule as { kind?: string } | undefined)?.kind === "on-exit" ||
+        (editingJob?.schedule as { kind?: string } | undefined)?.kind === "stream") &&
+      form.scheduleKind === editingJob?.schedule.kind,
     );
     const schedule = preserveSchedule ? undefined : buildCronSchedule(form);
     const preserveLockedPayload = Boolean(

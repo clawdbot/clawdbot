@@ -641,7 +641,16 @@ type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
   | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
-  | { kind: "on-exit"; command: string; cwd?: string };
+  | { kind: "on-exit"; command: string; cwd?: string }
+  | {
+      kind: "stream";
+      command: string[];
+      cwd?: string;
+      mode?: "line" | "match";
+      match?: string;
+      batchMs?: number;
+      maxBatchBytes?: number;
+    };
 
 type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 type CronWakeMode = "next-heartbeat" | "now";
@@ -690,6 +699,15 @@ type CronJobState = {
   lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
   lastFailureNotificationDeliveryError?: string;
   lastFailureAlertAtMs?: number;
+  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
+  streamError?: string;
+  streamConsecutiveFailures?: number;
+  streamRestartExhausted?: boolean;
+  streamSourceIdentity?: string;
+  streamDroppedBatches?: number;
+  streamCoalescedBatches?: number;
+  streamLastStartedAtMs?: number;
+  streamLastExitAtMs?: number;
 };
 
 export type CronJob = CronJobBase<

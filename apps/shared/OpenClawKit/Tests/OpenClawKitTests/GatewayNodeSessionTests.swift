@@ -2139,6 +2139,94 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `route bound node event request distinguishes handled and legacy acknowledgements`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos-test",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+        let route = try #require(await gateway.currentRoute())
+        let task = try #require(session.latestTask())
+
+        let handledRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("handled node event request sent") {
+            task.sentRequestCount(method: "node.event") == 1
+        }
+        let firstRequest = try #require(task.sentRequests(method: "node.event").first)
+        task.emitResponse(
+            id: try #require(firstRequest["id"] as? String),
+            payload: [
+                "ok": true,
+                "event": "node.presence.activity",
+                "handled": true,
+                "reason": "cleared",
+            ])
+        let handled = try await handledRequest.value
+        #expect(handled?.handled == true)
+        #expect(handled?.reason == "cleared")
+
+        let unsupportedRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("unsupported node event request sent") {
+            task.sentRequestCount(method: "node.event") == 2
+        }
+        let secondRequest = try #require(task.sentRequests(method: "node.event").last)
+        task.emitResponse(
+            id: try #require(secondRequest["id"] as? String),
+            payload: [
+                "ok": true,
+                "event": "node.presence.activity",
+                "handled": false,
+                "reason": "invalid_payload",
+            ])
+        let unsupported = try await unsupportedRequest.value
+        #expect(unsupported?.handled == false)
+        #expect(unsupported?.reason == "invalid_payload")
+
+        let legacyRequest = Task {
+            try await gateway.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+        }
+        try await waitUntil("legacy node event request sent") {
+            task.sentRequestCount(method: "node.event") == 3
+        }
+        let thirdRequest = try #require(task.sentRequests(method: "node.event").last)
+        task.emitResponse(
+            id: try #require(thirdRequest["id"] as? String),
+            payload: ["ok": true])
+        let legacy = try await legacyRequest.value
+        #expect(legacy == nil)
+
+        await gateway.disconnect()
+    }
+
+    @Test
     func `captured route bound operations never use a replacement channel`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()

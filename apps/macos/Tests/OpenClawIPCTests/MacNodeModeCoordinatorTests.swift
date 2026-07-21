@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -485,6 +486,19 @@ struct MacNodeModeCoordinatorTests {
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
         #expect(!commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
         #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
+    }
+
+    @Test func `node permission metadata omits unknown authorization state`() {
+        let permissions = MacNodeModeCoordinator.advertisedPermissions([
+            .appleScript: .unknown,
+            .accessibility: .granted,
+            .screenRecording: .notGranted,
+        ])
+
+        #expect(permissions == [
+            Capability.accessibility.rawValue: true,
+            Capability.screenRecording.rawValue: false,
+        ])
     }
 
     @Test func `local native manifest leaves browser proxy to the CLI worker`() {

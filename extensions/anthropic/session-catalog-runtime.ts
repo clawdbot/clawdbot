@@ -92,6 +92,7 @@ export function resolveClaudeCatalogCreateSession(
     raw: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
     defaultProvider: defaultModel.provider,
     defaultModel: defaultModel.model,
+    agentId,
   });
   return "error" in allowed
     ? undefined

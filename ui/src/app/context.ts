@@ -43,7 +43,9 @@ export type ApplicationNavigationPreferences = {
   subscribe: (listener: (snapshot: ApplicationNavigationPreferencesSnapshot) => void) => () => void;
 };
 
-export type ApplicationNavigationOptions = Partial<Pick<RouteLocation, "search" | "hash">>;
+export type ApplicationNavigationOptions = Partial<
+  Pick<RouteLocation, "pathname" | "search" | "hash">
+>;
 
 type SkillWorkshopRevisionHandoff = {
   sessionKey: string;

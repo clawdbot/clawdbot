@@ -2705,6 +2705,80 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Ops work");
   });
 
+  it("shows the board switcher at two boards with icon, color, and fallback glyphs", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.boards = [
+      { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
+      {
+        id: "ops",
+        name: "Operations",
+        icon: "⚙",
+        color: "#22c55e",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+      },
+    ];
+    const container = document.createElement("div");
+
+    renderInto(container, {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    });
+
+    const boardFilter = container.querySelector(".workboard-select--toolbar-board");
+    expect(boardFilter).not.toBeNull();
+    const defaultGlyph = boardFilter?.querySelector(
+      'wa-option[value="default"] .workboard-board-glyph',
+    );
+    const opsGlyph = boardFilter?.querySelector('wa-option[value="ops"] .workboard-board-glyph');
+    expect(defaultGlyph?.textContent?.trim()).toBe("D");
+    expect(opsGlyph?.textContent?.trim()).toBe("⚙");
+    expect(opsGlyph?.getAttribute("style")).toContain("#22c55e");
+  });
+
+  it("keeps a deleted routed board filtered instead of exposing every board", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.boardFilter = "deleted";
+    state.boards = [{ id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } }];
+    state.cards = [
+      {
+        id: "default-card",
+        title: "Default board work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    renderInto(container, {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    });
+
+    expect(container.textContent).not.toContain("Default board work");
+    expect(container.querySelector(".workboard-empty-state")).not.toBeNull();
+  });
+
   it("filters cards by linked agent", () => {
     const host = {};
     const state = getWorkboardState(host);

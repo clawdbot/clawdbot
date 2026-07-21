@@ -221,6 +221,7 @@ struct SettingsRootView: View {
             AnyView(GatewaySettings())
         case .permissions:
             AnyView(PermissionsSettings(
+                state: self.state,
                 status: self.permissionMonitor.status,
                 refresh: self.refreshPerms,
                 showOnboarding: { DebugActions.restartOnboarding() }))
