@@ -3,6 +3,34 @@ import { LEGACY_CONFIG_MIGRATION_RULES as LEGACY_CONFIG_RULES } from "../command
 import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
 
+/** Automatically materialize the agent every shipped pre-roster install implicitly owned. */
+export function migratePersistedImplicitMainRoster(raw: unknown): {
+  config: unknown;
+  changed: boolean;
+} {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { config: raw, changed: false };
+  }
+  const root = raw as Record<string, unknown>;
+  if (
+    Object.hasOwn(root, "agents") &&
+    (!root.agents || typeof root.agents !== "object" || Array.isArray(root.agents))
+  ) {
+    return { config: raw, changed: false };
+  }
+  const agents =
+    root.agents && typeof root.agents === "object" && !Array.isArray(root.agents)
+      ? (root.agents as Record<string, unknown>)
+      : {};
+  if (Object.hasOwn(agents, "list")) {
+    return { config: raw, changed: false };
+  }
+  return {
+    config: { ...root, agents: { ...agents, list: [{ id: "main", default: true }] } },
+    changed: true,
+  };
+}
+
 // Legacy checks use raw dotted paths so doctor can report exact config keys.
 function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
   let cursor: unknown = root;

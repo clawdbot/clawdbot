@@ -1,3 +1,4 @@
+import { withFileLock } from "../infra/file-lock.js";
 import { ConfigIncludeError } from "./includes.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { maybeRecoverSuspiciousConfigRead } from "./io.observe-recovery.js";
@@ -27,6 +28,7 @@ import type {
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
 import { resolveManagedUnsetPathsForWrite } from "./io.write-prepare.js";
+import { migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
@@ -158,7 +160,41 @@ export async function readConfigFileSnapshotInternal(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const effectiveConfigRaw = readResolution.resolvedConfigRaw;
+    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
+    const sourceRosterMigration = migratePersistedImplicitMainRoster(effectiveParsed);
+    if (
+      rosterMigration.changed &&
+      sourceRosterMigration.changed &&
+      !containsConfigIncludeDirective(effectiveParsed) &&
+      !deps.fs.lstatSync(configPath).isSymbolicLink()
+    ) {
+      try {
+        const wrote = await withFileLock(
+          configPath,
+          { stale: 30_000, retries: { retries: 40, factor: 1.2, minTimeout: 25, maxTimeout: 250 } },
+          async () => {
+            if (deps.fs.readFileSync(configPath, "utf8") !== raw) {
+              return false;
+            }
+            const temporaryPath = `${configPath}.roster-migration-${process.pid}`;
+            const mode = deps.fs.statSync(configPath).mode & 0o777;
+            deps.fs.writeFileSync(
+              temporaryPath,
+              `${JSON.stringify(sourceRosterMigration.config, null, 2)}\n`,
+              { encoding: "utf8", mode },
+            );
+            deps.fs.renameSync(temporaryPath, configPath);
+            return true;
+          },
+        );
+        if (wrote) {
+          return await readConfigFileSnapshotInternal(context, options);
+        }
+      } catch {
+        // Read-only deployments still receive the compatibility roster in memory.
+      }
+    }
+    const effectiveConfigRaw = rosterMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;
     const snapshotParsed = effectiveParsed;

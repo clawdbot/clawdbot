@@ -25,14 +25,14 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     });
   });
 
-  it("keeps a basename matching a non-main id distinct from main", () => {
+  it("preserves the shipped basename-matches-agent derivation", () => {
     const storePath = path.join("tmp", "stores", "ops.json");
 
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path).toBe(
       path.resolve("tmp", "stores", "ops.sqlite"),
     );
     expect(resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops" }).path).toBe(
-      path.resolve("tmp", "stores", "ops.ops.sqlite"),
+      path.resolve("tmp", "stores", "ops.sqlite"),
     );
   });
 

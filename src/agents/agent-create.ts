@@ -6,7 +6,11 @@ import {
   findAgentEntryIndex,
   listAgentEntries,
 } from "../commands/agents.config.js";
-import { transformConfigFileWithRetry, withConfigMutationExclusive } from "../config/config.js";
+import {
+  readConfigFileSnapshot,
+  transformConfigFileWithRetry,
+  withConfigMutationExclusive,
+} from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -68,18 +72,6 @@ type CreateAgentParams = {
 class DuplicateAgentError extends Error {}
 class InvalidAgentBindingsError extends Error {}
 
-function transferDefault(config: Parameters<typeof listAgentEntries>[0], agentId: string) {
-  const list = structuredClone(listAgentEntries(config));
-  for (const entry of list) {
-    if (normalizeAgentId(entry.id) === agentId) {
-      entry.default = true;
-    } else {
-      delete entry.default;
-    }
-  }
-  return { ...config, agents: { ...config.agents, list } };
-}
-
 function createError(
   reason: CreateError["reason"],
   message: string,
@@ -114,7 +106,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   if (!rawName) {
     return createError("invalid-name", "agent name is required");
   }
-  const agentId = normalizeAgentId(params.entry?.id ?? rawName);
+  const rawId = params.entry?.id ?? rawName;
+  if (!/[a-z0-9]/iu.test(rawId)) {
+    return createError("invalid-name", `agent name "${rawName}" has no valid id characters`);
+  }
+  const agentId = normalizeAgentId(rawId);
   if (isReservedSystemAgentId(agentId)) {
     return createError("reserved-id", `"${agentId}" is reserved`, agentId);
   }
@@ -148,10 +144,12 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           agentId,
         );
       }
+      const persistedConfigExists = (await readConfigFileSnapshot()).exists;
       const { maybeRepairAgentRoster } =
         await import("../commands/doctor/shared/agent-roster-repair.js");
-      const plannedRepair = maybeRepairAgentRoster(lockedConfig);
-      let repairedLegacyMain = false;
+      const plannedRepair = persistedConfigExists
+        ? maybeRepairAgentRoster(lockedConfig)
+        : { config: lockedConfig, changes: [] };
       if (plannedRepair.changes.length > 0 && agentId === "main") {
         const repaired = await transformConfig<boolean>({
           afterWrite: { mode: "auto" },
@@ -168,8 +166,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             return { nextConfig, result: repair.changes.length > 0 };
           },
         });
-        repairedLegacyMain = repaired.result === true;
-        repairedMainMaterialized = repairedLegacyMain;
+        repairedMainMaterialized = repaired.result === true;
       }
       let tombstoneClaimed = false;
       if (
@@ -185,9 +182,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         afterWrite: { mode: "auto" },
         maxAttempts: 1,
         transform: async (currentConfig) => {
-          const repair = maybeRepairAgentRoster(currentConfig);
+          const repair = persistedConfigExists
+            ? maybeRepairAgentRoster(currentConfig)
+            : { config: currentConfig, changes: [] };
           const creationConfig = agentId === "main" ? currentConfig : repair.config;
-          repairedLegacyMain = agentId !== "main" && repair.changes.length > 0;
           if (findAgentEntryIndex(listAgentEntries(creationConfig), agentId) >= 0) {
             throw new DuplicateAgentError();
           }
@@ -216,9 +214,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
               identity,
             };
             nextConfig = { ...nextConfig, agents: { ...nextConfig.agents, list } };
-          }
-          if (repairedLegacyMain) {
-            nextConfig = transferDefault(nextConfig, agentId);
           }
           const bindingParse = parseBindingSpecs({
             agentId,

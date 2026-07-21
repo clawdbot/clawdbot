@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
   persisted: {} as Record<string, unknown>,
   transformConfigFileWithRetry: vi.fn(),
+  readConfigFileSnapshot: vi.fn(async () => ({ exists: false })),
   withConfigMutationExclusive: vi.fn(),
   parseBindingSpecs: vi.fn(),
   ensureAgentWorkspace: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
+    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
     transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
     withConfigMutationExclusive: mocks.withConfigMutationExclusive,
   };
@@ -123,6 +125,14 @@ describe("createAgent", () => {
       });
     }
     expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
+    await expect(createAgent({ name: "###" })).resolves.toMatchObject({
+      status: "error",
+      reason: "invalid-name",
+    });
+    await expect(createAgent({ name: "ops", entry: { id: "###" } })).resolves.toMatchObject({
+      status: "error",
+      reason: "invalid-name",
+    });
   });
 
   it("allows main and marks the first created agent as default", async () => {

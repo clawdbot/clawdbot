@@ -31,6 +31,8 @@ export { isValidAgentId, normalizeAgentId };
 
 /** Legacy on-disk identity used only by doctor/migration and their fixtures. */
 export const LEGACY_IMPLICIT_AGENT_ID = "main";
+/** @deprecated legacy implicit agent id; use roster default resolution. Removal: next major SDK cut. */
+export const DEFAULT_AGENT_ID = LEGACY_IMPLICIT_AGENT_ID;
 export const DEFAULT_MAIN_KEY = "main";
 const INCOGNITO_SESSION_RE = /^(?:dashboard|subagent|internal-session-effects):incognito-[^:]+$/u;
 type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";

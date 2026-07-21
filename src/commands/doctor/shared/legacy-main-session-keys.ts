@@ -29,18 +29,14 @@ export async function maybeMigrateLegacyDefaultMainSessionKeys(
   if (defaultAgentId === LEGACY_IMPLICIT_AGENT_ID) {
     return { changes: [], warnings: [] };
   }
+  if (agents.some((agent) => normalizeAgentId(agent.id) === LEGACY_IMPLICIT_AGENT_ID)) {
+    return { changes: [], warnings: [] };
+  }
 
   const configuredStore = cfg.session?.store?.trim();
   const storePath = resolveStorePath(configuredStore, { agentId: defaultAgentId, env });
-  const legacyMainStorePath = resolveStorePath(configuredStore, {
-    agentId: LEGACY_IMPLICIT_AGENT_ID,
-    env,
-  });
   const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
     agentId: defaultAgentId,
-  }).path;
-  const legacyMainSqlitePath = resolveSqliteTargetFromSessionStorePath(legacyMainStorePath, {
-    agentId: LEGACY_IMPLICIT_AGENT_ID,
   }).path;
   if (!fs.existsSync(sqlitePath)) {
     return { changes: [], warnings: [] };
@@ -49,24 +45,6 @@ export async function maybeMigrateLegacyDefaultMainSessionKeys(
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const canonicalKey = `agent:${defaultAgentId}:${mainKey}`;
   const legacyKeys = [...new Set([`agent:main:${mainKey}`, "agent:main:main"])];
-  if (sqlitePath === legacyMainSqlitePath) {
-    const sharedOutcome = await migrateSqliteSessionEntryKeys({
-      agentId: defaultAgentId,
-      storePath,
-      canonicalKey,
-      legacyKeys,
-      dryRun: true,
-    });
-    if (sharedOutcome.status === "missing") {
-      return { changes: [], warnings: [] };
-    }
-    return {
-      changes: [],
-      warnings: [
-        "Skipped legacy main-session key migration for a fixed shared session store because its owner is ambiguous.",
-      ],
-    };
-  }
   const outcome = await migrateSqliteSessionEntryKeys({
     agentId: defaultAgentId,
     storePath,

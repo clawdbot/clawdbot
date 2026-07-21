@@ -30,7 +30,7 @@ describe("legacy non-main default session key migration", () => {
     const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state") };
     const cfg = {
       agents: {
-        list: [{ id: "ops", default: true }, { id: "main" }],
+        list: [{ id: "ops", default: true }],
       },
     };
     const storePath = resolveStorePath(undefined, { agentId: "ops", env });
@@ -88,7 +88,7 @@ describe("legacy non-main default session key migration", () => {
     );
   });
 
-  it("does not infer ownership in a fixed shared store", async () => {
+  it("rewrites a historical main key in a fixed shared store", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-main-key-shared-"));
     roots.push(root);
     const storePath = path.join(root, "sessions.sqlite");
@@ -104,8 +104,10 @@ describe("legacy non-main default session key migration", () => {
       },
       { HOME: root },
     );
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toHaveLength(1);
+    expect(result).toEqual({
+      changes: ["Migrated legacy main-session key to agent:ops:main."],
+      warnings: [],
+    });
   });
 
   it("does not warn for an unused fixed shared store", async () => {
