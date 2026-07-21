@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { extractInternalRuntimeContext } from "../agents/internal-runtime-context.js";
-import { appendRuntimeSelfContextToPrompt, buildRuntimeSelfContextPrompt } from "./render.js";
+import { appendRuntimeSelfContextToPrompt } from "./render.js";
 import type { RuntimeContextConfig } from "./types.js";
+
+function buildRuntimeSelfContextPrompt(config: RuntimeContextConfig): string {
+  const prompt = appendRuntimeSelfContextToPrompt({
+    prompt: "",
+    config: { runtimeContext: config },
+  });
+  return extractInternalRuntimeContext(prompt).runtimeContext ?? "";
+}
 
 function createRuntimeContext(mode: "none" | "tool_hint" | "prompt_summary"): RuntimeContextConfig {
   return {

@@ -1,8 +1,8 @@
-export type RuntimeContextSource = "static" | "provider" | "mixed";
+type RuntimeContextSource = "static" | "provider" | "mixed";
 
 export type RuntimeContextExposureMode = "none" | "tool_hint" | "prompt_summary";
 
-export type RuntimeContextExposure = {
+type RuntimeContextExposure = {
   mode?: RuntimeContextExposureMode;
 };
 
@@ -27,7 +27,7 @@ export type RuntimeSelfContext = {
   provenance?: RuntimeProvenance;
 };
 
-export type CurrentRuntime = {
+type CurrentRuntime = {
   id?: string;
   label?: string;
   locality?: "local" | "remote" | "cloud" | "unknown";
@@ -35,7 +35,7 @@ export type CurrentRuntime = {
   workspace?: RuntimeWorkspace;
 };
 
-export type RuntimeWorkspace = {
+type RuntimeWorkspace = {
   mode?: "local" | "mounted" | "synced" | "remote" | "none" | "unknown";
   writable?: boolean;
   cwdRelative?: string;
@@ -57,7 +57,7 @@ export type RuntimeResources = {
   accelerators?: RuntimeAccelerator[];
 };
 
-export type RuntimeAccelerator = {
+type RuntimeAccelerator = {
   kind: "gpu" | "npu" | "tpu" | "other";
   vendor?: string;
   model?: string;
@@ -67,7 +67,7 @@ export type RuntimeAccelerator = {
   >;
 };
 
-export type RuntimeActionKind =
+type RuntimeActionKind =
   | "scale_up"
   | "scale_down"
   | "delegate"
@@ -75,7 +75,7 @@ export type RuntimeActionKind =
   | "open_session"
   | "submit_task";
 
-export type RuntimeLimits = {
+type RuntimeLimits = {
   maxTaskSeconds?: number;
   secretsAllowed?: boolean;
   networkAccess?: "enabled" | "disabled" | "restricted" | "unknown";
@@ -92,11 +92,11 @@ export type RuntimeActionRef = {
   providerId?: string;
 };
 
-export type RuntimeOffload = {
+type RuntimeOffload = {
   targets?: RuntimeOffloadTarget[];
 };
 
-export type RuntimeWorkloadKind =
+type RuntimeWorkloadKind =
   | "codex"
   | "shell"
   | "build"
@@ -106,7 +106,7 @@ export type RuntimeWorkloadKind =
   | "media"
   | "generic";
 
-export type RuntimeAvailability = {
+type RuntimeAvailability = {
   state?: "available" | "unavailable" | "starting" | "stopping" | "error" | "unknown";
   reason?: string;
 };
@@ -129,7 +129,7 @@ export type RuntimeOffloadTarget = {
   providerId?: string;
 };
 
-export type RuntimeCostHint = {
+type RuntimeCostHint = {
   model: "free" | "included" | "metered" | "quota" | "unknown";
   currency?: string;
   roughUnitCost?: string;
@@ -138,14 +138,14 @@ export type RuntimeCostHint = {
   notes?: string;
 };
 
-export type RuntimeFreshness = {
+type RuntimeFreshness = {
   observedAt?: string;
   validUntil?: string;
   ttlSeconds?: number;
   stale?: boolean;
 };
 
-export type RuntimeProvenance = {
+type RuntimeProvenance = {
   source?: "static_config" | "provider" | "probe" | "operator" | "mixed";
   providerId?: string;
 };

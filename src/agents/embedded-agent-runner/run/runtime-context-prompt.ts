@@ -1,8 +1,5 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  appendRuntimeSelfContextToPrompt,
-  RUNTIME_SELF_CONTEXT_TOOL_NAME,
-} from "../../../runtime-self-context/render.js";
+import { appendRuntimeSelfContextToPrompt } from "../../../runtime-self-context/render.js";
 /**
  * Builds runtime context prompt fragments and custom session messages.
  */
@@ -16,9 +13,6 @@ import {
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
 import type { CurrentInboundPromptContext } from "./params.js";
-export { RUNTIME_SELF_CONTEXT_TOOL_NAME, appendRuntimeSelfContextToPrompt };
-export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
-
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 
 type RuntimeContextPromptParts = {
@@ -71,7 +65,7 @@ export function appendRuntimeSelfContextForPromptSplit(params: {
 }
 
 /** Returns the visible or resumable inbound prompt prefix used before the user prompt. */
-export function buildCurrentInboundPromptContextPrefix(
+function buildCurrentInboundPromptContextPrefix(
   context: CurrentInboundPromptContext | undefined,
   options?: { preferResumableText?: boolean },
 ): string {

@@ -33,7 +33,7 @@ export function shouldExposeRuntimeSelfContext(config: RuntimeContextConfig | un
   return resolveExposureMode(config) !== "none";
 }
 
-export function resolveRuntimeContextConfig(
+function resolveRuntimeContextConfig(
   config: OpenClawConfig | undefined,
 ): RuntimeContextConfig | undefined {
   return config?.runtimeContext;
@@ -145,7 +145,7 @@ function buildPromptSummary(context: RuntimeSelfContext, config: RuntimeContextC
   ].join("\n");
 }
 
-export function buildRuntimeSelfContextPrompt(config: RuntimeContextConfig | undefined): string {
+function buildRuntimeSelfContextPrompt(config: RuntimeContextConfig | undefined): string {
   if (!config) {
     return "";
   }
@@ -160,7 +160,7 @@ export function buildRuntimeSelfContextPrompt(config: RuntimeContextConfig | und
   return [RUNTIME_TOOL_HINT, summary].filter((part) => part.trim()).join("\n\n");
 }
 
-export function buildRuntimeSelfContextInternalBlock(
+function buildRuntimeSelfContextInternalBlock(
   config: RuntimeContextConfig | undefined,
   options?: { runtimeToolAvailable?: boolean },
 ): string | undefined {

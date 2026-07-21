@@ -76,8 +76,8 @@ import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
-import { createScreenTool } from "./tools/screen-tool.js";
 import { createRuntimeTool } from "./tools/runtime-tool.js";
+import { createScreenTool } from "./tools/screen-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -467,7 +467,6 @@ export function createOpenClawTools(
     pluginToolDenylist: options?.pluginToolDenylist,
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
-  const runtimeTool = createRuntimeTool({ config: resolvedConfig });
   const tools: AnyAgentTool[] = [
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -551,7 +550,7 @@ export function createOpenClawTools(
     ...(includeTranscriptsTool
       ? [createTranscriptsTool({ agentId: sessionAgentId, config: resolvedConfig })]
       : []),
-    ...collectPresentOpenClawTools([runtimeTool]),
+    ...collectPresentOpenClawTools([createRuntimeTool({ config: resolvedConfig })]),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []

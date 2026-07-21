@@ -147,7 +147,9 @@ describe("runtime tool", () => {
       currency: "USD",
       roughUnitCost: "current runtime only",
     };
-    delete config.runtimeContext!.value!.offload!.targets![0].cost;
+    const target = config.runtimeContext!.value!.offload!.targets![0];
+    expect(target).toBeDefined();
+    delete target!.cost;
     const tool = createRuntimeTool({ config });
     const result = await tool!.execute("runtime-current-cost", {
       action: "cost_estimate",
