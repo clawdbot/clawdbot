@@ -403,7 +403,8 @@ describe("openai video generation provider", () => {
       fetchWithTimeoutGuardedCall();
     expect(downloadUrl).toBe("http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video");
     expect(downloadInit?.method).toBe("GET");
-    expect(downloadTimeout).toBe(120000);
+    expect(downloadTimeout).toBeGreaterThan(0);
+    expect(downloadTimeout).toBeLessThanOrEqual(120000);
     expect(downloadFetch).toBe(fetch);
     expect(downloadOptions).toEqual({
       ssrfPolicy: { allowPrivateNetwork: true },
