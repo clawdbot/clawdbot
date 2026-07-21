@@ -22,7 +22,7 @@ import {
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
-import type { AgentMessage } from "./runtime/index.js";
+import type { AgentMessage, StreamFn, ThinkingLevel } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary as agentGenerateSummary } from "./sessions/index.js";
 
@@ -91,6 +91,8 @@ type GenerateSummaryCompat = {
     signal?: AbortSignal,
     customInstructions?: string,
     previousSummary?: string,
+    thinkingLevel?: ThinkingLevel,
+    streamFn?: StreamFn,
   ): Promise<string>;
 };
 
@@ -140,6 +142,7 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  streamFn?: StreamFn;
 }): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -169,6 +172,7 @@ async function summarizeChunks(params: {
             params.signal,
             effectiveInstructions,
             summary,
+            params.streamFn,
           ),
         {
           attempts: 3,
@@ -237,6 +241,7 @@ function generateSummary(
   signal: AbortSignal,
   customInstructions?: string,
   previousSummary?: string,
+  streamFn?: StreamFn,
 ): Promise<string> {
   if (agentGenerateSummary.length >= 8) {
     return generateSummaryCompat(
@@ -248,6 +253,12 @@ function generateSummary(
       signal,
       customInstructions,
       previousSummary,
+      // thinkingLevel is unused for compaction summaries; pass undefined to
+      // reach the streamFn slot so the summarizer uses the boundary-aware
+      // stream (which resolves the real provider base URL) instead of the
+      // core HTTP client that reads an empty model.baseUrl.
+      undefined,
+      streamFn,
     );
   }
   return generateSummaryCompat(
@@ -277,6 +288,7 @@ async function summarizeWithFallbackResult(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  streamFn?: StreamFn;
 }): Promise<CompactionSummaryResult> {
   const { messages, contextWindow } = params;
 
@@ -390,6 +402,7 @@ export async function summarizeInStages(params: {
   previousSummary?: string;
   parts?: number;
   minMessagesForSplit?: number;
+  streamFn?: StreamFn;
 }): Promise<CompactionSummaryResult> {
   const { messages } = params;
   if (messages.length === 0) {

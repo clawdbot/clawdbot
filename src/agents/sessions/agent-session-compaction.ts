@@ -169,6 +169,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         branchEntries: pathEntries,
         customInstructions: options.customInstructions,
         signal: options.signal,
+        // Same stream function the core compaction path below threads into
+        // compact(); handlers that summarize via an LLM need it so the request
+        // resolves the real provider base URL instead of an empty model.baseUrl.
+        streamFn: this.agent.streamFn,
       });
 
       if (extensionResult?.cancel) {

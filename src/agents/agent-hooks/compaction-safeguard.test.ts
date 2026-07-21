@@ -1587,6 +1587,43 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summaryCall.headers?.["x-initiator"]).toBe("user");
   });
 
+  it("threads the agent stream function into built-in compaction summarization", async () => {
+    // Regression: the safeguard summarizer previously omitted streamFn, so the
+    // core HTTP client (completeSimple) built the request from an empty
+    // model.baseUrl for OpenRouter-provider models and failed with a connection
+    // error. The agent's stream function resolves the real provider base URL.
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(summaryResult("mock summary"));
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock,
+    });
+    const compactionHandler = createCompactionHandler();
+    const event = createCompactionEvent({
+      messageText: "summarize me",
+      tokensBefore: 1000,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+    const streamFn = vi.fn();
+    (event as { streamFn?: unknown }).streamFn = streamFn;
+
+    const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
+
+    expect(result.cancel).not.toBe(true);
+    const summaryCall = latestMockCallArg(mockSummarizeInStages) as {
+      streamFn?: unknown;
+    };
+    expect(summaryCall.streamFn).toBe(streamFn);
+  });
+
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue(summaryResult("summary missing headings"));

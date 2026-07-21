@@ -396,6 +396,7 @@ async function summarizeViaLLM(params: {
   customInstructions?: string;
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
+  streamFn?: Parameters<typeof summarizeInStages>[0]["streamFn"];
 }): Promise<string> {
   const messages = prependPreviousSummaryForRedistill({
     messages: params.messages,
@@ -413,6 +414,7 @@ async function summarizeViaLLM(params: {
     customInstructions: params.customInstructions,
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
+    streamFn: params.streamFn,
   });
   if (result.kind === "summary") {
     return result.text;
@@ -1059,7 +1061,7 @@ async function readWorkspaceContextForSummary(
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
-    const { preparation, customInstructions: eventInstructions, signal } = event;
+    const { preparation, customInstructions: eventInstructions, signal, streamFn } = event;
     const rawTurnPrefixMessages = preparation.turnPrefixMessages ?? [];
     let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
       preparation.messagesToSummarize,
@@ -1308,6 +1310,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: structuredInstructions,
                   summarizationInstructions,
                   previousSummary: preparation.previousSummary,
+                  streamFn,
                 });
               } catch (droppedError) {
                 log.warn(
@@ -1384,6 +1387,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: currentInstructions,
                   summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
+                  streamFn,
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
@@ -1404,6 +1408,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ),
               summarizationInstructions,
               previousSummary: undefined,
+              streamFn,
             });
             splitTurnSectionLocal = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()

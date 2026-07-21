@@ -36,6 +36,7 @@ import type {
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
+  StreamFn,
   ThinkingLevel,
   ToolExecutionMode,
 } from "../../runtime/index.js";
@@ -614,6 +615,13 @@ interface SessionBeforeCompactEvent {
   branchEntries: SessionEntry[];
   customInstructions?: string;
   signal: AbortSignal;
+  /**
+   * The agent's egress stream function. Handlers that summarize via an LLM must
+   * thread this into the summarizer so the request uses the provider's
+   * boundary-aware stream (which resolves the real base URL) instead of the core
+   * HTTP client, whose `model.baseUrl` is empty for OpenRouter-provider models.
+   */
+  streamFn?: StreamFn;
 }
 
 /** Fired after context compaction */
