@@ -315,6 +315,19 @@ function resetAgentCliCommandMocksForTest() {
   // into every later --local test and silently route them through the failure path.
   startOneShotDiagnosticsExporters.mockReset();
   startOneShotDiagnosticsExporters.mockResolvedValue(null);
+  // Reset implementations as well so that unconsumed mockImplementationOnce
+  // callbacks from one test cannot leak into the next. Post-acceptance
+  // transport-error tests rely on the callGateway default stub so that
+  // stale agentCommand mocks do not carry over.
+  callGateway.mockReset().mockResolvedValue({
+    runId: "idem-1",
+    status: "ok",
+    result: {
+      payloads: [{ text: "hello" }],
+      meta: { stub: true },
+    },
+  });
+  agentCommand.mockReset();
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
   agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
@@ -2430,6 +2443,112 @@ describe("agentCliCommand", () => {
             message.includes("Gateway agent call connection closed") && message.includes("--local"),
         ),
       ).toBe(true);
+    });
+  });
+
+  it("returns in-flight status when gateway times out after accepting the run", async () => {
+    await withTempStore(async () => {
+      callGateway.mockImplementationOnce(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+        onAccepted?.({
+          status: "accepted",
+          runId: "accepted-run-timeout",
+          sessionKey: "agent:main:incident-42",
+        });
+        throw createGatewayTimeoutError();
+      });
+
+      const result = await agentCliCommand(
+        { message: "hi", sessionKey: "agent:main:incident-42" },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      // After the Gateway has accepted the run, the CLI must not launch an
+      // embedded fallback because the original Gateway-owned turn is still
+      // executing and could duplicate mutating work.
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        status: "accepted_timeout",
+        runId: "accepted-run-timeout",
+      });
+      expect(
+        mockMessages(runtime.error).some((message) =>
+          message.includes("Gateway agent timed out after accepting run accepted-run-timeout"),
+        ),
+      ).toBe(true);
+      expect(
+        mockMessages(runtime.error).some((message) =>
+          message.includes("To extend the CLI deadline: --timeout"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("returns in-flight status when gateway closes after accepting the run", async () => {
+    await withTempStore(async () => {
+      callGateway.mockImplementationOnce(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+        onAccepted?.({
+          status: "accepted",
+          runId: "accepted-run-closed",
+          sessionKey: "agent:main:incident-42",
+        });
+        throw createGatewayClosedError();
+      });
+
+      const result = await agentCliCommand(
+        { message: "hi", sessionKey: "agent:main:incident-42" },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        status: "accepted_timeout",
+        runId: "accepted-run-closed",
+      });
+      expect(
+        mockMessages(runtime.error).some((message) =>
+          message.includes(
+            "Gateway agent connection closed after accepting run accepted-run-closed",
+          ),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("writes JSON stdout and no stderr diagnostic for accepted_timeout in json mode", async () => {
+    await withTempStore(async () => {
+      callGateway.mockImplementationOnce(async (requestValue: unknown) => {
+        const request = requireRecord(requestValue, "gateway request");
+        const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+        onAccepted?.({
+          status: "accepted",
+          runId: "accepted-run-json",
+          sessionKey: "agent:main:incident-42",
+        });
+        throw createGatewayTimeoutError();
+      });
+
+      const result = await agentCliCommand(
+        { message: "hi", sessionKey: "agent:main:incident-42", json: true },
+        jsonRuntime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        status: "accepted_timeout",
+        runId: "accepted-run-json",
+      });
+      expect(jsonRuntime.writeJson).toHaveBeenCalledWith(
+        { status: "accepted_timeout", runId: "accepted-run-json" },
+        2,
+      );
+      expect(jsonRuntime.error).not.toHaveBeenCalled();
     });
   });
 

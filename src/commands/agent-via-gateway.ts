@@ -94,6 +94,38 @@ type GatewayAgentResponse = {
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
 const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
+/**
+ * Transport error that occurs after the Gateway has already accepted a run.
+ *
+ * Carries the accepted run/session identity so callers can surface an
+ * in-flight result instead of silently re-running the prompt through the
+ * embedded fallback.  Without this, a long-running accepted turn that hits
+ * the CLI deadline would launch a fresh {@code gateway-fallback-*} run
+ * while the original Gateway-owned run continues — duplicating mutating
+ * work and potentially switching provider/model.
+ */
+class GatewayAcceptedRunTransportError extends Error {
+  readonly acceptedRunId: string;
+  readonly acceptedSessionKey: string;
+  readonly fallbackReason: "gateway_timeout" | "gateway_closed";
+
+  constructor(params: {
+    acceptedRunId: string;
+    acceptedSessionKey: string;
+    fallbackReason: "gateway_timeout" | "gateway_closed";
+    cause: unknown;
+  }) {
+    super(
+      `Gateway agent ${params.fallbackReason === "gateway_timeout" ? "timed out" : "connection closed"} after accepting run ${params.acceptedRunId}`,
+      { cause: params.cause instanceof Error ? params.cause : undefined },
+    );
+    this.name = "GatewayAcceptedRunTransportError";
+    this.acceptedRunId = params.acceptedRunId;
+    this.acceptedSessionKey = params.acceptedSessionKey;
+    this.fallbackReason = params.fallbackReason;
+  }
+}
+
 type AgentCliOpts = {
   message?: string;
   messageFile?: string;
@@ -510,6 +542,13 @@ function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
     isGatewayExplicitAuthRequiredError(err) ||
     isGatewaySecretRefUnavailableError(err)
   );
+}
+
+function isGatewayAgentTimeoutError(err: unknown): boolean {
+  if (isGatewayTransportError(err)) {
+    return err.kind === "timeout";
+  }
+  return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
 function resolveGatewayAgentFailureHint(
@@ -1164,6 +1203,22 @@ async function agentViaGatewayCommand(
           config: cfg,
         });
       }
+      // If the Gateway already accepted the run, surface the run identity so
+      // callers can return an in-flight result instead of silently re-running
+      // the prompt through the embedded fallback.
+      if (
+        acceptedGatewayRun &&
+        isGatewayTransportError(err) &&
+        acceptedRunId &&
+        acceptedSessionKey
+      ) {
+        throw new GatewayAcceptedRunTransportError({
+          acceptedRunId,
+          acceptedSessionKey,
+          fallbackReason: isGatewayAgentTimeoutError(err) ? "gateway_timeout" : "gateway_closed",
+          cause: err,
+        });
+      }
       throw err;
     }
   }
@@ -1300,6 +1355,26 @@ export async function agentCliCommand(
           return undefined;
         }
         throw err;
+      }
+      // Gateway accepted the run before the transport error — the turn is
+      // still executing (default 48-hour Gateway deadline).  The embedded
+      // fallback must not re-run the prompt because that would duplicate
+      // mutating work and may switch provider/model.
+      if (err instanceof GatewayAcceptedRunTransportError) {
+        const reasonText =
+          err.fallbackReason === "gateway_timeout" ? "timed out" : "connection closed";
+        const result = { status: "accepted_timeout", runId: err.acceptedRunId };
+        if (opts.json) {
+          writeRuntimeJson(runtime, result);
+        } else {
+          runtime.error?.(
+            `Gateway agent ${reasonText} after accepting run ${err.acceptedRunId}. ` +
+              `The run is still executing on the Gateway (default 48-hour deadline). ` +
+              `To extend the CLI deadline: --timeout <seconds>. ` +
+              `To re-attach: --run-id ${err.acceptedRunId}`,
+          );
+        }
+        return result;
       }
       const failureHint = resolveGatewayAgentFailureHint(err);
       if (failureHint) {
