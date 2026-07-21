@@ -454,12 +454,11 @@ export function createPdfTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
-      const maxBytesMbRaw =
-        readFiniteNumberParam(record, "maxBytesMb", {
-          min: 0,
-          minExclusive: true,
-          message: "maxBytesMb must be greater than 0",
-        });
+      const maxBytesMbRaw = readFiniteNumberParam(record, "maxBytesMb", {
+        min: 0,
+        minExclusive: true,
+        message: "maxBytesMb must be greater than 0",
+      });
       // Model-supplied maxBytesMb is clamped to prevent pathological allocations
       // in PDF processing pipelines. Operator config (mediaMaxMb) is not clamped.
       const maxBytesMb =
