@@ -1277,7 +1277,7 @@ describe("sendMessageTelegram", () => {
     expect(String(sentText)).toBe(
       [
         "Вот что я бы ему рекомендовал, если задача именно понять, есть ли превышения.",
-        "Narda AMS-8061 или Wavecontrol MonitEM-IoT.",
+        "Narda AMS-8061 (https://www.narda-sts.com/en/products/emf-monitors/ams-8061/) или Wavecontrol MonitEM-IoT (https://wavecontrol.cn/en/products/monitem-iot/).",
       ].join("\n"),
     );
     expect(String(sentText).startsWith("Вот что")).toBe(true);

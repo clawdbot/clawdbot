@@ -377,6 +377,10 @@ export function richTextToPlainString(text: RichText): string {
   if (text.type === "custom_emoji") {
     return text.alternative_text;
   }
+  if (text.type === "url") {
+    const label = richTextToPlainString(text.text);
+    return !label || label === text.url ? text.url : `${label} (${text.url})`;
+  }
   return richTextToPlainString(text.text);
 }
 
