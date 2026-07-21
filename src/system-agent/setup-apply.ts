@@ -286,7 +286,10 @@ export async function applySystemAgentSetup(
   const hasExpectedConfigHash = Object.hasOwn(params, "expectedConfigHash");
   let expectedInferenceRoute = params.expectedInferenceRoute;
   let createdAgent:
-    | Extract<Awaited<ReturnType<typeof import("../agents/agent-create.js").createAgent>>, { status: "created" }>
+    | Extract<
+        Awaited<ReturnType<typeof import("../agents/agent-create.js").createAgent>>,
+        { status: "created" }
+      >
     | undefined;
   const commit: SystemAgentSetupApplyHooks["commit"] = hooks
     ? async (effect) => await hooks.commit(effect)

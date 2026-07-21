@@ -17,6 +17,7 @@ import {
   maybeRepairStaleManagedNpmBundledPlugins,
 } from "../doctor-plugin-registry.js";
 import { collectActiveToolSchemaProjectionWarnings } from "./shared/active-tool-schema-warnings.js";
+import { maybeRepairAgentRoster } from "./shared/agent-roster-repair.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
@@ -45,7 +46,6 @@ import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-sha
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
 import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
-import { maybeRepairAgentRoster } from "./shared/agent-roster-repair.js";
 
 /** Run doctor auto-repairs in dependency order and collect sanitized user notes. */
 export async function runDoctorRepairSequence(params: {

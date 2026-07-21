@@ -1,11 +1,7 @@
 // Agent scope tests cover which per-agent fields may flatten into runtime defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  listAgentIds,
-  resolveAgentConfig,
-  resolveDefaultAgentId,
-} from "./agent-scope-config.js";
+import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 
 describe("agent roster resolution", () => {
   it("does not synthesize ids for an empty roster", () => {
