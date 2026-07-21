@@ -271,7 +271,7 @@ export async function transcribeNvidiaAudio(
   }
 }
 
-export type MagpieSynthesizeParams = {
+type MagpieSynthesizeParams = {
   text: string;
   apiKey: string;
   baseUrl: string;
