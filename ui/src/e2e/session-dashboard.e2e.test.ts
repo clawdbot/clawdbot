@@ -1,4 +1,6 @@
 // Control UI E2E covers the real session-dashboard provider and transcript bridge.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
@@ -16,6 +18,10 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const cardboardProofDir = path.resolve(
+  process.cwd(),
+  ".artifacts/control-ui-e2e/workboard-cardboard",
+);
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -106,6 +112,18 @@ async function showDashboard(page: Page): Promise<void> {
     };
     localStorage.setItem(settingsKey, JSON.stringify(settings));
   }, sessionKey);
+}
+
+function workboardConfigSnapshot(enabled = true) {
+  const config = { plugins: { entries: { workboard: { enabled } } } };
+  return {
+    config,
+    hash: "workboard-cardboard-e2e",
+    path: "/tmp/openclaw-e2e/openclaw.json",
+    raw: JSON.stringify(config),
+    resolved: config,
+    sourceConfig: config,
+  };
 }
 
 describeControlUiE2e("Control UI session dashboard stitch", () => {
@@ -365,5 +383,197 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
     await context.close();
+  });
+
+  it("links a dispatched Workboard card and its live session dashboard in both directions", async () => {
+    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    if (recordProof) {
+      await mkdir(cardboardProofDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      viewport: { height: 900, width: 1280 },
+      ...(recordProof
+        ? { recordVideo: { dir: cardboardProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const card = {
+      id: "card-dashboard-stitch",
+      title: "Ship dashboard stitch",
+      status: "running",
+      priority: "high",
+      labels: ["ui"],
+      position: 1000,
+      createdAt: 1,
+      updatedAt: 2,
+      sessionKey,
+      runId: "run-dashboard-stitch",
+      metadata: { automation: { boardId: "platform" } },
+    };
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      featureMethods: [
+        "board.get",
+        "chat.metadata",
+        "chat.startup",
+        "config.get",
+        "sessions.list",
+        "tasks.list",
+        "workboard.cards.list",
+      ],
+      methodResponses: {
+        "board.get": boardSnapshot,
+        "config.get": workboardConfigSnapshot(),
+        "tasks.list": { nextCursor: null, tasks: [] },
+        "workboard.cards.list": { cards: [card], statuses: ["running", "done"] },
+      },
+    });
+    await showDashboard(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const chip = page.locator(".board-session-surface__workboard-chip");
+      await chip.waitFor();
+      await expect.poll(() => chip.textContent()).toContain("Ship dashboard stitch");
+      await expect.poll(() => chip.textContent()).toContain("Running");
+      expect(await chip.getAttribute("href")).toBe("/workboard?board=platform");
+      if (recordProof) {
+        await page.screenshot({ path: path.join(cardboardProofDir, "01-dashboard-card-chip.png") });
+      }
+
+      const completedCard = { ...card, status: "done", updatedAt: 3 };
+      await gateway.setMethodResponse("workboard.cards.list", {
+        cards: [completedCard],
+        statuses: ["running", "done"],
+      });
+      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+        epoch: "cardboard-e2e",
+        revision: 2,
+      });
+      await expect.poll(() => chip.textContent()).toContain("Done");
+
+      await gateway.setMethodResponse("workboard.cards.list", {
+        cards: [],
+        statuses: ["running", "done"],
+      });
+      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+        epoch: "cardboard-e2e",
+        revision: 3,
+      });
+      await expect.poll(() => chip.count()).toBe(0);
+
+      await gateway.setMethodResponse("workboard.cards.list", {
+        cards: [completedCard],
+        statuses: ["running", "done"],
+      });
+      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+        epoch: "cardboard-e2e",
+        revision: 4,
+      });
+      await chip.waitFor();
+
+      await chip.click();
+      await page.waitForURL(/\/workboard\?board=platform$/u);
+      const workboardCard = page.locator(".workboard-card", {
+        hasText: "Ship dashboard stitch",
+      });
+      await workboardCard.waitFor();
+      await workboardCard.click();
+      const cardDashboard = page.locator("openclaw-workboard-card-dashboard");
+      await cardDashboard.waitFor();
+      await expect
+        .poll(() =>
+          cardDashboard.locator(".workboard-card-dashboard__toggle").getAttribute("aria-expanded"),
+        )
+        .toBe("true");
+      await cardDashboard.locator("openclaw-board-view").waitFor();
+      if (recordProof) {
+        await page.screenshot({
+          path: path.join(cardboardProofDir, "02-workboard-card-dashboard.png"),
+        });
+      }
+
+      await gateway.setMethodResponse("board.get", {
+        sessionKey,
+        revision: 3,
+        tabs: [],
+        widgets: [],
+      });
+      await gateway.emitGatewayEvent("board.changed", { sessionKey });
+      await cardDashboard
+        .getByText("No dashboard yet — the working agent can pin widgets.")
+        .waitFor();
+    } finally {
+      const video = page.video();
+      await context.close();
+      if (recordProof && video) {
+        await video.saveAs(path.join(cardboardProofDir, "workboard-cardboard.webm"));
+      }
+    }
+  });
+
+  it("omits the Workboard breadcrumb when its plugin or the session board is unavailable", async () => {
+    const cases = [
+      {
+        name: "plugin disabled",
+        board: boardSnapshot,
+        config: workboardConfigSnapshot(false),
+      },
+      {
+        name: "board empty",
+        board: { sessionKey, revision: 1, tabs: [], widgets: [] },
+        config: workboardConfigSnapshot(),
+      },
+    ];
+
+    for (const testCase of cases) {
+      const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        featureMethods: [
+          "board.get",
+          "chat.metadata",
+          "chat.startup",
+          "config.get",
+          "workboard.cards.list",
+        ],
+        methodResponses: {
+          "board.get": testCase.board,
+          "config.get": testCase.config,
+          "workboard.cards.list": {
+            cards: [
+              {
+                id: `card-${testCase.name.replaceAll(" ", "-")}`,
+                title: testCase.name,
+                status: "running",
+                priority: "normal",
+                labels: [],
+                position: 1,
+                createdAt: 1,
+                updatedAt: 2,
+                sessionKey,
+                metadata: { automation: { boardId: "platform" } },
+              },
+            ],
+            statuses: ["running"],
+          },
+        },
+      });
+      await showDashboard(page);
+
+      try {
+        await page.goto(`${server.baseUrl}chat`);
+        await expect
+          .poll(async () => (await gateway.getRequests("board.get")).length)
+          .toBeGreaterThan(0);
+        await expect
+          .poll(() => page.locator(".board-session-surface__workboard-chip").count())
+          .toBe(0);
+        expect(await gateway.getRequests("workboard.cards.list")).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    }
   });
 });

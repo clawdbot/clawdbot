@@ -260,6 +260,52 @@ docker_build_resource_exhausted_failure "$LOG_PATH"
     }
   });
 
+  it("detects compiler processes killed by the OOM killer", () => {
+    const workDir = tempDirs.make("openclaw-docker-build-killed-compiler-");
+    const logPath = join(workDir, "docker-build.log");
+    writeFileSync(logPath, "c++: fatal error: Killed signal terminated program cc1plus\n");
+    const rootDir = process.cwd();
+    const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+LOG_PATH=${shellQuote(logPath)}
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+docker_build_resource_exhausted_failure "$LOG_PATH"
+`;
+
+    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+  });
+
+  it("retries Corepack connect timeouts without misreading Dockerfile comments as OOM", () => {
+    const workDir = tempDirs.make("openclaw-docker-build-connect-timeout-");
+
+    try {
+      const logPath = join(workDir, "docker-build.log");
+      writeFileSync(
+        logPath,
+        [
+          '# Docker builds on small VMs may otherwise fail with "Killed" (exit 137).',
+          "ConnectTimeoutError: Connect Timeout Error (attempted addresses: 192.0.2.1:443)",
+        ].join("\n"),
+      );
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+LOG_PATH=${shellQuote(logPath)}
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+docker_build_transient_failure "$LOG_PATH"
+if docker_build_resource_exhausted_failure "$LOG_PATH"; then
+  exit 3
+fi
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps shell-script Docker builds behind the helper", () => {
     for (const path of CENTRALIZED_BUILD_SCRIPTS) {
       const script = readFileSync(path, "utf8");

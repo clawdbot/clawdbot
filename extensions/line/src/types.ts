@@ -1,6 +1,7 @@
 // Line type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 export type LineCredentialStatus = "available" | "configured_unavailable" | "missing";
@@ -125,7 +126,7 @@ export type LineTemplateMessagePayload =
 
 export type LineChannelData = {
   quickReplies?: string[];
-  mediaKind?: "image" | "video" | "audio";
+  mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
   durationMs?: number;
   trackingId?: string;
@@ -138,3 +139,5 @@ export type LineChannelData = {
   flexMessage?: LineFlexMessagePayload;
   templateMessage?: LineTemplateMessagePayload;
 };
+
+export type LineOutboundMediaKind = Extract<MediaKind, "image" | "video" | "audio">;

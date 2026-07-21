@@ -734,8 +734,14 @@ describe("validateModelsProbeParams", () => {
   it("accepts one provider with optional profile and timeout", () => {
     expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
     expect(
-      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+      validateModelsProbeParams({
+        provider: "OpenAI",
+        profileId: "work",
+        timeoutMs: 20_000,
+        agentId: "writer",
+      }),
     ).toBe(true);
+    expect(validateModelsProbeParams({ provider: "openai", agentId: "" })).toBe(true);
   });
 
   it("rejects missing providers, invalid timeouts, and extra fields", () => {

@@ -24,6 +24,7 @@ import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
 } from "./post-compaction-loop-guard.js";
+import { clearProviderPromptState } from "./provider-prompt-state.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-preparation.js";
@@ -625,6 +626,7 @@ export async function runPreparedEmbeddedLoop(
       await maybeEmitFastModeAutoResetBestEffort();
     }
     forgetPromptBuildDrainCacheForRun(params.runId);
+    clearProviderPromptState(params.runId);
     stopRuntimeAuthRefreshTimer();
     await runAgentCleanupStep({
       runId: params.runId,

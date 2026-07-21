@@ -157,6 +157,7 @@ export function applyClickClackSetupConfigPatch(params: {
       : moveSingleAccountChannelSectionToDefaultAccount({
           cfg: params.cfg,
           channelKey: channel,
+          setupSurface: clickClackSetupAdapter,
         });
   const namedConfig = applyAccountNameToChannelSection({
     cfg: scopedConfig,

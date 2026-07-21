@@ -15,6 +15,7 @@ import {
   moveSingleAccountChannelSectionToDefaultAccount,
   prepareScopedSetupConfig,
 } from "./setup-helpers.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -43,6 +44,9 @@ function accountRecord(
 }
 
 const matrixSingleAccountKeysToMove = [
+  "homeserver",
+  "userId",
+  "accessToken",
   "allowBots",
   "deviceId",
   "deviceName",
@@ -57,6 +61,12 @@ const matrixNamedAccountPromotionKeys = [
   "userId",
 ] as const;
 const telegramSingleAccountKeysToMove = ["streaming"] as const;
+const matrixSetupSurface = {
+  applyAccountConfig: ({ cfg }) => cfg,
+  singleAccountKeysToMove: matrixSingleAccountKeysToMove,
+  namedAccountPromotionKeys: matrixNamedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget: resolveMatrixSingleAccountPromotionTarget,
+} as ChannelSetupAdapter;
 
 function collectNamedAccountIds(accounts: Record<string, unknown>): string[] {
   const ids: string[] = [];
@@ -282,6 +292,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
         },
       }),
       channelKey: "matrix",
+      setupSurface: matrixSetupSurface,
     });
 
     const channel = channelRecord(next, "matrix");
@@ -310,6 +321,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
         },
       }),
       channelKey: "matrix",
+      setupSurface: matrixSetupSurface,
     });
 
     const channel = channelRecord(next, "matrix");
@@ -365,6 +377,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
         },
       }),
       channelKey: "matrix",
+      setupSurface: matrixSetupSurface,
     });
 
     const channel = channelRecord(next, "matrix");

@@ -59,7 +59,8 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal)
   getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshotMock,
 }));
 
-vi.mock("./simple-completion-transport.js", () => ({
+vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/ai/transports")>()),
   prepareModelForSimpleCompletion: hoisted.prepareModelForSimpleCompletionMock,
 }));
 

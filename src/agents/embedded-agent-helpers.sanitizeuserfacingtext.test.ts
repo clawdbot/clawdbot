@@ -66,6 +66,12 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("preserves a provider-completed finish_reason error", () => {
+    expect(sanitizeUserFacingText("Provider finish_reason: error", { errorContext: true })).toBe(
+      "Provider finish_reason: error",
+    );
+  });
+
   it.each([
     "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
     "Request size exceeds model context window",

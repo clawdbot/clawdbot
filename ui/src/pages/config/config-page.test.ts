@@ -114,6 +114,52 @@ describe("ConfigPage advanced selection guard", () => {
   });
 });
 
+describe("ConfigPage media discovery", () => {
+  it("coalesces refreshes while discovery is in flight", async () => {
+    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
+      const discovery = deferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi.fn(() => discovery.promise);
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
+      const page = new ConfigPage();
+      const state = page as unknown as Record<
+        typeof method,
+        (requestPermission: boolean) => Promise<void>
+      >;
+
+      const first = state[method](true);
+      await state[method](true);
+      expect(enumerateDevices).toHaveBeenCalledOnce();
+
+      discovery.resolve([]);
+      await first;
+    }
+  });
+
+  it("upgrades passive discovery when the user requests permission", async () => {
+    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
+      const passiveDiscovery = deferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi
+        .fn()
+        .mockImplementationOnce(() => passiveDiscovery.promise)
+        .mockResolvedValueOnce([]);
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
+      const page = new ConfigPage();
+      const state = page as unknown as Record<
+        typeof method,
+        (requestPermission: boolean) => Promise<void>
+      >;
+
+      const passive = state[method](false);
+      await state[method](true);
+      expect(enumerateDevices).toHaveBeenCalledOnce();
+
+      passiveDiscovery.resolve([]);
+      await passive;
+      expect(enumerateDevices).toHaveBeenCalledTimes(2);
+    }
+  });
+});
+
 describe("ConfigPage camera selection", () => {
   it("clears recovered errors and ignores failures from superseded selections", async () => {
     let rejectFirst: (error: Error) => void = () => undefined;

@@ -5,9 +5,9 @@ import {
   configureWorkboardLiveRefresh,
   handleWorkboardChanged,
   resumeWorkboardLiveRefresh,
-  stopWorkboardLiveRefresh,
 } from "./live-refresh.ts";
 import { loadWorkboard } from "./loading.ts";
+import { stopWorkboardLiveRefresh } from "./runtime.ts";
 import { getWorkboardState } from "./runtime.ts";
 
 function createDeferred<T>() {

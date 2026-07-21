@@ -2,6 +2,7 @@
  * Chat message types for the UI layer.
  */
 
+import type { MediaKind } from "@openclaw/media-core/constants";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type ChatAttachment = {
@@ -111,7 +112,7 @@ export type MessageContentItem =
       type: "attachment";
       attachment: {
         url: string;
-        kind: "image" | "audio" | "video" | "document";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;
         isVoiceNote?: boolean;

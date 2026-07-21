@@ -34,6 +34,7 @@ type ModelProvidersViewProps = {
   error: string | null;
   updatedAt: number | null;
   costDays: number;
+  credentialAgentLabel: string;
   cards: ModelProviderCard[];
   configuredModels: ModelPickerEntry[];
   defaultModels: DefaultModelSelection;
@@ -149,7 +150,7 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
   `;
 }
 
-function renderCredentialSummary(card: ModelProviderCard) {
+function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
   const oauthCount = card.profiles.filter((profile) => profile.type === "oauth").length;
   const tokenCount = card.profiles.filter((profile) => profile.type === "token").length;
   const apiProfileCount = card.profiles.filter((profile) => profile.type === "api_key").length;
@@ -173,7 +174,7 @@ function renderCredentialSummary(card: ModelProviderCard) {
   }
   return html`
     <div class="model-providers__credentials">
-      <span>${t("modelProviders.credentials.label")}</span>
+      <span>${t("modelProviders.credentials.label", { agent: agentLabel })}</span>
       <strong
         >${parts.length > 0 ? parts.join(" · ") : t("modelProviders.credentials.none")}</strong
       >
@@ -373,12 +374,16 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
           ${renderAuthStatus(card)}
         </div>
       </div>
-      ${renderCredentialSummary(card)}
-      ${card.usage
-        ? renderProviderUsageDetails(card.usage)
-        : html`<div class="model-providers__no-stats">${t("modelProviders.noStats")}</div>`}
-      ${renderLocalCost(card, props.costDays)} ${renderProviderActions(card, props)}
-      ${renderKeyEditor(card, props)} ${renderProbeResult(props.probeResults[card.id])}
+      ${renderCredentialSummary(card, props.credentialAgentLabel)}
+      <div class="model-providers__global-metrics">
+        <div class="model-providers__global-metrics-title">${t("modelProviders.globalUsage")}</div>
+        ${card.usage
+          ? renderProviderUsageDetails(card.usage)
+          : html`<div class="model-providers__no-stats">${t("modelProviders.noStats")}</div>`}
+        ${renderLocalCost(card, props.costDays)}
+      </div>
+      ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
+      ${renderProbeResult(props.probeResults[card.id])}
       ${message
         ? html`<div class="callout ${message.kind}" role="status">${message.text}</div>`
         : nothing}

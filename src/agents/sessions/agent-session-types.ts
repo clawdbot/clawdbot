@@ -77,6 +77,8 @@ export interface AgentSessionConfig {
   sessionStartEvent?: SessionStartEvent;
   /** Lock used before session-file writes or write-capable hooks. */
   withSessionWriteLock?: AgentSessionWriteLockRunner;
+  /** Owner of reactive context-overflow recovery. Defaults to the session. */
+  contextOverflowRecoveryOwner?: "session" | "caller";
 }
 
 export interface ExtensionBindings {

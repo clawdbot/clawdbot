@@ -119,8 +119,13 @@ function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
     if (converted === rawKey) {
       continue;
     }
-    if (!(converted in next)) {
-      next[converted] = value;
+    if (!Object.hasOwn(next, converted)) {
+      Object.defineProperty(next, converted, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
     }
     if (normalizeLowercaseStringOrEmpty(rawKey).startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)) {
       delete next[rawKey];
@@ -149,7 +154,13 @@ function seedClaudeCliAllowlist(
     runtimeRefs.add(ref);
   }
   for (const ref of runtimeRefs) {
-    next[ref] = modelEntryWithClaudeCliRuntime(next[ref]);
+    const current = Object.hasOwn(next, ref) ? next[ref] : undefined;
+    Object.defineProperty(next, ref, {
+      value: modelEntryWithClaudeCliRuntime(current),
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   }
   return next;
 }

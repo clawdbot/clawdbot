@@ -106,6 +106,13 @@ class WearProtocolTest {
     assertEquals("/openclaw/wear/v1/realtime/audio", WearProtocol.REALTIME_AUDIO_CHANNEL_PATH)
     assertEquals("openclaw_phone_proxy_v1", WearProtocol.PHONE_CAPABILITY)
     assertEquals("openclaw_wear_companion_v1", WearProtocol.WATCH_CAPABILITY)
+    assertEquals("gateway_offline", WearConnectionFailure.GatewayOffline.wireValue)
+    assertEquals("incompatible", WearConnectionFailure.Incompatible.wireValue)
+    assertEquals(
+      WearConnectionFailure.Incompatible,
+      WearConnectionFailure.fromWireValue("incompatible"),
+    )
+    assertEquals(null, WearConnectionFailure.fromWireValue("future-failure"))
     assertEquals("agent-controls", WearProxyCapability.AgentControls.wireValue)
     assertEquals("gateway-controls", WearProxyCapability.GatewayControls.wireValue)
     assertEquals("model-controls", WearProxyCapability.ModelControls.wireValue)

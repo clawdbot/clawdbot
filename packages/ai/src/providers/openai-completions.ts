@@ -24,7 +24,6 @@ import type {
   Context,
   Message,
   Model,
-  OpenAICompletionsCompat,
   SimpleStreamOptions,
   StreamFunction,
   StreamOptions,
@@ -52,6 +51,10 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import {
+  resolveOpenAICompletionsCompat,
+  type ResolvedOpenAICompletionsCompat,
+} from "./openai-completions-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import {
@@ -118,14 +121,6 @@ interface OpenAICompatCacheControl {
   ttl?: string;
 }
 
-type ResolvedOpenAICompletionsCompat = Omit<
-  Required<OpenAICompletionsCompat>,
-  "cacheControlFormat"
-> & {
-  cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
-  sessionAffinityFormat: "openai" | "openrouter";
-};
-
 type EncryptedReasoningDetail = {
   type: "reasoning.encrypted";
   id: string;
@@ -186,7 +181,7 @@ export const streamOpenAICompletions: StreamFunction<
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      const compat = getCompat(model);
+      const compat = resolveOpenAICompletionsCompat(model);
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
       const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
@@ -646,7 +641,7 @@ function createClient(
   apiKey?: string,
   optionsHeaders?: Record<string, string>,
   sessionId?: string,
-  compat: ResolvedOpenAICompletionsCompat = getCompat(model),
+  compat: ResolvedOpenAICompletionsCompat = resolveOpenAICompletionsCompat(model),
 ) {
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);
@@ -662,8 +657,8 @@ function createClient(
     Object.assign(headers, copilotHeaders);
   }
 
-  if (sessionId && compat.sendSessionAffinityHeaders) {
-    if (compat.sessionAffinityFormat === "openrouter") {
+  if (sessionId && compat.sessionAffinity !== "none") {
+    if (compat.sessionAffinity === "openrouter") {
       headers["x-session-id"] = sessionId;
     } else {
       headers.session_id = sessionId;
@@ -700,7 +695,7 @@ function buildParams(
   model: Model<"openai-completions">,
   context: Context,
   options?: OpenAICompletionsOptions,
-  compat: ResolvedOpenAICompletionsCompat = getCompat(model),
+  compat: ResolvedOpenAICompletionsCompat = resolveOpenAICompletionsCompat(model),
   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
 ) {
   const cacheControl = getCompatCacheControl(compat, cacheRetention);
@@ -851,8 +846,8 @@ function buildParams(
   }
 
   // OpenRouter provider routing preferences
-  if (model.compat?.openRouterRouting) {
-    params.provider = model.compat.openRouterRouting;
+  if (compat.openRouterRouting) {
+    params.provider = compat.openRouterRouting;
   }
 
   // Vercel AI Gateway provider routing preferences
@@ -1377,129 +1372,4 @@ function parseChunkUsage(
   return usage;
 }
 
-/**
- * Detect compatibility settings from provider and baseUrl for known providers.
- * Provider takes precedence over URL-based detection since it's explicitly configured.
- * Returns a fully resolved OpenAICompletionsCompat object with all fields set.
- */
-function detectCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
-  const provider = model.provider;
-  const baseUrl = model.baseUrl;
-
-  const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
-  const isTogether =
-    provider === "together" ||
-    baseUrl.includes("api.together.ai") ||
-    baseUrl.includes("api.together.xyz");
-  const isMoonshot =
-    provider === "moonshotai" || provider === "moonshotai-cn" || baseUrl.includes("api.moonshot.");
-  const isCloudflareWorkersAI =
-    provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
-  const isCloudflareAiGateway =
-    provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");
-  const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
-
-  const isNonStandard =
-    provider === "cerebras" ||
-    baseUrl.includes("cerebras.ai") ||
-    provider === "xai" ||
-    baseUrl.includes("api.x.ai") ||
-    isTogether ||
-    baseUrl.includes("chutes.ai") ||
-    baseUrl.includes("deepseek.com") ||
-    isZai ||
-    isMoonshot ||
-    provider === "opencode" ||
-    baseUrl.includes("opencode.ai") ||
-    isCloudflareWorkersAI ||
-    isCloudflareAiGateway;
-
-  const useMaxTokens =
-    baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether || isZai;
-
-  const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
-  const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
-  const isXiaomi = provider === "xiaomi" || baseUrl.includes("xiaomimimo.com");
-  const supportsOpenRouterDeveloperRole =
-    isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
-  const usesOpenRouterSessionAffinity =
-    isOpenRouter ||
-    model.compat?.thinkingFormat === "openrouter" ||
-    model.compat?.openRouterRouting !== undefined;
-  const cacheControlFormat =
-    provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
-
-  return {
-    supportsStore: !isNonStandard,
-    supportsDeveloperRole: supportsOpenRouterDeveloperRole || (!isNonStandard && !isOpenRouter),
-    supportsReasoningEffort:
-      !isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway,
-    supportsUsageInStreaming: true,
-    maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
-    requiresToolResultName: false,
-    requiresAssistantAfterToolResult: false,
-    requiresThinkingAsText: false,
-    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
-    thinkingFormat: isDeepSeek
-      ? "deepseek"
-      : isXiaomi
-        ? "deepseek"
-        : isZai
-          ? "zai"
-          : isTogether
-            ? "together"
-            : isOpenRouter
-              ? "openrouter"
-              : "openai",
-    openRouterRouting: {},
-    vercelGatewayRouting: {},
-    zaiToolStream: false,
-    supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
-    cacheControlFormat,
-    sendSessionAffinityHeaders: false,
-    sessionAffinityFormat: usesOpenRouterSessionAffinity ? "openrouter" : "openai",
-    supportsPromptCacheKey: false,
-    supportsLongCacheRetention: !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway),
-  };
-}
-
-/**
- * Get resolved compatibility settings for a model.
- * Uses explicit model.compat if provided, otherwise auto-detects from provider/URL.
- */
-function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
-  const detected = detectCompat(model);
-  if (!model.compat) {
-    return detected;
-  }
-
-  return {
-    supportsStore: model.compat.supportsStore ?? detected.supportsStore,
-    supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
-    supportsReasoningEffort:
-      model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
-    supportsUsageInStreaming:
-      model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
-    maxTokensField: model.compat.maxTokensField ?? detected.maxTokensField,
-    requiresToolResultName: model.compat.requiresToolResultName ?? detected.requiresToolResultName,
-    requiresAssistantAfterToolResult:
-      model.compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
-    requiresThinkingAsText: model.compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
-    requiresReasoningContentOnAssistantMessages:
-      model.compat.requiresReasoningContentOnAssistantMessages ??
-      detected.requiresReasoningContentOnAssistantMessages,
-    thinkingFormat: model.compat.thinkingFormat ?? detected.thinkingFormat,
-    openRouterRouting: model.compat.openRouterRouting ?? {},
-    vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
-    zaiToolStream: model.compat.zaiToolStream ?? detected.zaiToolStream,
-    supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
-    cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
-    sendSessionAffinityHeaders:
-      model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
-    sessionAffinityFormat: detected.sessionAffinityFormat,
-    supportsPromptCacheKey: model.compat.supportsPromptCacheKey ?? detected.supportsPromptCacheKey,
-    supportsLongCacheRetention:
-      model.compat.supportsLongCacheRetention ?? detected.supportsLongCacheRetention,
-  };
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

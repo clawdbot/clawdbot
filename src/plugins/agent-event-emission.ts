@@ -1,5 +1,6 @@
 // Emits agent events requested by plugin hook contracts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasInvalidLifecycleStartTimestamp } from "../infra/agent-event-lifecycle.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   isPluginJsonValue,
@@ -70,6 +71,9 @@ export function emitPluginAgentEvent(params: {
       emitted: false,
       reason: `stream ${stream} must be scoped to plugin ${params.pluginId}`,
     };
+  }
+  if (hasInvalidLifecycleStartTimestamp(stream, params.event.data)) {
+    return { emitted: false, reason: "lifecycle start requires a finite startedAt timestamp" };
   }
   emitAgentEvent({
     runId,

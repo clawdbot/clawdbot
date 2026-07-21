@@ -306,6 +306,70 @@ describe("message hook mappers", () => {
     expect(claimEvent.metadata?.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
   });
 
+  it("projects retained facts into legacy hook media metadata", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        media: [
+          { path: "/tmp/tree.jpg", contentType: "image/jpeg" },
+          { url: "https://example.test/ramp.jpg", kind: "image" },
+        ],
+        MediaPath: undefined,
+        MediaUrl: undefined,
+        MediaType: undefined,
+        MediaPaths: undefined,
+        MediaUrls: undefined,
+        MediaTypes: undefined,
+      }),
+    );
+
+    expect(canonical).toMatchObject({
+      mediaPath: "/tmp/tree.jpg",
+      mediaUrl: "/tmp/tree.jpg",
+      mediaType: "image/jpeg",
+      mediaPaths: ["/tmp/tree.jpg"],
+      mediaUrls: ["/tmp/tree.jpg", "https://example.test/ramp.jpg"],
+      mediaTypes: ["image/jpeg", "image"],
+    });
+
+    const staged = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        media: [{ path: "/remote/tree.jpg", contentType: "image/jpeg" }],
+        MediaStaged: true,
+        MediaPath: "/tmp/staged/tree.jpg",
+        MediaUrl: "/tmp/staged/tree.jpg",
+        MediaType: "image/jpeg",
+        MediaPaths: ["/tmp/staged/tree.jpg"],
+        MediaUrls: ["/tmp/staged/tree.jpg"],
+        MediaTypes: ["image/jpeg"],
+      }),
+    );
+    expect(staged).toMatchObject({
+      mediaPath: "/tmp/staged/tree.jpg",
+      mediaUrl: "/tmp/staged/tree.jpg",
+      mediaPaths: ["/tmp/staged/tree.jpg"],
+      mediaUrls: ["/tmp/staged/tree.jpg"],
+    });
+
+    const workspaceStaged = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        media: [{ path: "/remote/tree.jpg", contentType: "image/jpeg" }],
+        MediaWorkspaceDir: "/tmp/staged",
+        MediaPath: "/tmp/staged/tree.jpg",
+        MediaUrl: "/tmp/staged/tree.jpg",
+        MediaType: "image/jpeg",
+        MediaPaths: ["/tmp/staged/tree.jpg"],
+        MediaUrls: ["/tmp/staged/tree.jpg"],
+        MediaTypes: ["image/jpeg"],
+      }),
+    );
+    expect(workspaceStaged).toMatchObject({
+      mediaPath: "/tmp/staged/tree.jpg",
+      mediaUrl: "/tmp/staged/tree.jpg",
+      mediaPaths: ["/tmp/staged/tree.jpg"],
+      mediaUrls: ["/tmp/staged/tree.jpg"],
+    });
+  });
+
   it("maps canonical inbound context to plugin/internal received payloads", () => {
     const trace: DiagnosticTraceContext = {
       traceId: "11111111111111111111111111111111",

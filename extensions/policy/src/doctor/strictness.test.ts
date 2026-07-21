@@ -23,6 +23,9 @@ describe("policy doctor strictness", () => {
     const alsoAllow = POLICY_RULE_METADATA.find(
       (rule) => rule.policyPath.join(".") === "tools.alsoAllow.expected",
     );
+    const routingProbes = POLICY_RULE_METADATA.find(
+      (rule) => rule.policyPath.join(".") === "routing.probes",
+    );
 
     expect(allowHosts).toBeDefined();
     expect(denyTools).toBeDefined();
@@ -30,6 +33,7 @@ describe("policy doctor strictness", () => {
     expect(fsWorkspaceOnly).toBeDefined();
     expect(denyHostNetwork).toBeDefined();
     expect(alsoAllow).toBeDefined();
+    expect(routingProbes).toBeDefined();
     expect(isPolicyValueAtLeastAsStrict(allowHosts!, ["sandbox"], ["sandbox", "node"])).toBe(true);
     expect(isPolicyValueAtLeastAsStrict(allowHosts!, ["sandbox", "node"], ["sandbox"])).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(allowHosts!, [], ["sandbox"])).toBe(false);
@@ -51,5 +55,87 @@ describe("policy doctor strictness", () => {
     expect(isPolicyValueAtLeastAsStrict(fsWorkspaceOnly!, false, true)).toBe(false);
     expect(isPolicyValueAtLeastAsStrict(alsoAllow!, ["read"], ["read"])).toBe(true);
     expect(isPolicyValueAtLeastAsStrict(alsoAllow!, [], ["read"])).toBe(false);
+    const baselineProbe = {
+      id: "family-dm",
+      route: { channel: "imessage", peer: { kind: "direct", id: "private" } },
+      expect: { agentId: "family", matchedBy: ["binding.peer", "binding.account"] },
+    };
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [{ ...baselineProbe, expect: { ...baselineProbe.expect, matchedBy: ["binding.peer"] } }],
+        [baselineProbe],
+      ),
+    ).toBe(true);
+    expect(isPolicyValueAtLeastAsStrict(routingProbes!, [], [baselineProbe])).toBe(false);
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [{ ...baselineProbe, expect: { ...baselineProbe.expect, matchedBy: [] } }],
+        [baselineProbe],
+      ),
+    ).toBe(false);
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [{ ...baselineProbe, expect: { ...baselineProbe.expect, agentId: "Family" } }],
+        [baselineProbe],
+      ),
+    ).toBe(true);
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [{ ...baselineProbe, expect: { ...baselineProbe.expect, agentId: "main" } }],
+        [baselineProbe],
+      ),
+    ).toBe(false);
+    const scopedBaselineProbe = {
+      ...baselineProbe,
+      route: {
+        channel: "imessage",
+        peer: { kind: "direct", id: "private" },
+        parentPeer: { kind: "group", id: "family-thread" },
+        guildId: "home",
+        teamId: "family",
+      },
+    };
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [
+          {
+            ...scopedBaselineProbe,
+            route: {
+              channel: " IMESSAGE ",
+              accountId: " DEFAULT ",
+              peer: { kind: "direct", id: " private " },
+              parentPeer: { kind: "group", id: " family-thread " },
+              guildId: " home ",
+              teamId: " family ",
+            },
+          },
+        ],
+        [scopedBaselineProbe],
+      ),
+    ).toBe(true);
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [{ ...baselineProbe, route: { ...baselineProbe.route, accountId: "*" } }],
+        [baselineProbe],
+      ),
+    ).toBe(true);
+    expect(
+      isPolicyValueAtLeastAsStrict(
+        routingProbes!,
+        [
+          {
+            ...scopedBaselineProbe,
+            route: { ...scopedBaselineProbe.route, guildId: "other" },
+          },
+        ],
+        [scopedBaselineProbe],
+      ),
+    ).toBe(false);
   });
 });

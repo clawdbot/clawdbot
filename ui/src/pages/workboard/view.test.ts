@@ -56,6 +56,97 @@ function changeWorkboardSelect(select: Element | null | undefined, value: string
 }
 
 describe("renderWorkboard", () => {
+  it("shows a card dashboard only for linked cards while the plugin is active", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Dashboard-aware card",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).toBeNull();
+
+    state.cards = [{ ...state.cards[0]!, sessionKey: "agent:main:dashboard-aware" }];
+    renderInto(container, props);
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).not.toBeNull();
+
+    renderInto(container, { ...props, pluginEnabled: false });
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).toBeNull();
+  });
+
+  it("releases the card dashboard provider when the details panel closes", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const sessionKey = "agent:main:dashboard-panel-close";
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Disposable dashboard card",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey,
+      },
+    ];
+    const removeListener = vi.fn();
+    const request = vi.fn(async () => ({
+      sessionKey,
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    }));
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: {
+        request,
+        addEventListener: vi.fn(() => removeListener),
+      } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", { sessionKey }));
+
+    state.detailCardId = null;
+    renderInto(container, props);
+    await nextFrame();
+
+    expect(removeListener).toHaveBeenCalledOnce();
+    container.remove();
+  });
+
   it("keeps manual recovery refresh visible while data is loading", () => {
     const host = {};
     const state = getWorkboardState(host);

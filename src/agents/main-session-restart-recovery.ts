@@ -364,6 +364,9 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
       ? undefined
       : normalizeStringSet(params.activeSessionKeys);
   const updatedBeforeMs = normalizeFiniteTimestamp(params.updatedBeforeMs);
+  // Lifecycle rotation synchronously evicts stale owners, so this same registry
+  // view drives both operational routing and recovery suppression. Re-read it at
+  // each check so a newer owner can still fence an older async recovery scan.
   const resolveActiveSessionIds = () =>
     providedActiveSessionIds ?? normalizeStringSet(listActiveEmbeddedRunSessionIds());
   const resolveActiveSessionKeys = () =>

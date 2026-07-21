@@ -45,6 +45,10 @@ import {
 } from "./components/chat-thread.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+import {
+  workspaceConflictPathForDisplay,
+  workspaceResultConflictFromTranscript,
+} from "./workspace-conflict.ts";
 
 const registeredAttachmentPayloads = new Map<
   string,
@@ -268,6 +272,7 @@ function renderWorkGroupSummaryMock(
 beforeEach(() => {
   vi.spyOn(chatThread, "buildCachedChatItems").mockImplementation(buildChatItemsMock);
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
+  vi.spyOn(chatThread, "getExpandedUserMessages").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "syncToolCardExpansionState").mockImplementation(() => undefined);
   vi.spyOn(chatMessage, "getAssistantAttachmentAvailabilityRenderVersion").mockImplementation(
     () => assistantAttachmentRenderVersionMock.value,
@@ -751,6 +756,112 @@ describe("chat compaction divider", () => {
   });
 });
 
+describe("cloud workspace conflict notice", () => {
+  const conflict = {
+    paths: [
+      "src/[path]-1.ts",
+      "src/path-2.ts",
+      "src/path-3.ts",
+      "src/path-4.ts",
+      "src/path-5.ts",
+      "src/path-6.ts",
+    ],
+    stagedResultRef: "refs/openclaw/worker-results/claim-123",
+    totalCount: 9,
+  };
+
+  it("bounds paths and renders copyable staged-ref guidance", () => {
+    const onDismissWorkspaceConflict = vi.fn();
+    const container = renderChatView({
+      workspaceConflict: conflict,
+      onDismissWorkspaceConflict,
+    });
+
+    const notice = requireElement(
+      container,
+      ".chat-workspace-conflict-notice",
+      "workspace conflict notice",
+    );
+    expect(notice.textContent).toContain("9 cloud workspace conflicts");
+    expect(notice.querySelectorAll(".chat-workspace-conflict-paths li")).toHaveLength(5);
+    expect(notice.textContent).toContain("+4 more paths");
+    expect(notice.textContent).toContain(conflict.stagedResultRef);
+    expect(notice.textContent).toContain("Git Bash on Windows");
+    expect(notice.textContent).toContain("file/directory conflict");
+    expect(notice.textContent).toContain("cloud deleted it");
+    expect(notice.textContent).toContain("staged ref is missing");
+
+    const commands = [...notice.querySelectorAll(".chat-workspace-conflict-commands code")].map(
+      (element) => element.textContent,
+    );
+    expect(commands).toEqual([
+      "git show 'refs/openclaw/worker-results/claim-123:src/[path]-1.ts'",
+      "git checkout 'refs/openclaw/worker-results/claim-123' -- ':(top,literal)src/[path]-1.ts'",
+    ]);
+    expect(
+      notice.querySelector<HTMLButtonElement>('[aria-label="Copy cloud inspect command"]'),
+    ).toBeInstanceOf(HTMLButtonElement);
+    expect(
+      notice.querySelector<HTMLButtonElement>('[aria-label="Copy take-cloud command"]'),
+    ).toBeInstanceOf(HTMLButtonElement);
+
+    notice
+      .querySelector<HTMLButtonElement>('[aria-label="Dismiss workspace conflict notice"]')!
+      .click();
+    expect(onDismissWorkspaceConflict).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the notice after the cleared projection drops the conflict", () => {
+    const container = document.createElement("div");
+    render(renderChat(createChatProps({ workspaceConflict: conflict })), container);
+    expect(container.querySelector(".chat-workspace-conflict-notice")).not.toBeNull();
+
+    render(renderChat(createChatProps()), container);
+    expect(container.querySelector(".chat-workspace-conflict-notice")).toBeNull();
+  });
+
+  it.each(["\u001b[201~echo injected\n", "\r", "\u007f", "\u0085"])(
+    "keeps terminal-control paths visible without building copyable commands (%j)",
+    (controlSequence) => {
+      const entryPath = `src/${controlSequence}unsafe.ts`;
+      const normalizedConflict = workspaceResultConflictFromTranscript({
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        details: {
+          paths: [entryPath],
+          stagedResultRef: "refs/openclaw/worker-results/claim-unsafe",
+        },
+      });
+      expect(normalizedConflict).toBeDefined();
+      const container = renderChatView({ workspaceConflict: normalizedConflict });
+      expect(container.querySelector(".chat-workspace-conflict-paths code")?.textContent).toBe(
+        workspaceConflictPathForDisplay(entryPath),
+      );
+      expect(container.querySelector(".chat-workspace-conflict-commands")).toBeNull();
+      expect(container.textContent).toContain("will not build a copyable shell command");
+    },
+  );
+
+  it("builds recovery commands for the first shell-safe conflicted path", () => {
+    const normalizedConflict = workspaceResultConflictFromTranscript({
+      role: "custom",
+      customType: "cloud-workspace-conflict",
+      details: {
+        paths: ["src/unsafe\nname.ts", "src/safe.ts"],
+        stagedResultRef: "refs/openclaw/worker-results/claim-mixed",
+      },
+    });
+    const container = renderChatView({ workspaceConflict: normalizedConflict });
+    const commands = [...container.querySelectorAll(".chat-workspace-conflict-commands code")].map(
+      (element) => element.textContent,
+    );
+    expect(commands).toEqual([
+      "git show 'refs/openclaw/worker-results/claim-mixed:src/safe.ts'",
+      "git checkout 'refs/openclaw/worker-results/claim-mixed' -- ':(top,literal)src/safe.ts'",
+    ]);
+  });
+});
+
 describe("chat conversation width", () => {
   it("applies a configured width once to the centered transcript frame", () => {
     const container = renderChatView({
@@ -899,7 +1010,7 @@ describe("direct thread avatar mode", () => {
       sessionKey: "kind-direct",
       sessions: sessionsListWithKind("kind-direct", "direct"),
       messages: labeledHistory,
-      attributedIdentity: true,
+      userId: "profile-1",
     });
     // Multi-user gateways share even 1:1-shaped sessions, so the author
     // marker is signal, not decoration.
@@ -1067,6 +1178,80 @@ describe("chat code-block copy", () => {
 });
 
 describe("chat transcript rendering", () => {
+  it("refreshes cached inline reply handlers when the callback identity changes", () => {
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const firstReply = vi.fn();
+    const currentReply = vi.fn();
+    const message = { role: "assistant", content: "Reply target", timestamp: 1 };
+    const messages = [message];
+    const stableChatItems = [
+      {
+        kind: "group",
+        key: "group:assistant:reply-callback-cache",
+        role: "assistant",
+        messages: [{ key: "message:reply-callback-cache", message }],
+        timestamp: 1,
+        isStreaming: false,
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>;
+    const defaultBuildChatItems = buildChatItemsMock.getMockImplementation();
+    const defaultRenderMessageGroup = renderMessageGroupMock.getMockImplementation();
+    buildChatItemsMock.mockReturnValue(stableChatItems);
+    renderMessageGroupMock.mockImplementation(
+      (
+        ...[_group, opts]: Parameters<typeof chatMessage.renderMessageGroup>
+      ): ReturnType<typeof chatMessage.renderMessageGroup> => html`
+        <button
+          aria-label="Reply to message"
+          @click=${() =>
+            opts.onReply?.({
+              messageId: "assistant-message",
+              senderLabel: "Val",
+              text: "Reply target",
+            })}
+        >
+          Reply
+        </button>
+      `,
+    );
+    const container = document.createElement("div");
+    const renderWithReply = (onSetReply: typeof firstReply) => {
+      render(
+        renderChat(
+          createChatProps({
+            paneId: "reply-callback-cache",
+            transcript,
+            messages,
+            onSetReply,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderWithReply(firstReply);
+    renderWithReply(currentReply);
+    requireElement(
+      container,
+      '[aria-label="Reply to message"]',
+      "inline reply button",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    if (defaultRenderMessageGroup) {
+      renderMessageGroupMock.mockImplementation(defaultRenderMessageGroup);
+    }
+    if (defaultBuildChatItems) {
+      buildChatItemsMock.mockImplementation(defaultBuildChatItems);
+    }
+
+    expect(firstReply).not.toHaveBeenCalled();
+    expect(currentReply).toHaveBeenCalledOnce();
+  });
+
   it("passes the full loaded history to one render path and leaves scroll ownership to the pane", () => {
     const messages = Array.from({ length: 80 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
@@ -1727,6 +1912,34 @@ describe("per-pane chat presentation state", () => {
 });
 
 describe("chat transcript rendering cache", () => {
+  it("rerenders transcript groups when the current profile id arrives", () => {
+    const messages = [{ role: "user", content: "hi" }];
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      {
+        kind: "group",
+        key: "group:user:test",
+        role: "user",
+        messages: [{ key: "message:user:test", message: messages[0] }],
+        timestamp: 1,
+        isStreaming: false,
+      },
+    ]);
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const props = createChatProps({ messages, transcript, userName: "Fuller Stack" });
+    const container = document.createElement("div");
+
+    render(renderChat(props), container);
+    render(renderChat({ ...props, userId: "profile-1" }), container);
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
+    expect(renderMessageGroupMock.mock.calls[1]?.[1]).toMatchObject({ userId: "profile-1" });
+  });
+
   it("rerenders transcript groups when assistant attachment availability changes", () => {
     const messages = [{ role: "assistant", content: "ready" }];
     const toolMessages: unknown[] = [];
@@ -2677,8 +2890,16 @@ describe("chat composer sizing", () => {
     expect(textarea.style.overflowY).toBe("auto");
   });
 
-  it("rechecks overflow when responsive layout changes the textarea height", () => {
+  it("resizes the draft when responsive layout changes the textarea width", () => {
     let resizeCallback: ResizeObserverCallback | undefined;
+    let animationFrameCallback: FrameRequestCallback | undefined;
+    let nextAnimationFrameId = 0;
+    const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
+      animationFrameCallback = callback;
+      nextAnimationFrameId += 1;
+      return nextAnimationFrameId;
+    });
+    const cancelAnimationFrameMock = vi.fn();
     class TestResizeObserver {
       constructor(callback: ResizeObserverCallback) {
         resizeCallback = callback;
@@ -2691,26 +2912,59 @@ describe("chat composer sizing", () => {
       }
     }
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    vi.stubGlobal("requestAnimationFrame", requestAnimationFrameMock);
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
+
+    let width = 320;
+    let scrollHeight = 42;
+    let clientHeight = 42;
+    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
+      bottom: clientHeight,
+      height: clientHeight,
+      left: 0,
+      right: width,
+      top: 0,
+      width,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+
     const container = renderChatView({});
     const textarea = requireElement(
       container,
       ".agent-chat__composer-combobox > textarea",
       "composer textarea",
     ) as HTMLTextAreaElement;
-    let scrollHeight = 42;
-    let clientHeight = 42;
     Object.defineProperties(textarea, {
       scrollHeight: { configurable: true, get: () => scrollHeight },
       clientHeight: { configurable: true, get: () => clientHeight },
     });
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(textarea.style.height).toBe("42px");
     expect(textarea.style.overflowY).toBe("hidden");
 
-    scrollHeight = 120;
-    clientHeight = 56;
+    scrollHeight = 180;
+    clientHeight = 150;
     resizeCallback?.([], {} as ResizeObserver);
-
     expect(textarea.style.overflowY).toBe("auto");
+    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
+
+    width = 180;
+    scrollHeight = 120;
+    clientHeight = 120;
+    resizeCallback?.([], {} as ResizeObserver);
+    expect(requestAnimationFrameMock).toHaveBeenCalledOnce();
+    expect(textarea.style.height).toBe("42px");
+
+    animationFrameCallback?.(0);
+    expect(textarea.style.height).toBe("120px");
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    width = 160;
+    resizeCallback?.([], {} as ResizeObserver);
+    render(html``, container);
+    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(2);
   });
 });
 
@@ -5319,15 +5573,24 @@ describe("chat model controls", () => {
 });
 
 describe("right-click Reply", () => {
-  it("adds rewind and fork actions only for persisted user bubbles", () => {
+  it("keeps inline actions in the context menu alongside user rewind and fork", () => {
     const onRewindMessage = vi.fn().mockResolvedValue(true);
     const onForkMessage = vi.fn();
-    const container = renderChatView({ onRewindMessage, onForkMessage, onSetReply: vi.fn() });
+    const onOpenSidebar = vi.fn();
+    const onCopy = vi.fn();
+    const container = renderChatView({
+      onRewindMessage,
+      onForkMessage,
+      onOpenSidebar,
+      onSetReply: vi.fn(),
+    });
     const section = container.querySelector<HTMLElement>(".card.chat")!;
     const group = document.createElement("div");
     group.className = "chat-group user";
+    group.dataset.chatRowKey = "group:user:persisted";
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
+    bubble.dataset.messageId = "message-1";
     bubble.dataset.entryId = "persisted-user";
     bubble.dataset.messageText = "hello";
     group.appendChild(bubble);
@@ -5338,17 +5601,113 @@ describe("right-click Reply", () => {
     const labels = [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
       button.textContent?.trim(),
     );
-    expect(labels).toEqual(["Reply", "Rewind to here", "Fork from here"]);
+    expect(labels).toEqual(["Reply", "Rewind to here", "Hide message", "Fork from here"]);
     document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')!.click();
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
     group.className = "chat-group assistant";
+    const onSiblingExpand = vi.fn();
+    const siblingActionOwner = document.createElement("div");
+    siblingActionOwner.dataset.messageActionsFor = "message-0";
+    const siblingExpandButton = document.createElement("button");
+    siblingExpandButton.className = "chat-expand-btn";
+    siblingExpandButton.addEventListener("click", onSiblingExpand);
+    siblingActionOwner.append(siblingExpandButton);
+    const expandButton = document.createElement("button");
+    expandButton.className = "chat-expand-btn";
+    expandButton.addEventListener("click", () =>
+      onOpenSidebar({ kind: "markdown", content: "hello" }),
+    );
+    const copyButton = document.createElement("button");
+    copyButton.className = "chat-copy-btn";
+    copyButton.addEventListener("click", onCopy);
+    const actionOwner = document.createElement("div");
+    actionOwner.dataset.messageActionsFor = "message-1";
+    actionOwner.append(expandButton, copyButton);
+    group.append(siblingActionOwner, actionOwner);
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     expect(
       [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
         button.textContent?.trim(),
       ),
-    ).toEqual(["Reply"]);
+    ).toEqual(["Reply", "Hide message", "Open in canvas", "Copy as markdown"]);
+    expect(
+      document.querySelector('.chat-reply-context-menu [aria-label="Reply to message"] svg'),
+    ).toBeNull();
+
+    document.querySelector<HTMLButtonElement>('[aria-label="Open in canvas"]')!.click();
+    expect(onOpenSidebar).toHaveBeenCalledWith({ kind: "markdown", content: "hello" });
+    expect(onSiblingExpand).not.toHaveBeenCalled();
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();
+    expect(onCopy).toHaveBeenCalledOnce();
+  });
+
+  it("confirms Hide from the context menu before hiding the message locally", () => {
+    const storedValues = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      clear: () => storedValues.clear(),
+      getItem: (key: string) => storedValues.get(key) ?? null,
+      key: (index: number) => [...storedValues.keys()][index] ?? null,
+      get length() {
+        return storedValues.size;
+      },
+      removeItem: (key: string) => storedValues.delete(key),
+      setItem: (key: string, value: string) => storedValues.set(key, value),
+    } satisfies Storage);
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ sessionKey: "context-hide-test", onRequestUpdate });
+    const group = document.createElement("div");
+    group.className = "chat-group assistant";
+    group.dataset.chatRowKey = "group:assistant:persisted";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    document.querySelector<HTMLButtonElement>('[aria-label="Hide message"]')!.click();
+    expect(document.querySelector(".chat-delete-confirm")).not.toBeNull();
+    document.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+
+    expect(storedValues.get("openclaw:deleted:context-hide-test")).toBe(
+      JSON.stringify(["group:assistant:persisted"]),
+    );
+    expect(onRequestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("dismisses an inline confirmation before opening the reply context menu", () => {
+    const container = renderChatView({ onSetReply: vi.fn() });
+    document.body.appendChild(container);
+    const section = container.querySelector<HTMLElement>(".card.chat")!;
+    const confirmationOwner = document.createElement("span");
+    confirmationOwner.className = "chat-delete-wrap";
+    const confirmationTrigger = document.createElement("button");
+    confirmationOwner.appendChild(confirmationTrigger);
+    section.appendChild(confirmationOwner);
+    window.localStorage.removeItem("openclaw:skip-rewind-confirm");
+    chatMessage.openChatRewindConfirmation(confirmationTrigger, vi.fn());
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageText = "open message actions";
+    group.appendChild(bubble);
+    section.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    try {
+      expect(confirmationOwner.querySelector(".chat-delete-confirm")).not.toBeNull();
+      bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+      expect(confirmationOwner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+    } finally {
+      chatMessage.dismissConfirmedActionPopovers(confirmationOwner);
+      confirmationOwner.remove();
+      container.remove();
+    }
   });
 
   it("disables rewind and fork context actions during an active run", () => {
@@ -5522,6 +5881,112 @@ describe("right-click Reply", () => {
 
     expect(evt.defaultPrevented).toBe(true);
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("dismisses a context-menu Rewind confirmation with Escape before closing the menu", () => {
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    const flushFrames = () => {
+      for (const callback of frameCallbacks.splice(0)) {
+        callback(0);
+      }
+    };
+    const container = renderChatView({
+      paneId: "pane-a",
+      onRewindMessage: vi.fn(),
+    });
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    bubble.dataset.messageText = "hello";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushFrames();
+    const rewindButton = document.querySelector<HTMLButtonElement>(
+      '.chat-reply-context-menu [aria-label="Rewind to here"]',
+    );
+    expect(rewindButton).toBeInstanceOf(HTMLButtonElement);
+    rewindButton!.click();
+    flushFrames();
+
+    const cancel = document.querySelector<HTMLButtonElement>(
+      ".chat-reply-context-menu .chat-delete-confirm__cancel",
+    );
+    expect(cancel).toBeInstanceOf(HTMLButtonElement);
+    expect(document.activeElement).toBe(cancel);
+    const confirmationEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    cancel!.dispatchEvent(confirmationEscape);
+
+    expect(confirmationEscape.defaultPrevented).toBe(true);
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+    expect(document.activeElement).toBe(rewindButton);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("removes a portaled Rewind confirmation only when its owning pane resets", () => {
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    const flushFrames = () => {
+      for (const callback of frameCallbacks.splice(0)) {
+        callback(0);
+      }
+    };
+    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
+    const removeWindowListener = vi.spyOn(window, "removeEventListener");
+    const onRewindMessage = vi.fn();
+    const container = renderChatView({ paneId: "pane-a", onRewindMessage });
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    bubble.dataset.messageText = "hello";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushFrames();
+    document
+      .querySelector<HTMLButtonElement>('.chat-reply-context-menu [aria-label="Rewind to here"]')!
+      .click();
+    flushFrames();
+
+    resetChatThreadPresentationState("pane-b");
+    expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).not.toBeNull();
+
+    resetChatThreadPresentationState("pane-a");
+
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(onRewindMessage).not.toHaveBeenCalled();
+    expect(removeDocumentListener).toHaveBeenCalledWith("click", expect.any(Function), true);
+    expect(removeWindowListener).toHaveBeenCalledWith("keydown", expect.any(Function), true);
   });
 
   it("dismisses the reply context menu before a later context menu opens", () => {

@@ -16,7 +16,6 @@ import { handleEmbeddedAttemptPromptError } from "./attempt-prompt-error.js";
 import { handleEmbeddedAttemptMidTurnPrecheck } from "./attempt-prompt-preflight.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "./attempt-transcript-helpers.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import { PREEMPTIVE_OVERFLOW_ERROR_TEXT } from "./preemptive-compaction.js";
 
 type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
 type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
@@ -39,10 +38,7 @@ type PromptContextPhaseInput = Omit<
 >;
 type PromptExecutionPhaseInput = Omit<PromptDispatchInput["execution"], "sessionLockController">;
 type PromptObservationPhaseInput = Omit<PromptDispatchInput["observation"], "transcriptLeafId">;
-type PromptPreflightPhaseInput = Omit<
-  PromptDispatchInput["preflight"],
-  "sessionManager" | "withOwnedSessionWriteLock"
-> & {
+type PromptPreflightPhaseInput = PromptDispatchInput["preflight"] & {
   activeContextEngine?: PromptDispatchInput["activeContextEngine"];
 };
 type PromptSubmissionPhaseInput = Pick<
@@ -52,13 +48,14 @@ type PromptSubmissionPhaseInput = Pick<
   | "toolResultPromptProjectionState"
   | "trajectoryRecorder"
 >;
+type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 export async function runEmbeddedAttemptPromptPhase(input: {
   attempt: PromptAssemblyInput["attempt"];
   activeSession: PromptAssemblyInput["activeSession"];
   sessionManager: PromptAssemblyInput["sessionManager"];
   sessionLockController: PromptDispatchInput["execution"]["sessionLockController"];
-  withOwnedSessionWriteLock: PromptDispatchInput["preflight"]["withOwnedSessionWriteLock"];
+  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
   getCompactionReserveTokens: () => number;
   emptyExplicitToolAllowlistError?: Error;
   assembly: PromptAssemblyPhaseInput;
@@ -180,25 +177,9 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       },
       ...input.context,
     });
-    const {
-      aggregatePressureEngaged,
-      hookMessagesForCurrentPrompt,
-      promptForModel,
-      systemPromptForHook,
-    } = promptContext;
+    const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     input.lifecycle.setPrePromptMessageCount(promptContext.prePromptMessageCount);
     input.lifecycle.setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
-    if (aggregatePressureEngaged) {
-      // Compaction and aggregate truncation both target about half the window;
-      // compact-then-truncate prevents re-hitting the same cap on the next turn.
-      patchState({
-        preflightRecovery: { route: "compact_then_truncate" },
-        promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
-        promptErrorSource: "precheck",
-      });
-      skipPromptSubmission = true;
-    }
-
     const beforeAgentRunOutcome = await runEmbeddedAttemptBeforeAgentRun({
       attempt,
       activeSession,
@@ -269,11 +250,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
         ...input.observation,
         transcriptLeafId,
       },
-      preflight: {
-        ...preflight,
-        sessionManager,
-        withOwnedSessionWriteLock: input.withOwnedSessionWriteLock,
-      },
+      preflight,
       submission: {
         ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
         ...(leasedSteering ? { leasedSteering } : {}),

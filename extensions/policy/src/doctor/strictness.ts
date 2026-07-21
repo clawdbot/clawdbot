@@ -1,6 +1,11 @@
 // Policy doctor strictness comparisons for scoped policy overlays.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeAccountId, normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
 import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
 import type { PolicyRuleMetadata } from "./metadata.js";
 
@@ -28,8 +33,146 @@ export function isPolicyValueAtLeastAsStrict(
       return baseline !== false || candidate === false;
     case "exact-list":
       return samePolicyStringList(candidate, baseline, metadata);
+    case "routing-probes":
+      return routingProbesAtLeastAsStrict(candidate, baseline);
   }
   return false;
+}
+
+function routingProbesAtLeastAsStrict(candidate: unknown, baseline: unknown): boolean {
+  if (!Array.isArray(candidate) || !Array.isArray(baseline)) {
+    return false;
+  }
+  const candidateById = new Map<string, Record<string, unknown>>();
+  for (const entry of candidate) {
+    if (!isRecord(entry) || !nonEmptyString(entry.id) || candidateById.has(entry.id)) {
+      return false;
+    }
+    candidateById.set(entry.id, entry);
+  }
+  return baseline.every((baselineEntry) => {
+    if (!isRecord(baselineEntry) || !nonEmptyString(baselineEntry.id)) {
+      return false;
+    }
+    const candidateEntry = candidateById.get(baselineEntry.id);
+    if (!isRecord(candidateEntry)) {
+      return false;
+    }
+    const candidateRoute = canonicalRoutingRoute(candidateEntry.route);
+    const baselineRoute = canonicalRoutingRoute(baselineEntry.route);
+    if (
+      candidateRoute === undefined ||
+      baselineRoute === undefined ||
+      candidateRoute !== baselineRoute ||
+      !isRecord(candidateEntry.expect) ||
+      !isRecord(baselineEntry.expect) ||
+      !nonEmptyString(candidateEntry.expect.agentId) ||
+      !nonEmptyString(baselineEntry.expect.agentId) ||
+      normalizeAgentId(candidateEntry.expect.agentId) !==
+        normalizeAgentId(baselineEntry.expect.agentId)
+    ) {
+      return false;
+    }
+    return routingMatchKindsAtLeastAsStrict(
+      candidateEntry.expect.matchedBy,
+      baselineEntry.expect.matchedBy,
+    );
+  });
+}
+
+function routingMatchKindsAtLeastAsStrict(candidate: unknown, baseline: unknown): boolean {
+  if (baseline === undefined) {
+    return candidate === undefined || validRoutingMatchKinds(candidate);
+  }
+  if (!validRoutingMatchKinds(candidate) || !validRoutingMatchKinds(baseline)) {
+    return false;
+  }
+  const baselineKinds = new Set(baseline);
+  return candidate.every((entry) => baselineKinds.has(entry));
+}
+
+function validRoutingMatchKinds(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (entry) => typeof entry === "string" && ROUTING_MATCH_KINDS.includes(entry as never),
+    ) &&
+    new Set(value).size === value.length
+  );
+}
+
+function canonicalRoutingRoute(value: unknown): string | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some(
+      (key) =>
+        ![
+          "accountId",
+          "channel",
+          "guildId",
+          "memberRoleIds",
+          "parentPeer",
+          "peer",
+          "teamId",
+        ].includes(key),
+    ) ||
+    !nonEmptyString(value.channel) ||
+    [value.accountId, value.guildId, value.teamId].some(
+      (entry) => entry !== undefined && !nonEmptyString(entry),
+    )
+  ) {
+    return undefined;
+  }
+  const peer = canonicalRoutingPeer(value.peer);
+  const parentPeer = canonicalRoutingPeer(value.parentPeer);
+  if (peer === null || parentPeer === null) {
+    return undefined;
+  }
+  const memberRoleIds = value.memberRoleIds;
+  if (
+    memberRoleIds !== undefined &&
+    (!Array.isArray(memberRoleIds) ||
+      memberRoleIds.length === 0 ||
+      memberRoleIds.some((entry) => !nonEmptyString(entry)) ||
+      new Set(memberRoleIds).size !== memberRoleIds.length)
+  ) {
+    return undefined;
+  }
+  return JSON.stringify({
+    channel: normalizeLowercaseStringOrEmpty(value.channel),
+    // Probe account ids are inbound values, not binding patterns, so "*" follows
+    // resolveAgentRoute and normalizes to the default account rather than a wildcard.
+    accountId: normalizeAccountId(value.accountId as string | undefined),
+    peer,
+    parentPeer,
+    guildId: normalizeRoutingId(value.guildId),
+    teamId: normalizeRoutingId(value.teamId),
+    memberRoleIds: memberRoleIds?.toSorted(),
+  });
+}
+
+function canonicalRoutingPeer(value: unknown): object | undefined | null {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => key !== "id" && key !== "kind") ||
+    !(["channel", "direct", "group"] as const).includes(value.kind as never) ||
+    !nonEmptyString(value.id)
+  ) {
+    return null;
+  }
+  return { kind: value.kind, id: value.id.trim() };
+}
+
+function normalizeRoutingId(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() : undefined;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
 }
 
 function isPolicyOrderedStringAtLeastAsStrict(

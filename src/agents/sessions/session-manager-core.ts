@@ -582,6 +582,15 @@ export class SessionManagerCore {
     }
   }
 
+  /** Makes pending append-oriented persistence durable without replacing SQLite transcripts. */
+  protected flushPendingPersistence(): void {
+    if (!this.shouldPersist || this.sqlitePersistence || this.flushed || !this.sessionFile) {
+      return;
+    }
+    this.replacePersistedTranscript();
+    this.flushed = true;
+  }
+
   isPersisted(): boolean {
     return this.shouldPersist;
   }

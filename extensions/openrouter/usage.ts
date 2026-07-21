@@ -1,6 +1,6 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ProviderUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
 import { buildUsageHttpErrorSnapshot } from "openclaw/plugin-sdk/provider-usage";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 
 const OPENROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
 const OPENROUTER_API_ROOT = "https://openrouter.ai/api/v1";
@@ -75,13 +75,12 @@ function resolveKeyBudget(
 }
 
 async function readJson(response: Response, timeoutMs: number): Promise<unknown> {
-  const buffer = await readResponseWithLimit(response, OPENROUTER_USAGE_RESPONSE_MAX_BYTES, {
+  return await readProviderJsonResponse(response, "OpenRouter usage", {
+    maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ maxBytes }) => new Error(`OpenRouter usage response exceeds ${maxBytes} bytes`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`OpenRouter usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(new TextDecoder().decode(buffer));
 }
 
 async function fetchEndpoint(params: {

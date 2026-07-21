@@ -58,6 +58,31 @@ function controlsHtml() {
   `;
 }
 
+function mediaDeviceRowsHtml() {
+  return `
+    <main style="width: 100%; max-width: 900px">
+      <div class="settings-row">
+        <div class="settings-row__text"><span class="settings-row__title">Microphone input</span></div>
+        <div class="settings-row__control">
+          <select class="settings-select settings-select--media-device">
+            <option>MacBook Pro Microphone (Built-in)</option>
+          </select>
+          <button class="btn btn--sm btn--icon" type="button">↻</button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-row__text"><span class="settings-row__title">Camera</span></div>
+        <div class="settings-row__control">
+          <select class="settings-select settings-select--media-device">
+            <option>System default</option>
+          </select>
+          <button class="btn btn--sm btn--icon" type="button">↻</button>
+        </div>
+      </div>
+    </main>
+  `;
+}
+
 async function openMobileFixture(): Promise<MobileFixture> {
   let page: Page | undefined;
   try {
@@ -102,6 +127,51 @@ afterAll(async () => {
     mobileContext?.close().catch(() => {}),
   ]);
   await browser?.close().catch(() => {});
+});
+
+describeBrowserLayout("settings media device controls", () => {
+  it("keeps paired selectors the same width across device labels and viewports", async () => {
+    const page = await desktopContext.newPage();
+    try {
+      await page.setViewportSize({ width: 1200, height: 800 });
+      await page.setContent(
+        `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${mediaDeviceRowsHtml()}</body></html>`,
+      );
+
+      const measure = () =>
+        page.locator(".settings-row").evaluateAll((rows) =>
+          rows.map((row) => {
+            const select = row.querySelector(".settings-select--media-device");
+            const button = row.querySelector(".btn--icon");
+            if (!(select instanceof HTMLElement) || !(button instanceof HTMLElement)) {
+              throw new Error("Missing media device controls");
+            }
+            const selectRect = select.getBoundingClientRect();
+            const buttonRect = button.getBoundingClientRect();
+            return {
+              selectWidth: selectRect.width,
+              selectTop: selectRect.top,
+              buttonTop: buttonRect.top,
+            };
+          }),
+        );
+
+      const desktop = await measure();
+      expect(desktop.map((row) => row.selectWidth)).toEqual([340, 340]);
+      expect(desktop.every((row) => row.selectTop === row.buttonTop)).toBe(true);
+
+      await page.setViewportSize({ width: 390, height: 800 });
+      await page.locator("main").evaluate((main) => {
+        main.style.width = "285px";
+      });
+      const mobile = await measure();
+      expect(mobile[0]?.selectWidth).toBeCloseTo(mobile[1]?.selectWidth ?? 0, 5);
+      expect(mobile[0]?.selectWidth).toBeLessThan(340);
+      expect(mobile.every((row) => row.selectTop === row.buttonTop)).toBe(true);
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
 });
 
 describeBrowserLayout("touch-primary form controls", () => {

@@ -63,6 +63,7 @@ import {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "./setup-wizard-helpers.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
 
 const matrixSingleAccountKeysToMove = [
   "allowBots",
@@ -81,7 +82,11 @@ const matrixNamedAccountPromotionKeys = [
   "homeserver",
   "userId",
 ] as const;
-const telegramSingleAccountKeysToMove = ["streaming"] as const;
+const telegramSingleAccountKeysToMove = ["streaming", "webhookSecret"] as const;
+const telegramSetupSurface = {
+  applyAccountConfig: ({ cfg }) => cfg,
+  singleAccountKeysToMove: telegramSingleAccountKeysToMove,
+} as ChannelSetupAdapter;
 
 function collectNamedAccountIds(accounts: Record<string, unknown>): string[] {
   const ids: string[] = [];
@@ -937,6 +942,7 @@ describe("patchChannelConfigForAccount", () => {
           allowFrom: ["100"],
           groupPolicy: "allowlist",
           streaming: { mode: "partial" },
+          webhookSecret: "legacy-webhook-secret",
         },
       },
     };
@@ -946,6 +952,7 @@ describe("patchChannelConfigForAccount", () => {
       channel: "telegram",
       accountId: "work",
       patch: { botToken: "work-token" },
+      setupSurface: telegramSetupSurface,
     });
 
     expect(next.channels?.telegram?.accounts?.default).toEqual({
@@ -953,11 +960,13 @@ describe("patchChannelConfigForAccount", () => {
       allowFrom: ["100"],
       groupPolicy: "allowlist",
       streaming: { mode: "partial" },
+      webhookSecret: "legacy-webhook-secret",
     });
     expect(next.channels?.telegram?.botToken).toBeUndefined();
     expect(next.channels?.telegram?.allowFrom).toBeUndefined();
     expect(next.channels?.telegram?.groupPolicy).toBeUndefined();
     expect(next.channels?.telegram?.streaming).toBeUndefined();
+    expect(next.channels?.telegram?.webhookSecret).toBeUndefined();
     expect(next.channels?.telegram?.accounts?.work?.botToken).toBe("work-token");
   });
 

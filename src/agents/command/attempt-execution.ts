@@ -1093,6 +1093,7 @@ export async function runAgentAttempt(params: {
     toolsAllow: params.opts.toolsAllow,
     runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
     drainsContinuationDelegateQueue: params.opts.drainsContinuationDelegateQueue,
+    trustedInternalHandoff: params.opts.trustedInternalHandoff,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,

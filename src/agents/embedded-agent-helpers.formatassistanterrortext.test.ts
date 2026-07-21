@@ -364,6 +364,13 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
 
+  it("does not rewrite Provider finish_reason: error into a timeout (#109218)", () => {
+    const msg = makeAssistantError("Provider finish_reason: error");
+    // Keep provider signal; do not rewrite to the timeout string (formatAssistantErrorText
+    // may return undefined for some paths — assert the concrete copy we preserve).
+    expect(formatAssistantErrorText(msg)).toBe("Provider finish_reason: error");
+  });
+
   it("returns a connection-refused message for ECONNREFUSED failures", () => {
     const msg = makeAssistantError("connect ECONNREFUSED 127.0.0.1:443 during upstream call");
     expect(formatAssistantErrorText(msg)).toBe(

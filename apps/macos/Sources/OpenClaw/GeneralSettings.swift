@@ -479,7 +479,10 @@ struct GeneralSettings: View {
     }
 
     private var controlChannelRow: some View {
-        SettingsCardRow(title: "Control channel", subtitle: self.controlChannelSubtitle) {
+        SettingsCardRow(
+            title: "Control channel",
+            subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim))
+        {
             Text(self.controlStatusLine)
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)

@@ -11,6 +11,11 @@ import {
 import { resolveDefaultMatrixAccountId, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { applyMatrixSetupAccountConfig, validateMatrixSetupInput } from "./setup-config.js";
+import {
+  namedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget,
+  singleAccountKeysToMove,
+} from "./setup-contract.js";
 import { resolveMatrixSetupDmAllowFrom } from "./setup-dm-policy.js";
 import type { CoreConfig } from "./types.js";
 
@@ -111,6 +116,9 @@ export function createMatrixSetupWizardProxy(
 }
 
 export const matrixSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove,
+  namedAccountPromotionKeys,
+  resolveSingleAccountPromotionTarget,
   resolveAccountId: ({ accountId, input }) =>
     resolveMatrixSetupAccountId({
       accountId,

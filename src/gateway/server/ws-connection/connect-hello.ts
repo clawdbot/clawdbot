@@ -189,20 +189,29 @@ export async function sendGatewayHello(
     const requestContext = buildRequestContext();
     const nodeId = connectParams.device?.id ?? connectParams.client.id;
     const nodeSession = requestContext.nodeRegistry.get(nodeId);
-    // Claim by the authenticated node id only. A replacement may register while
-    // persistence waits; the router transfers the pending alert by node identity.
-    if (nodeSession?.connId === connId) {
+    const pairingGeneration = nodeSession?.pairingGeneration;
+    if (nodeSession?.connId === connId && pairingGeneration) {
       try {
         const connection = await recordPairedNodeConnection(
           nodeSession.nodeId,
           nodeSession.connectedAtMs,
+          undefined,
+          { nodeId: nodeSession.nodeId, key: pairingGeneration },
         );
         if (!connection.recorded) {
           logGateway.warn(`failed to record last connect for ${nodeSession.nodeId}: not paired`);
         } else {
-          scheduleNodeConnectionNotification(requestContext.nodeRegistry, nodeSession, {
-            isFirstConnection: connection.firstConnection,
-          });
+          const currentSession = requestContext.nodeRegistry.getForPairingGeneration(
+            nodeSession.nodeId,
+            pairingGeneration,
+          );
+          // A rapid same-generation reconnect may take over the durable
+          // first-connection claim; generation lookup excludes stale replacements.
+          if (currentSession) {
+            scheduleNodeConnectionNotification(requestContext.nodeRegistry, currentSession, {
+              isFirstConnection: connection.firstConnection,
+            });
+          }
         }
       } catch (err) {
         logGateway.warn(

@@ -47,6 +47,18 @@ enum class WearProxyCapability(
   }
 }
 
+enum class WearConnectionFailure(
+  val wireValue: String,
+) {
+  GatewayOffline(wireValue = "gateway_offline"),
+  Incompatible(wireValue = "incompatible"),
+  ;
+
+  companion object {
+    fun fromWireValue(value: String?): WearConnectionFailure? = entries.firstOrNull { failure -> failure.wireValue == value }
+  }
+}
+
 @Serializable
 enum class WearRpcMethod {
   @SerialName("proxy.status")

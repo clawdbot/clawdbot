@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGateway,
+  createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
   type SidebarLifecycleState,
@@ -181,6 +182,39 @@ describe("AppSidebar interleaved zone", () => {
     expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();
     expect(sidebar.querySelector(".nav-item--home")?.hasAttribute("draggable")).toBe(false);
+  });
+
+  it("renders plugin tabs as sidebar entries", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+
+    gateway.publish({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+      },
+    });
+    await sidebar.updateComplete;
+
+    const entry = sidebar.querySelector<HTMLAnchorElement>(
+      '[data-sidebar-entry="plugin:logbook/logbook"] > .nav-item',
+    );
+    expect(entry?.textContent).toContain("Logbook");
+    expect(entry?.getAttribute("href")).toBe("/plugin?plugin=logbook&id=logbook");
+
+    gateway.publish({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        controlUiTabs: [],
+      },
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:logbook/logbook"]')).toBeNull();
   });
 
   it("writes reordered entries after a route drop", async () => {

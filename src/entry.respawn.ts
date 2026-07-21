@@ -116,7 +116,7 @@ export function buildCliRespawnPlan(
     platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
 
   if (
-    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv) ||
+    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv, platform) ||
     isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
   ) {
     return null;
@@ -179,7 +179,7 @@ export function buildCliRespawnPlan(
   }
 
   if (
-    !shouldSkipRespawnForArgv(argv) &&
+    !shouldSkipRespawnForArgv(argv, platform) &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY]) &&
     !hasExperimentalWarningSuppressed({ env, execArgv })
   ) {

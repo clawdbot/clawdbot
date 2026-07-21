@@ -1,5 +1,6 @@
 import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
+import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
 /**
  * Simple completion runtime preparation.
@@ -53,7 +54,6 @@ import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
-import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type SimpleCompletionAuthStorage = {

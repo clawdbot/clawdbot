@@ -4,6 +4,7 @@
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type, type TSchema } from "typebox";
 import type { Model } from "../../packages/agent-core/src/llm.js";
 import type { AgentEvent, AgentTool } from "../../packages/agent-core/src/types.js";
@@ -689,12 +690,12 @@ async function runOne(params: {
                 (code ? `\n---code---\n${code}\n---` : input?.runId ? ` runId=${input.runId}` : ""),
             );
           } else if (b.type === "text" && b.text?.trim()) {
-            trail.push(`ASSISTANT text: ${b.text.trim().slice(0, 300)}`);
+            trail.push(`ASSISTANT text: ${truncateUtf16Safe(b.text.trim(), 300)}`);
           }
         }
       } else if (message.role === "toolResult") {
         const tr = message as { toolName?: string; content?: unknown; isError?: boolean };
-        const text = textFromMessageContent(tr.content).slice(0, 400);
+        const text = truncateUtf16Safe(textFromMessageContent(tr.content), 400);
         trail.push(`TOOLRESULT ${tr.toolName}${tr.isError ? " ERR" : ""}: ${text}`);
       }
     }
@@ -726,7 +727,7 @@ async function runOne(params: {
       : runError
         ? { errorMessage: formatUnknownError(runError) }
         : {}),
-    finalText: finalText.slice(0, 400),
+    finalText: truncateUtf16Safe(finalText, 400),
   };
 }
 

@@ -1,10 +1,10 @@
+import { beforeAll, describe, it } from "vitest";
 /**
  * Registry-backed channel contract shard installers.
  *
  * Installs surface, directory, threading, and plugin contract suites for bundled channel shards.
  */
-import { expectChannelPluginContract } from "openclaw/plugin-sdk/channel-test-helpers";
-import { beforeAll, describe, it } from "vitest";
+import { expectChannelPluginContract } from "../../../../plugin-sdk/channel-test-helpers.js";
 import {
   getBundledChannelDirectoryPluginAsync,
   getBundledChannelPluginAsync,

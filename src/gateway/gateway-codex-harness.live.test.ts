@@ -26,6 +26,7 @@ import {
 import { requireSuccessfulNativeCommandCompactionEvidence } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
   buildCodexHarnessLargeOutputCommand,
+  CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexStatusCommandText,
@@ -97,7 +98,7 @@ const CODEX_HARNESS_LARGE_OUTPUT_BYTES = resolveBoundedPositiveIntEnv(
   "OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES",
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES,
   300_000,
-  1_000_000,
+  CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   100_000,
 );
 const CODEX_HARNESS_SUBAGENT_COUNT = resolveBoundedPositiveIntEnv(
@@ -433,7 +434,7 @@ async function writeLiveGatewayConfig(params: {
   token: string;
   workspace: string;
 }): Promise<void> {
-  parseModelKey(params.modelKey);
+  const parsedModel = parseModelKey(params.modelKey);
   const cfg: OpenClawConfig = {
     gateway: {
       mode: "local",
@@ -502,6 +503,22 @@ async function writeLiveGatewayConfig(params: {
         },
       ],
     },
+    ...(CODEX_HARNESS_AUTH_MODE === "api-key" && parsedModel.provider === "openai"
+      ? {
+          secrets: { providers: { default: { source: "env" } } },
+          models: {
+            mode: "merge",
+            providers: {
+              openai: {
+                api: "openai-responses",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        }
+      : {}),
   };
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
 }

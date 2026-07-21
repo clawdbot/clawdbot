@@ -308,9 +308,9 @@ extension SettingsProTab {
                     }
                 }
                 if let headerSidebarAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
-                    }
+                    OpenClawSidebarToolbarItem(
+                        action: headerSidebarAction,
+                        placement: .topBarLeading)
                 }
             }
         }
@@ -1056,7 +1056,10 @@ extension SettingsProTab {
                 Text("Default").font(OpenClawType.body).tag("")
                 let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                ForEach(self.appModel.gatewayAgents.filter { $0.id != defaultId }, id: \.id) { agent in
+                ForEach(
+                    self.appModel.gatewayAgents.filter(\.isSelectableAgent).filter { $0.id != defaultId },
+                    id: \.id)
+                { agent in
                     let name = (agent.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     Text(name.isEmpty ? agent.id : name).font(OpenClawType.body).tag(agent.id)
                 }

@@ -49,11 +49,7 @@ const AUDIO_ATTACHMENT_EXTENSIONS = new Set([
 
 const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
 
-export type DiscordMediaInfo = {
-  path?: string;
-  contentType?: string;
-  kind?: "audio" | "document" | "image" | "sticker";
-};
+export type DiscordMediaInfo = Pick<MediaPlaceholderTextFact, "contentType" | "kind" | "path">;
 
 type DiscordMediaResolveOptions = {
   fetchImpl?: FetchLike;
@@ -105,7 +101,7 @@ function resolveEffectiveMediaType(params: {
 function resolveDiscordMediaClassification(params: {
   attachment: APIAttachment;
   fetchedContentType?: string | null;
-}): { contentType?: string; kind?: "audio" | "document" | "image" } {
+}): Pick<DiscordMediaInfo, "contentType" | "kind"> {
   const contentType = resolveEffectiveMediaType({
     declaredContentType: params.attachment.content_type,
     fetchedContentType: params.fetchedContentType,

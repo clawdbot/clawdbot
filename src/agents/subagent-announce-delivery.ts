@@ -31,6 +31,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isAgentMediatedCompletionSourceTool,
+  normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
@@ -151,6 +152,7 @@ async function runAnnounceAgentCall(params: {
   timeoutMs?: number;
 }): Promise<unknown> {
   let accepted = false;
+  const inputProvenance = normalizeInputProvenance(params.agentParams.inputProvenance);
   try {
     return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
       "agent",
@@ -163,6 +165,10 @@ async function runAnnounceAgentCall(params: {
           shouldPreserveUserFacingSessionStateForInputProvenance(
             params.agentParams.inputProvenance,
           ),
+        delegatedToolPolicyHandoff:
+          inputProvenance?.kind === "inter_session" &&
+          inputProvenance.sourceTool === "subagent_announce" &&
+          Boolean(inputProvenance.sourceSessionKey),
         onAccepted: () => {
           accepted = true;
         },

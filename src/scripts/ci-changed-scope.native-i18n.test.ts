@@ -14,7 +14,9 @@ describe("native i18n changed scope", () => {
       "apps/.i18n/apple-translation-contradictions.json",
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
       "apps/android/app/src/main/res/values-sv/strings.xml",
+      "apps/android/wear/src/main/res/values-sv/strings.xml",
       "apps/ios/Resources/Localizable.xcstrings",
+      "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
       "apps/ios/WatchApp/sv.lproj/InfoPlist.strings",
     ];
 
@@ -57,6 +59,9 @@ describe("native i18n changed scope", () => {
     expect(shouldStrictNativeI18n(null)).toBe(true);
     expect(shouldStrictNativeI18n(["apps/.i18n/native/sv.json"])).toBe(true);
     expect(shouldStrictNativeI18n(["apps/ios/Resources/Localizable.xcstrings"])).toBe(true);
+    expect(
+      shouldStrictNativeI18n(["apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings"]),
+    ).toBe(true);
     expect(
       shouldStrictNativeI18n(["apps/ios/Sources/RootTabs.swift", "apps/.i18n/native-source.json"]),
     ).toBe(false);

@@ -219,6 +219,47 @@ describeUnix("inspectPortUsage", () => {
     }
   });
 
+  it("limits concurrent Unix process metadata lookups", async () => {
+    const listenerCount = 25;
+    let activeProcessLookups = 0;
+    let maxConcurrentProcessLookups = 0;
+    let processLookupCount = 0;
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout: Array.from(
+            { length: listenerCount },
+            (_, index) => `p${1_000 + index}\ncnode\nnTCP 127.0.0.1:18789 (LISTEN)`,
+          ).join("\n"),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        processLookupCount += 1;
+        activeProcessLookups += 1;
+        maxConcurrentProcessLookups = Math.max(maxConcurrentProcessLookups, activeProcessLookups);
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 1);
+        });
+        activeProcessLookups -= 1;
+        return { stdout: "value\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortUsage(18789);
+
+    expect(result.listeners).toHaveLength(listenerCount);
+    expect(processLookupCount).toBe(listenerCount * 3);
+    expect(maxConcurrentProcessLookups).toBeLessThan(processLookupCount);
+    expect(maxConcurrentProcessLookups).toBeLessThanOrEqual(60);
+  });
+
   it("does not match ss listener ports by substring", async () => {
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];

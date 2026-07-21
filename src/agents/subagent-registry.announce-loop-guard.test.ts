@@ -54,7 +54,10 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: mocks.onAgentEvent,
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
 vi.mock("./subagent-registry.store.sqlite.js", () => ({

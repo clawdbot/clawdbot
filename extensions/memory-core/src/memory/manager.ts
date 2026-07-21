@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
+import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -1213,14 +1214,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private mergeHybridResults(params: {
     query: string;
     vector: Array<MemorySearchResult & { id: string }>;
-    keyword: Array<
-      MemorySearchResult & {
-        id: string;
-        textScore: number;
-        pathScore: number;
-        exactPathSpecificity: ExactPathSpecificity;
-      }
-    >;
+    keyword: KeywordSearchHit[];
     vectorWeight: number;
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
@@ -1251,6 +1245,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
+      isNonTextMediaPath: (path) =>
+        classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,

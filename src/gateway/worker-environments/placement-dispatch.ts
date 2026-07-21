@@ -18,7 +18,10 @@ import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceResultConflict,
 } from "./workspace-conflicts.js";
-import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import {
+  verifyReconciledWorkspaceFinal,
+  WorkerWorkspaceFinalFenceError,
+} from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
@@ -265,7 +268,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           },
           abort: () => placements.abortWorkspaceReconciliation(journalOwner),
         };
-        const cancelEmptyFailedReclaim = async (): Promise<void> => {
+        const cancelUnstagedFailedReclaim = async (allowCommitted: boolean): Promise<void> => {
           await options.workspaceOperations.run(current.environmentId, async () => {
             const stillOwnsEmptyResult = (): boolean => {
               const owned = placements.get(current.sessionId);
@@ -279,7 +282,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                     pending.runId === reclaimClaim.runId,
                 );
               return (
-                !manifestAccepted &&
+                (allowCommitted || !manifestAccepted) &&
                 owned?.state === "active" &&
                 owned.turnClaim?.claimId === reclaimClaim.claimId &&
                 reclaimClaim.owner.kind === "worker" &&
@@ -456,7 +459,11 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         try {
           return await finishReclaim();
         } catch (error) {
-          await cancelEmptyFailedReclaim().catch(() => undefined);
+          // An unstaged final-fence failure is retryable even after an unchanged
+          // manifest commit; the journal remains authoritative for the next attempt.
+          await cancelUnstagedFailedReclaim(
+            error instanceof WorkerWorkspaceFinalFenceError && error.retryableForReclaim,
+          ).catch(() => undefined);
           throw error;
         }
       },

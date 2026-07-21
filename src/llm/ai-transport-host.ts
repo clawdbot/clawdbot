@@ -3,7 +3,10 @@
 // process-default stream facade.
 import { configureAiTransportHost } from "@openclaw/ai";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
-import { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
+import {
+  buildGuardedModelFetch,
+  resolveModelRequestTimeoutMs,
+} from "../agents/provider-transport-fetch.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
@@ -34,6 +37,7 @@ configureAiTransportHost({
   redactSecrets,
   redactToolPayloadText,
   resolveOpenAIStrictToolSetting,
+  resolveModelRequestTimeoutMs: (model) => resolveModelRequestTimeoutMs(model, undefined),
   logDebug: (subsystem, build) => {
     const log = transportLog(subsystem);
     if (!log.isEnabled("debug", "any")) {
@@ -44,4 +48,6 @@ configureAiTransportHost({
       log.debug(entry.message, entry.data);
     }
   },
+  logInfo: (subsystem, message, data) => transportLog(subsystem).info(message, data),
+  logWarn: (subsystem, message, data) => transportLog(subsystem).warn(message, data),
 });

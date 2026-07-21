@@ -271,8 +271,13 @@ describe("processMessage audio preflight transcription", () => {
     expectContextFields(firstTranscriptionContext(), {
       AccountId: "default",
       From: "+15550000002",
-      MediaPaths: ["/tmp/voice.ogg"],
-      MediaTypes: ["audio/ogg; codecs=opus"],
+      media: [
+        {
+          path: "/tmp/voice.ogg",
+          contentType: "audio/ogg; codecs=opus",
+          kind: "audio",
+        },
+      ],
       OriginatingChannel: "whatsapp",
       OriginatingTo: "+15550000002",
       Provider: "whatsapp",

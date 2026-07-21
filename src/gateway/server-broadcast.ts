@@ -71,6 +71,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],
+  "session.observer": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
@@ -79,14 +80,14 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "terminal.exit": [ADMIN_SCOPE],
 };
 
-// Events that node-role sessions must receive even when the event's operator
-// scope would otherwise reject non-operator roles. Nodes act on these updates
-// (e.g. reconfiguring wake-word triggers).
-const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
-
 // Opt-in scoped clients never receive session-bearing broadcasts without an
 // authoritative registry key, including malformed/sessionless agent events.
-const SESSION_SUBSCRIPTION_EVENTS = new Set(["agent", "chat", "chat.side_result"]);
+const SESSION_SUBSCRIPTION_EVENTS = new Set([
+  "agent",
+  "chat",
+  "chat.side_result",
+  "session.observer",
+]);
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
   // Serialize one field through JSON.stringify so embedded values keep JSON
@@ -137,7 +138,7 @@ function hasEventScope(
   }
   const role = client.connect.role ?? "operator";
   if (role !== "operator") {
-    return role === "node" && NODE_ALLOWED_EVENTS.has(event);
+    return false;
   }
   const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
@@ -203,6 +204,9 @@ export function createGatewayBroadcaster(params: {
       return frameBase;
     };
     for (const c of params.clients) {
+      if (c.invalidated === true) {
+        continue;
+      }
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
       }

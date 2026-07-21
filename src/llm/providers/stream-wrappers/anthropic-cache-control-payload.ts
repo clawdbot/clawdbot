@@ -2,4 +2,4 @@
 export {
   applyAnthropicEphemeralCacheControlMarkers,
   resolveAnthropicEphemeralCacheControl,
-} from "../../../agents/anthropic-payload-policy.js";
+} from "@openclaw/ai/transports";

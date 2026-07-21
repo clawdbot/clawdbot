@@ -9,6 +9,11 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import {
+  hasStagedMediaProjection,
+  projectMediaFacts,
+  resolveMediaFacts,
+} from "../media/media-facts.js";
 import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
@@ -144,21 +149,14 @@ export function deriveInboundMessageHookContext(
     ctx.From ??
     internalSessionConversationId(channelId, ctx.SessionKey);
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
-  const mediaPaths = Array.isArray(ctx.MediaPaths)
-    ? ctx.MediaPaths.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
-  const mediaTypes = Array.isArray(ctx.MediaTypes)
-    ? ctx.MediaTypes.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
-  const mediaUrls = Array.isArray(ctx.MediaUrls)
-    ? ctx.MediaUrls.filter(
-        (value): value is string => typeof value === "string" && value.length > 0,
-      )
-    : undefined;
+  const mediaPayload = hasStagedMediaProjection(ctx)
+    ? ctx
+    : ctx.media?.length
+      ? projectMediaFacts(resolveMediaFacts(ctx))
+      : ctx;
+  const mediaPaths = mediaPayload.MediaPaths?.filter(Boolean);
+  const mediaTypes = mediaPayload.MediaTypes?.filter(Boolean);
+  const mediaUrls = mediaPayload.MediaUrls?.filter(Boolean);
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -194,9 +192,9 @@ export function deriveInboundMessageHookContext(
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
     threadParentId: ctx.ThreadParentId,
-    mediaPath: ctx.MediaPath ?? mediaPaths?.[0],
-    mediaUrl: ctx.MediaUrl ?? mediaUrls?.[0],
-    mediaType: ctx.MediaType ?? mediaTypes?.[0],
+    mediaPath: mediaPayload.MediaPath ?? mediaPaths?.[0],
+    mediaUrl: mediaPayload.MediaUrl ?? mediaUrls?.[0],
+    mediaType: mediaPayload.MediaType ?? mediaTypes?.[0],
     mediaPaths,
     mediaUrls,
     mediaTypes,

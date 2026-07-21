@@ -41,6 +41,11 @@
       "import": "./dist/providers.mjs",
       "default": "./dist/providers.mjs"
     },
+    "./transports": {
+      "types": "./dist/transports.d.mts",
+      "import": "./dist/transports.mjs",
+      "default": "./dist/transports.mjs"
+    },
     "./diagnostics": {
       "types": "./dist/diagnostics.d.mts",
       "import": "./dist/diagnostics.mjs",
@@ -61,10 +66,30 @@
       "import": "./dist/validation.mjs",
       "default": "./dist/validation.mjs"
     },
-    "./internal/*": {
-      "types": "./dist/internal/*.d.mts",
-      "import": "./dist/internal/*.mjs",
-      "default": "./dist/internal/*.mjs"
+    "./internal/anthropic": {
+      "types": "./dist/internal/anthropic.d.mts",
+      "import": "./dist/internal/anthropic.mjs",
+      "default": "./dist/internal/anthropic.mjs"
+    },
+    "./internal/openai": {
+      "types": "./dist/internal/openai.d.mts",
+      "import": "./dist/internal/openai.mjs",
+      "default": "./dist/internal/openai.mjs"
+    },
+    "./internal/retry-after": {
+      "types": "./dist/internal/retry-after.d.mts",
+      "import": "./dist/internal/retry-after.mjs",
+      "default": "./dist/internal/retry-after.mjs"
+    },
+    "./internal/runtime": {
+      "types": "./dist/internal/runtime.d.mts",
+      "import": "./dist/internal/runtime.mjs",
+      "default": "./dist/internal/runtime.mjs"
+    },
+    "./internal/shared": {
+      "types": "./dist/internal/shared.d.mts",
+      "import": "./dist/internal/shared.mjs",
+      "default": "./dist/internal/shared.mjs"
     }
   },
   "dependencies": {

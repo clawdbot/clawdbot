@@ -1,6 +1,5 @@
 import OpenClawKit
 import SwiftUI
-import WebKit
 
 /// Control-hub Terminal destination: embeds the gateway-served terminal page
 /// (`/?view=terminal`, the ghostty-web surface shared with the Control UI) in a
@@ -27,7 +26,7 @@ struct TerminalHubScreen: View {
         ZStack {
             OpenClawProBackground()
             if let url = Self.terminalURL(config: config) {
-                TerminalWebView(
+                AuthenticatedControlUIWebView(
                     url: url,
                     authScript: Self.terminalAuthUserScript(
                         config: config,
@@ -58,9 +57,9 @@ struct TerminalHubScreen: View {
                 }
             }
             if let headerSidebarAction {
-                ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarRevealButton(action: headerSidebarAction)
-                }
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarLeading)
             }
         }
     }
@@ -91,20 +90,10 @@ struct TerminalHubScreen: View {
     /// Credentials never enter the URL — they are injected as a document-start
     /// user script (see `terminalAuthUserScript`), matching the macOS Dashboard.
     static func terminalURL(config: GatewayConnectConfig?) -> URL? {
-        guard let config,
-              var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false)
-        else {
-            return nil
-        }
-        switch components.scheme?.lowercased() {
-        case "wss", "https":
-            components.scheme = "https"
-        default:
-            components.scheme = "http"
-        }
-        components.path = "/"
-        components.queryItems = [URLQueryItem(name: "view", value: "terminal")]
-        return components.url
+        AuthenticatedControlUI.pageURL(
+            config: config,
+            path: "/",
+            queryItems: [URLQueryItem(name: "view", value: "terminal")])
     }
 
     /// Origin-gated document-start script that hands the gateway credentials to
@@ -121,128 +110,21 @@ struct TerminalHubScreen: View {
         config: GatewayConnectConfig?,
         storedOperatorToken: String?) -> String?
     {
-        guard let config, let pageURL = terminalURL(config: config) else {
-            return nil
-        }
-        var payload: [String: String] = ["gatewayUrl": config.url.absoluteString]
-        let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let storedToken = storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let password = config.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !token.isEmpty {
-            payload["token"] = token
-        } else if !storedToken.isEmpty {
-            payload["token"] = storedToken
-        }
-        if !password.isEmpty {
-            payload["password"] = password
-        }
-        guard payload["token"] != nil || payload["password"] != nil else {
-            return nil
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: payload),
-              let json = String(data: data, encoding: .utf8)
-        else {
-            return nil
-        }
-        let allowedOrigin = Self.jsStringLiteral(Self.originString(for: pageURL))
-        return """
-        (() => {
-          try {
-            if (location.origin !== \(allowedOrigin)) return;
-            Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
-              value: \(json),
-              configurable: true,
-            });
-          } catch {}
-        })();
-        """
+        AuthenticatedControlUI.authUserScript(
+            config: config,
+            pageURL: self.terminalURL(config: config),
+            storedOperatorToken: storedOperatorToken)
     }
 
     /// Identity for the embedded web view: recreate it only when the gateway
     /// endpoint or credentials actually change.
     static func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
-        var hasher = Hasher()
-        hasher.combine(config?.url)
-        hasher.combine(config?.token)
-        hasher.combine(config?.password)
-        hasher.combine(storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines))
-        return hasher.finalize()
+        AuthenticatedControlUI.webContentIdentity(
+            config: config,
+            storedOperatorToken: storedOperatorToken)
     }
 
     private static func storedOperatorToken(config: GatewayConnectConfig?) -> String? {
-        guard let config else { return nil }
-        // Endpoint handoffs may explicitly suppress device-token reuse; every auth surface
-        // must honor that boundary or a stale token can override the supplied password.
-        guard config.nodeOptions.allowStoredDeviceAuth else { return nil }
-        let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return nil }
-        return DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: "operator",
-            gatewayID: gatewayID)?
-            .token
-    }
-
-    static func originString(for url: URL) -> String {
-        guard let scheme = url.scheme, let host = url.host else {
-            return ""
-        }
-        let hostPart = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
-        var origin = "\(scheme)://\(hostPart)"
-        if let port = url.port {
-            origin += ":\(port)"
-        }
-        return origin
-    }
-
-    private static func jsStringLiteral(_ value: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: [value]),
-              let raw = String(data: data, encoding: .utf8),
-              raw.hasPrefix("["),
-              raw.hasSuffix("]")
-        else {
-            return "\"\""
-        }
-        return String(raw.dropFirst().dropLast())
-    }
-}
-
-/// Minimal WKWebView host for the terminal page. Unlike the canvas WebView it
-/// needs no script bridges or deep-link routing — the page is self-contained.
-private struct TerminalWebView: UIViewRepresentable {
-    let url: URL
-    let authScript: String?
-
-    func makeUIView(context _: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        // Ephemeral store: credentials arrive per load via the auth user
-        // script; nothing needs to persist across loads.
-        config.websiteDataStore = .nonPersistent()
-        if let authScript {
-            config.userContentController.addUserScript(WKUserScript(
-                source: authScript,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true))
-        }
-
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.isOpaque = true
-        webView.backgroundColor = .black
-
-        let scrollView = webView.scrollView
-        scrollView.backgroundColor = .black
-        scrollView.contentInsetAdjustmentBehavior = .never
-        scrollView.contentInset = .zero
-        scrollView.verticalScrollIndicatorInsets = .zero
-        scrollView.horizontalScrollIndicatorInsets = .zero
-        scrollView.automaticallyAdjustsScrollIndicatorInsets = false
-
-        webView.load(URLRequest(url: self.url))
-        return webView
-    }
-
-    func updateUIView(_: WKWebView, context _: Context) {
-        // Connection changes recreate the view via `.id(webContentIdentity)`;
-        // reloading here would restart live shell sessions on unrelated passes.
+        AuthenticatedControlUI.storedOperatorToken(config: config)
     }
 }

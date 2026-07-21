@@ -32,6 +32,15 @@ type NewSessionComposerOptions = {
   onSubmit: () => void;
 };
 
+export function renderDraftError(message: string) {
+  return html`
+    <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
+      <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
+      <span class="callout__content new-session-page__alert-message">${message}</span>
+    </div>
+  `;
+}
+
 function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposerOptions) {
   if (
     options.submitting ||

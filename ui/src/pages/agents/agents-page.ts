@@ -19,6 +19,7 @@ import {
 } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { selectableAgentsList } from "../../lib/agents/display.ts";
 import {
   loadToolsCatalog,
   loadToolsEffective,
@@ -291,9 +292,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     const agentState = agents.state;
     this.agentsLoading = agentState.agentsLoading;
     this.agentsError = agentState.agentsError;
-    this.agentsList = agentState.agentsList;
-    if (agentState.agentsList) {
-      this.ensureSelectedAgentInList(agentState.agentsList);
+    this.agentsList = agentState.agentsList ? selectableAgentsList(agentState.agentsList) : null;
+    if (this.agentsList) {
+      this.ensureSelectedAgentInList(this.agentsList);
     }
     this.syncCurrentAgentFiles(agents);
   }
@@ -316,11 +317,17 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     }
     this.agentFilesList = status.list;
     this.agentFilesError = status.error;
-    if (
-      this.agentFileActive &&
-      !status.list.files.some((file) => file.name === this.agentFileActive)
-    ) {
-      this.agentFileActive = null;
+    void this.selectDefaultAgentFile(agentId);
+  }
+
+  private async selectDefaultAgentFile(agentId: string) {
+    const files = this.agentFilesList?.files ?? [];
+    if (this.agentFileActive && files.some((file) => file.name === this.agentFileActive)) {
+      return;
+    }
+    this.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
+    if (this.agentFileActive) {
+      await loadAgentFileContent(this, agentId, this.agentFileActive);
     }
   }
 
@@ -551,16 +558,13 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       }
       this.agentFilesList = list ?? agents.files(agentId).list;
       this.agentFilesError = agents.files(agentId).error;
-      if (
-        this.agentFileActive &&
-        !this.agentFilesList?.files.some((file) => file.name === this.agentFileActive)
-      ) {
-        this.agentFileActive = null;
-      }
     } finally {
       if (this.isCurrentRequest(client, generation, agentId, { agents })) {
         this.agentFilesLoading = false;
       }
+    }
+    if (this.isCurrentRequest(client, generation, agentId, { agents })) {
+      await this.selectDefaultAgentFile(agentId);
     }
   }
 

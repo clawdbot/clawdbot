@@ -1403,7 +1403,7 @@
 .callout--dismissible,
 .callout--action {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
 }
 
@@ -2992,8 +2992,11 @@ td.data-table-key-col {
 }
 
 .exec-approval-meta-row span:last-child {
+  min-width: 0;
   color: var(--text);
   font-family: var(--mono);
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .exec-approval-error {
@@ -3619,11 +3622,6 @@ td.data-table-key-col {
 
 .field textarea.agent-file-textarea {
   min-height: clamp(320px, 56vh, 720px);
-  transition: filter var(--duration-fast) ease;
-}
-
-.field textarea.agent-file-textarea:not(:focus) {
-  filter: blur(6px);
 }
 
 .agent-file-header {
@@ -5220,9 +5218,13 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.session-row-badge--pull-request,
+.session-row-badge--pull-request[data-pull-request-state="open"],
 .session-row-badge--cloud[data-placement-state="active"] {
   color: var(--ok);
+}
+
+.session-row-badge--pull-request[data-pull-request-state="merged"] {
+  color: var(--accent);
 }
 
 .session-row-badge--approval,
@@ -5252,6 +5254,10 @@ td.data-table-key-col {
   [data-placement-state="reconciling"]
 ) {
   color: var(--accent);
+}
+
+.session-row-badge--cloud[data-workspace-conflicts] {
+  color: var(--warn);
 }
 
 .session-row-badge svg {

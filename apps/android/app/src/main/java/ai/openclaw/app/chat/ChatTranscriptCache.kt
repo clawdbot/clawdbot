@@ -75,6 +75,12 @@ internal data class CachedSessionEntity(
   val sessionKey: String,
   val displayName: String?,
   val updatedAtMs: Long?,
+  val status: String?,
+  val startedAt: Long?,
+  val endedAt: Long?,
+  val runtimeMs: Long?,
+  val outputTokens: Long?,
+  val hasRunMetadata: Boolean,
   // Preserves gateway list order so offline session rows render in the familiar order.
   val rowOrder: Int,
 )
@@ -258,6 +264,12 @@ class RoomChatTranscriptCache internal constructor(
         updatedAtMs = row.updatedAtMs,
         ownerAgentId = agent,
         displayName = row.displayName,
+        status = row.status,
+        startedAt = row.startedAt,
+        endedAt = row.endedAt,
+        runtimeMs = row.runtimeMs,
+        outputTokens = row.outputTokens,
+        hasRunMetadata = row.hasRunMetadata,
       )
     }
   }
@@ -305,6 +317,12 @@ class RoomChatTranscriptCache internal constructor(
               sessionKey = entry.key,
               displayName = entry.displayName,
               updatedAtMs = entry.updatedAtMs,
+              status = entry.status,
+              startedAt = entry.startedAt,
+              endedAt = entry.endedAt,
+              runtimeMs = entry.runtimeMs,
+              outputTokens = entry.outputTokens,
+              hasRunMetadata = entry.hasRunMetadata,
               rowOrder = 0,
             )
           } ?: dao.session(gateway, agent, retainedKey)
@@ -320,6 +338,12 @@ class RoomChatTranscriptCache internal constructor(
             sessionKey = session.key,
             displayName = session.displayName,
             updatedAtMs = session.updatedAtMs,
+            status = session.status,
+            startedAt = session.startedAt,
+            endedAt = session.endedAt,
+            runtimeMs = session.runtimeMs,
+            outputTokens = session.outputTokens,
+            hasRunMetadata = session.hasRunMetadata,
             rowOrder = index,
           )
         }
@@ -380,6 +404,12 @@ class RoomChatTranscriptCache internal constructor(
               sessionKey = key,
               displayName = null,
               updatedAtMs = null,
+              status = null,
+              startedAt = null,
+              endedAt = null,
+              runtimeMs = null,
+              outputTokens = null,
+              hasRunMetadata = false,
               rowOrder = dao.nextSessionRowOrder(gateway, agent),
             ),
         ),

@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatMessageContent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,6 +11,33 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatScreenTest {
+  @Test
+  fun longUserMessagesProduceABoundedPlainTextPreview() {
+    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("Short prompt"))
+    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview(List(12) { "line" }.joinToString("\n")))
+    assertNull(ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(700)))
+    assertEquals(
+      List(12) { "line" }.joinToString("\n") + "…",
+      ChatUserMessageDisclosurePolicy.collapsedPreview(List(13) { "line" }.joinToString("\n")),
+    )
+    assertEquals(
+      "a".repeat(700) + "…",
+      ChatUserMessageDisclosurePolicy.collapsedPreview("a".repeat(701)),
+    )
+  }
+
+  @Test
+  fun disclosureDoesNotReorderMixedUserContent() {
+    val mixedContent =
+      listOf(
+        ChatMessageContent(type = "text", text = "a".repeat(701)),
+        ChatMessageContent(type = "image", fileName = "photo.png", base64 = "AAAA"),
+        ChatMessageContent(type = "text", text = "caption"),
+      )
+
+    assertFalse(shouldUseUserMessageDisclosure(isUser = true, content = mixedContent))
+  }
+
   @Test
   fun realtimeTalkLaunchRequestsPermissionBeforeSetupOrStart() {
     assertEquals(

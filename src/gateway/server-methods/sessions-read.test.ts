@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import {
@@ -41,7 +42,7 @@ function expectAgentStoreAbsent(agentId: string): void {
   );
 }
 
-async function listAgentIdsViaRpc(): Promise<string[]> {
+async function listAgentIdsViaRpc(includeSystem = false): Promise<string[]> {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   let ids: string[] | undefined;
   await agentsHandlers["agents.list"]?.({
@@ -56,7 +57,9 @@ async function listAgentIdsViaRpc(): Promise<string[]> {
       getRuntimeConfig,
       loadGatewayModelCatalog: async () => [],
     } as unknown as GatewayRequestContext,
-    client: null,
+    client: includeSystem
+      ? ({ connect: { caps: [GATEWAY_CLIENT_CAPS.AGENT_KIND] } } as never)
+      : null,
     isWebchatConnect: () => false,
   });
   return ids ?? [];
@@ -68,6 +71,13 @@ async function setAgentsConfig(agentsConfig: Record<string, unknown> | undefined
   clearRuntimeConfigSnapshot();
   clearConfigCache();
 }
+
+test("agents.list includes system rows only when negotiated", async () => {
+  fs.mkdirSync(path.join(requireStateDir(), "agents", "openclaw"), { recursive: true });
+
+  expect(await listAgentIdsViaRpc()).toEqual(["main"]);
+  expect(await listAgentIdsViaRpc(true)).toEqual(["main", "openclaw"]);
+});
 
 beforeEach(async () => {
   testState.sessionStorePath = undefined;

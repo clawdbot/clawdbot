@@ -40,6 +40,8 @@ export type BoardWidgetCellCallbacks = {
   resizePointerDown: (widget: BoardViewWidget, event: PointerEvent) => void;
   moveToTab: (widget: BoardViewWidget, tabId: string) => Promise<void>;
   resizeTo: (widget: BoardViewWidget, w: number, h: number) => Promise<void>;
+  setHeightMode: (widget: BoardViewWidget, mode: "auto" | "fixed") => Promise<void>;
+  reportContentHeight: (name: string, height: number) => void;
   remove: (widget: BoardViewWidget) => Promise<void>;
   nudge: (widget: BoardViewWidget, direction: BoardGridDirection) => Promise<void>;
   focus: (widget: BoardViewWidget, direction: BoardGridDirection) => void;
@@ -80,6 +82,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     connected: () => this.isConnected,
     context: () => this.context,
     refreshFrame: () => this.callbacks?.frameLoadFailed,
+    reportContentHeight: (name, height) => this.callbacks?.reportContentHeight(name, height),
     requestUpdate: () => this.requestUpdate(),
     resolveFrameUrl: () => this.widgetFrameUrl,
     root: () => this,
@@ -163,6 +166,11 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       if (size) {
         void this.runAction(() => callbacks.resizeTo(widget, size.w, size.h));
       }
+      return;
+    }
+    if (value === "height:auto") {
+      const mode = widget.heightMode !== "fixed" ? "fixed" : "auto";
+      void this.runAction(() => callbacks.setHeightMode(widget, mode));
     }
   }
 
@@ -290,9 +298,11 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       widget.grantState === "pending" ||
       widget.grantState === "rejected";
     const contentScrollable = bodyScrollable || widget.contentKind === "mcp-app";
+    const presentation =
+      widget.contentKind === "html" ? (widget.presentation ?? "card") : undefined;
     return html`
       <section
-        class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""}`}
+        class=${`board-widget ${this.dragging ? "board-widget--dragging" : ""} ${presentation ? `board-widget--${presentation}` : ""}`}
         style=${toCssPlacement(rect)}
         role="listitem"
         tabindex=${this.focusTabIndex}
@@ -334,7 +344,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
               })}
         </header>
         <div
-          class=${`board-widget__body ${contentScrollable ? "board-widget__body--scrollable" : ""}`}
+          class=${`board-widget__body ${contentScrollable ? "board-widget__body--scrollable" : ""} ${presentation === "card" ? "board-widget__body--card" : ""}`}
         >
           ${body}
           ${this.actionError && widget.grantState !== "pending"
@@ -351,6 +361,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
               title=${t("board.widget.resizeHandle", { title: label })}
               @pointerdown=${(event: PointerEvent) => callbacks.resizePointerDown(widget, event)}
             ></span>`}
+        ${widget.grantState === "granted" && widget.contentKind !== "builtin"
+          ? html`<span class="board-widget__grant-dot" aria-hidden="true"></span>`
+          : nothing}
       </section>
     `;
   }

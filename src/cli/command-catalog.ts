@@ -89,6 +89,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
   },
   { commandPath: ["message"], policy: { loadPlugins: "never" } },
+  { commandPath: ["docs"], policy: { bypassConfigGuard: true } },
   {
     commandPath: ["channels"],
     policy: {

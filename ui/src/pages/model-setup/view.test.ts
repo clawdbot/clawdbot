@@ -363,15 +363,33 @@ describe("renderModelSetup", () => {
     expect(document.querySelector("textarea")).toBeNull();
   });
 
-  it("renders sensitive text, select, and confirm steps", () => {
-    const sensitive = wizardStep(
-      { id: "token", type: "text", sensitive: true, placeholder: "Paste token" },
-      "secret",
-    );
-    expect(sensitive.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.type).toBe(
-      "password",
-    );
+  it.each([
+    { sensitive: false, expectedType: "text" },
+    { sensitive: true, expectedType: "password" },
+  ])(
+    "labels a $expectedType input with the visible text-step message",
+    ({ sensitive, expectedType }) => {
+      const container = wizardStep(
+        {
+          id: "access-value",
+          type: "text",
+          message: "Provider access value",
+          sensitive,
+          placeholder: "Enter value",
+        },
+        "initial value",
+      );
+      const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input");
+      const label = container.querySelector<HTMLLabelElement>(
+        'label[for="model-setup-wizard-text-input"]',
+      );
+      expect(label?.textContent).toBe("Provider access value");
+      expect(input?.type).toBe(expectedType);
+      expect(input?.labels).toContain(label);
+    },
+  );
 
+  it("renders select and confirm steps", () => {
     const select = wizardStep(
       {
         id: "account",

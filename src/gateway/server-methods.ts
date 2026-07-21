@@ -914,6 +914,20 @@ export async function handleGatewayRequest(
     respond(false, undefined, authError);
     return;
   }
+  if (
+    client?.connect.role === "node" &&
+    (!client.connId || !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId)))
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      }),
+    );
+    return;
+  }
   if (context.unavailableGatewayMethods?.has(req.method)) {
     // During startup, methods can be listed before their runtime is ready. Return the protocol
     // retry shape so clients can back off without treating startup as a permanent unknown method.

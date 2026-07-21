@@ -214,7 +214,6 @@ export async function runEmbeddedAttemptSettledPhase(
         contextEngineAssemblySucceeded,
         contextEnginePromptAuthority,
         includeBoundaryTimestamp,
-        sessionAgentId: input.setup.sessionAgentId,
         ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
         ...(unwindowedContextEngineMessagesForPrecheck
           ? { unwindowedContextEngineMessagesForPrecheck }

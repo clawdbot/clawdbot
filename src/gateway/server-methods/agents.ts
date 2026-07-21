@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -883,7 +887,7 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
-  "agents.list": async ({ params, respond, context }) => {
+  "agents.list": async ({ params, respond, context, client }) => {
     if (!validateAgentsListParams(params)) {
       respondInvalidMethodParams(respond, "agents.list", validateAgentsListParams.errors);
       return;
@@ -893,7 +897,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const modelCatalog = await loadOptionalServerMethodModelCatalog(context, "agents.list", {
       logOnceKey: "agents.list",
     });
-    const result = listAgentsForGateway(cfg, modelCatalog);
+    const result = listAgentsForGateway(cfg, modelCatalog, {
+      includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
+    });
     respond(true, result, undefined);
   },
   "agents.create": async ({ params, respond }) => {

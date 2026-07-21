@@ -14,6 +14,19 @@ export function createSandboxFsBridgeFromResolver(
 ): SandboxFsBridge {
   return {
     resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
+    copyFile: async ({ sourcePath, destinationPath, cwd, mkdir = true }) => {
+      const source = resolvePath(sourcePath, cwd);
+      const destination = resolvePath(destinationPath, cwd);
+      if (!source.hostPath || !destination.hostPath) {
+        throw new Error(
+          `Expected hostPath for copy: ${source.containerPath} -> ${destination.containerPath}`,
+        );
+      }
+      if (mkdir) {
+        await fs.mkdir(path.dirname(destination.hostPath), { recursive: true });
+      }
+      await fs.copyFile(source.hostPath, destination.hostPath);
+    },
     readFile: async ({ filePath, cwd }) => {
       const target = resolvePath(filePath, cwd);
       if (!target.hostPath) {

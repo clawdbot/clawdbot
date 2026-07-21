@@ -8,8 +8,9 @@ struct MacGatewayProfile: Codable, Equatable, Identifiable, Sendable {
     var url: URL
 }
 
-enum MacGatewayProfileError: LocalizedError {
+enum MacGatewayProfileError: LocalizedError, Equatable {
     case invalidURL
+    case insecureRemoteURL
     case profileNotFound
     case unsupportedRegistryVersion(Int)
     case keychain(OSStatus)
@@ -18,6 +19,8 @@ enum MacGatewayProfileError: LocalizedError {
         switch self {
         case .invalidURL:
             "Enter a ws:// or wss:// Gateway URL."
+        case .insecureRemoteURL:
+            "Public Gateway hosts require wss://. Use ws:// only on loopback, a trusted private network, or Tailnet."
         case .profileNotFound:
             "That Gateway profile no longer exists."
         case let .unsupportedRegistryVersion(version):
@@ -78,14 +81,28 @@ actor MacGatewayProfileStore {
         return profile
     }
 
+    func profiles() throws -> [MacGatewayProfile] {
+        try Self.sortedProfiles(self.loadRegistry().profiles.map(\.profile))
+    }
+
+    func remove(profileID: String) throws {
+        var registry = try self.loadRegistry()
+        guard registry.profiles.contains(where: { $0.profile.id == profileID }) else {
+            throw MacGatewayProfileError.profileNotFound
+        }
+        registry.profiles.removeAll { $0.profile.id == profileID }
+        try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+    }
+
     func endpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {
         let registry = try self.loadRegistry()
         guard let stored = registry.profiles.first(where: { $0.profile.id == profileID }) else {
             throw MacGatewayProfileError.profileNotFound
         }
+        let url = try Self.canonicalURL(stored.profile.url)
         return GatewayConnection.EndpointSnapshot(
             config: (
-                url: stored.profile.url,
+                url: url,
                 token: stored.credentials.token,
                 password: stored.credentials.password),
             routeAuthority: nil,
@@ -109,6 +126,16 @@ actor MacGatewayProfileStore {
         _ = try MacGatewayProfileStore.decodeRegistry(data)
     }
 
+    static func sortedProfiles(_ profiles: [MacGatewayProfile]) -> [MacGatewayProfile] {
+        profiles.sorted { lhs, rhs in
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame {
+                return nameOrder == .orderedAscending
+            }
+            return lhs.url.absoluteString.localizedCaseInsensitiveCompare(rhs.url.absoluteString) == .orderedAscending
+        }
+    }
+
     static func canonicalURL(_ url: URL) throws -> URL {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let scheme = components.scheme?.lowercased(),
@@ -116,6 +143,9 @@ actor MacGatewayProfileStore {
               let host = components.host?.lowercased(),
               !host.isEmpty
         else { throw MacGatewayProfileError.invalidURL }
+        if scheme == "ws", !GatewayRemoteConfig.allowsPlaintextGatewayHost(host) {
+            throw MacGatewayProfileError.insecureRemoteURL
+        }
         components.scheme = scheme
         components.host = host
         if components.port == nil {
@@ -206,6 +236,11 @@ actor MacGatewayConnectionFleet {
             supportsSharedEndpointRecovery: false)
         self.connections[profileID] = connection
         return connection
+    }
+
+    func remove(profileID: String) async {
+        guard let connection = self.connections.removeValue(forKey: profileID) else { return }
+        await connection.shutdown()
     }
 
     func shutdown() async {

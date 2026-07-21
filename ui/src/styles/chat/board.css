@@ -69,10 +69,72 @@
 
 .board-session-surface__board {
   display: flex;
+  flex-direction: column;
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+openclaw-workboard-card-chip {
+  display: contents;
+}
+
+.board-session-surface__workboard-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  align-self: flex-start;
+  gap: 7px;
+  max-width: calc(100% - 32px);
+  min-height: 28px;
+  margin: 12px 16px 0;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-strong) 84%, transparent);
+  font-size: 11px;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.board-session-surface__workboard-chip:hover,
+.board-session-surface__workboard-chip:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  color: var(--text);
+}
+
+.board-session-surface__workboard-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.board-session-surface__workboard-chip svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.board-session-surface__workboard-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-session-surface__workboard-status {
+  flex: 0 0 auto;
+  padding-left: 7px;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
 }
 
 /* Scroll owner for the board face. Widget/tab menus stay usable because

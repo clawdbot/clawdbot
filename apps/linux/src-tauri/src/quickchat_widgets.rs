@@ -2,9 +2,9 @@ use crate::gateway_ws::GatewayClient;
 use crate::quickchat::{QuickChatState, QUICKCHAT_LABEL};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::webview::{NewWindowResponse, WebviewBuilder};
 use tauri::{
@@ -34,11 +34,20 @@ pub struct QuickChatWidgetLayout {
     visible: bool,
 }
 
+#[derive(Clone)]
+struct RendererSession {
+    id: String,
+    epoch: u64,
+    active_generation: u64,
+    closed_generation: u64,
+    hidden: bool,
+}
+
 #[derive(Clone, Default)]
 pub struct QuickChatWidgetState {
     views: Arc<Mutex<HashSet<String>>>,
     sync: Arc<AsyncMutex<()>>,
-    closed_generation: Arc<AtomicU64>,
+    active_session: Arc<Mutex<Option<RendererSession>>>,
 }
 
 fn quickchat_window_height(has_widgets: bool, expanded: bool) -> f64 {
@@ -68,30 +77,261 @@ fn resize_window_if_needed(window: &Window, height: f64) -> Result<(), String> {
 }
 
 impl QuickChatWidgetState {
-    fn invalidate_generation(&self, generation: u64) {
-        self.closed_generation
-            .fetch_max(generation, Ordering::SeqCst);
+    fn validate_session_id(session_id: &str) -> Result<(), String> {
+        if session_id.trim().is_empty() || session_id.len() > 128 {
+            Err("Quick Chat renderer session is invalid.".to_string())
+        } else {
+            Ok(())
+        }
     }
 
-    fn generation_is_closed(&self, generation: u64) -> bool {
-        generation <= self.closed_generation.load(Ordering::SeqCst)
+    fn session_allows_sync(
+        active: &RendererSession,
+        session_id: &str,
+        renderer_epoch: u64,
+        generation: u64,
+    ) -> bool {
+        active.id == session_id
+            && active.epoch == renderer_epoch
+            && !active.hidden
+            && generation > active.closed_generation
     }
 
-    pub async fn close(&self, app: &AppHandle, generation: u64) {
-        // Invalidate before waiting on the sync lock so an older queued request cannot
-        // recreate child WebViews after this hide cycle finishes its cleanup.
-        self.invalidate_generation(generation);
-        let _sync = self.sync.lock().await;
-        let labels = self
+    fn view_labels(&self) -> Result<HashSet<String>, String> {
+        self.views
+            .lock()
+            .map_err(|_| "Quick Chat widget state is unavailable.".to_string())
+            .map(|views| views.clone())
+    }
+
+    fn store_view_labels(&self, labels: HashSet<String>) -> Result<(), String> {
+        *self
             .views
             .lock()
-            .map(|mut views| views.drain().collect::<Vec<_>>())
-            .unwrap_or_default();
+            .map_err(|_| "Quick Chat widget state is unavailable.".to_string())? = labels;
+        Ok(())
+    }
+
+    fn close_views(
+        app: &AppHandle,
+        labels: &HashSet<String>,
+        parent_hidden: bool,
+    ) -> (HashSet<String>, Option<String>) {
+        let mut retained = HashSet::new();
+        let mut first_error = None;
         for label in labels {
-            if let Some(webview) = app.get_webview(&label) {
-                let _ = webview.close();
+            let Some(webview) = app.get_webview(label) else {
+                continue;
+            };
+            if let Err(error) = webview.hide() {
+                retained.insert(label.clone());
+                if !parent_hidden {
+                    first_error.get_or_insert_with(|| {
+                        format!("Could not hide stale Quick Chat widget {label}: {error}")
+                    });
+                }
+                continue;
+            }
+            if webview.close().is_err() {
+                // A hidden child is safe to retain and retry later; only hide failure
+                // can leave stale content visible and must abort the transition.
+                retained.insert(label.clone());
             }
         }
+        (retained, first_error)
+    }
+
+    #[cfg(test)]
+    fn activate_session(
+        &self,
+        session_id: &str,
+        renderer_epoch: u64,
+    ) -> Result<(bool, bool), String> {
+        Self::validate_session_id(session_id)?;
+        if renderer_epoch == 0 {
+            return Err("Quick Chat renderer epoch is invalid.".to_string());
+        }
+        let mut active = self
+            .active_session
+            .lock()
+            .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
+        if let Some(current) = active.as_ref() {
+            if current.id == session_id && current.epoch == renderer_epoch {
+                return Ok((true, false));
+            }
+            if current.epoch >= renderer_epoch {
+                return Ok((false, false));
+            }
+        }
+        *active = Some(RendererSession {
+            id: session_id.to_string(),
+            epoch: renderer_epoch,
+            active_generation: 0,
+            closed_generation: 0,
+            hidden: true,
+        });
+        Ok((true, true))
+    }
+
+    fn session_snapshot(
+        &self,
+        session_id: &str,
+        renderer_epoch: u64,
+    ) -> Result<Option<(u64, u64, bool)>, String> {
+        self.active_session
+            .lock()
+            .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())
+            .map(|active| {
+                active.as_ref().and_then(|active| {
+                    (active.id == session_id && active.epoch == renderer_epoch).then_some((
+                        active.active_generation,
+                        active.closed_generation,
+                        active.hidden,
+                    ))
+                })
+            })
+    }
+
+    pub async fn start_session(
+        &self,
+        app: &AppHandle,
+        session_id: &str,
+        renderer_epoch: u64,
+    ) -> Result<bool, String> {
+        Self::validate_session_id(session_id)?;
+        if renderer_epoch == 0 {
+            return Err("Quick Chat renderer epoch is invalid.".to_string());
+        }
+        let _sync = self.sync.lock().await;
+        {
+            let active = self
+                .active_session
+                .lock()
+                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
+            if let Some(current) = active.as_ref() {
+                if current.id == session_id && current.epoch == renderer_epoch {
+                    return Ok(true);
+                }
+                if current.epoch >= renderer_epoch {
+                    return Ok(false);
+                }
+            }
+        }
+        let labels = self.view_labels()?;
+        let (retained, cleanup_error) = Self::close_views(app, &labels, false);
+        self.store_view_labels(retained)?;
+        if let Some(error) = cleanup_error {
+            return Err(error);
+        }
+        *self
+            .active_session
+            .lock()
+            .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())? =
+            Some(RendererSession {
+                id: session_id.to_string(),
+                epoch: renderer_epoch,
+                active_generation: 0,
+                closed_generation: 0,
+                hidden: true,
+            });
+        Ok(true)
+    }
+
+    pub async fn activate(
+        &self,
+        window: &Window,
+        session_id: &str,
+        renderer_epoch: u64,
+        generation: u64,
+        hide_requested: &AtomicBool,
+    ) -> Result<bool, String> {
+        Self::validate_session_id(session_id)?;
+        let _sync = self.sync.lock().await;
+        {
+            let active = self
+                .active_session
+                .lock()
+                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
+            let Some(active) = active.as_ref() else {
+                return Ok(false);
+            };
+            if active.id != session_id
+                || active.epoch != renderer_epoch
+                || generation < active.active_generation
+            {
+                return Ok(false);
+            }
+        }
+        let labels = self.view_labels()?;
+        let (retained, cleanup_error) = Self::close_views(window.app_handle(), &labels, false);
+        self.store_view_labels(retained)?;
+        if let Some(error) = cleanup_error {
+            return Err(error);
+        }
+        window
+            .show()
+            .map_err(|error| format!("Could not show Quick Chat: {error}"))?;
+        {
+            let mut active = self
+                .active_session
+                .lock()
+                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
+            let active = active.as_mut().expect("renderer session held by sync lock");
+            active.active_generation = generation;
+            active.hidden = false;
+        }
+        hide_requested.store(false, Ordering::SeqCst);
+        Ok(true)
+    }
+
+    pub async fn hide(
+        &self,
+        app: &AppHandle,
+        window: &Window,
+        session_id: &str,
+        renderer_epoch: u64,
+        generation: u64,
+        hide_requested: &AtomicBool,
+    ) -> Result<bool, String> {
+        Self::validate_session_id(session_id)?;
+        let _sync = self.sync.lock().await;
+        {
+            let active = self
+                .active_session
+                .lock()
+                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
+            let Some(active) = active.as_ref() else {
+                return Ok(false);
+            };
+            if active.id != session_id
+                || active.epoch != renderer_epoch
+                || generation < active.active_generation
+            {
+                return Ok(false);
+            }
+        }
+        window
+            .hide()
+            .map_err(|error| format!("Could not hide Quick Chat: {error}"))?;
+        let labels = self.view_labels()?;
+        let (retained, _) = Self::close_views(app, &labels, true);
+        self.store_view_labels(retained)?;
+        {
+            let mut active = self
+                .active_session
+                .lock()
+                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
+            let active = active.as_mut().expect("renderer session held by sync lock");
+            active.active_generation = generation;
+            active.hidden = true;
+            active.closed_generation = active.closed_generation.max(generation);
+        }
+        hide_requested.store(true, Ordering::SeqCst);
+        let _ = window.set_size(LogicalSize::new(
+            QUICKCHAT_WIDTH,
+            QUICKCHAT_COMPACT_WINDOW_HEIGHT,
+        ));
+        Ok(true)
     }
 
     async fn sync(
@@ -101,14 +341,23 @@ impl QuickChatWidgetState {
         widgets: Vec<QuickChatWidgetLayout>,
         has_widgets: bool,
         expanded: bool,
+        session_id: &str,
+        renderer_epoch: u64,
         generation: u64,
     ) -> Result<(), String> {
-        if self.generation_is_closed(generation) {
-            return Ok(());
-        }
+        Self::validate_session_id(session_id)?;
         let _sync = self.sync.lock().await;
-        if self.generation_is_closed(generation) {
-            return Ok(());
+        {
+            let active = self
+                .active_session
+                .lock()
+                .map_err(|_| "Quick Chat renderer session is unavailable.".to_string())?;
+            let Some(active) = active.as_ref() else {
+                return Ok(());
+            };
+            if !Self::session_allows_sync(active, session_id, renderer_epoch, generation) {
+                return Ok(());
+            }
         }
         let window = webview.window();
         if !has_widgets && !widgets.is_empty() {
@@ -203,6 +452,21 @@ impl QuickChatWidgetState {
             reconciled.push((widget.visible, webview));
         }
 
+        let mut committed = desired.clone();
+        for label in current.difference(&desired) {
+            if let Some(webview) = app.get_webview(label) {
+                if let Err(error) = webview.hide() {
+                    cleanup_created(&created);
+                    return Err(format!(
+                        "Could not hide obsolete Quick Chat widget: {error}"
+                    ));
+                }
+                if webview.close().is_err() {
+                    committed.insert(label.clone());
+                }
+            }
+        }
+
         for (visible, webview) in &reconciled {
             let result = if *visible {
                 webview.show()
@@ -223,15 +487,6 @@ impl QuickChatWidgetState {
             return Err(error);
         }
 
-        let mut committed = desired.clone();
-        for label in current.difference(&desired) {
-            if app
-                .get_webview(label)
-                .is_some_and(|webview| webview.close().is_err())
-            {
-                committed.insert(label.clone());
-            }
-        }
         *self.views.lock().map_err(|_| {
             cleanup_created(&created);
             "Quick Chat widget state is unavailable.".to_string()
@@ -259,6 +514,8 @@ pub async fn quickchat_sync_widgets(
     widgets: Vec<QuickChatWidgetLayout>,
     has_widgets: bool,
     expanded: bool,
+    session_id: String,
+    renderer_epoch: u64,
     generation: u64,
 ) -> Result<(), String> {
     if webview.label() != QUICKCHAT_LABEL || webview.window().label() != QUICKCHAT_LABEL {
@@ -266,7 +523,16 @@ pub async fn quickchat_sync_widgets(
     }
     state
         .widget_state()
-        .sync(&webview, &app, widgets, has_widgets, expanded, generation)
+        .sync(
+            &webview,
+            &app,
+            widgets,
+            has_widgets,
+            expanded,
+            &session_id,
+            renderer_epoch,
+            generation,
+        )
         .await
 }
 
@@ -434,6 +700,7 @@ fn same_widget_document(candidate: &Url, allowed: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn test_widget(key: &str, url: &str, sandbox: &str) -> QuickChatWidgetLayout {
         QuickChatWidgetLayout {
@@ -449,13 +716,64 @@ mod tests {
     }
 
     #[test]
-    fn hide_generation_invalidates_queued_syncs() {
+    fn new_renderer_session_resets_closed_generations() {
         let state = QuickChatWidgetState::default();
-        assert!(!state.generation_is_closed(1));
-        state.invalidate_generation(2);
-        assert!(state.generation_is_closed(1));
-        assert!(state.generation_is_closed(2));
-        assert!(!state.generation_is_closed(3));
+        assert_eq!(
+            state
+                .activate_session("renderer-a", 100)
+                .expect("activate first"),
+            (true, true)
+        );
+        {
+            let mut active = state.active_session.lock().expect("session state");
+            let active = active.as_mut().expect("active renderer");
+            active.active_generation = 8;
+            active.hidden = true;
+        }
+        assert_eq!(
+            state
+                .session_snapshot("renderer-a", 100)
+                .expect("first renderer state"),
+            Some((8, 0, true))
+        );
+        assert_eq!(
+            state
+                .activate_session("stale-renderer", 99)
+                .expect("reject stale"),
+            (false, false)
+        );
+        assert_eq!(
+            state
+                .activate_session("renderer-b", 101)
+                .expect("activate second"),
+            (true, true)
+        );
+        assert_eq!(
+            state
+                .session_snapshot("renderer-a", 100)
+                .expect("old session"),
+            None
+        );
+        assert_eq!(
+            state
+                .session_snapshot("renderer-b", 101)
+                .expect("new session"),
+            Some((0, 0, true))
+        );
+    }
+
+    #[test]
+    fn hidden_renderer_rejects_widget_syncs() {
+        let state = QuickChatWidgetState::default();
+        state
+            .activate_session("renderer", 100)
+            .expect("activate renderer");
+        let active = state.active_session.lock().expect("session state");
+        let active = active.as_ref().expect("active renderer");
+        assert!(active.hidden);
+        assert!(!QuickChatWidgetState::session_allows_sync(
+            active, "renderer", 100, 1
+        ));
     }
 
     #[test]

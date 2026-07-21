@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../api/types.ts";

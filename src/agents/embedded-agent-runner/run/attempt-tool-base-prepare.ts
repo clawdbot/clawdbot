@@ -170,6 +170,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
     sandboxToolPolicy: params.sandbox?.tools,
     runtimeToolAllowlist: effectiveToolsAllow,
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
+    inputProvenance: attempt.inputProvenance,
+    trustedInternalHandoff: attempt.trustedInternalHandoff,
   });
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,

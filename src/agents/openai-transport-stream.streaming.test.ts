@@ -1,11 +1,11 @@
 import { createServer } from "node:http";
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
 } from "./embedded-agent-helpers.js";
-import { createOpenAICompletionsTransportStreamFn } from "./openai-transport-stream.js";
 import {
   parseTransportChunkUsage,
   type CapturedStreamEvent,
@@ -687,6 +687,31 @@ describe("openai transport stream", () => {
 
     expect(usage.cost.total).toBe(0);
     expect(usage.cost.totalOrigin).toBe("provider-billed");
+  });
+
+  it("maps cache_write_tokens as a separate write count", () => {
+    const model = makeCompletionsModel({
+      id: "openrouter/cached",
+      name: "OpenRouter Cached",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    });
+
+    const usage = parseTransportChunkUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 2 },
+      },
+      model,
+    );
+
+    // Writes are their own bucket: they must leave `input` and land in `totalTokens`,
+    // matching the plugin-sdk completions provider.
+    expect(usage).toMatchObject({ input: 5, cacheRead: 3, cacheWrite: 2, totalTokens: 15 });
   });
 
   it("keeps the catalog estimate for an invalid provider-reported usage cost", () => {

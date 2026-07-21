@@ -54,6 +54,8 @@ export const SystemAgentChatQuestionSchema = closedObject({
   ),
   /** Free-text answers are also accepted for this question. */
   isOther: Type.Optional(Type.Boolean()),
+  /** Client-owned action for the visible skip control; omitted means send a reply. */
+  skipAction: Type.Optional(Type.Literal("exit")),
 });
 
 /** One OpenClaw reply; `action` tells clients about conversation handoffs. */

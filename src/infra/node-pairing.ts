@@ -8,8 +8,13 @@
 import { randomUUID } from "node:crypto";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
+import { updatePairedDeviceNodeSurfaceInTransaction } from "./device-pairing-store.js";
 import {
+  clearNodePairingGenerationBins,
+  resolveNodePairingGeneration,
+  resolveNodePairingState,
   withPairedDeviceRecords,
+  type NodePairingGeneration,
   type PairedDevice,
   type PairedDevicePendingNodeSurface,
 } from "./device-pairing.js";
@@ -87,6 +92,10 @@ type NodePairingList = {
   paired: NodePairingPairedNode[];
 };
 
+type NodePairingListWithGeneration = Omit<NodePairingList, "paired"> & {
+  paired: Array<NodePairingPairedNode & { pairingGeneration?: string }>;
+};
+
 const OPERATOR_ROLE = "operator";
 
 const activeCleanupRevisionClaims = new Map<string, Set<number>>();
@@ -149,11 +158,17 @@ function toPendingEntry(
   };
 }
 
-function toPairedNode(device: PairedDevice): NodePairingPairedNode | null {
+function toPairedNode(
+  device: PairedDevice,
+  options?: { includePairingGeneration?: boolean },
+): NodePairingPairedNode | null {
   const surface = device.nodeSurface;
   if (!surface) {
     return null;
   }
+  const pairingGeneration = options?.includePairingGeneration
+    ? resolveNodePairingGeneration(device)?.key
+    : undefined;
   return {
     nodeId: device.deviceId,
     clientId: device.clientId,
@@ -172,6 +187,7 @@ function toPairedNode(device: PairedDevice): NodePairingPairedNode | null {
     permissions: surface.permissions,
     remoteIp: device.remoteIp,
     bins: surface.bins,
+    ...(pairingGeneration ? { pairingGeneration } : {}),
     createdAtMs: surface.createdAtMs,
     approvedAtMs: surface.approvedAtMs,
     lastConnectedAtMs: surface.lastConnectedAtMs,
@@ -322,7 +338,15 @@ function pendingHasActiveCleanupClaim(
   return (activeCleanupRevisionClaims.get(key)?.size ?? 0) > 0;
 }
 
-export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
+export function listNodePairing(baseDir?: string): Promise<NodePairingList>;
+export function listNodePairing(
+  baseDir: string | undefined,
+  options: { includePairingGeneration: true },
+): Promise<NodePairingListWithGeneration>;
+export async function listNodePairing(
+  baseDir?: string,
+  options?: { includePairingGeneration?: boolean },
+): Promise<NodePairingList | NodePairingListWithGeneration> {
   return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
     const pending: NodePairingPendingEntry[] = [];
     const paired: NodePairingPairedNode[] = [];
@@ -330,7 +354,7 @@ export async function listNodePairing(baseDir?: string): Promise<NodePairingList
       if (device.pendingNodeSurface) {
         pending.push(toPendingEntry(device, device.pendingNodeSurface));
       }
-      const node = toPairedNode(device);
+      const node = toPairedNode(device, options);
       if (node) {
         paired.push(node);
       }
@@ -485,7 +509,13 @@ export async function reusePendingNodePairingForReconnect(
   });
 }
 
-type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNode };
+type ApprovedNodePairingResult = {
+  requestId: string;
+  node: NodePairingPairedNode;
+  pairingIdentity: string;
+  nextPairingGeneration: string;
+  previousPairingGeneration?: string;
+};
 type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
 type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 
@@ -525,7 +555,8 @@ export async function approveNodePairing(
       return { value: { status: "forbidden" as const, missingScope }, persist: false };
     }
 
-    const now = Date.now();
+    const previousPairingGeneration = resolveNodePairingGeneration(device);
+    const now = Math.max(Date.now(), (device.nodeSurface?.approvedAtMs ?? -1) + 1);
     device.nodeSurface = {
       displayName: pending.displayName,
       version: pending.version,
@@ -541,11 +572,28 @@ export async function approveNodePairing(
       lastConnectedAtMs: device.nodeSurface?.lastConnectedAtMs,
     };
     delete device.pendingNodeSurface;
+    const nextPairingState = resolveNodePairingState(device);
+    const nextPairingGeneration = nextPairingState?.generation?.key;
+    if (!nextPairingState || !nextPairingGeneration) {
+      return { value: null, persist: false };
+    }
+    clearNodePairingGenerationBins(device, previousPairingGeneration);
     const node = toPairedNode(device);
     if (!node) {
       return { value: null, persist: false };
     }
-    return { value: { requestId, node }, persist: true };
+    return {
+      value: {
+        requestId,
+        node,
+        pairingIdentity: nextPairingState.identity.key,
+        nextPairingGeneration,
+        ...(previousPairingGeneration
+          ? { previousPairingGeneration: previousPairingGeneration.key }
+          : {}),
+      },
+      persist: true,
+    };
   });
 }
 
@@ -582,18 +630,31 @@ export async function getPendingNodePairing(
 export async function updatePairedNodeBins(
   nodeId: string,
   bins: string[],
+  expectedPairingGeneration: NodePairingGeneration,
   baseDir?: string,
 ): Promise<boolean> {
-  return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
-    const device = nodeSurfaceDevice(pairedByDeviceId, nodeId);
-    if (!device?.nodeSurface) {
-      return { value: false, persist: false };
-    }
-    device.nodeSurface = {
-      ...device.nodeSurface,
-      bins,
-    };
-    return { value: true, persist: true };
+  return await withPairedDeviceRecords<boolean>(baseDir, () => {
+    const value = updatePairedDeviceNodeSurfaceInTransaction<boolean>(nodeId, baseDir, (device) => {
+      const currentPairingGeneration = resolveNodePairingGeneration(device);
+      if (
+        !device?.nodeSurface ||
+        expectedPairingGeneration.nodeId !== device.deviceId ||
+        currentPairingGeneration?.key !== expectedPairingGeneration.key
+      ) {
+        return { value: false, persist: false };
+      }
+      return {
+        value: true,
+        persist: true,
+        nodeSurface: {
+          ...device.nodeSurface,
+          bins,
+        },
+      };
+    });
+    // The row-scoped transaction owns cross-process generation validation, while
+    // this lock prevents a local full-snapshot writer from replaying retired bins.
+    return { value, persist: false };
   });
 }
 
@@ -606,25 +667,44 @@ export async function recordPairedNodeConnection(
   nodeId: string,
   connectedAtMs: number,
   baseDir?: string,
+  expectedPairingGeneration?: NodePairingGeneration,
 ): Promise<RecordPairedNodeConnectionResult> {
-  return await withPairedDeviceRecords<RecordPairedNodeConnectionResult>(
-    baseDir,
-    (pairedByDeviceId) => {
-      const device = nodeSurfaceDevice(pairedByDeviceId, nodeId);
-      if (!device?.nodeSurface) {
-        return { value: { recorded: false }, persist: false };
-      }
-      // Read and write under the pairing lock. Concurrent rehandshakes must not
-      // both claim the same node's first connection and schedule duplicate alerts.
-      const firstConnection = device.nodeSurface.lastConnectedAtMs === undefined;
-      const previousConnectedAtMs = device.nodeSurface.lastConnectedAtMs ?? connectedAtMs;
-      device.nodeSurface = {
-        ...device.nodeSurface,
-        lastConnectedAtMs: Math.max(previousConnectedAtMs, connectedAtMs),
-      };
-      return { value: { recorded: true, firstConnection }, persist: true };
-    },
-  );
+  return await withPairedDeviceRecords<RecordPairedNodeConnectionResult>(baseDir, () => {
+    const value = updatePairedDeviceNodeSurfaceInTransaction<RecordPairedNodeConnectionResult>(
+      nodeId,
+      baseDir,
+      (device) => {
+        if (!device?.nodeSurface) {
+          return { value: { recorded: false }, persist: false };
+        }
+        if (expectedPairingGeneration) {
+          const currentPairingGeneration = resolveNodePairingGeneration(device);
+          if (
+            expectedPairingGeneration.nodeId !== device.deviceId ||
+            currentPairingGeneration?.key !== expectedPairingGeneration.key
+          ) {
+            return { value: { recorded: false }, persist: false };
+          }
+        }
+        // Read and write under the pairing lock. Concurrent rehandshakes must not
+        // both claim the same node's first connection and schedule duplicate alerts.
+        const firstConnection = device.nodeSurface.lastConnectedAtMs === undefined;
+        const previousConnectedAtMs = device.nodeSurface.lastConnectedAtMs ?? connectedAtMs;
+        return {
+          value: { recorded: true, firstConnection },
+          persist: true,
+          nodeSurface: {
+            ...device.nodeSurface,
+            lastConnectedAtMs: Math.max(previousConnectedAtMs, connectedAtMs),
+          },
+        };
+      },
+    );
+    // The row-scoped transaction owns cross-process generation validation, while
+    // this outer shared lock prevents local full-snapshot writers from replaying
+    // node-surface state loaded before the connection metadata commit.
+    return { value, persist: false };
+  });
 }
 
 /** Rename a paired node display name while preserving approval metadata. */

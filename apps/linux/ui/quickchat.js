@@ -46,6 +46,7 @@ const INLINE_WIDGET_MIN_HEIGHT = 160;
 const INLINE_WIDGET_MAX_HEIGHT = 1200;
 const INLINE_WIDGET_VIEWPORT_MAX_HEIGHT = 160;
 const CANVAS_SURFACE_REFRESH_INTERVAL_MS = 8 * 60 * 1_000;
+const CANVAS_SURFACE_REFRESH_RETRY_MS = 5_000;
 
 function decodeRepeatedly(raw) {
   let value = raw;
@@ -107,7 +108,7 @@ function canonicalInlineWidgetTarget(raw) {
 }
 
 function boundedWidgetKey(raw) {
-  if (raw.length <= 200) {
+  if (new TextEncoder().encode(raw).length <= 200) {
     return raw;
   }
   let hash = 2166136261;
@@ -115,8 +116,7 @@ function boundedWidgetKey(raw) {
     hash ^= character.codePointAt(0);
     hash = Math.imul(hash, 16777619) >>> 0;
   }
-  const prefix = raw.replace(/[^A-Za-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 80);
-  return `${prefix || "widget"}-${hash.toString(16).padStart(8, "0")}`;
+  return `widget-${hash.toString(16).padStart(8, "0")}`;
 }
 
 function coerceInlineWidgetPreview(block) {
@@ -242,6 +242,12 @@ function resolveInlineWidgetUrl(rawSurfaceUrl, rawTarget) {
 const tauri = window["__TAURI__"];
 const { invoke } = tauri.core;
 const { listen } = tauri.event;
+const rendererSessionId =
+  globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const rendererEpoch = Math.max(
+  1,
+  Math.trunc((globalThis.performance?.timeOrigin ?? Date.now()) * 1_000),
+);
 
 const elements = {
   agentAvatar: document.querySelector("#agent-avatar"),
@@ -281,12 +287,20 @@ let hideTimer = null;
 let acceptedTimer = null;
 let visibilitySequence = 0;
 let popoverSequence = 0;
+
+function nextVisibilityOperation() {
+  visibilitySequence += 1;
+  return visibilitySequence;
+}
 let sendError = "";
 let gatewayState = "down";
 let gatewayNotice = "";
 let canvasSurfaceUrl = null;
+let canvasSurfaceObservedUrl = null;
 let canvasSurfaceRefreshedAt = 0;
+let canvasSurfaceRetryAt = 0;
 let canvasSurfaceRefreshPromise = null;
+let canvasSurfaceRetryTimer = null;
 let gatewayDisconnectSequence = 0;
 let openPopover = null;
 let menuIndex = 0;
@@ -336,12 +350,16 @@ function setGatewayState(payload) {
     gatewayState === "up" && typeof payload?.canvasSurfaceUrl === "string"
       ? payload.canvasSurfaceUrl
       : null;
-  if (nextCanvasSurfaceUrl !== canvasSurfaceUrl) {
+  if (nextCanvasSurfaceUrl !== canvasSurfaceObservedUrl) {
+    canvasSurfaceObservedUrl = nextCanvasSurfaceUrl;
+    canvasSurfaceUrl = nextCanvasSurfaceUrl;
     canvasSurfaceRefreshedAt = nextCanvasSurfaceUrl ? Date.now() : 0;
-  }
-  canvasSurfaceUrl = nextCanvasSurfaceUrl;
-  if (!canvasSurfaceUrl) {
-    canvasSurfaceRefreshPromise = null;
+    canvasSurfaceRetryAt = 0;
+    window.clearTimeout(canvasSurfaceRetryTimer);
+    canvasSurfaceRetryTimer = null;
+    if (!nextCanvasSurfaceUrl) {
+      canvasSurfaceRefreshPromise = null;
+    }
   }
   if (gatewayState !== "up") {
     gatewayDisconnectSequence += 1;
@@ -438,34 +456,72 @@ function renderReplyText() {
 }
 
 function canvasSurfaceNeedsRefresh() {
+  const now = Date.now();
   return (
-    Boolean(canvasSurfaceUrl) &&
-    Date.now() - canvasSurfaceRefreshedAt >= CANVAS_SURFACE_REFRESH_INTERVAL_MS
+    Boolean(canvasSurfaceObservedUrl) &&
+    now >= canvasSurfaceRetryAt &&
+    (!canvasSurfaceUrl || now - canvasSurfaceRefreshedAt >= CANVAS_SURFACE_REFRESH_INTERVAL_MS)
   );
+}
+
+function scheduleCanvasSurfaceRetry() {
+  window.clearTimeout(canvasSurfaceRetryTimer);
+  if (!activeReply?.widgets.length || !canvasSurfaceObservedUrl) {
+    canvasSurfaceRetryTimer = null;
+    return;
+  }
+  const delay = Math.max(0, canvasSurfaceRetryAt - Date.now());
+  canvasSurfaceRetryTimer = window.setTimeout(() => {
+    canvasSurfaceRetryTimer = null;
+    if (canvasSurfaceNeedsRefresh()) {
+      void refreshCanvasSurface();
+    }
+  }, delay);
 }
 
 function refreshCanvasSurface() {
   if (canvasSurfaceRefreshPromise) {
     return canvasSurfaceRefreshPromise;
   }
-  if (!canvasSurfaceUrl) {
-    return Promise.resolve(null);
+  const requestedObservedUrl = canvasSurfaceObservedUrl;
+  if (!requestedObservedUrl || Date.now() < canvasSurfaceRetryAt) {
+    return Promise.resolve(canvasSurfaceUrl);
   }
   canvasSurfaceRefreshPromise = invoke("quickchat_refresh_widget_surface")
     .then((refreshed) => {
-      canvasSurfaceUrl = typeof refreshed === "string" && refreshed.trim() ? refreshed : null;
-      canvasSurfaceRefreshedAt = canvasSurfaceUrl ? Date.now() : 0;
+      if (canvasSurfaceObservedUrl !== requestedObservedUrl) {
+        return canvasSurfaceUrl;
+      }
+      const next = typeof refreshed === "string" && refreshed.trim() ? refreshed : null;
+      if (next) {
+        canvasSurfaceObservedUrl = next;
+        canvasSurfaceUrl = next;
+        canvasSurfaceRefreshedAt = Date.now();
+        canvasSurfaceRetryAt = 0;
+      } else {
+        canvasSurfaceUrl = null;
+        canvasSurfaceRetryAt = Date.now() + CANVAS_SURFACE_REFRESH_RETRY_MS;
+      }
       return canvasSurfaceUrl;
     })
     .catch(() => {
-      canvasSurfaceUrl = null;
-      canvasSurfaceRefreshedAt = 0;
-      return null;
+      if (canvasSurfaceObservedUrl === requestedObservedUrl) {
+        canvasSurfaceUrl = null;
+        canvasSurfaceRetryAt = Date.now() + CANVAS_SURFACE_REFRESH_RETRY_MS;
+      }
+      return canvasSurfaceUrl;
     })
     .finally(() => {
       canvasSurfaceRefreshPromise = null;
       if (activeReply?.widgets.length) {
         renderReplyWidgets();
+      }
+      if (
+        activeReply?.widgets.length &&
+        canvasSurfaceObservedUrl &&
+        (!canvasSurfaceUrl || canvasSurfaceNeedsRefresh())
+      ) {
+        scheduleCanvasSurfaceRetry();
       }
     });
   return canvasSurfaceRefreshPromise;
@@ -512,6 +568,8 @@ function scheduleWidgetSync() {
           widgets: layouts,
           hasWidgets: widgets.length > 0,
           expanded: !elements.reply.hidden || Boolean(openPopover),
+          sessionId: rendererSessionId,
+          rendererEpoch,
           generation,
         }),
       )
@@ -940,8 +998,7 @@ async function requestHide() {
   if (hiding) {
     return;
   }
-  visibilitySequence += 1;
-  const hideSequence = visibilitySequence;
+  const operationGeneration = nextVisibilityOperation();
   hiding = true;
   pendingChatEvents = [];
   closePopover(false, false);
@@ -950,18 +1007,29 @@ async function requestHide() {
   hideTimer = window.setTimeout(
     async () => {
       try {
-        await invoke("quickchat_hide", { generation: hideSequence });
+        const hidden = await invoke("quickchat_hide", {
+          sessionId: rendererSessionId,
+          rendererEpoch,
+          generation: operationGeneration,
+        });
+        if (visibilitySequence !== operationGeneration) {
+          return;
+        }
+        if (hidden !== true) {
+          document.body.classList.add("shown");
+          return;
+        }
         resetAccepted();
         clearReply();
       } catch (error) {
-        if (visibilitySequence === hideSequence) {
+        if (visibilitySequence === operationGeneration) {
           sendError = friendlyError(error);
           renderStatus();
           document.body.classList.add("shown");
           elements.input.focus();
         }
       } finally {
-        if (visibilitySequence === hideSequence) {
+        if (visibilitySequence === operationGeneration) {
           hiding = false;
         }
       }
@@ -971,7 +1039,26 @@ async function requestHide() {
 }
 
 function reveal() {
-  visibilitySequence += 1;
+  const operationGeneration = nextVisibilityOperation();
+  void invoke("quickchat_activate", {
+    sessionId: rendererSessionId,
+    rendererEpoch,
+    generation: operationGeneration,
+  })
+    .then((accepted) => {
+      if (accepted !== true && visibilitySequence === operationGeneration) {
+        document.body.classList.remove("shown");
+        return;
+      }
+      if (
+        accepted === true &&
+        visibilitySequence === operationGeneration &&
+        activeReply?.widgets.length
+      ) {
+        scheduleWidgetSync();
+      }
+    })
+    .catch(() => {});
   window.clearTimeout(hideTimer);
   resetAccepted();
   hiding = false;
@@ -1165,7 +1252,10 @@ await listen("quickchat:chat-event", (event) => {
 
 const readySequence = visibilitySequence;
 try {
-  const shouldShow = await invoke("quickchat_ready");
+  const shouldShow = await invoke("quickchat_ready", {
+    sessionId: rendererSessionId,
+    rendererEpoch,
+  });
   if (visibilitySequence === readySequence) {
     if (shouldShow) {
       reveal();

@@ -2,6 +2,7 @@
 import path from "node:path";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { mediaKindFromMime, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
+import type { MediaKind } from "openclaw/plugin-sdk/media-mime";
 import {
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
   transcodeAudioBufferToOpus,
@@ -46,7 +47,7 @@ export type DeliverableWhatsAppOutboundPayload<T extends WhatsAppOutboundPayload
 
 type CanonicalWhatsAppLoadedMedia = {
   buffer: Buffer;
-  kind: "image" | "audio" | "video" | "document";
+  kind: Exclude<MediaKind, "sticker" | "unknown">;
   mimetype: string;
   fileName?: string;
 };
@@ -116,7 +117,7 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
 
 function inferWhatsAppMediaKind(
   media: WhatsAppLoadedMediaLike,
-): "image" | "audio" | "video" | "document" {
+): CanonicalWhatsAppLoadedMedia["kind"] {
   if (
     media.kind === "image" ||
     media.kind === "audio" ||
@@ -125,7 +126,10 @@ function inferWhatsAppMediaKind(
   ) {
     return media.kind;
   }
-  return mediaKindFromMime(normalizeMimeType(media.contentType)) ?? "document";
+  const inferredKind = mediaKindFromMime(normalizeMimeType(media.contentType));
+  return !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
+    ? "document"
+    : inferredKind;
 }
 
 function normalizeWhatsAppLoadedMedia(

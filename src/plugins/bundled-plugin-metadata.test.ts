@@ -581,6 +581,15 @@ describe("bundled plugin metadata", () => {
     expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
   });
 
+  it("keeps Workboard CLI ownership separate from its slash command", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "workboard",
+    );
+
+    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "workboard" }]);
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["workboard"]);
+  });
+
   it("scopes Codex CLI activation to the codex command", () => {
     const entry = listRepoBundledPluginManifests().find(({ manifest }) => manifest.id === "codex");
 

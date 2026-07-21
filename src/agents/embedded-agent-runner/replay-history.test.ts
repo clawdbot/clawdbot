@@ -312,6 +312,78 @@ describe("normalizeAssistantReplayContent", () => {
     expect(out).toEqual([messages[0], messages[2]]);
   });
 
+  it.each([
+    [
+      "directly",
+      "NO_REPLY",
+      { type: "thinking", thinking: "yield reasoning", thinkingSignature: "sig_yield" },
+    ],
+    [
+      "after metadata removal",
+      `${COPIED_INBOUND_METADATA_ONLY_TEXT}\n\nNO_REPLY`,
+      { type: "redacted_thinking", data: "redacted-yield" },
+    ],
+  ])("drops thinking-only silent replies %s (#99620)", (_label, text, reasoning) => {
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant([reasoning, { type: "text", text }], "stop"),
+    ];
+
+    expect(normalizeAssistantReplayContent(messages)).toStrictEqual([messages[0]]);
+  });
+
+  it("drops silent thinking residue before a follow-up tool turn (#99620)", () => {
+    const nextToolTurn = bedrockAssistant(
+      [
+        { type: "thinking", thinking: "next reasoning", thinkingSignature: "sig_next" },
+        { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
+      ],
+      "toolUse",
+    );
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "yield reasoning", thinkingSignature: "sig_yield" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        "stop",
+      ),
+      nextToolTurn,
+      userMessage("tool result"),
+    ];
+
+    expect(normalizeAssistantReplayContent(messages)).toEqual([
+      messages[0],
+      nextToolTurn,
+      messages[3],
+    ]);
+  });
+
+  it.each([
+    ["tool calls", { type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+    ["unknown blocks", { customType: "legacy_data", data: "preserve me" }],
+  ])("preserves silent-reply turns with %s", (_label, companion) => {
+    const messages = [
+      userMessage("hi"),
+      bedrockAssistant(
+        [
+          { type: "thinking", thinking: "useful reasoning", thinkingSignature: "sig" },
+          companion,
+          { type: "text", text: "NO_REPLY" },
+        ],
+        "stop",
+      ),
+    ];
+
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(2);
+    expect((out[1] as { content: unknown[] }).content).toEqual([
+      { type: "thinking", thinking: "useful reasoning", thinkingSignature: "sig" },
+      companion,
+    ]);
+  });
+
   it("strips copied runtime context from assistant replay text", () => {
     const messages = [
       userMessage("first"),

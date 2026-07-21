@@ -1,3 +1,4 @@
+import { normalizeCodexResponsesBaseUrlForOpenAISdk } from "@openclaw/ai/transports";
 import type { TSchema } from "typebox";
 import type {
   WorkerInferenceContext,
@@ -44,7 +45,6 @@ import {
   type PreparedSimpleCompletionModel,
 } from "../../agents/simple-completion-runtime.js";
 import { bindSimpleCompletionModelResolverWorkspace } from "../../agents/simple-completion-scope.js";
-import { normalizeCodexResponsesBaseUrlForOpenAISdk } from "../../agents/simple-completion-transport.js";
 import { normalizeUsage, hasNonzeroUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

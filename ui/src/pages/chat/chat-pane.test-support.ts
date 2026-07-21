@@ -41,6 +41,7 @@ export type TestChatPane = HTMLElement & {
   taskSuggestions: TaskSuggestion[];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
+  switchPaneSession: (nextSessionKey: string) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;

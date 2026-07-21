@@ -23,6 +23,7 @@ import type {
   ChannelSetupStatus,
   ChannelSetupStatusContext,
 } from "./setup-wizard-types.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
 export type {
@@ -48,6 +49,7 @@ function createWizardAccountScope(params: {
   cfg: OpenClawConfig;
   channelKey: string;
   accountId: string;
+  setupSurface?: ChannelSetupAdapter;
 }): { cfg: OpenClawConfig; restore: (cfg: OpenClawConfig) => OpenClawConfig } {
   const accountId = normalizeAccountId(params.accountId);
   const initialChannel = getChannelSection(params.cfg, params.channelKey);
@@ -60,6 +62,7 @@ function createWizardAccountScope(params: {
   const cfg = moveSingleAccountChannelSectionToDefaultAccount({
     cfg: params.cfg,
     channelKey: params.channelKey,
+    setupSurface: params.setupSurface,
   });
   const channel = getChannelSection(cfg, params.channelKey);
   const previousDefaultAccount = channel.defaultAccount;
@@ -280,6 +283,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             cfg,
             channelKey: plugin.id,
             accountId,
+            setupSurface: plugin.setup,
           })
         : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
       let next = accountScope.cfg;

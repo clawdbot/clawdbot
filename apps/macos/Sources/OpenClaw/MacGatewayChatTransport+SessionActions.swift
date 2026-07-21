@@ -19,7 +19,7 @@ extension MacGatewayChatTransport {
                 let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
                 return OpenClawChatAgentsListResponse(
                     defaultId: result.defaultid,
-                    agents: result.agents.map {
+                    agents: result.agents.filter(\.isSelectableAgent).map {
                         OpenClawChatAgentChoice(
                             id: $0.id,
                             name: $0.name,

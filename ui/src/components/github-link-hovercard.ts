@@ -308,6 +308,14 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
   private renderedUnavailable = false;
   private requestVersion = 0;
   private stopI18n: (() => void) | null = null;
+  private readonly activeAnchorObserver = new MutationObserver(() => {
+    const anchor = this.activeAnchor;
+    // The card is portaled outside the routed tree, whose replacement can remove
+    // a hovered link without a pointer event reaching this delegated handler.
+    if (anchor && !this.contains(anchor)) {
+      this.close();
+    }
+  });
 
   connectedCallback(): void {
     this.style.display = "contents";
@@ -416,6 +424,7 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
     this.activeAnchor = anchor;
     this.activeTarget = target;
     this.describedBy = anchor.getAttribute("aria-describedby");
+    this.activeAnchorObserver.observe(this, { childList: true, subtree: true });
     this.openTimer = window.setTimeout(() => {
       this.openTimer = null;
       void this.show(anchor, target);
@@ -517,6 +526,7 @@ export class GitHubLinkHovercardProvider extends HTMLElement {
       window.clearTimeout(this.openTimer);
       this.openTimer = null;
     }
+    this.activeAnchorObserver.disconnect();
     this.requestVersion += 1;
     if (this.activeAnchor) {
       if (this.describedBy === null) {

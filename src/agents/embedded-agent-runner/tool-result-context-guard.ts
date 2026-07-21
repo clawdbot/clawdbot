@@ -14,11 +14,9 @@ import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
 import {
-  CHARS_PER_TOKEN_ESTIMATE,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
-  estimateContextChars,
   estimateMessageCharsCached,
   getToolResultText,
   invalidateMessageCharsCacheEntry,
@@ -26,10 +24,6 @@ import {
 } from "./tool-result-char-estimator.js";
 
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
-const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
-
-const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
-  "Context overflow: estimated context size exceeds safe threshold during tool loop.";
 const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
 
@@ -239,14 +233,6 @@ function toolResultsNeedTruncation(params: {
     }
   }
   return false;
-}
-
-function exceedsPreemptiveOverflowThreshold(params: {
-  messages: AgentMessage[];
-  maxContextChars: number;
-}): boolean {
-  const estimateCache = createMessageCharEstimateCache();
-  return estimateContextChars(params.messages, estimateCache) > params.maxContextChars;
 }
 
 function applyMessageMutationInPlace(
@@ -471,10 +457,6 @@ export function installToolResultContextGuard(params: {
   midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
-  const maxContextChars = Math.max(
-    1_024,
-    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
-  );
   const maxSingleToolResultChars = Math.max(
     1_024,
     Math.floor(
@@ -550,15 +532,6 @@ export function installToolResultContextGuard(params: {
       }
       lastSeenLength = contextMessages.length;
     }
-    if (
-      exceedsPreemptiveOverflowThreshold({
-        messages: contextMessages,
-        maxContextChars,
-      })
-    ) {
-      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
-    }
-
     return contextMessages;
   }) as GuardableTransformContext;
 

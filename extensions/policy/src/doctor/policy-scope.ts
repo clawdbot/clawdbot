@@ -123,6 +123,10 @@ export function policyHasIngressRules(policy: unknown): boolean {
   );
 }
 
+export function policyHasRoutingRules(policy: unknown): boolean {
+  return isRecord(policy) && isRecord(policy.routing);
+}
+
 function ingressPolicyHasRules(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;

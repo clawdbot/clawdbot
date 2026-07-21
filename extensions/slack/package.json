@@ -33,6 +33,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "slack",
       "configuredState": {
@@ -56,7 +59,17 @@
       "commands": {
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false
-      }
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--bot-token <token>",
+          "description": "Bot token"
+        },
+        {
+          "flags": "--app-token <token>",
+          "description": "App token"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/slack",

@@ -9,6 +9,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  readTranscriptRawDelta,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
@@ -43,6 +44,24 @@ describe("SessionManager.open", () => {
     await Promise.all(
       tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
+  });
+
+  it("flushes a pending initial file transcript before later appends", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "pending-session.jsonl");
+    const sessionManager = SessionManager.open(sessionFile, dir, dir);
+
+    sessionManager.appendMessage({ role: "user", content: "question", timestamp: Date.now() });
+    await expect(fs.stat(sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+
+    sessionManager.flushPendingPersistence();
+    sessionManager.appendMessage(buildAssistantMessage("answer"));
+
+    expect(
+      loadEntriesFromFile(sessionFile)
+        .filter((entry) => entry.type === "message")
+        .map((entry) => ("content" in entry.message ? entry.message.content : undefined)),
+    ).toEqual(["question", [{ type: "text", text: "answer" }]]);
   });
 
   it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
@@ -149,6 +168,53 @@ describe("SessionManager.open", () => {
         expect.objectContaining({ id: compactionId, type: "compaction" }),
       ]),
     );
+  });
+
+  it("persists a deduped runtime user entry before its SQLite descendants", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-runtime-user-parent";
+    const sessionKey = "agent:main:dashboard:sqlite-runtime-user-parent";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    const marker = formatSqliteSessionFileMarker(scope);
+    const userMessage = {
+      role: "user" as const,
+      content: "question",
+      idempotencyKey: "runtime-user-parent:user",
+      timestamp: 1,
+    };
+    await upsertSessionEntry(scope, { sessionFile: marker, sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "pre-persisted-user",
+      message: userMessage,
+      now: 1,
+    });
+    const bootstrap = readTranscriptRawDelta(scope, { maxBytes: 10_000, maxEvents: 100 });
+    expect(bootstrap.kind).toBe("page");
+    if (bootstrap.kind !== "page") {
+      throw new Error(`expected bootstrap page, got ${bootstrap.kind}`);
+    }
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const runtimeUserId = sessionManager.appendMessage(userMessage);
+    const assistantId = sessionManager.appendMessage(buildAssistantMessage("answer"));
+    const resumed = readTranscriptRawDelta(scope, {
+      cursor: bootstrap.cursor,
+      maxBytes: 10_000,
+      maxEvents: 100,
+    });
+
+    expect(resumed.kind).toBe("page");
+    if (resumed.kind !== "page") {
+      throw new Error(`expected append page, got ${resumed.kind}`);
+    }
+    expect(resumed.events.map((row) => (row.event as { id?: string }).id)).toEqual([
+      runtimeUserId,
+      assistantId,
+    ]);
+    const assistantEvent = resumed.events.at(1)?.event as { parentId?: string } | undefined;
+    expect(assistantEvent?.parentId).toBe(runtimeUserId);
   });
 
   it("preserves root-to-leaf ordering across session branches", () => {

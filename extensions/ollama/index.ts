@@ -104,12 +104,29 @@ const dynamicModelCache = new Map<string, ProviderRuntimeModel[]>();
 const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0]}`;
 const OLLAMA_CONFIGURED_SHOW_CONCURRENCY = 4;
 const OLLAMA_CONFIGURED_SHOW_MAX_MODELS = 8;
+const OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 
 async function buildLocalOllamaProvider(
   configuredBaseUrl?: string,
   opts?: Parameters<typeof buildOllamaProvider>[1],
 ): Promise<ModelProviderConfig> {
   return capLocalOllamaProviderContext(await buildOllamaProvider(configuredBaseUrl, opts));
+}
+
+function orderAppGuidedOllamaModels(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
+  const remaining = [...models];
+  const ordered: ModelDefinitionConfig[] = [];
+  while (remaining.length > 0) {
+    const preferredId = selectPreferredLocalModelId(remaining.map((candidate) => candidate.id));
+    const preferredIndex = preferredId
+      ? remaining.findIndex((candidate) => candidate.id.trim() === preferredId)
+      : 0;
+    const [candidate] = remaining.splice(Math.max(preferredIndex, 0), 1);
+    if (candidate) {
+      ordered.push(candidate);
+    }
+  }
+  return ordered;
 }
 
 async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) {
@@ -131,9 +148,38 @@ async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) 
   });
   const toolModels =
     provider.models?.filter((candidate) => candidate.compat?.supportsTools === true) ?? [];
-  const preferredModelId = selectPreferredLocalModelId(toolModels.map((candidate) => candidate.id));
-  const model =
-    toolModels.find((candidate) => candidate.id.trim() === preferredModelId) ?? toolModels[0];
+  // Automatic setup needs measured /api/show facts. The catalog fallback is
+  // intentionally optimistic for manual use and must not qualify a weak route.
+  let model: ModelDefinitionConfig | undefined;
+  for (const candidate of orderAppGuidedOllamaModels(toolModels)) {
+    const showInfo = await queryOllamaModelShowInfo(
+      provider.baseUrl,
+      candidate.id,
+      accessValue ? { apiKey: accessValue } : undefined,
+    );
+    const contextWindow = showInfo.contextWindow;
+    if (
+      !showInfo.capabilities?.includes("tools") ||
+      contextWindow === undefined ||
+      contextWindow < OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS
+    ) {
+      continue;
+    }
+    model = capLocalOllamaModelContext({
+      ...candidate,
+      contextWindow,
+      contextTokens: contextWindow,
+      compat: { ...candidate.compat, supportsTools: true },
+    });
+    break;
+  }
+  if (!model) {
+    return null;
+  }
+  const preparedProvider = capLocalOllamaProviderContext({
+    ...provider,
+    models: provider.models?.map((candidate) => (candidate.id === model.id ? model : candidate)),
+  });
   let ownerValue = existing?.apiKey;
   if (ownerValue === undefined) {
     if (accessValue) {
@@ -142,14 +188,12 @@ async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) 
       ownerValue = OLLAMA_DEFAULT_API_KEY;
     }
   }
-  return model
-    ? {
-        existing,
-        provider: capLocalOllamaProviderContext(provider),
-        model: capLocalOllamaModelContext(model),
-        ownerValue,
-      }
-    : null;
+  return {
+    existing,
+    provider: preparedProvider,
+    model,
+    ownerValue,
+  };
 }
 
 function buildDynamicCacheKey(provider: string, baseUrl: string | undefined): string {
@@ -693,12 +737,7 @@ export default definePluginEntry({
                 return null;
               }
               const modelId = ctx.modelRef.slice(prefix.length);
-              if (
-                !discovered.provider.models?.some(
-                  (candidate) =>
-                    candidate.id === modelId && candidate.compat?.supportsTools === true,
-                )
-              ) {
+              if (modelId !== discovered.model.id) {
                 return null;
               }
               // Keep discovery ownership explicit so the live probe and persisted

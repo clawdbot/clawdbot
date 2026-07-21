@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
-import type { PluginManifestContracts } from "./manifest.js";
+import type { PluginManifestContracts, PluginManifestDashboard } from "./manifest.js";
 import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
@@ -35,6 +35,7 @@ export function createPluginRecord(params: {
   providerIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
+  dashboard?: PluginManifestDashboard;
 }): PluginRecord {
   return {
     id: params.id,
@@ -89,6 +90,7 @@ export function createPluginRecord(params: {
     configUiHints: undefined,
     configJsonSchema: undefined,
     contracts: params.contracts,
+    dashboard: params.dashboard,
   };
 }
 

@@ -524,7 +524,10 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       OriginatingChannel: "discord",
-      MediaTypes: ["application/pdf", "image/png"],
+      media: [
+        { path: "/tmp/report.pdf", contentType: "application/pdf" },
+        { path: "/tmp/photo.png", contentType: "image/png" },
+      ],
     } as TemplateContext);
 
     expect(parseConversationInfoPayload(text)["source_modality"]).toBe("document");

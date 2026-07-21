@@ -15,7 +15,7 @@ import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import { isStoppableCloudWorkerPlacement } from "../../components/session-row-badges.ts";
-import { renderSessionsHubTabs } from "../../components/sessions-hub-tabs.ts";
+import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
@@ -1267,23 +1267,19 @@ class SessionsPage extends OpenClawLightDomElement {
       return html``;
     }
     return html`
-      <section class="content-header content-header--page">
-        <div>
-          <div class="page-title">${titleForRoute("sessions")}</div>
-        </div>
-        ${renderSessionsHubTabs({
-          active: "sessions",
-          onSelect: (tab) => {
-            if (tab !== "sessions") {
-              context.navigate(tab);
-            }
-          },
-        })}
-        ${renderAgentScopeControl({
+      ${renderSessionsHubHeader({
+        active: "sessions",
+        title: titleForRoute("sessions"),
+        actions: renderAgentScopeControl({
           agents: context.agents.state.agentsList?.agents ?? [],
           selection: context.agentSelection,
-        })}
-      </section>
+        }),
+        onSelect: (tab) => {
+          if (tab !== "sessions") {
+            context.navigate(tab);
+          }
+        },
+      })}
       ${renderSettingsWorkspace(
         renderSessions({
           loading: this.loading,

@@ -223,6 +223,41 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `long user prompt disclosure builds across dynamic type sizes`() {
+        let text = Array(repeating: "A long user-authored prompt line.", count: 13).joined(separator: "\n")
+        let message = OpenClawChatMessage(
+            role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil)],
+            timestamp: nil)
+
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = ChatMessageBubble(
+                message: message,
+                style: .standard,
+                markdownVariant: .standard,
+                userAccent: nil,
+                displayOptions: [],
+                assistantName: "OpenClaw",
+                assistantAvatarText: "OC",
+                assistantAvatarTint: nil,
+                showsAssistantAvatar: true,
+                isClean: false,
+                contextWindowTokens: nil,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
+                inlineWidgetResolverReady: true,
+                inlineWidgetResourceResolver: { _, _ in nil })
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 320, height: 420))
+        }
+    }
+
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
         let text = """
         Earlier prose stays visible.
@@ -281,6 +316,8 @@ struct SwiftUIRenderSmokeTests {
                 showsAssistantAvatar: true,
                 isClean: false,
                 contextWindowTokens: 1_000_000,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
                 inlineWidgetResourceResolver: { _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
@@ -493,6 +530,7 @@ struct SwiftUIRenderSmokeTests {
                 model: RootSidebarModel(),
                 selectedDestination: .overview,
                 isDrawerLayout: true,
+                showsDismissButton: true,
                 selectDestination: { _ in },
                 selectSettingsRoute: { _ in },
                 hideSidebar: {})
@@ -508,6 +546,7 @@ struct SwiftUIRenderSmokeTests {
             model: RootSidebarModel(),
             selectedDestination: .chat,
             isDrawerLayout: true,
+            showsDismissButton: true,
             selectDestination: { _ in },
             selectSettingsRoute: { _ in },
             hideSidebar: {})

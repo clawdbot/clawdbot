@@ -228,6 +228,23 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("uses the loaded context as the effective runtime budget", () => {
+    const model = mapLmstudioWireEntry({
+      type: "llm",
+      key: "small-loaded-context",
+      max_context_length: 262_144,
+      loaded_instances: [{ id: "loaded", config: { context_length: 8_192 } }],
+    });
+
+    expect(model).toMatchObject({
+      id: "small-loaded-context",
+      contextWindow: 262_144,
+      contextTokens: 8_192,
+      maxTokens: 8_192,
+      loaded: true,
+    });
+  });
+
   it("resolves reasoning capability for supported and unsupported options", () => {
     expect(resolveLmstudioReasoningCapability({ capabilities: undefined })).toBe(false);
     expect(

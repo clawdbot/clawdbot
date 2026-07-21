@@ -523,6 +523,39 @@ describe("ClickClack HTTP client", () => {
     expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
   });
 
+  it("redacts non-2xx response details with built-in patterns", async () => {
+    const fieldA = ["access", "token"].join("_");
+    const fieldB = ["client", "secret"].join("_");
+    const valueA = ["redact", "fixture", "a", "123"].join("_");
+    const valueB = ["redact", "fixture", "b", "123"].join("_");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            safe: "diagnostic",
+            [fieldA]: valueA,
+            [fieldB]: valueB,
+          }),
+          { status: 502 },
+        ),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    let message = "";
+    try {
+      await client.me();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('"safe":"diagnostic"');
+    expect(message).not.toContain(valueA);
+    expect(message).not.toContain(valueB);
+  });
+
   it("POSTs durable activity rows with kind and turn_id", async () => {
     const fetchMock = vi.fn(
       async (_input: string | URL | Request, _init?: RequestInit) =>

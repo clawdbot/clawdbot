@@ -8,6 +8,7 @@ import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import type {
   SessionCatalogHost,
   SessionCatalogProvider,
+  SessionCatalogPullRequestSummary,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -57,6 +58,7 @@ const MAX_TRANSCRIPT_LIMIT = 50;
 const MAX_HOSTS = 100;
 const MAX_STRING_LENGTH = 4096;
 const MAX_SEARCH_LENGTH = 500;
+const MAX_SESSION_PULL_REQUESTS = 20;
 const MAX_CATALOG_DISCOVERY_FILES = 10_000;
 const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
 const CLAUDE_METADATA_PREFIX_BYTES = 1024 * 1024;
@@ -65,6 +67,7 @@ const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
 const TRANSCRIPT_READ_CHUNK_BYTES = 128 * 1024;
 const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
+const CLI_ENTRYPOINTS = new Set(["cli", "sdk-cli"]);
 
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
 // Catalog refresh is fail-soft: one unhealthy machine must not hold the whole sidebar.
@@ -98,6 +101,15 @@ type DesktopSessionMetadata = {
   isArchived?: unknown;
   title?: unknown;
   customGroup?: unknown;
+  prNumber?: unknown;
+  prState?: unknown;
+  prs?: unknown;
+};
+
+type DesktopPullRequestMetadata = {
+  prNumber?: unknown;
+  state?: unknown;
+  dismissed?: unknown;
 };
 
 type CatalogRecord = ClaudeSessionCatalogSession & {
@@ -144,6 +156,99 @@ function optionalString(value: unknown, maxLength = MAX_STRING_LENGTH): string |
   }
   const trimmed = value.trim();
   return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
+}
+
+function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["state"] | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  switch (value.trim().toLowerCase()) {
+    case "open":
+    case "draft":
+    case "merged":
+    case "closed":
+      return value.trim().toLowerCase() as SessionCatalogPullRequestSummary["state"];
+    default:
+      return undefined;
+  }
+}
+
+function pullRequestNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+// Desktop retains historical PRs in order and marks hidden ones as dismissed;
+// the top-level pair identifies the current PR whose state labels the row.
+function desktopPullRequestSummary(
+  metadata: DesktopSessionMetadata,
+): SessionCatalogPullRequestSummary | undefined {
+  const visibleByNumber = new Map<number, SessionCatalogPullRequestSummary["state"] | undefined>();
+  const dismissed = new Set<number>();
+  if (Array.isArray(metadata.prs)) {
+    for (const value of metadata.prs) {
+      if (!isRecord(value)) {
+        continue;
+      }
+      const entry = value as DesktopPullRequestMetadata;
+      const number = pullRequestNumber(entry.prNumber);
+      if (!number) {
+        continue;
+      }
+      if (entry.dismissed === true) {
+        dismissed.add(number);
+        visibleByNumber.delete(number);
+        continue;
+      }
+      if (!dismissed.has(number) && !visibleByNumber.has(number)) {
+        visibleByNumber.set(number, pullRequestState(entry.state));
+      }
+    }
+  }
+  const currentNumber = pullRequestNumber(metadata.prNumber);
+  let currentState = currentNumber ? visibleByNumber.get(currentNumber) : undefined;
+  if (currentNumber && !dismissed.has(currentNumber)) {
+    currentState = pullRequestState(metadata.prState) ?? currentState;
+    // Reinsert the current PR at the tail so truncation always retains it.
+    visibleByNumber.delete(currentNumber);
+    visibleByNumber.set(currentNumber, currentState);
+  }
+  const visible = [...visibleByNumber].map(([number, state]) => ({ number, state }));
+  if (visible.length === 0) {
+    return undefined;
+  }
+  const state = currentState ?? visible.at(-1)?.state;
+  if (!state) {
+    return undefined;
+  }
+  return {
+    numbers: visible.slice(-MAX_SESSION_PULL_REQUESTS).map((entry) => entry.number),
+    state,
+  };
+}
+
+function parsePullRequestSummary(value: unknown): SessionCatalogPullRequestSummary | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value) || !Array.isArray(value.numbers)) {
+    throw new Error("Claude node returned an invalid pull request summary");
+  }
+  const numbers = value.numbers.map(pullRequestNumber);
+  const state = pullRequestState(value.state);
+  if (
+    numbers.length === 0 ||
+    numbers.length > MAX_SESSION_PULL_REQUESTS ||
+    numbers.some((number) => number === undefined) ||
+    new Set(numbers).size !== numbers.length ||
+    !state
+  ) {
+    throw new Error("Claude node returned an invalid pull request summary");
+  }
+  return { numbers: numbers as number[], state };
+}
+
+function isCliEntrypoint(value: unknown): value is string {
+  return typeof value === "string" && CLI_ENTRYPOINTS.has(value);
 }
 
 function timestampMs(value: unknown): number | undefined {
@@ -453,15 +558,15 @@ async function discoverCliRecords(
             aiTitle = optionalString(raw.aiTitle, 500) ?? aiTitle;
             return false;
           }
-          if (typeof raw.entrypoint === "string" && raw.entrypoint !== "sdk-cli") {
+          if (typeof raw.entrypoint === "string" && !isCliEntrypoint(raw.entrypoint)) {
             return true;
           }
-          if (raw.entrypoint === "sdk-cli" && raw.isSidechain === true) {
+          if (isCliEntrypoint(raw.entrypoint) && raw.isSidechain === true) {
             sidechainIds.add(sessionId);
             return true;
           }
           if (
-            raw.entrypoint !== "sdk-cli" ||
+            !isCliEntrypoint(raw.entrypoint) ||
             raw.type !== "user" ||
             !isRecord(raw.message) ||
             raw.message.role !== "user"
@@ -587,6 +692,7 @@ async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRe
     const createdAt = timestampMs(metadata.createdAt) ?? existing?.createdAt;
     const updatedAt = timestampMs(metadata.lastActivityAt) ?? existing?.updatedAt;
     const customGroup = optionalString(metadata.customGroup, 500);
+    const pullRequest = desktopPullRequestSummary(metadata);
     records.set(sessionId, {
       ...(existing ?? {
         threadId: sessionId,
@@ -599,6 +705,7 @@ async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRe
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
       ...(customGroup ? { customGroup } : {}),
+      ...(pullRequest ? { pullRequest } : {}),
       source: "claude-desktop",
       filePath,
     });
@@ -769,13 +876,19 @@ export async function readLocalClaudeTranscriptPage(
       );
       position -= size;
       const chunk = Buffer.allocUnsafe(size);
-      const { bytesRead } = await handle.read(chunk, 0, size, position);
-      if (bytesRead !== size) {
-        throw new Error("Claude transcript changed while it was being read");
+      // Positional reads may return short, so complete the bounded window.
+      // A zero-byte read before it fills means the file changed after stat.
+      let filled = 0;
+      while (filled < size) {
+        const { bytesRead } = await handle.read(chunk, filled, size - filled, position + filled);
+        if (bytesRead === 0) {
+          throw new Error("Claude transcript changed while it was being read");
+        }
+        filled += bytesRead;
       }
-      scanned += bytesRead;
-      let right = bytesRead;
-      for (let index = bytesRead - 1; index >= 0; index -= 1) {
+      scanned += filled;
+      let right = filled;
+      for (let index = filled - 1; index >= 0; index -= 1) {
         if (chunk[index] !== 0x0a) {
           continue;
         }
@@ -914,6 +1027,7 @@ function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
     const recencyAt = parseNumberField("recencyAt", true);
     const cliVersion = parseStringField("cliVersion", 256);
     const gitBranch = parseStringField("gitBranch", 500);
+    const pullRequest = parsePullRequestSummary(candidate.pullRequest);
     return {
       threadId,
       status: "stored",
@@ -927,6 +1041,7 @@ function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
       ...(recencyAt !== undefined ? { recencyAt } : {}),
       ...(cliVersion ? { cliVersion } : {}),
       ...(gitBranch ? { gitBranch } : {}),
+      ...(pullRequest ? { pullRequest } : {}),
     };
   });
   const nextCursor = readNodePageCursor(value, "Claude node returned an invalid session page");
@@ -1456,6 +1571,7 @@ function toGenericClaudeHost(
         ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         ...(session.customGroup ? { customGroup: session.customGroup } : {}),
+        ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
         archived: session.archived,
         ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
         canContinue: continuable,

@@ -40,6 +40,19 @@
   padding-top: var(--space-3);
 }
 
+.model-providers__global-metrics {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.model-providers__global-metrics-title {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .model-providers__layout,
 .model-providers__fallbacks,
 .model-providers__inline-form,

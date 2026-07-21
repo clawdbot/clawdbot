@@ -17,6 +17,13 @@ dreaming stay owned by whichever memory backend is configured
 (`memory-core`, QMD, Honcho, etc.). `memory-wiki` sits beside it and compiles
 knowledge into a maintained wiki layer.
 
+Enable the plugin before using its CLI, tools, or runtime integration:
+
+```bash
+openclaw plugins enable memory-wiki
+openclaw gateway restart
+```
+
 | Layer                | Owns                                                                              |
 | -------------------- | --------------------------------------------------------------------------------- |
 | Active memory plugin | Recall, semantic search, promotion, dreaming, memory runtime                      |

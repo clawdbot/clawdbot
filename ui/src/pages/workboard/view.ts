@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
@@ -62,11 +63,19 @@ import {
 } from "./board-filter.ts";
 import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
 
+function ensureWorkboardCardDashboardElement(): Promise<void> {
+  return ensureCustomElementDefined(
+    "openclaw-workboard-card-dashboard",
+    () => import("./workboard-card-dashboard.ts"),
+  );
+}
+
 type WorkboardProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
   canWrite?: boolean;
+  canGrant?: boolean;
   canModelOverride?: boolean;
   pluginEnabled: boolean | null;
   pluginEnablementError?: string | null;
@@ -1433,6 +1442,9 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const cardActions = getCardActionState(props, card);
   const { task, busy, activeTask, live, linkedSessionKey, writable, showStartControls, archived } =
     cardActions;
+  if (linkedSessionKey) {
+    void ensureWorkboardCardDashboardElement().catch(() => undefined);
+  }
   const lifecycle = getWorkboardLifecycle(card, props.sessions, task);
   const formatted = formatLifecycle(lifecycle);
   const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;
@@ -1515,6 +1527,17 @@ function renderCardDetailsPanel(props: WorkboardProps) {
                   <h3>${t("workboard.fieldNotes")}</h3>
                   <p>${card.notes}</p>
                 </section>
+              `
+            : nothing}
+          ${linkedSessionKey
+            ? html`
+                <openclaw-workboard-card-dashboard
+                  .sessionKey=${linkedSessionKey}
+                  .client=${props.client}
+                  .connected=${props.connected}
+                  .canMutate=${props.canWrite !== false}
+                  .canGrant=${props.canGrant === true}
+                ></openclaw-workboard-card-dashboard>
               `
             : nothing}
           ${renderDependencyDetailList(dependencies)}

@@ -2,6 +2,7 @@
 import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import pMap from "p-map";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { buildPortHints } from "./ports-format.js";
@@ -28,6 +29,10 @@ type CommandResult = {
   code: number;
   error?: string;
 };
+
+// Each Unix mapper starts three child processes; cap mapper slots so port
+// diagnostics cannot fan out one process batch per socket record.
+const PORT_PROCESS_ENRICHMENT_CONCURRENCY = 20;
 
 async function runCommandSafe(argv: string[], timeoutMs = 5_000): Promise<CommandResult> {
   try {
@@ -198,8 +203,9 @@ function parseSsConnections(output: string, port: number): PortConnection[] {
 }
 
 async function enrichUnixListenerProcessInfo(listeners: PortListener[]): Promise<void> {
-  await Promise.all(
-    listeners.map(async (listener) => {
+  await pMap(
+    listeners,
+    async (listener) => {
       if (!listener.pid) {
         return;
       }
@@ -217,7 +223,8 @@ async function enrichUnixListenerProcessInfo(listeners: PortListener[]): Promise
       if (parentPid !== undefined) {
         listener.ppid = parentPid;
       }
-    }),
+    },
+    { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY },
   );
 }
 
@@ -520,8 +527,9 @@ async function readWindowsNetstatEntries<T extends PortListener>(
   }
 
   const entries = parse(res.stdout, port);
-  await Promise.all(
-    entries.map(async (entry) => {
+  await pMap(
+    entries,
+    async (entry) => {
       if (!entry.pid) {
         return;
       }
@@ -535,7 +543,8 @@ async function readWindowsNetstatEntries<T extends PortListener>(
       if (commandLine) {
         entry.commandLine = commandLine;
       }
-    }),
+    },
+    { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY },
   );
   return { entries, detail: res.stdout.trim() || undefined, errors };
 }

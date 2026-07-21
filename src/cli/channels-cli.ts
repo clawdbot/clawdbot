@@ -15,10 +15,10 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 type ChannelsCommandsModule = typeof import("../commands/channels.js");
-type BundledPackageChannelMetadataModule =
-  typeof import("../plugins/bundled-package-channel-metadata.js");
+type ChannelSetupCliOptionsModule = typeof import("../channels/plugins/cli-add-options.js");
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
+const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["channel"]);
 
 type RegisterChannelsCliOptions = {
   includeSetupOptions?: boolean;
@@ -27,10 +27,9 @@ type RegisterChannelsCliOptions = {
 const channelsCommandsLoader = createLazyImportLoader<ChannelsCommandsModule>(
   () => import("../commands/channels.js"),
 );
-const bundledPackageChannelMetadataLoader =
-  createLazyImportLoader<BundledPackageChannelMetadataModule>(
-    () => import("../plugins/bundled-package-channel-metadata.js"),
-  );
+const channelSetupCliOptionsLoader = createLazyImportLoader<ChannelSetupCliOptionsModule>(
+  () => import("../channels/plugins/cli-add-options.js"),
+);
 
 function loadChannelsCommands(): Promise<ChannelsCommandsModule> {
   return channelsCommandsLoader.load();
@@ -73,27 +72,49 @@ function shouldRegisterChannelSetupOptions(
   return commandPath[0] === "channels" && commandPath[1] === "add";
 }
 
-async function addChannelSetupOptions(command: Command): Promise<Command> {
-  const { listBundledPackageChannelMetadata } = await bundledPackageChannelMetadataLoader.load();
-  const seenFlags = new Set(command.options.map((option) => option.flags));
-  const channels = listBundledPackageChannelMetadata().toSorted((left, right) => {
-    const leftOrder = left.order ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = right.order ?? Number.MAX_SAFE_INTEGER;
-    return leftOrder === rightOrder
-      ? (left.id ?? "").localeCompare(right.id ?? "")
-      : leftOrder - rightOrder;
-  });
-  for (const channel of channels) {
-    for (const option of channel.cliAddOptions ?? []) {
-      if (seenFlags.has(option.flags)) {
-        continue;
-      }
-      seenFlags.add(option.flags);
-      if (option.defaultValue !== undefined) {
-        command.option(option.flags, option.description, option.defaultValue);
-      } else {
-        command.option(option.flags, option.description);
-      }
+// Best-effort pre-parse sniff of the selected channel so its option
+// declarations win registration. Misses only the unusual `add --flag value
+// <channel>` shape, which falls back to first-declaration ordering.
+function resolveChannelsAddArgvChannel(argv: string[]): string | undefined {
+  const tokens = normalizeWindowsArgv(argv);
+  const addIndex = tokens.indexOf("add");
+  if (addIndex === -1) {
+    return undefined;
+  }
+  const rest = tokens.slice(addIndex + 1);
+  const channelFlagIndex = rest.indexOf("--channel");
+  if (channelFlagIndex !== -1) {
+    const value = rest[channelFlagIndex + 1];
+    return value && !value.startsWith("-") ? value : undefined;
+  }
+  const inline = rest.find((token) => token.startsWith("--channel="));
+  if (inline) {
+    return inline.slice("--channel=".length) || undefined;
+  }
+  const positional = rest[0];
+  return positional && !positional.startsWith("-") ? positional : undefined;
+}
+
+async function addChannelSetupOptions(command: Command, channelId?: string): Promise<Command> {
+  const { channelCliOptionSwitchKey, resolveChannelSetupCliOptionMetadata } =
+    await channelSetupCliOptionsLoader.load();
+  // Seed with switch identities, not raw flags strings: Commander throws on a
+  // matching switch with a different placeholder (e.g. plugin `--token <payload>`
+  // vs the static `--token <token>`).
+  const seenSwitches = new Set(
+    command.options.map((option) => option.long ?? option.short ?? option.flags),
+  );
+  const { options } = resolveChannelSetupCliOptionMetadata(channelId);
+  for (const option of options) {
+    const key = channelCliOptionSwitchKey(option.flags);
+    if (seenSwitches.has(key)) {
+      continue;
+    }
+    seenSwitches.add(key);
+    if (option.defaultValue !== undefined) {
+      command.option(option.flags, option.description, option.defaultValue);
+    } else {
+      command.option(option.flags, option.description);
     }
   }
   return command;
@@ -262,27 +283,19 @@ export async function registerChannelsCli(
     .option("--name <name>", "Display name for this account")
     .option("--token <token>", "Channel token or credential payload")
     .option("--token-file <path>", "Read channel token or credential payload from file")
-    .option("--secret <secret>", "Channel shared secret")
-    .option("--secret-file <path>", "Read channel shared secret from file")
-    .option("--bot-token <token>", "Bot token")
-    .option("--app-token <token>", "App token")
-    .option("--password <password>", "Channel password or login secret")
-    .option("--cli-path <path>", "Channel CLI path")
-    .option("--url <url>", "Channel setup URL")
-    .option("--base-url <url>", "Channel base URL")
-    .option("--workspace <workspace>", "Channel workspace id, slug, or name")
-    .option("--http-url <url>", "Channel HTTP service URL")
-    .option("--auth-dir <path>", "Channel auth directory override")
     .option("--use-env", "Use env-backed credentials when supported", false);
 
   if (shouldRegisterChannelSetupOptions(argv, options)) {
-    await addChannelSetupOptions(addCommand);
+    await addChannelSetupOptions(addCommand, resolveChannelsAddArgvChannel(argv));
   }
 
   addCommand.action(async (channelArg: string | undefined, opts, command) => {
     await runChannelsCommand(async () => {
       const { channelsAddCommand } = await loadChannelsCommands();
-      const hasFlags = hasExplicitOptions(command, getOptionNames(command));
+      const hasFlags = hasExplicitOptions(
+        command,
+        getOptionNames(command).filter((name) => !CHANNEL_ADD_SELECTION_OPTION_NAMES.has(name)),
+      );
       await channelsAddCommand(resolveChannelsAddOptions(channelArg, opts), defaultRuntime, {
         hasFlags,
       });

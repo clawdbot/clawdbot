@@ -200,6 +200,7 @@ describe("renderPlugins", () => {
   it("keeps plugin monograms usable when Intl.Segmenter is unavailable", async () => {
     const originalSegmenter = Intl.Segmenter;
     Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
+    vi.resetModules();
 
     try {
       const freshModulePath = "./presentation.ts?without-intl-segmenter";
@@ -208,6 +209,7 @@ describe("renderPlugins", () => {
       expect(pluginMonogram("👩‍💻 Tools")).toBe("👩T");
     } finally {
       Object.defineProperty(Intl, "Segmenter", { configurable: true, value: originalSegmenter });
+      vi.resetModules();
     }
   });
 

@@ -2,12 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   assertInsideWorkspace,

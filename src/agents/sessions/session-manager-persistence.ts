@@ -227,7 +227,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       appendTranscriptEventSync(scope, entry);
       return;
     }
-    const result = appendTranscriptMessageSync(scope, {
+    const appendOptions = {
       cwd: this.cwd,
       eventId: entry.id,
       ...(options?.config ? { config: options.config } : {}),
@@ -235,7 +235,20 @@ export class SessionManagerPersistence extends SessionManagerCore {
       message: entry.message,
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
-    });
+    } satisfies Parameters<typeof appendTranscriptMessageSync>[1];
+    let result = appendTranscriptMessageSync(scope, appendOptions);
+    if (result && !result.appended && result.messageId !== entry.id) {
+      // SessionManager has already adopted this event ID as the next parent. A
+      // pre-persisted user turn may share its idempotency key, but dropping the
+      // canonical node would leave every later descendant dangling in SQLite.
+      result = appendTranscriptMessageSync(scope, {
+        ...appendOptions,
+        idempotencyLookup: "caller-checked",
+      });
+    }
+    if (result && result.messageId !== entry.id) {
+      throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
+    }
     if (
       options?.idempotencyLookup === "caller-checked" &&
       (!result?.appended || result.messageId !== entry.id)

@@ -20,11 +20,21 @@ export const BoardSizeSchema = Type.Union([
   Type.Literal("xl"),
   Type.Literal("full"),
 ]);
+export const BoardWidgetPresentationSchema = Type.Union([
+  Type.Literal("card"),
+  Type.Literal("full-bleed"),
+  Type.Literal("frameless"),
+]);
+export const BoardWidgetHeightModeSchema = Type.Union([
+  Type.Literal("auto"),
+  Type.Literal("fixed"),
+]);
 
 export const BOARD_CRON_JOB_ID_MAX_LENGTH = 256;
 export const BOARD_CRON_TRIGGER_PREFIX = "cron.trigger:";
 export const BOARD_WIDGET_TOOL_MAX_LENGTH =
   BOARD_CRON_TRIGGER_PREFIX.length + BOARD_CRON_JOB_ID_MAX_LENGTH;
+export const BOARD_DATA_BINDING_ID_MAX_LENGTH = 64;
 
 export const BoardTabSchema = closedObject({
   tabId: BoardTabIdSchema,
@@ -51,6 +61,8 @@ export const BoardWidgetSchema = closedObject({
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app")]),
+  presentation: Type.Optional(BoardWidgetPresentationSchema),
+  heightMode: Type.Optional(BoardWidgetHeightModeSchema),
   sizeW: Type.Integer({ minimum: 1, maximum: 12 }),
   sizeH: Type.Integer({ minimum: 1, maximum: 20 }),
   position: Type.Integer({ minimum: 0 }),
@@ -115,6 +127,7 @@ export const BoardWidgetResizeOpSchema = closedObject({
   name: BoardWidgetNameSchema,
   sizeW: Type.Integer(),
   sizeH: Type.Integer(),
+  heightMode: Type.Optional(BoardWidgetHeightModeSchema),
 });
 export const BoardWidgetRemoveOpSchema = closedObject({
   kind: Type.Literal("widget_remove"),
@@ -187,6 +200,8 @@ export const BoardWidgetPutParamsSchema = closedObject({
   name: BoardWidgetNameSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   content: BoardWidgetPutContentSchema,
+  presentation: Type.Optional(BoardWidgetPresentationSchema),
+  heightMode: Type.Optional(BoardWidgetHeightModeSchema),
   placement: Type.Optional(
     closedObject({
       tabId: Type.Optional(BoardTabIdSchema),
@@ -249,7 +264,7 @@ export type BoardPromptAuthorizeParams = Static<typeof BoardPromptAuthorizeParam
 
 export const BoardDataReadParamsSchema = closedObject({
   ticket: BoardViewTicketSchema,
-  bindingId: Type.String({ minLength: 1, maxLength: 64 }),
+  bindingId: Type.String({ minLength: 1, maxLength: BOARD_DATA_BINDING_ID_MAX_LENGTH }),
   params: Type.Optional(
     Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
       maxProperties: 64,
@@ -258,11 +273,24 @@ export const BoardDataReadParamsSchema = closedObject({
 });
 export type BoardDataReadParams = Static<typeof BoardDataReadParamsSchema>;
 
-export const BoardActionParamsSchema = closedObject({
+export const BoardCronActionParamsSchema = closedObject({
   ticket: BoardViewTicketSchema,
   action: Type.Literal("cron.trigger"),
   jobId: Type.String({ minLength: 1, maxLength: BOARD_CRON_JOB_ID_MAX_LENGTH }),
 });
+export const BoardPluginActionParamsSchema = closedObject({
+  ticket: BoardViewTicketSchema,
+  action: Type.String({ minLength: 1, maxLength: BOARD_WIDGET_TOOL_MAX_LENGTH }),
+  params: Type.Optional(
+    Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
+      maxProperties: 64,
+    }),
+  ),
+});
+export const BoardActionParamsSchema = Type.Union([
+  BoardCronActionParamsSchema,
+  BoardPluginActionParamsSchema,
+]);
 export type BoardActionParams = Static<typeof BoardActionParamsSchema>;
 
 export const BoardChangedEventSchema = closedObject({

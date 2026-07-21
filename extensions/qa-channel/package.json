@@ -45,7 +45,13 @@
         "configured": false,
         "setup": false,
         "docs": false
-      }
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--base-url <url>",
+          "description": "Channel base URL"
+        }
+      ]
     }
   }
 }

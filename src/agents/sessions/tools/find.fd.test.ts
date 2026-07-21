@@ -55,6 +55,24 @@ it("rejects partial fd output when fd exits with an error", async () => {
   await expect(result).rejects.toThrow("fd failed while reading subtree");
 });
 
+it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition("/workspace");
+  const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
+  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  const stderrBytes = Buffer.from("fd 失败：权限被拒绝\n");
+  child.stdout.end();
+  // Split inside the first multibyte character to mimic a pipe chunk boundary.
+  child.stderr.write(stderrBytes.subarray(0, 5));
+  child.stderr.end(stderrBytes.subarray(5));
+  child.emit("close", 2, null);
+
+  await expect(result).rejects.toThrow("fd 失败：权限被拒绝");
+});
+
 it.each(["stdout", "stderr"] as const)(
   "rejects and stops fd when %s emits an error",
   async (stream) => {

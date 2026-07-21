@@ -56,12 +56,11 @@ function assertMaintenancePathsOwnedByStateDir(
   const stateCanonicalDir = resolvePathViaExistingAncestorSync(stateDir);
   for (const protectedPath of protectedPaths) {
     const absolutePath = path.resolve(protectedPath);
-    let resolvedPath: ReturnType<typeof resolveRootPathSync>;
     try {
       if (!isPathInside(stateDir, absolutePath) && !isPathInside(stateCanonicalDir, absolutePath)) {
         throw new Error("path is not lexically owned by the active state directory");
       }
-      resolvedPath = resolveRootPathSync({
+      resolveRootPathSync({
         absolutePath,
         boundaryLabel: "OpenClaw state directory",
         rootCanonicalPath: stateCanonicalDir,
@@ -73,11 +72,26 @@ function assertMaintenancePathsOwnedByStateDir(
         { cause: error },
       );
     }
-    if (
-      resolvedPath.exists &&
-      resolvedPath.kind === "file" &&
-      fs.statSync(resolvedPath.canonicalPath).nlink > 1
-    ) {
+  }
+  assertDoctorSqliteMaintenancePathsNotHardLinked(operation, protectedPaths);
+}
+
+/** Reject file aliases that destructive SQLite maintenance would mutate in place. */
+export function assertDoctorSqliteMaintenancePathsNotHardLinked(
+  operation: string,
+  protectedPaths: readonly string[],
+): void {
+  for (const protectedPath of new Set(protectedPaths.map((candidate) => path.resolve(candidate)))) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(protectedPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    if (stat.isFile() && stat.nlink > 1) {
       throw new Error(
         `Cannot run ${operation} for a hard-linked path: ${protectedPath}. Remove the additional hard link and retry.`,
       );

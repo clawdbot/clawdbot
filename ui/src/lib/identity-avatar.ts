@@ -92,6 +92,15 @@ export function resolveAvatarInitials(
 }
 
 /**
+ * Stable identity hue (0-359) shared by avatar initials and per-sender chat
+ * bubble tints; both must derive from the same seed or a user's bubble and
+ * avatar drift apart. Lightness/alpha stay theme-owned in CSS.
+ */
+export function resolveIdentityHue(input: IdentityAvatarInput): number {
+  return resolveAvatarInitials(input).colorSeed % 360;
+}
+
+/**
  * Resolves a trusted gateway avatar route, else deterministic initials.
  * Gravatar is served by the gateway inside the profile avatar route itself, so
  * the client never constructs a Gravatar URL — it only ever renders the

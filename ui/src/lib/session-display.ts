@@ -1,4 +1,5 @@
 // Control UI module implements session display behavior.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -18,7 +19,7 @@ const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
   const trimmed = identifier.trim();
-  return trimmed.length <= 10 ? trimmed : `…${trimmed.slice(-6)}`;
+  return trimmed.length <= 10 ? trimmed : `…${sliceUtf16Safe(trimmed, -6)}`;
 }
 
 // Long hex/uuid runs inside keys and node ids are machine ids, not names;

@@ -120,6 +120,10 @@ ENV GIT_COMMIT=${GIT_COMMIT} \
 
 COPY . .
 
+# The build stage also backs non-root live-test containers. Build contexts preserve
+# host modes, so normalize readability before Node resolves workspace packages.
+RUN chmod -R a+rX /app
+
 # Normalize extension paths now so runtime COPY preserves safe modes
 # without adding a second full extensions layer.
 RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \

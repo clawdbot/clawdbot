@@ -457,7 +457,7 @@ struct VoiceWakeSettings: View {
     }
 
     private func chimeRow(
-        title: String,
+        title: SettingsTextValue,
         selection: Binding<VoiceWakeChime>,
         showsDivider: Bool = true) -> some View
     {
@@ -611,7 +611,7 @@ struct VoiceWakeSettings: View {
         }
     }
 
-    private var additionalLanguagesSubtitle: String {
+    private var additionalLanguagesSubtitle: SettingsTextValue {
         if self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
             return "None configured."
         }
@@ -857,7 +857,9 @@ private struct AdditionalLanguageRow: View {
 
     var body: some View {
         SettingsCardRow(
-            title: "Language \(self.index + 2)",
+            title: .verbatim(String(
+                format: String(localized: "Language %lld"),
+                self.index + 2)),
             subtitle: "Fallback recognition language.",
             showsDivider: self.showsDivider)
         {

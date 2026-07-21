@@ -284,6 +284,22 @@ describe("program routes", () => {
     await expectRunFalse(["status"], ["node", "openclaw", "status", "--timeout"]);
   });
 
+  it.each([
+    { path: ["health"], argv: ["node", "openclaw", "health", "--wat"] },
+    { path: ["status"], argv: ["node", "openclaw", "status", "--wat"] },
+    { path: ["sessions"], argv: ["node", "openclaw", "sessions", "--wat"] },
+    {
+      path: ["agents", "list"],
+      argv: ["node", "openclaw", "agents", "list", "--wat"],
+    },
+    { path: ["agents"], argv: ["node", "openclaw", "agents", "--wat"] },
+  ])(
+    "returns false instead of handling unknown routed option for $path",
+    async ({ path, argv }) => {
+      await expectRunFalse(path, argv);
+    },
+  );
+
   it("routes status --json through the lean JSON command", async () => {
     const route = expectRoute(["status"]);
     await expect(

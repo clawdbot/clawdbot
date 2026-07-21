@@ -1,12 +1,10 @@
 import { createServer } from "node:http";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  buildOpenAICompletionsParams,
-  createOpenAICompletionsTransportStreamFn,
-} from "./openai-transport-stream.js";
+import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
   buildOpenAIResponsesParams,
   type CapturedStreamEvent,
@@ -1044,7 +1042,7 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
-        api: "openclaw-openai-responses-transport" as Api,
+        api: "openclaw-openai-chatgpt-responses-transport" as Api,
         provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,

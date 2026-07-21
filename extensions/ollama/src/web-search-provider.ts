@@ -188,8 +188,9 @@ async function runOllamaWebSearch(params: {
         method: "POST",
         headers,
         body,
-        signal: AbortSignal.timeout(DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS),
       },
+      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+      timeoutMs: DEFAULT_OLLAMA_WEB_SEARCH_TIMEOUT_MS,
       policy: buildOllamaBaseUrlSsrFPolicy(attempt.baseUrl),
       auditContext: "ollama-web-search.search",
     });

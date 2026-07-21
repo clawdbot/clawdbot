@@ -143,6 +143,8 @@ type PluginHarnessToolPolicyContext = Pick<
   | "senderUsername"
   | "senderE164"
   | "senderIsOwner"
+  | "inputProvenance"
+  | "trustedInternalHandoff"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -619,6 +621,8 @@ function resolvePluginHarnessToolPolicies(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
   });
   const groupPolicyParams = {
     config: params.config,

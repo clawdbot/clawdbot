@@ -10,6 +10,10 @@ export type DraftBranches = {
 export type DraftNode = {
   nodeId: string;
   displayName: string;
+  platform?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
+  remoteIp?: string;
   connected: boolean;
   canExec: boolean;
   canBrowse: boolean;
@@ -29,6 +33,10 @@ export function readDraftNodes(value: unknown): DraftNode[] {
       const node = raw as {
         nodeId?: unknown;
         displayName?: unknown;
+        platform?: unknown;
+        deviceFamily?: unknown;
+        modelIdentifier?: unknown;
+        remoteIp?: unknown;
         connected?: unknown;
         commands?: unknown;
       };
@@ -45,6 +53,10 @@ export function readDraftNodes(value: unknown): DraftNode[] {
         {
           nodeId,
           displayName: normalizeOptionalString(node.displayName) ?? nodeId,
+          platform: normalizeOptionalString(node.platform),
+          deviceFamily: normalizeOptionalString(node.deviceFamily),
+          modelIdentifier: normalizeOptionalString(node.modelIdentifier),
+          remoteIp: normalizeOptionalString(node.remoteIp),
           connected,
           canExec,
           canBrowse: canExec && commands.includes("fs.listDir"),

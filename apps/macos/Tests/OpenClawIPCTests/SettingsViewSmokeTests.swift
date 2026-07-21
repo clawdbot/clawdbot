@@ -210,6 +210,19 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `Gateway settings is visible and builds body`() throws {
+        let tabs = SettingsTabGroup.defaultGroups(showDebug: false, showSystemAgent: false)
+            .flatMap(\.tabs)
+        #expect(tabs.contains(.gateways))
+
+        let profile = try MacGatewayProfile(
+            id: "studio",
+            name: "Studio",
+            url: #require(URL(string: "wss://studio.example")))
+        let view = GatewaySettings(profiles: [profile], isPreview: true)
+        _ = view.body
+    }
+
     @Test func `OpenClaw settings require configured inference`() {
         #expect(!SystemAgentAvailability.shouldShow(configuredModel: nil))
         #expect(!SystemAgentAvailability.shouldShow(configuredModel: "   "))

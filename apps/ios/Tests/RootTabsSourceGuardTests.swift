@@ -83,17 +83,28 @@ struct RootTabsSourceGuardTests {
         #expect(drawerContent.contains("self.sidebarDrawerLayer"))
         #expect(drawerContent.contains("self.sidebarDrawerContentSurface"))
         #expect(drawerContent.contains("self.sidebarDrawerContentCard"))
+        #expect(drawerContent.contains("self.sidebarDrawerInteractionLayer"))
         #expect(drawerContent.contains("self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth)"))
+        #expect(drawerContent.contains("self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth)"))
+        #expect(drawerContent.contains("self.isSidebarDetailRootVisible"))
+        #expect(drawerContent.contains("self.sidebarNavigationPath.isEmpty"))
+        #expect(!drawerContent.contains("self.selectedSidebarDestination == .chat"))
         #expect(drawerContent.contains(".allowsHitTesting(!self.isSidebarVisible)"))
-        #expect(drawerContent.contains(".clipShape(RoundedRectangle("))
-        #expect(drawerContent.contains("cornerRadius: OpenClawProMetric.drawerRadius * progress"))
+        #expect(source.contains("private static let sidebarDrawerTopLeadingRadius: CGFloat = 8"))
+        #expect(drawerContent.contains("let shape = self.sidebarDrawerContentShape(progress: progress)"))
+        #expect(drawerContent.contains("return shape\n            .fill(Color(uiColor: .systemGroupedBackground))"))
+        #expect(drawerContent.contains(".clipShape(self.sidebarDrawerContentShape(progress: progress))"))
         #expect(drawerContent.contains(".offset(x: Self.sidebarContentOffset("))
-        #expect(drawerContent.contains(".shadow("))
+        #expect(!drawerContent.contains(".shadow("))
         #expect(drawerContent.contains(".fill(Color(uiColor: .systemGroupedBackground))"))
         #expect(drawerContent.contains(".ignoresSafeArea(.container, edges: .vertical)"))
         #expect(!drawerContent.contains("Color.black.opacity(0.35)"))
-        #expect(!drawerContent.contains("UnevenRoundedRectangle"))
-        #expect(!drawerContent.contains("sidebarDrawerShape"))
+        #expect(drawerContent.contains("private func sidebarDrawerContentShape(progress: CGFloat)"))
+        #expect(drawerContent.contains("UnevenRoundedRectangle("))
+        #expect(drawerContent.contains("topLeadingRadius: Self.sidebarDrawerTopLeadingRadius * progress"))
+        #expect(drawerContent.contains("bottomLeadingRadius: OpenClawProMetric.drawerRadius * progress"))
+        #expect(drawerContent.contains("bottomTrailingRadius: OpenClawProMetric.drawerRadius * progress"))
+        #expect(drawerContent.contains("topTrailingRadius: OpenClawProMetric.drawerRadius * progress"))
         #expect(!drawerContent.contains("NavigationSplitView"))
     }
 
@@ -487,10 +498,12 @@ struct RootTabsSourceGuardTests {
         #expect(chatSource.contains("self.headerAgentIdentity"))
         #expect(!chatSource.contains("headerAgentModelPicker"))
         #expect(chatSource.contains(".sharedBackgroundVisibility(.hidden)"))
-        #expect(chatSource.contains("OpenClawSidebarRevealButton(action: headerSidebarAction)"))
+        #expect(chatSource.contains("OpenClawSidebarToolbarItem("))
+        #expect(componentsSource.contains("struct OpenClawSidebarToolbarItem: ToolbarContent"))
+        #expect(componentsSource.contains(".sharedBackgroundVisibility(.hidden)"))
         #expect(!chatSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
-        #expect(settingsSource.contains("ToolbarItem(placement: .topBarLeading)"))
+        #expect(settingsSource.contains("OpenClawSidebarToolbarItem("))
         #expect(!settingsSource.contains("ToolbarItem(placement: .topBarTrailing)"))
     }
 
@@ -1068,7 +1081,7 @@ extension RootTabsSourceGuardTests {
         let storeSource = try String(contentsOf: Self.watchInboxStoreSourceURL(), encoding: .utf8)
         let consumePayload = try Self.extract(
             receiverSource,
-            from: "private func consumeIncomingPayload(_ payload: [String: Any], transport: String)",
+            from: "private func consumeIncomingPayload(",
             to: "}\n}")
         let appSnapshotConsume = try #require(
             consumePayload.range(of: "self.store.consume(appSnapshot: appSnapshot)"))

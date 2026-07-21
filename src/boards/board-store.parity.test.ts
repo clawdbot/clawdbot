@@ -53,6 +53,8 @@ describe.each([
       sessionKey: "agent:main:board",
       name: "weather",
       content: { kind: "html", html: "<p>one</p>" },
+      presentation: "frameless",
+      heightMode: "auto",
       declared: {
         netOrigins: ["https://weather.example"],
         tools: ["weather.refresh"],
@@ -66,6 +68,8 @@ describe.each([
           name: "weather",
           revision: 1,
           grantState: "pending",
+          presentation: "frameless",
+          heightMode: "auto",
           declaredSummary: [
             "Network access: https://weather.example",
             "Tool access: weather.refresh",
@@ -83,12 +87,21 @@ describe.each([
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
 
+    // Legacy clients omit heightMode on resize; explicit user sizing must pin.
     const resized = store.applyOps("agent:main:board", [
       { kind: "widget_resize", name: "weather", sizeW: 8, sizeH: 6 },
     ]);
     expect(resized).toMatchObject({
       revision: 2,
-      widgets: [{ sizeW: 8, sizeH: 6, revision: 1 }],
+      widgets: [
+        {
+          sizeW: 8,
+          sizeH: 6,
+          revision: 1,
+          presentation: "frameless",
+          heightMode: "fixed",
+        },
+      ],
     });
     expect(
       store.grant("agent:main:board", "weather", "granted", 1, first.widgets[0]?.instanceId),
@@ -104,7 +117,16 @@ describe.each([
     });
     expect(updated).toMatchObject({
       revision: 4,
-      widgets: [{ revision: 2, grantState: "none", sizeW: 8, sizeH: 6 }],
+      widgets: [
+        {
+          revision: 2,
+          grantState: "none",
+          sizeW: 8,
+          sizeH: 6,
+          presentation: "frameless",
+          heightMode: "fixed",
+        },
+      ],
     });
     expect(updated.widgets[0]).not.toHaveProperty("declaredSummary");
     expect(store.getSnapshot("agent:main:board").widgets[0]).not.toHaveProperty("declaredSummary");
@@ -356,6 +378,56 @@ describe.each([
 });
 
 describe("SqliteBoardStore persistence", () => {
+  it("round-trips widget frame preferences through the manifest", () => {
+    const stateDir = tempDirs.make("openclaw-board-widget-frame-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:widget-frame";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    store.putWidget({
+      sessionKey,
+      name: "status",
+      content: { kind: "html", html: "status" },
+      presentation: "card",
+      heightMode: "auto",
+    });
+    store.applyOps(sessionKey, [
+      { kind: "widget_resize", name: "status", sizeW: 8, sizeH: 7, heightMode: "fixed" },
+    ]);
+
+    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+      presentation: "card",
+      heightMode: "fixed",
+      sizeW: 8,
+      sizeH: 7,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const readManifest = () =>
+      JSON.parse(
+        (
+          database.db
+            .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
+            .get(sessionKey) as { manifest: string }
+        ).manifest,
+      );
+    expect(readManifest()).toMatchObject({ presentation: "card", heightMode: "fixed" });
+
+    // A content re-pin that omits frame options must keep the persisted ones.
+    store.putWidget({ sessionKey, name: "status", content: { kind: "html", html: "status v2" } });
+    expect(readManifest()).toMatchObject({ presentation: "card", heightMode: "fixed" });
+
+    // Legacy resize ops without heightMode still pin persisted height.
+    store.applyOps(sessionKey, [
+      { kind: "widget_resize", name: "status", sizeW: 8, sizeH: 7, heightMode: "auto" },
+    ]);
+    expect(readManifest()).toMatchObject({ heightMode: "auto" });
+    store.applyOps(sessionKey, [{ kind: "widget_resize", name: "status", sizeW: 6, sizeH: 4 }]);
+    expect(readManifest()).toMatchObject({ presentation: "card", heightMode: "fixed" });
+  });
+
   it("drops MCP App rows without canonical authority provenance", () => {
     const stateDir = tempDirs.make("openclaw-board-noncanonical-app-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

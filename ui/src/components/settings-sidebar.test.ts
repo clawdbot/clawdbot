@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { pt_BR } from "../i18n/locales/pt-BR.ts";
 import { renderSettingsSidebar } from "./settings-sidebar.ts";
 
 let container: HTMLDivElement;
@@ -13,7 +14,9 @@ beforeEach(async () => {
   document.body.append(container);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  i18n.registerTranslation("pt-BR", pt_BR);
+  await i18n.setLocale("en");
   container.remove();
 });
 
@@ -246,6 +249,42 @@ describe("settings sidebar search", () => {
       .querySelector<HTMLAnchorElement>('.settings-sidebar__item[href="/settings/channels"]')
       ?.click();
     expect(onNavigate).toHaveBeenCalledWith("channels");
+  });
+
+  it("renders refreshed settings route titles from the active locale", async () => {
+    i18n.registerTranslation("pt-BR", {
+      routeTitles: {
+        notifications: "Notificacoes",
+        modelProviders: "Provedores de modelos",
+        advanced: "Avancado",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "config",
+        connected: true,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "",
+        onExit: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+      }),
+      container,
+    );
+
+    const labels = [...container.querySelectorAll(".settings-sidebar__item-label")].map((item) =>
+      item.textContent?.trim(),
+    );
+    expect(labels).toContain("Notificacoes");
+    expect(labels).toContain("Provedores de modelos");
+    expect(labels).toContain("Avancado");
   });
 
   it("keeps the update card above the settings footer", async () => {

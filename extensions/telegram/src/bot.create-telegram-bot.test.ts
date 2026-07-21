@@ -192,6 +192,28 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
   return value;
 }
 
+function makeGenericCallbackContext(params: { id: string; updateId?: number }) {
+  const data = "skip nightly build tonight";
+  return {
+    ...(params.updateId === undefined ? {} : { update: { update_id: params.updateId } }),
+    callbackQuery: {
+      id: params.id,
+      data,
+      from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      message: {
+        chat: { id: 1234, type: "private" },
+        date: 1736380800,
+        message_id: 10,
+        reply_markup: {
+          inline_keyboard: [[{ text: "Skip tonight", callback_data: data }]],
+        },
+      },
+    },
+    me: { username: "openclaw_bot" },
+    getFile: async () => ({ download: async () => new Uint8Array() }),
+  };
+}
+
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -1945,6 +1967,57 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("/fast status");
     expect(payload.Body).not.toContain("callback_data: /fast status");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-slash-1");
+  });
+
+  it.each([
+    { name: "clears buttons", id: "cbq-generic-clear-1", editError: undefined },
+    {
+      name: "continues after a permanent edit error",
+      id: "cbq-generic-clear-permanent-1",
+      editError: new Error("400: Bad Request: message can't be edited"),
+    },
+  ])("routes generic callback_query payloads and $name", async ({ id, editError }) => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    if (editError) {
+      editMessageReplyMarkupSpy.mockRejectedValueOnce(editError);
+    }
+
+    await callbackHandler(makeGenericCallbackContext({ id }));
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("skip nightly build tonight");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith(id);
+  });
+
+  it("retries generic callback_query button cleanup after transient edit failures", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    const ctx = makeGenericCallbackContext({ id: "cbq-generic-clear-retry-1", updateId: 779 });
+
+    editMessageReplyMarkupSpy.mockRejectedValueOnce(new Error("edit boom"));
+
+    await expect(
+      runTelegramMiddlewareChain({
+        ctx,
+        finalHandler: callbackHandler,
+      }),
+    ).rejects.toThrow("edit boom");
+    expect(replySpy).not.toHaveBeenCalled();
+
+    await runTelegramMiddlewareChain({
+      ctx,
+      finalHandler: callbackHandler,
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(2);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("skip nightly build tonight");
   });
 
   it("does not route opaque callback_query payloads as synthetic commands", async () => {

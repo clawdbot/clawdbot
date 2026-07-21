@@ -6,6 +6,7 @@ export type CustodianStructuredQuestion = {
   question: string;
   options: Array<{ label: string; description?: string; recommended?: boolean; reply?: string }>;
   isOther: boolean;
+  skipAction?: "exit";
 };
 
 function nonEmptyString(value: unknown): string | null {
@@ -54,5 +55,12 @@ export function parseCustodianQuestion(
   if (options.filter((option) => option.recommended).length > 1) {
     return null;
   }
-  return { id, header, question, options, isOther: value.isOther === true };
+  return {
+    id,
+    header,
+    question,
+    options,
+    isOther: value.isOther === true,
+    ...(value.skipAction === "exit" ? { skipAction: "exit" as const } : {}),
+  };
 }

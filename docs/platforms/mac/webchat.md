@@ -18,12 +18,20 @@ The anchored compact chat panel from the menu bar keeps the compact single-colum
 
 ## Multiple Gateway windows
 
-Choose **File → New Gateway Window…** or press Cmd-N, then enter a `ws://` or
-`wss://` endpoint and its optional token or password. Each saved profile owns
-an independent Gateway connection, device-auth scope, transcript cache,
-offline outbox, route leases, and window restoration key. These windows can
-stay connected and run chats simultaneously; opening the same profile again
-focuses its existing window.
+Open **Settings → Gateways** to add or remove reusable Gateway profiles. Each
+profile contains a `ws://` or `wss://` endpoint and its optional token or
+password; credentials are stored in the macOS Keychain. Removing a profile
+also closes its open windows and shuts down its secondary connection.
+
+Choose **File → New Gateway Window…** or press Cmd-N, then select one of those
+saved profiles. The picker remembers the most recently used profile. Every
+selection creates a new independent window, so the same Gateway can appear in
+multiple windows with different active sessions and navigation state.
+
+Each saved profile owns one shared Gateway connection, device-auth scope,
+transcript cache, offline outbox, and route leases. Windows for that profile
+reuse those resources while staying independently navigable. Windows for
+different profiles stay connected and run chats simultaneously.
 
 The menu-bar app's configured Gateway remains the owner of Mac node
 capabilities and Talk Mode. Additional Gateway windows are operator-only, so a

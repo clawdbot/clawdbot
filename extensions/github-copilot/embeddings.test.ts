@@ -1,5 +1,6 @@
 // Github Copilot tests cover embeddings plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CopilotTokenExchangeError } from "./token-exchange-error.js";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
@@ -381,7 +382,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     ).toBe(true);
     expect(
       shouldContinueAutoSelection(
-        new Error("Copilot token exchange failed: timed out after 30000ms"),
+        new CopilotTokenExchangeError({ reason: "timeout", timeoutMs: 30_000 }),
       ),
     ).toBe(true);
     expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);

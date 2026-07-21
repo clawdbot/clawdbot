@@ -6,6 +6,7 @@ import { deriveCopilotApiBaseUrlFromToken } from "openclaw/plugin-sdk/provider-a
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CachedCopilotToken } from "./token-cache.js";
+import { CopilotTokenExchangeError } from "./token-exchange-error.js";
 import { resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -435,6 +436,27 @@ describe("github-copilot token", () => {
       "identity",
     );
     expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains how to recover from a forbidden token exchange", async () => {
+    jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 403 }));
+
+    const rejection = resolveCopilotApiToken({
+      githubToken: "gh",
+      cachePath,
+      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
+      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(rejection).rejects.toBeInstanceOf(CopilotTokenExchangeError);
+    await expect(rejection).rejects.toMatchObject({
+      code: "github_copilot_token_exchange_failed",
+      reason: "http_error",
+      status: 403,
+      message: expect.stringContaining("login-github-copilot"),
+    });
   });
 
   it("keeps exchanges per source credential in plugin state", async () => {

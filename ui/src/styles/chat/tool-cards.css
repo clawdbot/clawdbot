@@ -559,6 +559,10 @@
   transition: opacity 120ms ease;
 }
 
+.chat-tool-card--flush:has(> .chat-tool-card__actions) .chat-tool-term__cmd {
+  padding-right: 42px;
+}
+
 .chat-tool-card--flush:hover > .chat-tool-card__actions,
 .chat-tool-card--flush:focus-within > .chat-tool-card__actions {
   opacity: 1;
@@ -824,7 +828,13 @@
 }
 
 .chat-tool-card__preview-panel {
-  padding: 12px;
+  padding: var(--widget-frame-inset);
+}
+
+/* Full-bleed and frameless pins render edge-to-edge here too, so the same
+   authored document meets identical geometry in chat and on the board. */
+.chat-tool-card__preview-panel[data-bleed] {
+  padding: 0;
 }
 
 .chat-tool-card__preview-frame {
@@ -970,7 +980,7 @@
 /* Keep the activity summary, call bubbles, and flat result rows on one width.
    Include the role classes so this wins over the generic tool-group rule. */
 .chat-group.tool.chat-group--activity .chat-group-messages {
-  max-width: min(760px, 100%);
+  max-width: var(--chat-message-max-width, min(760px, 100%));
 }
 
 .chat-activity-group {
@@ -1098,15 +1108,16 @@
   color: inherit;
 }
 
-/* Reading indicator = working claw: the brand pincer shadowboxes where the
+/* Reading indicator = working claw: the brand pincer claws in place where the
    reply will materialize while the agent works with nothing visibly
    streaming. Bubble chrome and sizing come from
    .chat-bubble.chat-reading-indicator (components.css). Filled silhouette;
    18px because the claw is denser than a star glyph. The row settles into
-   stance once, then the solid claw carries the ongoing working signal. One
-   cycle = jab, jab, cross; the jaw snaps shut on every impact and a pow star
-   pops on the cross. --claw-cycle drives all three animations so stance
-   variants only retune the tempo. */
+   stance once, then the solid claw carries the ongoing working signal. The
+   default cycle is two jaw snips with a sympathetic body flex — no lateral
+   travel, that read as too busy. The old jab-jab-cross shadowbox combo
+   survives only as the rare --shadowbox stance. --claw-cycle drives every
+   animation so stance variants only retune the tempo. */
 .chat-reading-indicator {
   --claw-cycle: 2.4s;
 
@@ -1142,24 +1153,26 @@
   height: 18px;
   fill: currentColor;
   stroke: none;
-  animation: chatWorkingClawCombo var(--claw-cycle) ease-out infinite;
+  animation: chatWorkingClawFlex var(--claw-cycle) ease-out infinite;
   will-change: transform;
 }
 
 /* The upper jaw hinges at the palm joint. Rest is slightly open — the open
-   notch is what reads "claw" at 18px — and the jaw snaps shut exactly on the
-   combo's impact frames (keyframe percentages must stay in lockstep with
-   chatWorkingClawCombo). */
+   notch is what reads "claw" at 18px — and the jaw snaps shut on the snip
+   frames (keyframe percentages must stay in lockstep with
+   chatWorkingClawFlex, and with chatWorkingClawCombo in the shadowbox
+   stance). */
 .chat-reading-indicator svg .claw-icon__jaw {
   transform-box: view-box;
   transform-origin: 8.6px 11px;
   transform: rotate(-10deg);
-  animation: chatWorkingClawJaw var(--claw-cycle) ease-out infinite;
+  animation: chatWorkingClawSnip var(--claw-cycle) ease-out infinite;
   will-change: transform;
 }
 
-/* Pow star: pops at the cross impact (46-58% of the combo cycle). */
-.chat-reading-indicator::after {
+/* Pow star: shadowbox-only, pops at the cross impact (46-58% of the combo
+   cycle). */
+.chat-reading-indicator--shadowbox::after {
   content: "✦";
   position: absolute;
   right: -14px;
@@ -1189,7 +1202,70 @@
   }
 }
 
-/* Jab 1 at 12-16%, jab 2 at 26-30%, big wind-up, cross at 46-52%. */
+/* Default stance: the body flexes in place in sympathy with the jaw — pure
+   rotation, no translate, so the claw works without pacing around. Snip 1 at
+   10-16%, snip 2 at 26-32%, then rest. */
+@keyframes chatWorkingClawFlex {
+  0%,
+  6% {
+    transform: rotate(0deg);
+  }
+
+  10% {
+    transform: rotate(-4deg);
+  }
+
+  16% {
+    transform: rotate(3deg);
+  }
+
+  22%,
+  26% {
+    transform: rotate(-4deg);
+  }
+
+  32% {
+    transform: rotate(3deg);
+  }
+
+  42%,
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+/* Jaw opens wide on each wind-up and snaps shut on the snip frames above. */
+@keyframes chatWorkingClawSnip {
+  0%,
+  6% {
+    transform: rotate(-10deg);
+  }
+
+  10% {
+    transform: rotate(-26deg);
+  }
+
+  16% {
+    transform: rotate(4deg);
+  }
+
+  22%,
+  26% {
+    transform: rotate(-24deg);
+  }
+
+  32% {
+    transform: rotate(4deg);
+  }
+
+  42%,
+  100% {
+    transform: rotate(-10deg);
+  }
+}
+
+/* Shadowbox body: jab 1 at 12-16%, jab 2 at 26-30%, big wind-up, cross at
+   46-52%. */
 @keyframes chatWorkingClawCombo {
   0%,
   8% {
@@ -1231,6 +1307,7 @@
   }
 }
 
+/* Shadowbox jaw: snaps shut in lockstep with chatWorkingClawCombo impacts. */
 @keyframes chatWorkingClawJaw {
   0%,
   8% {
@@ -1291,9 +1368,11 @@
   }
 }
 
-/* Seeded stance variants (see punchStanceClass in chat-message.ts): the
-   southpaw fights mirrored, the flurry fighter runs the combo double-time,
-   the rare haymaker is a slow heavyweight with a bigger pow. */
+/* Seeded stance variants (see stanceClass in chat-working-indicator.ts): the
+   southpaw claws mirrored, the flurry snips double-time, the spin does a
+   fake-3D turntable revolve while snipping, the shadowbox brings back the
+   full jab-jab-cross combo with the pow star, and the rarest backflip throws
+   a single in-place somersault per cycle. */
 .chat-reading-indicator--southpaw {
   transform: scaleX(-1);
 }
@@ -1302,13 +1381,60 @@
   --claw-cycle: 1.3s;
 }
 
-.chat-reading-indicator--haymaker {
-  --claw-cycle: 3.8s;
+.chat-reading-indicator--spin {
+  --claw-cycle: 3.6s;
 }
 
-.chat-reading-indicator--haymaker::after {
-  font-size: 15px;
-  right: -17px;
+/* Fake 3D: perspective() + rotateY reads as a spinning coin at 18px. Linear
+   timing keeps the revolve steady; the jaw keeps its snip cycle on top. */
+.chat-reading-indicator--spin svg {
+  animation-name: chatWorkingClawSpin;
+  animation-timing-function: linear;
+}
+
+.chat-reading-indicator--shadowbox svg {
+  animation-name: chatWorkingClawCombo;
+}
+
+.chat-reading-indicator--shadowbox svg .claw-icon__jaw {
+  animation-name: chatWorkingClawJaw;
+}
+
+.chat-reading-indicator--backflip svg {
+  animation-name: chatWorkingClawBackflip;
+}
+
+@keyframes chatWorkingClawSpin {
+  0% {
+    transform: perspective(60px) rotateY(0deg);
+  }
+
+  100% {
+    transform: perspective(60px) rotateY(360deg);
+  }
+}
+
+/* Long rest, then one quick somersault with a small hop; -360deg lands back
+   at the rest pose so the loop seam is invisible. translateY comes first so
+   the hop stays vertical while the claw rotates in place. */
+@keyframes chatWorkingClawBackflip {
+  0%,
+  55% {
+    transform: translateY(0) rotate(0deg);
+  }
+
+  62% {
+    transform: translateY(-3px) rotate(-120deg);
+  }
+
+  70% {
+    transform: translateY(-3px) rotate(-240deg);
+  }
+
+  78%,
+  100% {
+    transform: translateY(0) rotate(-360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1362,6 +1488,12 @@
   transform-box: view-box;
   transform-origin: 8.6px 11px;
   transform: rotate(-4deg);
+}
+
+/* Turn recap reuses the tasks-status chrome but the run is over: the parked
+   claw holds still instead of breathing. */
+.chat-turn-recap .chat-tasks-status__claw {
+  animation: none;
 }
 
 .chat-tasks-status__link {

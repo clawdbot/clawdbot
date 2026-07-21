@@ -22,11 +22,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 
 export function flushSessionManagerTranscript(sessionManager: AttemptSessionManager): void {
-  (
-    sessionManager as unknown as {
-      replacePersistedTranscript?: () => void;
-    }
-  ).replacePersistedTranscript?.();
+  sessionManager.flushPendingPersistence();
 }
 
 export function repairAttemptToolUseResultPairing(

@@ -179,13 +179,17 @@ export async function azLoginDeviceCodeWithOptions(params: {
       }
       return total;
     };
-    child.stdout?.on("data", (chunk) => {
-      const text = String(chunk);
+    // Decode pipes statefully so a multibyte UTF-8 code point split across
+    // chunk boundaries does not become U+FFFD in terminal output / error text.
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      const text = chunk;
       stdoutLen = appendBoundedChunk(stdoutChunks, text, stdoutLen);
       process.stdout.write(text);
     });
-    child.stderr?.on("data", (chunk) => {
-      const text = String(chunk);
+    child.stderr?.on("data", (chunk: string) => {
+      const text = chunk;
       stderrLen = appendBoundedChunk(stderrChunks, text, stderrLen);
       process.stderr.write(text);
     });

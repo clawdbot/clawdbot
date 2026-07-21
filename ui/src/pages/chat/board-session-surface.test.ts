@@ -26,6 +26,55 @@ beforeEach(() => {
 });
 
 describe("board session shell", () => {
+  it("delegates the optional Workboard chip to its lazy element", () => {
+    const linked = createContainer();
+    const unlinked = createContainer();
+    const provider = boardProviderForSession("agent:main:workboard-link");
+    const client = {
+      request: vi.fn(async () => ({ cards: [] })),
+      addEventListener: vi.fn(() => () => {}),
+    } as never;
+    const props = {
+      snapshot: provider.snapshot$.value,
+      sessions: [],
+      activeTabId: "main",
+      dock: "right" as const,
+      reopenDock: "right" as const,
+      dockSize: { height: 300, width: 420 },
+      chat: html`<div>chat</div>`,
+      divider: html`<div></div>`,
+      canMutate: true,
+      canGrant: true,
+      callbacks: {
+        applyOps: (ops: Parameters<typeof provider.applyOps>[0]) => provider.applyOps(ops),
+        grant: (...args: Parameters<typeof provider.grant>) => provider.grant(...args),
+        selectTab: () => {},
+      },
+      widgetFrameUrl: (name: string, revision: number) => provider.widgetFrameUrl(name, revision),
+      onDockChange: () => {},
+    };
+
+    render(
+      renderBoardSessionSurface({
+        ...props,
+        workboardCardChip: {
+          basePath: "",
+          client,
+          sessionKey: "agent:main:workboard-link",
+        },
+      }),
+      linked,
+    );
+    render(renderBoardSessionSurface(props), unlinked);
+
+    const chip = linked.querySelector<HTMLElementTagNameMap["openclaw-workboard-card-chip"]>(
+      "openclaw-workboard-card-chip",
+    );
+    expect(chip?.sessionKey).toBe("agent:main:workboard-link");
+    expect(chip?.client).toBe(client);
+    expect(unlinked.querySelector("openclaw-workboard-card-chip")).toBeNull();
+  });
+
   it("shows the face toggle only when a board exists", () => {
     const withoutBoard = createContainer();
     const withBoard = createContainer();

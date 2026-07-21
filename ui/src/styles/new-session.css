@@ -53,8 +53,8 @@ openclaw-new-session-page {
   text-align: left;
 }
 
-/* Quiet chip row directly above the composer: every picker (agent, folder,
-   where) shares one trigger treatment so the row reads as a single control
+/* Quiet chip row directly above the composer: the agent and place pickers
+   share one trigger treatment so the row reads as a single control
    strip. Web Awesome owns popup/listbox behavior. */
 .new-session-page__triggers {
   display: flex;
@@ -103,16 +103,6 @@ openclaw-new-session-page {
 .new-session-page__trigger:disabled {
   cursor: default;
   opacity: 0.6;
-}
-
-.new-session-page__trigger--disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.new-session-page__trigger--disabled:hover {
-  color: var(--muted);
-  background: transparent;
 }
 
 /* Keep the anchor focusable while Web Awesome finishes its hide animation. */
@@ -231,16 +221,40 @@ wa-popover.new-session-page__select::part(body) {
   color: var(--muted);
 }
 
-/* The folder menu hosts the directory browser; wider than the list menus. */
-wa-popover.new-session-page__select--folder::part(body) {
+/* Place browsing uses the same shell as its root menu, with inset root rows. */
+wa-popover.new-session-page__place-popover {
+  --max-width: min(420px, calc(100vw - 24px));
+}
+
+wa-popover.new-session-page__place-popover::part(body) {
   width: min(420px, calc(100vw - 24px));
   max-width: none;
   padding: 0;
   overflow: hidden;
 }
 
-.new-session-page__browser-menu {
-  width: 100%;
+/* part(body) hides overflow for the browser view's square corners, so the
+   root menu needs its own scroll region or long place lists become unreachable. */
+.new-session-page__place-root {
+  max-height: min(420px, 60vh);
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.new-session-page__menu-chevron {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.new-session-page__menu-chevron svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* The chip row already spaces itself; keep the composer snug beneath it. */

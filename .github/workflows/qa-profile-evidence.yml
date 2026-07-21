@@ -197,7 +197,7 @@ jobs:
     name: Generate QA profile evidence
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: ${{ inputs.qa_profile == 'all' && 240 || 60 }}
+    timeout-minutes: 60
     permissions:
       contents: read
     outputs:
@@ -303,6 +303,8 @@ jobs:
           pnpm openclaw qa run \
             --repo-root . \
             --qa-profile "${QA_PROFILE}" \
+            --concurrency 2 \
+            --fast \
             --output-dir "${output_dir}" || qa_exit_code=$?
 
           echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"

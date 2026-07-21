@@ -22,6 +22,8 @@ type ParsedBoardManifest = {
   declared?: BoardWidgetDeclared;
   declarationInvalid?: true;
   grantSemanticsVersion?: number;
+  presentation?: BoardWidget["presentation"];
+  heightMode?: BoardWidget["heightMode"];
   mcpAppInteractive?: boolean;
   mcpAppInstanceId?: string;
 };
@@ -31,6 +33,8 @@ export function parseManifest(value: string): ParsedBoardManifest {
     netOrigins?: unknown;
     tools?: unknown;
     grantSemanticsVersion?: unknown;
+    presentation?: unknown;
+    heightMode?: unknown;
     mcpAppInteractive?: unknown;
     mcpAppInstanceId?: unknown;
   };
@@ -46,6 +50,14 @@ export function parseManifest(value: string): ParsedBoardManifest {
     typeof parsed.mcpAppInstanceId === "string" && /^[a-f0-9]{32}$/u.test(parsed.mcpAppInstanceId)
       ? parsed.mcpAppInstanceId
       : undefined;
+  const presentation =
+    parsed.presentation === "card" ||
+    parsed.presentation === "full-bleed" ||
+    parsed.presentation === "frameless"
+      ? parsed.presentation
+      : undefined;
+  const heightMode =
+    parsed.heightMode === "auto" || parsed.heightMode === "fixed" ? parsed.heightMode : undefined;
   try {
     const declared = normalizeBoardWidgetDeclared({
       ...(netOrigins?.length ? { netOrigins } : {}),
@@ -56,6 +68,8 @@ export function parseManifest(value: string): ParsedBoardManifest {
       ...(parsed.grantSemanticsVersion === BOARD_GRANT_SEMANTICS_VERSION
         ? { grantSemanticsVersion: BOARD_GRANT_SEMANTICS_VERSION }
         : {}),
+      ...(presentation ? { presentation } : {}),
+      ...(heightMode ? { heightMode } : {}),
       ...(mcpAppInteractive !== undefined ? { mcpAppInteractive } : {}),
       ...(mcpAppInstanceId ? { mcpAppInstanceId } : {}),
     };
@@ -73,9 +87,12 @@ export function serializeManifest(
   declared: BoardWidgetDeclared | undefined,
   grantState: BoardWidget["grantState"],
   mcpAppAuthority?: { interactive: boolean; instanceId: string },
+  widgetOptions?: Pick<BoardWidget, "presentation" | "heightMode">,
 ): string {
   return JSON.stringify({
     ...declared,
+    ...(widgetOptions?.presentation ? { presentation: widgetOptions.presentation } : {}),
+    ...(widgetOptions?.heightMode ? { heightMode: widgetOptions.heightMode } : {}),
     ...(grantState === "granted" ? { grantSemanticsVersion: BOARD_GRANT_SEMANTICS_VERSION } : {}),
     ...(mcpAppAuthority
       ? {
@@ -84,6 +101,14 @@ export function serializeManifest(
         }
       : {}),
   });
+}
+
+export function updateManifestHeightMode(
+  value: string,
+  heightMode: NonNullable<BoardWidget["heightMode"]>,
+): string {
+  const parsed = JSON.parse(value) as Record<string, unknown>;
+  return JSON.stringify({ ...parsed, heightMode });
 }
 
 export function effectiveGrantState(
@@ -130,6 +155,8 @@ export function rowToWidget(row: SelectedBoardWidgetRow): BoardWidget {
     tabId: row.tab_id,
     ...(row.title !== null ? { title: row.title } : {}),
     contentKind: row.content_kind as BoardWidget["contentKind"],
+    ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
+    ...(manifest.heightMode ? { heightMode: manifest.heightMode } : {}),
     sizeW: row.size_w,
     sizeH: row.size_h,
     position: row.position,

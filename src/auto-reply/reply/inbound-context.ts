@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
+import { resolveMediaFacts } from "../../media/media-facts.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
@@ -170,6 +171,11 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
 
     normalized.MediaTypes = mediaTypesFinal;
     normalized.MediaType = mediaType ?? mediaTypesFinal[0] ?? DEFAULT_MEDIA_TYPE;
+  }
+
+  const media = resolveMediaFacts(normalized);
+  if (media.length > 0) {
+    normalized.media = media;
   }
 
   return normalized as T & FinalizedMsgContext;

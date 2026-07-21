@@ -2945,7 +2945,7 @@ describe("installPluginFromNpmSpec", () => {
       path.join(hostRoot, "pnpm-workspace.yaml"),
       [
         "overrides:",
-        "  axios: 1.16.0",
+        "  axios: 1.18.0",
         '  node-domexception: "npm:@nolyfill/domexception@1.0.28"',
         "  nested:",
         '    alias: "npm:@scope/alias@1.0.0"',
@@ -2994,7 +2994,7 @@ describe("installPluginFromNpmSpec", () => {
             };
           }
           expect(manifest.overrides).toEqual({
-            axios: "1.16.0",
+            axios: "1.18.0",
             nested: {
               semver: "1.2.3",
             },

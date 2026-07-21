@@ -55,6 +55,36 @@ function deferredCommandResult() {
   return { promise, resolve };
 }
 
+type MockWatcherChild = EventEmitter & {
+  kill: ReturnType<typeof vi.fn>;
+  pid?: number;
+  stderr: EventEmitter;
+};
+
+function createMockWatcherChild(spawned = true): MockWatcherChild {
+  const child = new EventEmitter();
+  return Object.assign(child, {
+    stderr: new EventEmitter(),
+    kill: vi.fn(() => {
+      queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+      return true;
+    }),
+    ...(spawned ? { pid: 1234 } : {}),
+  });
+}
+
+async function startMockWatcher(spawned = true): Promise<MockWatcherChild[]> {
+  mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+  const children: MockWatcherChild[] = [];
+  mocks.spawn.mockImplementation(() => {
+    const child = createMockWatcherChild(spawned);
+    children.push(child);
+    return child;
+  });
+  await startGmailWatcher(createGmailConfig());
+  return children;
+}
+
 describe("startGmailWatcher", () => {
   beforeEach(async () => {
     await stopGmailWatcher();
@@ -116,7 +146,7 @@ describe("startGmailWatcher", () => {
         reason: "startup cancelled",
       });
 
-      spawnedChildren[0]?.emit("exit", 1, null);
+      spawnedChildren[0]?.emit("close", 1, null);
       await vi.advanceTimersByTimeAsync(5000);
 
       expect(mocks.spawn).toHaveBeenCalledTimes(2);
@@ -412,7 +442,7 @@ describe("startGmailWatcher", () => {
       expect(spawnedChildren).toHaveLength(1);
 
       // Process crashes (exit code 1). This queues a 5s respawn timeout.
-      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").emit("exit", 1, null);
+      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").emit("close", 1, null);
 
       // Before the 5s timer fires, a config reload triggers re-entry.
       // The re-entry guard should cancel the stale respawn timeout.
@@ -453,5 +483,65 @@ describe("startGmailWatcher", () => {
     });
 
     await expect(startGmailWatcher(createGmailConfig())).resolves.toEqual({ started: true });
+  });
+
+  it.each([
+    { name: "failed spawn", spawned: false, expectedChildren: 1 },
+    { name: "error from a running child", spawned: true, expectedChildren: 2 },
+  ])("handles $name without losing restart policy", async ({ spawned, expectedChildren }) => {
+    vi.useFakeTimers();
+    try {
+      const children = await startMockWatcher(spawned);
+      const child = expectDefined(children[0], "watcher child");
+      child.emit("error", new Error(spawned ? "gog stream error" : "spawn gog ENOENT"));
+      child.emit("close", spawned ? 1 : -2, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(children).toHaveLength(expectedChildren);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    {
+      name: "split address-in-use marker",
+      chunks: ["address alre", "ady in use\n"],
+      expectedChildren: 1,
+    },
+    {
+      name: "final bind fragment after exit",
+      chunks: ["address alre", "ady in use\n"],
+      exitAfterChunk: 0,
+      expectedChildren: 1,
+    },
+    {
+      name: "marker completed before tail truncation",
+      chunks: ["address alre", `ady in use ${"x".repeat(800)}`],
+      expectedChildren: 1,
+    },
+    {
+      name: "non-bind stderr",
+      chunks: ["some erro", "r message\n"],
+      expectedChildren: 2,
+    },
+  ])("classifies $name", async ({ chunks, exitAfterChunk, expectedChildren }) => {
+    vi.useFakeTimers();
+    try {
+      const children = await startMockWatcher();
+      const child = expectDefined(children[0], "watcher child");
+      for (const [index, chunk] of chunks.entries()) {
+        child.stderr.emit("data", Buffer.from(chunk));
+        if (exitAfterChunk === index) {
+          child.emit("exit", 1, null);
+        }
+      }
+      child.emit("close", 1, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(children).toHaveLength(expectedChildren);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,5 +1,10 @@
 // Skill tool dispatch tests cover policy-filtered tool surfaces.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type CreateOpenClawToolsArg = {
@@ -80,5 +85,44 @@ describe("resolveSkillDispatchTools", () => {
     expect(args?.beforeToolCallHookContext?.skillCommand?.skillFile).toBe(
       "/workspace/skills/daily-brief/SKILL.md",
     );
+  });
+
+  it("uses persisted delegated policy instead of a sender wildcard", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skill-delegated-policy-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:skill-child";
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "skill-child-session",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:main:telegram:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+    } as SessionEntry);
+
+    try {
+      const tools = resolveSkillDispatchTools({
+        message: { surface: "telegram" },
+        cfg: {
+          session: { store: storePath },
+          tools: {
+            toolsBySender: {
+              "*": { deny: ["group:runtime", "group:fs"] },
+              "id:alice": {},
+            },
+          },
+        } as OpenClawConfig,
+        agentId: "main",
+        sessionKey,
+        workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+        provider: "openai",
+        model: "gpt-5.5",
+      });
+
+      expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["read", "exec"]));
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

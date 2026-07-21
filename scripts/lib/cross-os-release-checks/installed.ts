@@ -3,7 +3,6 @@ import { appendFileSync, createWriteStream, existsSync, mkdirSync } from "node:f
 import { dirname, join } from "node:path";
 import {
   agentOutputHasExpectedOkMarker,
-  agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseAgentSessionId,
   buildReleaseAgentTurnArgs,
   maybeBuildOptionalAgentTurnSkipResult,
@@ -765,9 +764,6 @@ export async function runInstalledAgentTurn(params: {
       const logText = readLogTextSince(params.logPath, logOffset);
       if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
-      }
-      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
-        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {

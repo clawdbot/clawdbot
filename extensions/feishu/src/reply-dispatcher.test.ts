@@ -1632,9 +1632,17 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       threadReply: true,
       rootId: "om_original_msg",
     });
-    await options.deliver({ text: "plain text" }, { kind: "final" });
+    await options.deliver(
+      { text: "plain text", mediaUrl: "https://example.com/reply.png" },
+      { kind: "final" },
+    );
 
     expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      replyToMessageId: "om_quote_reply",
+      replyInThread: true,
+      allowTopLevelReplyFallback: true,
+    });
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
       replyToMessageId: "om_quote_reply",
       replyInThread: true,
       allowTopLevelReplyFallback: true,
@@ -1649,9 +1657,17 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       threadReply: true,
       rootId: "om_topic_root",
     });
-    await options.deliver({ text: "plain text" }, { kind: "final" });
+    await options.deliver(
+      { text: "plain text", mediaUrl: "https://example.com/reply.png" },
+      { kind: "final" },
+    );
 
     expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      replyToMessageId: "om_topic_root",
+      replyInThread: true,
+      allowTopLevelReplyFallback: false,
+    });
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
       replyToMessageId: "om_topic_root",
       replyInThread: true,
       allowTopLevelReplyFallback: false,

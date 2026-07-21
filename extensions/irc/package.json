@@ -18,6 +18,9 @@
       "allowInvalidConfigRecovery": true
     },
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "irc",
       "configuredState": {
@@ -37,7 +40,13 @@
       "aliases": [
         "internet-relay-chat"
       ],
-      "systemImage": "network"
+      "systemImage": "network",
+      "cliAddOptions": [
+        {
+          "flags": "--password <password>",
+          "description": "Channel password or login secret"
+        }
+      ]
     },
     "compat": {
       "pluginApi": ">=2026.7.2"

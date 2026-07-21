@@ -534,6 +534,32 @@ struct ChatTranscriptCacheStoreTests {
         } == OpenClawClientDatabases.gatewayIdentityHash("gw-a"))
     }
 
+    @Test func `staged gateway removal uses exact registry identifier bytes`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let composedGatewayID = "gateway-\u{00E9}"
+        let decomposedGatewayID = "gateway-e\u{0301}"
+        #expect(composedGatewayID == decomposedGatewayID)
+        do {
+            let databases = try OpenClawClientDatabases(directoryURL: directory)
+            let store = databases.store(gatewayID: composedGatewayID)
+            #expect(await store.enqueueCommand(outboxCommand(id: "remove", text: "pending")))
+            try databases.stageGatewayRemoval(gatewayID: composedGatewayID)
+            try databases.close()
+        }
+
+        let recovered = try OpenClawClientDatabases(
+            directoryURL: directory,
+            registeredGatewayIDs: [decomposedGatewayID])
+
+        #expect(await recovered.store(gatewayID: composedGatewayID).loadCommands().isEmpty)
+        #expect(try await recovered.stateQueue.read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT gateway_hash FROM forgotten_gateways WHERE gateway_id IS NULL")
+        } == OpenClawClientDatabases.gatewayIdentityHash(composedGatewayID))
+    }
+
     @Test func `commit started recovery finishes even while gateway remains registered`() async throws {
         let directory = try makeDatabaseDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -912,6 +938,28 @@ struct ClientDatabaseLegacyImportTests {
         #expect(await databases.store(gatewayID: "gw-orphaned").loadCommands().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: keptURL.path))
         #expect(FileManager.default.fileExists(atPath: orphanedURL.path))
+    }
+
+    @Test func `legacy import uses exact registry identifier bytes`() async throws {
+        let directory = try makeDatabaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let composedGatewayID = "gateway-\u{00E9}"
+        let decomposedGatewayID = "gateway-e\u{0301}"
+        #expect(composedGatewayID == decomposedGatewayID)
+        let legacyURL = OpenClawClientDatabases.legacyPerGatewayDatabaseURL(
+            gatewayID: composedGatewayID,
+            directoryURL: directory)
+        try createLegacyV2Database(
+            at: legacyURL,
+            gatewayID: composedGatewayID,
+            commandID: "unowned")
+
+        let databases = try OpenClawClientDatabases(
+            directoryURL: directory,
+            registeredGatewayIDs: [decomposedGatewayID])
+
+        #expect(await databases.store(gatewayID: composedGatewayID).loadCommands().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: legacyURL.path))
     }
 
     @Test func `preserved shared legacy database blocks targeted forget`() async throws {

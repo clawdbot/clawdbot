@@ -46,7 +46,13 @@
       "blurb": "LINE Messaging API webhook bot.",
       "systemImage": "message",
       "order": 75,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "cliAddOptions": [
+        {
+          "flags": "--secret-file <path>",
+          "description": "Read channel shared secret from file"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/line",

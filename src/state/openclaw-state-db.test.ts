@@ -137,8 +137,12 @@ const LEGACY_AMBIENT_WATCH_PREFIX = "ambient-group-watch:";
 
 function seedLegacySessionWatchCursorSchema(stateDir: string): {
   ambientTarget: string;
+  bomTarget: string;
+  bomWatcherSessionKey: string;
+  corruptTarget: string;
   databasePath: string;
   explicitTarget: string;
+  replacementWatcherSessionKey: string;
   watcherSessionKey: string;
 } {
   const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -147,8 +151,13 @@ function seedLegacySessionWatchCursorSchema(stateDir: string): {
 
   const watcherSessionKey = "agent:main:main";
   const ambientTarget = "agent:main:telegram:group:ambient";
+  const bomTarget = "agent:main:telegram:group:bom";
+  const bomWatcherSessionKey = "﻿agent:main:bom-watcher";
+  const corruptTarget = "agent:main:telegram:group:corrupt";
   const explicitTarget = "agent:main:subagent:explicit";
+  const replacementWatcherSessionKey = "�";
   const markerKey = `${LEGACY_AMBIENT_WATCH_PREFIX}${Buffer.from(watcherSessionKey, "utf8").toString("hex")}`;
+  const bomMarkerKey = `${LEGACY_AMBIENT_WATCH_PREFIX}${Buffer.from(bomWatcherSessionKey, "utf8").toString("hex")}`;
   const orphanMarkerKey = `${LEGACY_AMBIENT_WATCH_PREFIX}${Buffer.from("agent:main:orphan", "utf8").toString("hex")}`;
   const { DatabaseSync } = requireNodeSqlite();
   const legacy = new DatabaseSync(databasePath);
@@ -185,13 +194,26 @@ function seedLegacySessionWatchCursorSchema(stateDir: string): {
     `);
     insert.run(watcherSessionKey, ambientTarget, 7, 8, 9, 200);
     insert.run(watcherSessionKey, explicitTarget, 3, 4, 5, 300);
+    insert.run(bomWatcherSessionKey, bomTarget, 10, 11, 12, 500);
+    insert.run(replacementWatcherSessionKey, corruptTarget, 13, 14, 15, 600);
     insert.run(markerKey, ambientTarget, 7, 7, 7, 400);
+    insert.run(bomMarkerKey, bomTarget, 10, 10, 10, 800);
+    insert.run(`${LEGACY_AMBIENT_WATCH_PREFIX}ff`, corruptTarget, 13, 13, 13, 900);
     insert.run(orphanMarkerKey, "agent:main:telegram:group:orphan", 1, 1, 1, 100);
     insert.run(`${LEGACY_AMBIENT_WATCH_PREFIX}not-hex`, ambientTarget, 1, 1, 1, 100);
   } finally {
     legacy.close();
   }
-  return { ambientTarget, databasePath, explicitTarget, watcherSessionKey };
+  return {
+    ambientTarget,
+    bomTarget,
+    bomWatcherSessionKey,
+    corruptTarget,
+    databasePath,
+    explicitTarget,
+    replacementWatcherSessionKey,
+    watcherSessionKey,
+  };
 }
 
 type PlacementConstraintProbe = {
@@ -1118,7 +1140,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
-        "Migrated shared state session watch cursors → provenance column (1 ambient, 3 sentinels removed)",
+        "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
       ],
       warnings: [],
     });
@@ -1152,6 +1174,24 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         provenance: "ambient-group",
         updated_at: 400,
       },
+      {
+        watcher_session_key: seeded.bomWatcherSessionKey,
+        target_session_key: seeded.bomTarget,
+        last_seen_sequence: 10,
+        notified_sequence: 11,
+        material_sequence: 12,
+        provenance: "ambient-group",
+        updated_at: 800,
+      },
+      {
+        watcher_session_key: seeded.replacementWatcherSessionKey,
+        target_session_key: seeded.corruptTarget,
+        last_seen_sequence: 13,
+        notified_sequence: 14,
+        material_sequence: 15,
+        provenance: "explicit",
+        updated_at: 600,
+      },
     ]);
     expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
@@ -1180,6 +1220,8 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual([
       { target_session_key: seeded.explicitTarget, provenance: "explicit" },
       { target_session_key: seeded.ambientTarget, provenance: "ambient-group" },
+      { target_session_key: seeded.bomTarget, provenance: "ambient-group" },
+      { target_session_key: seeded.corruptTarget, provenance: "explicit" },
     ]);
     expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);

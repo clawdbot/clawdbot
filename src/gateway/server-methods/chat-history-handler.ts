@@ -1,5 +1,9 @@
 // Read-side chat handlers own history projection, startup metadata, and message lookup.
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -289,6 +293,7 @@ async function handleChatHistoryRequest({
   params,
   respond,
   context,
+  client,
   method,
   includeAgentsList,
   includeMetadata,
@@ -590,13 +595,15 @@ async function handleChatHistoryRequest({
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
     ...(includeAgentsList
       ? {
-          agentsList: listAgentsForGateway(
-            cfg,
-            modelCatalog,
-            startupCatalogProjection
+          agentsList: listAgentsForGateway(cfg, modelCatalog, {
+            ...(startupCatalogProjection
               ? { modelCatalogByAgentId: startupCatalogProjection.modelCatalogByAgentId }
-              : undefined,
-          ),
+              : {}),
+            includeSystem: hasGatewayClientCap(
+              client?.connect.caps,
+              GATEWAY_CLIENT_CAPS.AGENT_KIND,
+            ),
+          }),
         }
       : {}),
     ...(startupMetadata ? { metadata: startupMetadata } : {}),

@@ -207,6 +207,16 @@ export function createBoardWidgetPutSnapshot(
           ? { title: existing.title }
           : {}),
       contentKind: params.content.kind,
+      ...(params.presentation !== undefined
+        ? { presentation: params.presentation }
+        : existing?.presentation !== undefined
+          ? { presentation: existing.presentation }
+          : {}),
+      ...(params.heightMode !== undefined
+        ? { heightMode: params.heightMode }
+        : existing?.heightMode !== undefined
+          ? { heightMode: existing.heightMode }
+          : {}),
       sizeW: params.placement?.size ? size.sizeW : (existing?.sizeW ?? size.sizeW),
       sizeH: params.placement?.size ? size.sizeH : (existing?.sizeH ?? size.sizeH),
       position: existing?.position ?? layout.widgets.length,

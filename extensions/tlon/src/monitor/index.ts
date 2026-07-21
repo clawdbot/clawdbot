@@ -36,6 +36,7 @@ import {
   mergeUniqueStrings,
   shouldMigrateTlonSetting,
 } from "./settings-helpers.js";
+import { createActiveSnapshotTracker, createParticipatedThreadTracker } from "./tracking.js";
 import { asRecord, formatErrorMessage, readString } from "./utils.js";
 import {
   extractMessageText,
@@ -160,8 +161,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   let pendingApprovals: PendingApproval[] = [];
   let currentSettings: TlonSettingsStore = {};
 
-  // Track threads we've participated in (by parentId) - respond without mention requirement
-  const participatedThreads = new Set<string>();
+  // Track recent threads we've participated in so replies can omit a mention.
+  const participatedThreads = createParticipatedThreadTracker();
 
   // Track DM senders per session to detect shared sessions (security warning)
   const dmSendersBySession = new Map<string, Set<string>>();
@@ -894,8 +895,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   };
 
   // Firehose handler for all DM messages (/v3)
-  // Track which DM invites we've already processed to avoid duplicate accepts
-  const processedDmInvites = new Set<string>();
+  // Track processed DM invites only while they remain in the active /v3 snapshot.
+  const processedDmInvites = createActiveSnapshotTracker();
 
   const handleChatFirehose = async (
     event: unknown,
@@ -904,9 +905,16 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     try {
       // Handle DM invite lists (arrays)
       if (Array.isArray(event)) {
-        for (const invite of event as DmInvite[]) {
-          const ship = normalizeShip(invite.ship || "");
-          if (!ship || processedDmInvites.has(ship)) {
+        // UrbitSSEClient awaits each handler before reading and acking the next fact,
+        // so snapshot replacement and invite side effects cannot overlap.
+        // The /v3 invite array is the active snapshot. Forget ships that left it
+        // instead of retaining every invite seen during the monitor lifetime.
+        const ships = processedDmInvites.beginSnapshot(
+          (event as DmInvite[]).map((invite) => normalizeShip(invite.ship || "")).filter(Boolean),
+        );
+
+        for (const ship of ships) {
+          if (processedDmInvites.has(ship)) {
             continue;
           }
 
@@ -926,11 +934,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
             continue;
           }
 
+          const allowed = await isDmAllowedWithIngress(ship, effectiveDmAllowlist);
           // Auto-accept if on allowlist and auto-accept is enabled
-          if (
-            effectiveAutoAcceptDmInvites &&
-            (await isDmAllowedWithIngress(ship, effectiveDmAllowlist))
-          ) {
+          if (effectiveAutoAcceptDmInvites && allowed) {
             try {
               await api.poke({
                 app: "chat",
@@ -946,14 +952,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           // If owner is configured and ship is not on allowlist, queue approval
-          if (effectiveOwnerShip && !(await isDmAllowedWithIngress(ship, effectiveDmAllowlist))) {
+          if (effectiveOwnerShip && !allowed) {
             const approval = createPendingApproval({
               type: "dm",
               requestingShip: ship,
               messagePreview: "(DM invite - no message yet)",
             });
             await queueApprovalRequest(approval);
-            processedDmInvites.add(ship); // Mark as processed to avoid duplicate notifications
+            processedDmInvites.add(ship);
           }
         }
         return;

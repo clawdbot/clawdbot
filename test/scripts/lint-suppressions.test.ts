@@ -200,6 +200,7 @@ describe("production lint suppressions", () => {
         "scripts/changed-lanes.mjs|typescript/restrict-template-expressions|2",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/tools/request-compaction-tool.ts|eslint/no-underscore-dangle|4",
+        "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/audit/audit-event-writer.ts|unicorn/require-post-message-target-origin|2",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",

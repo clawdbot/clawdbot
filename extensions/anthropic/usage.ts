@@ -7,6 +7,7 @@ import {
   readClaudeCliCredentialsCached,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   buildUsageHttpErrorSnapshot,
   fetchClaudeUsage,
@@ -14,7 +15,6 @@ import {
   type ProviderUsageModelBreakdown,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
@@ -134,14 +134,13 @@ function resolveDailyRange(now: number, periodDays: number) {
 }
 
 async function readPage(response: Response, timeoutMs: number): Promise<AnthropicUsagePage> {
-  const buffer = await readResponseWithLimit(response, ANTHROPIC_USAGE_RESPONSE_MAX_BYTES, {
+  const payload = await readProviderJsonObjectResponse(response, "Anthropic usage", {
+    maxBytes: ANTHROPIC_USAGE_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ maxBytes }) => new Error(`Anthropic usage response exceeds ${maxBytes} bytes`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Anthropic usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  const payload = objectRecord(JSON.parse(new TextDecoder().decode(buffer)));
-  if (!payload || !Array.isArray(payload.data)) {
+  if (!Array.isArray(payload.data)) {
     throw new Error("Anthropic usage response is not an object with data");
   }
   const nextPage =

@@ -5,22 +5,26 @@
  * running the full onboarding wizard.
  */
 import fs from "node:fs/promises";
-import JSON5 from "json5";
-import { z } from "zod";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { ConfigWriteOptions, ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
-import { safeParseWithSchema } from "../utils/zod-parse.js";
-
-const JsonRecordSchema = z.record(z.string(), z.unknown());
 
 type ConfigIO = {
   configPath: string;
+  readConfigFileSnapshotForWrite: () => Promise<ReadConfigFileSnapshotForWriteResult>;
 };
+
+type ReplaceConfigFile = (params: {
+  nextConfig: OpenClawConfig;
+  snapshot: ConfigFileSnapshot;
+  afterWrite: { mode: "auto" };
+  writeOptions: ConfigWriteOptions;
+}) => Promise<unknown>;
 
 type EnsureAgentWorkspace = (params: {
   dir: string;
@@ -39,10 +43,7 @@ type SetupCommandDeps = {
   ) => void | Promise<void>;
   mkdir?: (dir: string, options: { recursive: true }) => Promise<unknown>;
   resolveSessionTranscriptsDir?: () => string | Promise<string>;
-  replaceConfigFile?: (params: {
-    nextConfig: OpenClawConfig;
-    afterWrite: { mode: "auto" };
-  }) => Promise<unknown>;
+  replaceConfigFile?: ReplaceConfigFile;
 };
 
 type AgentWorkspaceModule = typeof import("../agents/workspace.js");
@@ -97,12 +98,9 @@ async function ensureDefaultAgentWorkspace(
   return ensureAgentWorkspace(params);
 }
 
-async function writeDefaultConfigFile(config: OpenClawConfig): Promise<void> {
+async function writeDefaultConfigFile(params: Parameters<ReplaceConfigFile>[0]): Promise<void> {
   const { replaceConfigFile } = await loadConfigIOModule();
-  await replaceConfigFile({
-    nextConfig: config,
-    afterWrite: { mode: "auto" },
-  });
+  await replaceConfigFile(params);
 }
 
 async function formatDefaultConfigPath(configPath: string): Promise<string> {
@@ -123,21 +121,6 @@ async function resolveDefaultSessionTranscriptsDir(): Promise<string> {
   return resolveSessionTranscriptsDir();
 }
 
-async function readConfigFileRaw(configPath: string): Promise<{
-  exists: boolean;
-  parsed: OpenClawConfig;
-}> {
-  try {
-    const raw = await fs.readFile(configPath, "utf-8");
-    const parsed = safeParseWithSchema(JsonRecordSchema, JSON5.parse(raw));
-    return { exists: true, parsed: (parsed ?? {}) as OpenClawConfig };
-  } catch {
-    // Missing or malformed config should not block setup; setup writes only the
-    // minimal defaults it owns and leaves deeper repair to doctor/onboard.
-    return { exists: false, parsed: {} };
-  }
-}
-
 /** Prepares config, workspace, and session directories for a usable installation. */
 export async function setupCommand(
   opts?: { workspace?: string },
@@ -151,8 +134,18 @@ export async function setupCommand(
 
   const io = deps.createConfigIO?.() ?? (await createDefaultConfigIO());
   const configPath = io.configPath;
-  const existingRaw = await readConfigFileRaw(configPath);
-  const cfg = existingRaw.parsed;
+  const prepared = await io.readConfigFileSnapshotForWrite();
+  const snapshot = prepared.snapshot;
+  if (snapshot.exists && !snapshot.valid) {
+    const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
+    runtime.error(
+      `Config invalid at ${await formatConfigPath(configPath)}. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
+    );
+    runtime.exit(1);
+    return;
+  }
+
+  const cfg = snapshot.sourceConfig;
   const defaults = cfg.agents?.defaults ?? {};
 
   const workspace =
@@ -174,19 +167,20 @@ export async function setupCommand(
   };
 
   if (
-    !existingRaw.exists ||
+    !snapshot.exists ||
     defaults.workspace !== workspace ||
     cfg.gateway?.mode !== next.gateway?.mode
   ) {
     // Preserve all existing config fields and touch only workspace/gateway mode
     // defaults that this command owns.
-    const replaceConfig =
-      deps.replaceConfigFile ?? ((params) => writeDefaultConfigFile(params.nextConfig));
+    const replaceConfig = deps.replaceConfigFile ?? writeDefaultConfigFile;
     await replaceConfig({
       nextConfig: next,
+      snapshot,
       afterWrite: { mode: "auto" },
+      writeOptions: prepared.writeOptions,
     });
-    if (!existingRaw.exists) {
+    if (!snapshot.exists) {
       const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
       runtime.log(`Wrote ${await formatConfigPath(configPath)}`);
     } else {

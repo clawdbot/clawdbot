@@ -17,6 +17,7 @@ import {
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
   readSessionMessages,
+  readSessionMessagesPageWithStatsAsync,
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
@@ -1324,6 +1325,68 @@ describe("readSessionMessages", () => {
       { role: "user", content: "active prompt", kind: undefined },
       { role: "assistant", content: "active answer", kind: undefined },
     ]);
+  });
+
+  test("keeps active-branch compaction markers reachable through pagination", async () => {
+    const sessionId = "paginated-branch-with-compaction";
+    const sessionFile = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "old-user",
+        parentId: null,
+        message: { role: "user", content: "old prompt" },
+      },
+      {
+        type: "message",
+        id: "old-assistant",
+        parentId: "old-user",
+        message: { role: "assistant", content: "old answer" },
+      },
+      {
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "2026-02-07T00:00:00.000Z",
+        summary: "Compacted history",
+      },
+      {
+        type: "message",
+        id: "active-user",
+        parentId: null,
+        message: { role: "user", content: "active prompt" },
+      },
+      {
+        type: "message",
+        id: "active-assistant",
+        parentId: "active-user",
+        message: { role: "assistant", content: "active answer" },
+      },
+      {
+        type: "message",
+        id: "side-branch",
+        parentId: "active-assistant",
+        message: { role: "assistant", content: "side branch" },
+      },
+      { type: "leaf", id: "active-leaf", parentId: "side-branch", targetId: "active-assistant" },
+    ]);
+    const newest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 0,
+      maxMessages: 2,
+    });
+    const oldest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 2,
+      maxMessages: 1,
+    });
+
+    expect(newest.totalMessages).toBe(3);
+    expectMessageFields(newest.messages[0], { content: "active prompt", openclaw: { seq: 2 } });
+    expectMessageFields(newest.messages[1], { content: "active answer", openclaw: { seq: 3 } });
+    expect(oldest.totalMessages).toBe(3);
+    expectMessageFields(oldest.messages[0], {
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      openclaw: { kind: "compaction", id: "comp-1", seq: 1 },
+    });
   });
 
   test("keeps blocked hook messages on the current active branch", () => {

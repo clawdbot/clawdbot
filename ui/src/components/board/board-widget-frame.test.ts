@@ -22,6 +22,7 @@ function terminalFailureError(params: {
     connected: () => true,
     context: () => undefined,
     refreshFrame: () => undefined,
+    reportContentHeight: () => {},
     requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
     root: () => document,

@@ -257,6 +257,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderName: params.ctx.SenderName,
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
+    inputProvenance: params.ctx.InputProvenance,
     sessionFile: runtime.resolveSessionFilePath(
       sessionId,
       targetSessionEntry,

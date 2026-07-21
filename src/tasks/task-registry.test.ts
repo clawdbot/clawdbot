@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
+import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
 import {
   emitAgentEvent,
@@ -662,6 +663,120 @@ describe("task-registry", () => {
         endedAt: 1_000,
       });
     });
+  });
+
+  it("persists an ACP producer timestamp across lifecycle projection and SQLite reload", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        resetTaskRegistryForTests({ persist: false });
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterSessionKey: "agent:main:main",
+          runId: "run-reused-lifecycle",
+          task: "Reuse a persisted task row",
+          status: "queued",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+          lastEventAt: 1_000,
+        });
+
+        emitAcpLifecycleStart({
+          runId: "run-reused-lifecycle",
+          startedAt: 2_000,
+        });
+        emitAgentEvent({
+          runId: "run-reused-lifecycle",
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: 2_500 },
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+        reloadTaskRegistryFromStore();
+
+        expectRecordFields(requireTaskByRunId("run-reused-lifecycle"), {
+          status: "succeeded",
+          startedAt: 2_000,
+          endedAt: 2_500,
+        });
+      },
+      { durableStore: true },
+    );
+  });
+
+  it("persists an accepted zero lifecycle start timestamp over stale state", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        resetTaskRegistryForTests({ persist: false });
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterSessionKey: "agent:main:main",
+          runId: "run-zero-lifecycle",
+          task: "Replace a stale task timestamp",
+          status: "queued",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+        });
+
+        emitAcpLifecycleStart({ runId: "run-zero-lifecycle", startedAt: 0 });
+        emitAgentEvent({
+          runId: "run-zero-lifecycle",
+          stream: "lifecycle",
+          data: { phase: "end", endedAt: 500 },
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+        reloadTaskRegistryFromStore();
+
+        expectRecordFields(requireTaskByRunId("run-zero-lifecycle"), {
+          status: "succeeded",
+          startedAt: 0,
+          endedAt: 500,
+        });
+      },
+      { durableStore: true },
+    );
+  });
+
+  it("ignores a non-finite lifecycle timestamp during durable terminal projection", async () => {
+    await withTaskRegistryTempDir(
+      async () => {
+        resetTaskRegistryForTests({ persist: false });
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterSessionKey: "agent:main:main",
+          runId: "run-non-finite-terminal",
+          task: "Keep the accepted producer timestamp",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+        });
+
+        emitAgentEvent({
+          runId: "run-non-finite-terminal",
+          stream: "lifecycle",
+          data: { phase: "end", startedAt: Number.NaN, endedAt: 1_500 },
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+        reloadTaskRegistryFromStore();
+
+        expectRecordFields(requireTaskByRunId("run-non-finite-terminal"), {
+          status: "succeeded",
+          startedAt: 1_000,
+          endedAt: 1_500,
+        });
+      },
+      { durableStore: true },
+    );
   });
 
   it("tracks tool activity from tool-start events", async () => {

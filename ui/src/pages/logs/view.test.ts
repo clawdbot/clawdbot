@@ -61,7 +61,7 @@ function buttonByText(container: Element, text: string): HTMLButtonElement {
 
 async function useTestPortugueseLogsLabels() {
   i18n.registerTranslation("pt-BR", {
-    logsView: {
+    gatewayLogs: {
       title: "Registros",
       subtitle: "Registros do Gateway em JSONL.",
       exportButton: "Exportar {label}",

@@ -748,6 +748,7 @@ jobs:
               add_profile_suite native-live-src-gateway-profiles-opencode-go-smoke "stable"
               add_profile_suite native-live-src-gateway-profiles-openrouter "full"
               add_profile_suite native-live-src-gateway-profiles-xai "full"
+              add_profile_suite native-live-src-gateway-profiles-zai "full"
               add_profile_suite native-live-src-gateway-backends "stable full"
               add_profile_suite native-live-src-infra "stable full"
               add_profile_suite native-live-test "stable full"
@@ -765,7 +766,7 @@ jobs:
               add_profile_suite live-gateway-advisory-docker "full"
               add_profile_suite live-gateway-advisory-docker-deepseek-fireworks "full"
               add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"
-              add_profile_suite live-gateway-advisory-docker-xai "full"
+              add_profile_suite live-gateway-advisory-docker-xai-zai "full"
               add_profile_suite live-cli-backend-docker "stable full"
               add_profile_suite live-acp-bind-docker "stable full"
               add_profile_suite live-codex-harness-docker "stable full"
@@ -827,17 +828,6 @@ jobs:
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
         run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
-
-      - name: Record temporary Z.AI API Platform omission
-        if: inputs.include_live_suites
-        shell: bash
-        run: |
-          {
-            echo
-            echo "### Temporary provider omission"
-            echo
-            echo "Z.AI API Platform validation is temporarily disabled while its CI account is unavailable. Z.AI Coding Plan validation remains enabled."
-          } >> "$GITHUB_STEP_SUMMARY"
 
   validate_release_live_cache:
     needs: validate_selected_ref
@@ -3158,6 +3148,13 @@ jobs:
             profile_env_only: false
             advisory: true
             profiles: full
+          - suite_id: native-live-src-gateway-profiles-zai
+            label: Native live gateway profiles Z.ai
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=zai node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 30
+            profile_env_only: false
+            advisory: true
+            profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
             command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
@@ -3415,10 +3412,10 @@ jobs:
             profile_env_only: false
             advisory: true
             profiles: full
-          - suite_id: live-gateway-advisory-docker-xai
+          - suite_id: live-gateway-advisory-docker-xai-zai
             suite_group: live-gateway-advisory-docker
-            label: Docker live gateway advisory xAI
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            label: Docker live gateway advisory xAI/Z.ai
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
             timeout_minutes: 40
             profile_env_only: false
             advisory: true

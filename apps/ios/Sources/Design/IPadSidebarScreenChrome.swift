@@ -65,9 +65,9 @@ struct IPadSidebarScreenChrome<Content: View>: View {
                 }
             }
             if self.usesNativeNavigationChrome, let headerSidebarAction {
-                ToolbarItem(placement: .topBarLeading) {
-                    OpenClawSidebarRevealButton(action: headerSidebarAction)
-                }
+                OpenClawSidebarToolbarItem(
+                    action: headerSidebarAction,
+                    placement: .topBarLeading)
             }
         }
     }

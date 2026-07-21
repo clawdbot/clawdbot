@@ -413,8 +413,25 @@ async function runGuidedOnboardingFlow(
   // persisted gateway config (quickstart writes it when setup applies).
   // Wizard timestamps are shared with configure/doctor and prove nothing here.
   const alreadyConfigured = Boolean(detection?.setupComplete || existingConfig.gateway);
+  const { resolveSetupWorkspaceSelection } = await import("../wizard/setup.workspace.js");
+  const workspaceSelection = await resolveSetupWorkspaceSelection({
+    baseConfig: existingConfig,
+    requestedWorkspaceDir: workspace,
+    prompter,
+    canConfirmMove: !alreadyConfigured,
+  });
+  const { allowWorkspaceChange, conflict: workspaceConflict } = workspaceSelection;
+  const appliedWorkspace = workspaceSelection.workspaceDir;
   if (alreadyConfigured) {
     await prompter.note(t("wizard.guided.alreadySetUp"), t("wizard.guided.welcomeTitle"));
+    if (workspaceConflict) {
+      await prompter.note(
+        t("wizard.guided.workspaceConflictClassic", {
+          command: formatCliCommand("openclaw onboard --classic"),
+        }),
+        t("wizard.setup.workspaceConflictTitle"),
+      );
+    }
   } else {
     // Announced default: apply the same setup plan the conversational "yes"
     // would, then hand off to the hatch instead of parking in the OpenClaw chat.
@@ -423,7 +440,12 @@ async function runGuidedOnboardingFlow(
     const applyProgress = prompter.progress(t("wizard.guided.settingUp"));
     try {
       const applied = await withConsoleSubsystemsSuppressed(() =>
-        applySetup({ workspace, surface: "cli", runtime }),
+        applySetup({
+          workspace,
+          ...(allowWorkspaceChange ? { allowWorkspaceChange: true } : {}),
+          surface: "cli",
+          runtime,
+        }),
       );
       applyProgress.stop(t("wizard.guided.setupDone"));
       if (applied.lines.length > 0) {
@@ -483,7 +505,7 @@ async function runGuidedOnboardingFlow(
     ? resolveUserPath(
         existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
       )
-    : workspace;
+    : appliedWorkspace;
   if (opts.tui !== true) {
     const probeBrowserHandoffGateway =
       deps.probeBrowserHandoffGateway ??

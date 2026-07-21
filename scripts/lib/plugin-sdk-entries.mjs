@@ -23,14 +23,14 @@ const privateLocalOnlyPluginSdkSubpathSet = new Set(
 );
 
 /**
- * Private plugin SDK entrypoints that are built locally but not exported publicly.
+ * Private plugin SDK entrypoints excluded from the typed, documented public API.
  * @internal Shared repository-script contract.
  */
 export const privateLocalOnlyPluginSdkEntrypoints = pluginSdkSubpaths.filter((entry) =>
   privateLocalOnlyPluginSdkSubpathSet.has(entry),
 );
 
-/** Public plugin SDK entrypoints that appear in package exports. */
+/** Typed public plugin SDK entrypoints. */
 export const publicPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
   (entry) => !privateLocalOnlyPluginSdkSubpathSet.has(entry),
 );
@@ -78,10 +78,11 @@ export const productionPluginSdkEntrypoints = pluginSdkEntrypoints.filter(
 
 const productionPluginSdkEntrypointSet = new Set(productionPluginSdkEntrypoints);
 
-/** Private runtime facades required by core or bundled plugins in packaged builds. */
-const packagedPrivatePluginSdkRuntimeEntrypoints = privateLocalOnlyPluginSdkEntrypoints.filter(
-  (entry) => productionPluginSdkEntrypointSet.has(entry),
-);
+/** Private runtime facades required by bundled or separately published official plugins. */
+export const packagedPrivatePluginSdkRuntimeEntrypoints =
+  privateLocalOnlyPluginSdkEntrypoints.filter((entry) =>
+    productionPluginSdkEntrypointSet.has(entry),
+  );
 
 /** Private entrypoints reserved for local tests and QA builds. */
 const nonProductionPrivatePluginSdkEntrypoints = privateLocalOnlyPluginSdkEntrypoints.filter(
@@ -113,18 +114,37 @@ export function buildPluginSdkEntrySources(entries = pluginSdkEntrypoints) {
 }
 
 /**
- * Build package export metadata for public plugin SDK entrypoints.
+ * Build package export metadata for typed public SDK and official plugin runtime entrypoints.
  * @internal Shared repository-script contract.
  */
 export function buildPluginSdkPackageExports() {
   return Object.fromEntries(
-    publicPluginSdkEntrypoints.map((entry) => [
-      `./plugin-sdk/${entry}`,
-      {
-        types: `./dist/plugin-sdk/${entry}.d.ts`,
-        default: `./dist/plugin-sdk/${entry}.js`,
-      },
-    ]),
+    pluginSdkEntrypoints.flatMap((entry) => {
+      if (publicPluginSdkEntrypoints.includes(entry)) {
+        return [
+          [
+            `./plugin-sdk/${entry}`,
+            {
+              types: `./dist/plugin-sdk/${entry}.d.ts`,
+              default: `./dist/plugin-sdk/${entry}.js`,
+            },
+          ],
+        ];
+      }
+      if (packagedPrivatePluginSdkRuntimeEntrypoints.includes(entry)) {
+        // Official plugins ship separately but execute against the host's private runtime.
+        // Their declarations stay pack-excluded by listUnpackagedPrivatePluginSdkDistArtifacts.
+        return [
+          [
+            `./plugin-sdk/${entry}`,
+            {
+              default: `./dist/plugin-sdk/${entry}.js`,
+            },
+          ],
+        ];
+      }
+      return [];
+    }),
   );
 }
 
@@ -133,10 +153,13 @@ export function buildPluginSdkPackageExports() {
  * @internal Shared repository-script contract.
  */
 export function listPluginSdkDistArtifacts() {
-  return publicPluginSdkEntrypoints.flatMap((entry) => [
-    `dist/plugin-sdk/${entry}.js`,
-    `dist/plugin-sdk/${entry}.d.ts`,
-  ]);
+  return [
+    ...publicPluginSdkEntrypoints.flatMap((entry) => [
+      `dist/plugin-sdk/${entry}.js`,
+      `dist/plugin-sdk/${entry}.d.ts`,
+    ]),
+    ...packagedPrivatePluginSdkRuntimeEntrypoints.map((entry) => `dist/plugin-sdk/${entry}.js`),
+  ];
 }
 
 /**

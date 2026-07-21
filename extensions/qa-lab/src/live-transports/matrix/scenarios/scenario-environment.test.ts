@@ -120,6 +120,13 @@ describe("matrix scenario environment", () => {
       restartDelayMs: 0,
       timeoutMs: 1_000,
     });
+    expect(gateway.call).toHaveBeenCalledWith(
+      "config.patch",
+      expect.objectContaining({
+        replacePaths: ["channels.matrix", "messages"],
+      }),
+      { timeoutMs: 60_000 },
+    );
     expect(gateway.call).toHaveBeenLastCalledWith(
       "exec.approval.request",
       { id: "approval-1" },

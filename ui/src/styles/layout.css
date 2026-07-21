@@ -326,11 +326,30 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
 
 .settings-sidebar__search {
   position: relative;
+  z-index: 1;
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  margin: 8px 21px 0;
+  margin: 8px 12px 0;
+  padding-bottom: 8px;
   color: var(--muted);
+}
+
+.settings-sidebar__search::after {
+  content: "";
+  position: absolute;
+  inset-inline: -12px;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--border) 62%, transparent);
+  box-shadow: 0 6px 12px color-mix(in srgb, var(--text) 14%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__search--scrolled::after {
+  opacity: 1;
 }
 
 .settings-sidebar__search-icon {
@@ -2243,7 +2262,17 @@ html.openclaw-native-macos
   border-radius: var(--radius-md);
   transition:
     opacity var(--duration-fast) ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
     box-shadow var(--duration-fast) ease;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @starting-style {
+    .sidebar-r .sidebar-zone-entry {
+      opacity: 0;
+      transform: translateX(-8px) scale(0.98);
+    }
+  }
 }
 
 .sidebar-zone-entry--dragging {
@@ -2504,6 +2533,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--accent);
 }
 
+.session-menu__icon {
+  color: var(--muted);
+}
+
 .session-menu__icon svg,
 .session-menu__check svg,
 .session-menu__chevron svg {
@@ -2520,6 +2553,16 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-menu__sub {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

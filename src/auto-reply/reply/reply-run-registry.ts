@@ -5,6 +5,11 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+  registerAgentEventLifecycleRotationHandler,
+} from "../../infra/agent-events.js";
 import type { ImageContent } from "../../llm/types.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -123,6 +128,8 @@ type ReplyOperationResult =
 export type ReplyOperation = {
   readonly key: ReplyRunKey;
   readonly sessionId: string;
+  /** Gateway lifecycle that admitted this process-local owner. */
+  readonly lifecycleGeneration?: string;
   readonly routeThreadId?: string | number;
   readonly abortSignal: AbortSignal;
   readonly resetTriggered: boolean;
@@ -234,6 +241,7 @@ type ReplyRunState = {
   waitKeysBySessionId: Map<string, string>;
   waitersByKey: Map<string, Set<ReplyRunWaiter>>;
   followupAdmissionBarriersByKey: Map<string, ReplyRunFollowupAdmissionBarrier>;
+  evictOperationByOperation?: WeakMap<ReplyOperation, () => void>;
 };
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
@@ -245,8 +253,12 @@ const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STATE_KEY,
   waitKeysBySessionId: new Map<string, string>(),
   waitersByKey: new Map<string, Set<ReplyRunWaiter>>(),
   followupAdmissionBarriersByKey: new Map<string, ReplyRunFollowupAdmissionBarrier>(),
+  evictOperationByOperation: new WeakMap<ReplyOperation, () => void>(),
 }));
 replyRunState.followupAdmissionBarriersByKey ??= new Map();
+const evictReplyOperationByOperation =
+  replyRunState.evictOperationByOperation ??
+  (replyRunState.evictOperationByOperation = new WeakMap<ReplyOperation, () => void>());
 
 export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 // Terminal results must release the lane even if the owner never resumes.
@@ -490,7 +502,20 @@ function updateFollowupAdmissionSessionId(sessionKey: string, sessionId: string)
   }
 }
 
-function clearReplyRunState(params: { sessionKey: string; sessionId: string }): void {
+function clearReplyRunState(params: {
+  sessionKey: string;
+  sessionId: string;
+  operation: ReplyOperation;
+}): void {
+  if (replyRunState.activeRunsByKey.get(params.sessionKey) !== params.operation) {
+    if (
+      replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey &&
+      replyRunState.activeSessionIdsByKey.get(params.sessionKey) !== params.sessionId
+    ) {
+      replyRunState.activeKeysBySessionId.delete(params.sessionId);
+    }
+    return;
+  }
   replyRunState.activeRunsByKey.delete(params.sessionKey);
   replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
   if (replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey) {
@@ -550,6 +575,7 @@ export function createReplyOperation(params: {
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
   const startedAtMs = Date.now();
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
   let lastActivityAtMs = startedAtMs;
   const upstreamAbortSignal = params.upstreamAbortSignal;
   let upstreamAbortHandler: (() => void) | undefined;
@@ -580,6 +606,7 @@ export function createReplyOperation(params: {
     terminalSettleTimer.clear();
     finalizationLease.clear();
     expireReplyOperationByOperation.delete(operation);
+    evictReplyOperationByOperation.delete(operation);
     detachUpstreamAbort();
     const registeredBarrier = afterClearBarrier
       ? registerFollowupAdmissionBarrier(
@@ -598,6 +625,7 @@ export function createReplyOperation(params: {
     clearReplyRunState({
       sessionKey: currentSessionKey,
       sessionId: currentSessionId,
+      operation,
     });
     if (!registeredBarrier) {
       flushReplyOperationAfterClear(operation, currentSessionId);
@@ -642,6 +670,7 @@ export function createReplyOperation(params: {
     get sessionId() {
       return currentSessionId;
     },
+    lifecycleGeneration,
     get routeThreadId() {
       return params.routeThreadId;
     },
@@ -937,6 +966,33 @@ export function createReplyOperation(params: {
       );
       clearState();
     },
+  });
+
+  evictReplyOperationByOperation.set(operation, () => {
+    if (stateCleared) {
+      return;
+    }
+    if (!result) {
+      setResult({ kind: "aborted", code: "aborted_for_restart" });
+      phase = "aborted";
+    }
+    abortInternally(createAgentRunRestartAbortError());
+    let cancelError: unknown;
+    let cancelFailed = false;
+    try {
+      getAttachedBackend(operation)?.cancel("restart");
+    } catch (error) {
+      cancelFailed = true;
+      cancelError = error;
+      diag.warn(
+        `reply run lifecycle eviction cancel failed: sessionKey=${currentSessionKey} error=${String(error)}`,
+      );
+    } finally {
+      clearState();
+    }
+    if (cancelFailed) {
+      throw cancelError;
+    }
   });
 
   replyRunState.activeRunsByKey.set(sessionKey, operation);
@@ -1294,6 +1350,67 @@ export function listActiveReplyRunSessionIds(): string[] {
 export function listActiveReplyRunSessionKeys(): string[] {
   return [...replyRunState.activeSessionIdsByKey.keys()];
 }
+
+function evictPriorLifecycleReplyRuns(): void {
+  const errors: unknown[] = [];
+  for (const operation of replyRunState.activeRunsByKey.values()) {
+    if (
+      operation.lifecycleGeneration &&
+      isAgentEventLifecycleGenerationCurrent(operation.lifecycleGeneration)
+    ) {
+      continue;
+    }
+    const evict = evictReplyOperationByOperation.get(operation);
+    if (evict) {
+      try {
+        evict();
+      } catch (error) {
+        errors.push(error);
+        try {
+          clearReplyRunState({
+            sessionKey: operation.key,
+            sessionId: operation.sessionId,
+            operation,
+          });
+        } catch (clearError) {
+          errors.push(clearError);
+        }
+      }
+      continue;
+    }
+    // Pre-generation hot-loaded operations have no retained callback, but their
+    // public method still closes over the module instance that owns the backend.
+    try {
+      if (!operation.abortForRestart()) {
+        errors.push(new Error(`Stale reply operation was not abortable: ${operation.key}`));
+      }
+    } catch (error) {
+      errors.push(error);
+    }
+    // Admission stays occupied until the old closure clears it. If abort
+    // synchronously clears and replaces the slot, its captured stateCleared
+    // makes this completion idempotent instead of erasing the replacement.
+    try {
+      operation.complete();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      clearReplyRunState({
+        sessionKey: operation.key,
+        sessionId: operation.sessionId,
+        operation,
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to abort stale reply runs");
+  }
+}
+
+registerAgentEventLifecycleRotationHandler("reply-runs", evictPriorLifecycleReplyRuns);
 
 const replyRunRegistryTestApi = {
   resetReplyRunRegistry(): void {

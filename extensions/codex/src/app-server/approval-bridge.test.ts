@@ -13,7 +13,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
-import { requestPluginApproval } from "./plugin-approval-roundtrip.js";
+import {
+  requestPluginApproval,
+  waitForPluginApprovalDecision,
+} from "./plugin-approval-roundtrip.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
@@ -2286,6 +2289,52 @@ describe("Codex app-server approval bridge", () => {
     expect(mockCallGatewayTool).toHaveBeenCalledTimes(1);
     expect(onNativeToolFailureDisposition).toHaveBeenCalledWith("patch-1", "failed");
     findApprovalEvent(params, { status: "unavailable", reason: "needs write access" });
+  });
+
+  it("fails closed when waitDecision reports a stale approval id", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-stale", status: "accepted" })
+      .mockRejectedValueOnce(new Error("approval expired or not found"));
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-stale",
+        reason: "needs write access",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+    findApprovalEvent(params, {
+      status: "unavailable",
+      approvalId: "plugin:approval-stale",
+      reason: "needs write access",
+      message: "Codex app-server approval unavailable.",
+    });
+  });
+
+  it("does not classify a matching abort reason as a stale gateway wait", async () => {
+    const controller = new AbortController();
+    mockCallGatewayTool.mockImplementationOnce(() => new Promise(() => {}));
+
+    const pending = waitForPluginApprovalDecision({
+      approvalId: "plugin:approval-abort",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(mockCallGatewayTool).toHaveBeenCalledOnce());
+    controller.abort(new Error("approval expired or not found"));
+
+    await expect(pending).rejects.toThrow("approval expired or not found");
   });
 
   it("preserves an accepted approval expiry as timed out", async () => {

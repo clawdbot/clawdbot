@@ -12,7 +12,13 @@ Options:
 ```bash
 scripts/restart-mac.sh --no-sign   # fastest dev; ad-hoc signing (TCC permissions do not stick)
 scripts/restart-mac.sh --sign      # force code signing (requires cert)
+scripts/restart-mac.sh --background-only # keep services running without automatic windows
 ```
+
+`--background-only` suppresses first-run onboarding, update and CLI prompts, and
+the `--chat`/`--dashboard` auto-open helpers. Pairing, control-channel, and Mac
+node services still start. Combine it with `--attach-only` when an external
+process owns the local Gateway.
 
 ## Packaging flow
 

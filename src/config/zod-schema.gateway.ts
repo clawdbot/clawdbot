@@ -31,6 +31,7 @@ export const GatewayConfigSchema = z
         basePath: z.string().optional(),
         root: z.string().optional(),
         toolTitles: z.boolean().optional(),
+        sessionObserver: z.boolean().optional(),
         embedSandbox: z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
           .optional(),

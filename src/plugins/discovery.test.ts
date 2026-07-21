@@ -1514,7 +1514,7 @@ describe("discoverOpenClawPlugins", () => {
       pluginId: "future-channel",
       source: path.join(pluginDir, "package.json"),
       messageIncludes:
-        "plugin requires plugin API >=2026.5.27-beta.2, but this host is 2026.5.27-beta.1; skipping discovery",
+        'plugin requires plugin API >=2026.5.27-beta.2, but this host is 2026.5.27-beta.1; skipping discovery (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")',
     });
   });
 
@@ -1550,7 +1550,7 @@ describe("discoverOpenClawPlugins", () => {
       pluginId: "malformed-channel",
       source: path.join(pluginDir, "package.json"),
       messageIncludes:
-        "invalid package plugin API metadata: package.json openclaw.compat.pluginApi must be a string; skipping discovery",
+        "invalid package plugin API metadata: package.json openclaw.compat.pluginApi must be a string; skipping discovery (check package.json openclaw.compat.pluginApi)",
     });
   });
 

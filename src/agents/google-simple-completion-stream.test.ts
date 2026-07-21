@@ -10,14 +10,10 @@ const apiRegistry = {
   getApiProvider: vi.fn(() => ({ streamSimple })),
 } as unknown as ApiRegistry;
 
-vi.mock("../llm/stream.js", () => ({
-  streamSimple,
-}));
-
-vi.mock("../plugin-sdk/provider-stream-shared.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugin-sdk/provider-stream-shared.js")>(
-    "../plugin-sdk/provider-stream-shared.js",
-  );
+vi.mock("../llm/providers/stream-wrappers/google-thinking-payload.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../llm/providers/stream-wrappers/google-thinking-payload.js")
+  >("../llm/providers/stream-wrappers/google-thinking-payload.js");
   return {
     ...actual,
     sanitizeGoogleThinkingPayload,
@@ -164,8 +160,8 @@ describe("prepareGoogleSimpleCompletionModel", () => {
     "preserves clamped-off intent in the final Gemini 3 payload for reasoning=%s",
     async (reasoning) => {
       const actual = await vi.importActual<
-        typeof import("../plugin-sdk/provider-stream-shared.js")
-      >("../plugin-sdk/provider-stream-shared.js");
+        typeof import("../llm/providers/stream-wrappers/google-thinking-payload.js")
+      >("../llm/providers/stream-wrappers/google-thinking-payload.js");
       sanitizeGoogleThinkingPayload.mockImplementationOnce(actual.sanitizeGoogleThinkingPayload);
       streamSimple.mockImplementationOnce((_model, _context, options) => {
         const payload = {

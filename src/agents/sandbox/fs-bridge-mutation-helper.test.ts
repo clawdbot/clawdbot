@@ -71,6 +71,11 @@ const FORCED_EXDEV_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
   "        raise OSError(errno.EXDEV, 'forced EXDEV for test')\n        os.rename(src_basename, dst_basename, src_dir_fd=src_parent_fd, dst_dir_fd=dst_parent_fd)",
 );
 
+const FORCED_COPY_FAILURE_MUTATION_PYTHON = SANDBOX_PINNED_MUTATION_PYTHON.replace(
+  "        copy_completed = True",
+  "        raise OSError(errno.ENOSPC, 'forced copy failure')\n        copy_completed = True",
+);
+
 const FORCED_EXDEV_WITH_LATE_SOURCE_WRITE_MUTATION_PYTHON = FORCED_EXDEV_MUTATION_PYTHON.replace(
   "        remove_copied_entry(src_parent_fd, src_basename, ('dir', entry_identity(src_stat), copied_children))",
   [
@@ -182,6 +187,83 @@ describe("sandbox pinned mutation helper", () => {
         const hardlinkResult = runMutation(["read", workspace, "nested", "hardlinked.txt"]);
         expect(hardlinkResult.status).not.toBe(0);
         expect(hardlinkResult.stderr).toMatch(/hardlinked file/i);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "copies regular files atomically and rejects hardlinked sources",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-copy-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destinationRoot = path.join(root, "destination");
+        const sourcePath = path.join(sourceRoot, "payload.bin");
+        const destinationName = `${"d".repeat(235)}.bin`;
+        const destinationPath = path.join(destinationRoot, "nested", destinationName);
+        await fs.mkdir(sourceRoot, { recursive: true });
+        await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+        await fs.writeFile(sourcePath, "streamed", "utf8");
+        await fs.chmod(sourcePath, 0o640);
+        await fs.writeFile(destinationPath, "old", "utf8");
+
+        const copyResult = runMutation([
+          "copy",
+          sourceRoot,
+          "",
+          "payload.bin",
+          destinationRoot,
+          "nested",
+          destinationName,
+          "1",
+        ]);
+
+        expect(copyResult.status).toBe(0);
+        await expect(fs.readFile(destinationPath, "utf8")).resolves.toBe("streamed");
+        expect((await fs.stat(destinationPath)).mode & 0o777).toBe(0o640);
+
+        await fs.link(sourcePath, path.join(sourceRoot, "hardlinked.bin"));
+        const hardlinkResult = runMutation([
+          "copy",
+          sourceRoot,
+          "",
+          "hardlinked.bin",
+          destinationRoot,
+          "",
+          "blocked.bin",
+          "1",
+        ]);
+        expect(hardlinkResult.status).not.toBe(0);
+        expect(hardlinkResult.stderr).toMatch(/hardlinked file/i);
+        await expectPathMissing(path.join(destinationRoot, "blocked.bin"));
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "removes a partial temporary file when streaming copy fails",
+    async () => {
+      await withTempDir({ prefix: "openclaw-mutation-copy-failure-" }, async (root) => {
+        const sourceRoot = path.join(root, "source");
+        const destinationRoot = path.join(root, "destination");
+        await fs.mkdir(sourceRoot, { recursive: true });
+        await fs.mkdir(destinationRoot, { recursive: true });
+        await fs.writeFile(path.join(sourceRoot, "payload.bin"), "streamed", "utf8");
+
+        const result = runMutationWithSource(FORCED_COPY_FAILURE_MUTATION_PYTHON, [
+          "copy",
+          sourceRoot,
+          "",
+          "payload.bin",
+          destinationRoot,
+          "",
+          "payload.bin",
+          "1",
+        ]);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("forced copy failure");
+        await expectPathMissing(path.join(destinationRoot, "payload.bin"));
+        await expect(fs.readdir(destinationRoot)).resolves.toEqual([]);
       });
     },
   );

@@ -77,7 +77,8 @@ private enum GatewayActivationBindingKeyStore {
 actor GatewayConnection {
     static let shared = GatewayConnection(
         endpointProvider: GatewayConnection.defaultEndpointProvider)
-    nonisolated static let operatorClientCaps = [OpenClawGatewayClientCapability.inlineWidgets]
+    nonisolated static let operatorClientCaps =
+        [OpenClawGatewayClientCapability.agentKind, OpenClawGatewayClientCapability.inlineWidgets]
 
     typealias Config = (url: URL, token: String?, password: String?)
 

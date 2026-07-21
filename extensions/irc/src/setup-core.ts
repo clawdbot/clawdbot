@@ -111,6 +111,7 @@ export function setIrcGroupAccess(
 }
 
 export const ircSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["password"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({

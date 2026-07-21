@@ -72,6 +72,17 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
           sessionId: "e2e-custodian",
           reply: "## Hi, I'm OpenClaw",
           action: "none",
+          question: {
+            id: "onboarding-next-step",
+            header: "Next step",
+            question: "What would you like to do first?",
+            options: [
+              { label: "Talk to my agent", reply: "talk to agent", recommended: true },
+              { label: "Connect WhatsApp", reply: "connect whatsapp" },
+            ],
+            isOther: true,
+            skipAction: "exit",
+          },
         },
       },
     });
@@ -106,11 +117,16 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
         sessionId: expect.stringMatching(/^control-ui-onboarding-/u),
         welcomeVariant: "onboarding",
       });
-      await page.getByRole("button", { name: "Exit setup" }).click();
+      await page.getByRole("button", { name: "Skip for now" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--onboarding");
+      const userTurns = (await gateway.getRequests("openclaw.chat")).filter((request) => {
+        const params = request.params;
+        return typeof params === "object" && params !== null && "message" in params;
+      });
+      expect(userTurns).toHaveLength(0);
     } finally {
       await context.close();
     }

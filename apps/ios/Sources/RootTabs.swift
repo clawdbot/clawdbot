@@ -4,6 +4,19 @@ import SwiftUI
 import UIKit
 
 struct RootTabs: View {
+    private enum SidebarEdgeDragDisposition: Equatable {
+        case horizontal
+        case rejected
+    }
+
+    private struct SidebarEdgeDragState: Equatable {
+        var disposition: SidebarEdgeDragDisposition?
+        var translationWidth: CGFloat = 0
+    }
+
+    private static let sidebarEdgeGestureWidth: CGFloat = 44
+    private static let sidebarDrawerTopLeadingRadius: CGFloat = 8
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -27,11 +40,14 @@ struct RootTabs: View {
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
+    @State private var isSidebarDetailRootVisible: Bool = true
     @State private var isSidebarVisible: Bool = Self.initialSidebarVisibility ?? false
     @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
     @State private var isSidebarDrawerLayout: Bool = false
     @State private var didResolveSidebarLayout: Bool = false
     @State private var sidebarContentDragOffset: CGFloat = 0
+    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.35, dampingFraction: 0.86)))
+    private var sidebarEdgeDragState = SidebarEdgeDragState()
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
     @State private var presentedSheet: PresentedSheet?
@@ -197,7 +213,18 @@ struct RootTabs: View {
                 .opacity(self.reduceMotion && self.isSidebarVisible ? 0 : 1)
                 .accessibilityHidden(self.isSidebarVisible)
                 .zIndex(1)
+
+            // Gesture ownership must stay on an unmoving shell. Attaching either
+            // drag to the offset card makes a slow finger outrun its own recognizer.
+            self.sidebarDrawerInteractionLayer(sidebarWidth: sidebarWidth)
+                .zIndex(2)
         }
+        .simultaneousGesture(
+            self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth),
+            isEnabled: !self.isSidebarVisible &&
+                !self.reduceMotion &&
+                self.isSidebarDetailRootVisible &&
+                self.sidebarNavigationPath.isEmpty)
     }
 
     private func sidebarDrawerLayer(
@@ -213,76 +240,81 @@ struct RootTabs: View {
 
     private func sidebarDrawerContentSurface(sidebarWidth: CGFloat) -> some View {
         let progress = self.sidebarContentRevealProgress(sidebarWidth: sidebarWidth)
-        return RoundedRectangle(
-            cornerRadius: OpenClawProMetric.drawerRadius * progress,
-            style: .continuous)
+        let shape = self.sidebarDrawerContentShape(progress: progress)
+        return shape
             .fill(Color(uiColor: .systemGroupedBackground))
             .overlay(
-                RoundedRectangle(
-                    cornerRadius: OpenClawProMetric.drawerRadius * progress,
-                    style: .continuous)
-                    .strokeBorder(OpenClawSidebarPalette.hairline.opacity(Double(progress)), lineWidth: 1))
-            .shadow(
-                color: .black.opacity(0.28 * progress),
-                radius: 20 * progress,
-                x: -4 * progress,
-                y: 0)
+                shape.strokeBorder(
+                    OpenClawSidebarPalette.hairline.opacity(Double(progress)),
+                    lineWidth: 1))
             .ignoresSafeArea(.container, edges: .vertical)
             .offset(x: Self.sidebarContentOffset(
                 sidebarWidth: sidebarWidth,
                 isVisible: self.isSidebarVisible,
-                dragOffset: self.sidebarContentDragOffset,
+                dragOffset: self.sidebarResolvedDragOffset,
                 reduceMotion: self.reduceMotion))
     }
 
     private func sidebarDrawerContentCard(sidebarWidth: CGFloat) -> some View {
         let progress = self.sidebarContentRevealProgress(sidebarWidth: sidebarWidth)
-        return ZStack {
-            self.sidebarDetailNavigationShell
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(!self.isSidebarVisible)
+        return self.sidebarDetailNavigationShell
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(!self.isSidebarVisible)
+            .clipShape(self.sidebarDrawerContentShape(progress: progress))
+            .offset(x: Self.sidebarContentOffset(
+                sidebarWidth: sidebarWidth,
+                isVisible: self.isSidebarVisible,
+                dragOffset: self.sidebarResolvedDragOffset,
+                reduceMotion: self.reduceMotion))
+    }
 
-            // Tap-to-close stays available under Reduce Motion (the drags are
-            // gated); otherwise the header X would be the only exit.
-            if self.isSidebarVisible {
+    /// Keep the Dynamic Island row nearly square while retaining the softer
+    /// lower drawer edge. The surface and content must share this exact shape.
+    private func sidebarDrawerContentShape(progress: CGFloat) -> UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: Self.sidebarDrawerTopLeadingRadius * progress,
+            bottomLeadingRadius: OpenClawProMetric.drawerRadius * progress,
+            bottomTrailingRadius: OpenClawProMetric.drawerRadius * progress,
+            topTrailingRadius: OpenClawProMetric.drawerRadius * progress,
+            style: .continuous)
+    }
+
+    @ViewBuilder
+    private func sidebarDrawerInteractionLayer(sidebarWidth: CGFloat) -> some View {
+        if self.isSidebarVisible {
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: sidebarWidth)
+                    .allowsHitTesting(false)
                 Color.clear
                     .contentShape(Rectangle())
+                    .accessibilityHidden(true)
                     .onTapGesture {
                         self.hideSidebar()
                     }
-            }
-
-            // Edge-open is chat-root only: pushed screens own the system
-            // back-swipe on this edge, and other destinations push internally.
-            if !self.isSidebarVisible, !self.reduceMotion,
-               self.selectedSidebarDestination == .chat, self.sidebarNavigationPath.isEmpty
-            {
-                HStack(spacing: 0) {
-                    Color.clear
-                        .frame(width: 24)
-                        .contentShape(Rectangle())
-                        .gesture(self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth))
-                    Spacer(minLength: 0)
-                }
+                    .gesture(
+                        self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth),
+                        isEnabled: !self.reduceMotion)
             }
         }
-        .contentShape(Rectangle())
-        .gesture(
-            self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth),
-            isEnabled: self.isSidebarVisible && !self.reduceMotion)
-        .clipShape(RoundedRectangle(
-            cornerRadius: OpenClawProMetric.drawerRadius * progress,
-            style: .continuous))
-        .offset(x: Self.sidebarContentOffset(
-            sidebarWidth: sidebarWidth,
-            isVisible: self.isSidebarVisible,
-            dragOffset: self.sidebarContentDragOffset,
-            reduceMotion: self.reduceMotion))
     }
 
     private var sidebarDetailShell: some View {
-        self.sidebarDetail
-            .id(self.sidebarDetailShellID)
+        let shellID = self.sidebarDetailShellID
+        return self.sidebarDetail
+            .id(shellID)
+            // RootTabs disables destination-owned stacks at its call sites. A
+            // destination-style NavigationLink therefore replaces this shared
+            // root, so visibility guards its native back-swipe without relying
+            // on the typed Settings path.
+            .onAppear {
+                guard self.sidebarDetailShellID == shellID else { return }
+                self.isSidebarDetailRootVisible = true
+            }
+            .onDisappear {
+                guard self.sidebarDetailShellID == shellID else { return }
+                self.isSidebarDetailRootVisible = false
+            }
     }
 
     /// RootSidebar owns its dark surface; this wrapper only restores vertical
@@ -293,6 +325,7 @@ struct RootTabs: View {
             model: self.sidebarModel,
             selectedDestination: self.selectedSidebarDestination,
             isDrawerLayout: self.isSidebarDrawerLayout,
+            showsDismissButton: self.isSidebarVisible,
             selectDestination: self.selectSidebarDestination,
             selectSettingsRoute: self.selectSettingsRoute,
             hideSidebar: self.hideSidebar)
@@ -505,8 +538,15 @@ struct RootTabs: View {
         return Self.sidebarContentOffset(
             sidebarWidth: sidebarWidth,
             isVisible: self.isSidebarVisible,
-            dragOffset: self.sidebarContentDragOffset,
+            dragOffset: self.sidebarResolvedDragOffset,
             reduceMotion: self.reduceMotion) / sidebarWidth
+    }
+
+    private var sidebarResolvedDragOffset: CGFloat {
+        guard !self.isSidebarVisible, self.sidebarEdgeDragState.disposition == .horizontal else {
+            return self.sidebarContentDragOffset
+        }
+        return self.sidebarEdgeDragState.translationWidth
     }
 
     private func sidebarContentDismissGesture(sidebarWidth: CGFloat) -> some Gesture {
@@ -529,14 +569,29 @@ struct RootTabs: View {
 
     private func sidebarEdgeOpenGesture(sidebarWidth: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8)
-            .onChanged { value in
-                self.sidebarContentDragOffset = max(0, min(sidebarWidth, value.translation.width))
+            .updating(self.$sidebarEdgeDragState) { value, state, _ in
+                guard value.startLocation.x <= Self.sidebarEdgeGestureWidth,
+                      value.startLocation.y > Self.sidebarEdgeGestureWidth
+                else {
+                    state.disposition = .rejected
+                    return
+                }
+                if state.disposition == nil {
+                    state.disposition = value.translation.width > 0 &&
+                        value.translation.width > abs(value.translation.height) ? .horizontal : .rejected
+                }
+                guard state.disposition == .horizontal else { return }
+                state.translationWidth = max(0, min(sidebarWidth, value.translation.width))
             }
             .onEnded { value in
+                guard value.startLocation.x <= Self.sidebarEdgeGestureWidth,
+                      value.startLocation.y > Self.sidebarEdgeGestureWidth,
+                      value.translation.width > 0,
+                      value.translation.width > abs(value.translation.height)
+                else { return }
                 let shouldOpen = value.translation.width > 80 ||
                     value.predictedEndTranslation.width > 160
                 withAnimation(self.sidebarAnimation) {
-                    self.sidebarContentDragOffset = 0
                     if shouldOpen {
                         self.sidebarVisibilityUserOverridden = true
                         self.setSidebarVisible(true)

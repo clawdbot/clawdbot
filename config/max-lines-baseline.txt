@@ -350,6 +350,10 @@ packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-completions.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/providers/openai-responses-shared.ts
+packages/ai/src/transports/anthropic-transport-stream.test.ts
+packages/ai/src/transports/anthropic-transport-stream.ts
+packages/ai/src/transports/openai-completions-transport.ts
+packages/ai/src/transports/openai-responses-transport.ts
 packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/index.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
@@ -384,8 +388,6 @@ src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
 src/agents/agent-tools.schema.test.ts
 src/agents/agent-tools.ts
-src/agents/anthropic-transport-stream.test.ts
-src/agents/anthropic-transport-stream.ts
 src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/oauth.openai-codex-refresh-fallback.test.ts
 src/agents/auth-profiles/persisted.ts
@@ -491,8 +493,6 @@ src/agents/model-fallback.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
-src/agents/openai-completions-transport.ts
-src/agents/openai-responses-transport.ts
 src/agents/openai-transport-stream.base.test.ts
 src/agents/openai-transport-stream.deepseek-and-shaping.test.ts
 src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts
@@ -960,7 +960,6 @@ src/plugin-sdk/approval-native-helpers.ts
 src/plugin-sdk/core.ts
 src/plugin-sdk/provider-auth.test.ts
 src/plugin-sdk/provider-stream-shared.test.ts
-src/plugin-sdk/provider-stream-shared.ts
 src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts

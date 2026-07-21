@@ -17,6 +17,7 @@ import { classifySessionKind } from "../../../../../src/sessions/classify-sessio
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import { COPY_LABEL } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -44,12 +45,14 @@ import {
   resolveUiGlobalAliasAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
+import { resolveTurnRecap } from "../chat-progress.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   deletedChatItemsSignature,
   getExpandedToolCards,
+  getExpandedUserMessages,
   persistedMessageEntryId,
   resetChatThreadState,
   stableBooleanMapSignature,
@@ -65,27 +68,23 @@ import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.t
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
 import { renderChatDivider } from "./chat-divider.ts";
 import {
+  dismissConfirmedActionPopovers,
   getAssistantAttachmentAvailabilityRenderVersion,
+  openChatHideConfirmation,
   openChatRewindConfirmation,
   renderMessageGroup,
   renderStreamGroup,
   renderWorkGroupSummary,
+  type MessageReplyTarget,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
-
-type ReplyTarget = {
-  messageId: string;
-  text: string;
-  senderLabel?: string | null;
-  /** Persisted transcript id; when present chat.send carries it as replyToId. */
-  sourceMessageId?: string | null;
-};
 
 type ChatThreadState = {
   searchOpen: boolean;
@@ -129,10 +128,9 @@ type ChatThreadProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
-  /** Gateway resolves authenticated user identities (multi-user attribution). */
-  attributedIdentity?: boolean;
   basePath?: string;
   fullMessageAgentId?: string;
   localMediaPreviewRoots?: string[];
@@ -153,7 +151,7 @@ type ChatThreadProps = {
   /** Current composer draft; the selection popup preserves it when prefilling. */
   getDraft?: () => string;
   onSend: () => void;
-  onSetReply?: (target: ReplyTarget) => void;
+  onSetReply?: (target: MessageReplyTarget) => void;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
@@ -552,8 +550,11 @@ function getPinnedMessageSummary(message: unknown): string {
   return extractTextCached(message) ?? "";
 }
 
-export function resetChatThreadPresentationState(paneId?: string) {
+export function resetChatThreadPresentationState(paneId?: string, owner?: ParentNode) {
   removeReplyContextMenu(paneId);
+  if (owner) {
+    dismissConfirmedActionPopovers(owner);
+  }
   // The selection popup is body-portaled; pane teardown/route changes must
   // drop it so it cannot outlive the render that owns its callbacks.
   removeChatSelectionPopup();
@@ -700,10 +701,17 @@ function removeReplyContextMenu(paneId?: string) {
   if (paneId && paneId !== activeReplyContextMenuPaneId) {
     return;
   }
-  activeReplyContextMenu?.remove();
+  if (activeReplyContextMenu) {
+    dismissConfirmedActionPopovers(activeReplyContextMenu);
+    activeReplyContextMenu.remove();
+  }
   activeReplyContextMenu = null;
   activeReplyContextMenuPaneId = null;
-  document.querySelector(".chat-reply-context-menu")?.remove();
+  const fallbackMenu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
+  if (fallbackMenu) {
+    dismissConfirmedActionPopovers(fallbackMenu);
+    fallbackMenu.remove();
+  }
   if (contextMenuDocumentClickHandler) {
     document.removeEventListener("click", contextMenuDocumentClickHandler);
     contextMenuDocumentClickHandler = null;
@@ -732,24 +740,8 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", "Reply to message");
-
-  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  icon.setAttribute("viewBox", "0 0 24 24");
-  icon.setAttribute("width", "16");
-  icon.setAttribute("height", "16");
-  icon.setAttribute("fill", "currentColor");
-  icon.setAttribute("stroke", "none");
-  icon.setAttribute("aria-hidden", "true");
-  icon.setAttribute("focusable", "false");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z");
-  icon.appendChild(path);
-
-  const label = document.createElement("span");
-  label.textContent = "Reply";
-
-  button.append(icon, label);
+  button.setAttribute("aria-label", t("chat.messages.replyToMessage"));
+  button.textContent = t("chat.messages.reply");
   button.addEventListener("click", onClick);
   return button;
 }
@@ -817,11 +809,23 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const senderLabel = senderEl?.textContent?.trim() ?? undefined;
   const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
   const entryId = (bubble as HTMLElement).dataset.entryId?.trim() ?? "";
+  const messageId = (bubble as HTMLElement).dataset.messageId?.trim() ?? "";
+  const groupKey = (group as HTMLElement).dataset.chatRowKey?.trim() ?? "";
   const isUserMessage = group.classList.contains("user") && Boolean(entryId);
+  // Grouped rows can contain several bubbles. Match the clicked bubble to its
+  // own action owner so canvas/copy never targets a sibling message.
+  const actionOwner = [...group.querySelectorAll<HTMLElement>("[data-message-actions-for]")].find(
+    (element) => element.dataset.messageActionsFor === messageId,
+  );
+  const expandButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-expand-btn");
+  const copyButton = actionOwner?.querySelector<HTMLButtonElement>(".chat-copy-btn");
   const canReply = Boolean(text && props.onSetReply);
   const canRewind = isUserMessage && typeof props.onRewindMessage === "function";
+  const canHide = Boolean(groupKey);
+  const canOpenInCanvas = Boolean(expandButton);
+  const canCopy = Boolean(copyButton);
   const canFork = isUserMessage && typeof props.onForkMessage === "function";
-  if (!canReply && !canRewind && !canFork) {
+  if (!canReply && !canRewind && !canHide && !canOpenInCanvas && !canCopy && !canFork) {
     return;
   }
   event.preventDefault();
@@ -835,11 +839,10 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   menu.style.top = `${event.clientY}px`;
   const focusCandidates: HTMLButtonElement[] = [];
   if (canReply) {
-    const messageId =
-      (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
+    const replyMessageId = messageId || stableReplyMessageId(senderLabel, text);
     const replyButton = createReplyContextMenuButton(() => {
       props.onSetReply?.({
-        messageId,
+        messageId: replyMessageId,
         text,
         senderLabel,
         ...(entryId ? { sourceMessageId: entryId } : {}),
@@ -868,6 +871,49 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
       },
     });
     action.element.classList.add("chat-delete-wrap", "chat-rewind-wrap");
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canHide) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.hideMessage"),
+      disabled: false,
+      tooltip: t("chat.messages.hideTooltip"),
+      onClick: () => {
+        openChatHideConfirmation(action.button, () => {
+          removeReplyContextMenu();
+          getDeletedMessages(props.sessionKey).delete(groupKey);
+          props.onRequestUpdate?.();
+        });
+      },
+    });
+    action.element.classList.add("chat-delete-wrap");
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canOpenInCanvas) {
+    const action = createMessageActionContextButton({
+      label: t("chat.messages.openInCanvas"),
+      disabled: false,
+      tooltip: t("chat.messages.openInCanvas"),
+      onClick: () => {
+        removeReplyContextMenu();
+        expandButton?.click();
+      },
+    });
+    menu.append(action.element);
+    focusCandidates.push(action.button);
+  }
+  if (canCopy) {
+    const action = createMessageActionContextButton({
+      label: COPY_LABEL,
+      disabled: false,
+      tooltip: COPY_LABEL,
+      onClick: () => {
+        removeReplyContextMenu();
+        copyButton?.click();
+      },
+    });
     menu.append(action.element);
     focusCandidates.push(action.button);
   }
@@ -1106,6 +1152,7 @@ function renderChatThreadContents(
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
+  const expandedUserMessages = getExpandedUserMessages(props.sessionKey);
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
@@ -1135,7 +1182,7 @@ function renderChatThreadContents(
   // sessions, so the author marker is signal, not decoration.
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
-    !props.attributedIdentity;
+    !props.userId;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -1163,12 +1210,18 @@ function renderChatThreadContents(
         expandedToolCards.set(messageId, !(expanded ?? expandedToolCards.get(messageId) ?? false));
         requestUpdate();
       },
+      isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
+      onToggleUserMessageExpanded: (messageId: string) => {
+        expandedUserMessages.set(messageId, !expandedUserMessages.get(messageId));
+        requestUpdate();
+      },
       isToolExpanded: (toolCardId: string) => expandedToolCards.get(toolCardId) ?? false,
       onToggleToolExpanded: toggleToolCardExpanded,
       onRequestUpdate: requestUpdate,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
+      userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
       basePath: props.basePath,
@@ -1178,6 +1231,7 @@ function renderChatThreadContents(
       embedSandboxMode: props.embedSandboxMode ?? "scripts",
       allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
       contextWindow: threadContextWindow,
+      onReply: props.onSetReply,
       onDelete: () => {
         deleted.delete(item.key);
         requestUpdate();
@@ -1252,6 +1306,18 @@ function renderChatThreadContents(
       content: realtimeConversation,
     });
   }
+  // Watch/settle on actual indicator visibility (not runWorking): queued
+  // sends show the claw before the run starts, and the recap must never
+  // stack under a visible working row.
+  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
+  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
+  if (turnRecap !== null && !isEmpty && !showLoadingSkeleton) {
+    transcriptRows.push({
+      kind: "content",
+      key: "turn-recap",
+      content: renderTurnRecapRow(turnRecap),
+    });
+  }
   const backgroundTasks =
     !props.runWorking && !isEmpty && !showLoadingSkeleton
       ? renderBackgroundTasksStatusRow(props.backgroundTasks)
@@ -1268,6 +1334,7 @@ function renderChatThreadContents(
     locale,
     deletedChatItemsSignature(deleted, chatItems),
     stableBooleanMapSignature(expandedToolCards),
+    stableBooleanMapSignature(expandedUserMessages),
     getAssistantAttachmentAvailabilityRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
@@ -1288,6 +1355,7 @@ function renderChatThreadContents(
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,
+    props.userId,
     props.userName,
     props.userAvatar,
     props.basePath,
@@ -1297,6 +1365,8 @@ function renderChatThreadContents(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
+    props.onSetReply,
+    turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   const transcriptContents =
     showLoadingSkeleton || isEmpty

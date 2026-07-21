@@ -76,7 +76,7 @@ internal interface ClientStateControlDao {
 /** Disposable gateway-derived projections. Schema mismatches and corruption rebuild this file. */
 @Database(
   entities = [CachedSessionEntity::class, CachedMessageEntity::class, CachedGatewayOwnerEntity::class],
-  version = 1,
+  version = 2,
   exportSchema = true,
 )
 internal abstract class GatewayCacheDatabase : RoomDatabase() {
@@ -151,9 +151,19 @@ internal abstract class ClientStateDatabase : RoomDatabase() {
  *
  * Runtime reads and writes never use this type after [AndroidClientDatabases.start] completes.
  */
+@Entity(tableName = "cached_sessions", primaryKeys = ["gatewayId", "agentId", "sessionKey"])
+internal data class LegacyCachedSessionEntity(
+  val gatewayId: String,
+  val agentId: String,
+  val sessionKey: String,
+  val displayName: String?,
+  val updatedAtMs: Long?,
+  val rowOrder: Int,
+)
+
 @Database(
   entities = [
-    CachedSessionEntity::class,
+    LegacyCachedSessionEntity::class,
     CachedMessageEntity::class,
     OutboxCommandEntity::class,
     OutboxAttachmentEntity::class,
@@ -165,8 +175,6 @@ internal abstract class ClientStateDatabase : RoomDatabase() {
   exportSchema = false,
 )
 internal abstract class LegacyChatDatabase : RoomDatabase() {
-  abstract fun dao(): ChatCacheDao
-
   abstract fun outboxDao(): ChatOutboxDao
 
   companion object {

@@ -532,51 +532,75 @@ describe("gateway/node-command-policy", () => {
     expect(currentConfigApproval.has("screen.record")).toBe(true);
   });
 
-  it("keeps computer.act out of the runtime allowlist until explicitly allowed", () => {
-    const macNode = {
-      platform: "macos",
-      deviceFamily: "Mac",
-      commands: ["computer.act", "screen.snapshot"],
-    };
-    const unarmed = resolveNodeCommandAllowlist({} as OpenClawConfig, macNode);
-    expect(unarmed.has("computer.act")).toBe(false);
-    expect(
-      resolveNodeCommandAllowlist({} as OpenClawConfig, {
-        ...macNode,
-        approvedCommands: ["computer.act"],
-      }).has("computer.act"),
-    ).toBe(false);
+  it.each([
+    ["macos", "Mac"],
+    ["windows", "Windows"],
+    ["linux", "Linux"],
+  ])(
+    "keeps computer.act out of the %s runtime allowlist until explicitly allowed",
+    (platform, deviceFamily) => {
+      const desktopNode = {
+        platform,
+        deviceFamily,
+        commands: ["computer.act", "screen.snapshot"],
+      };
+      const unarmed = resolveNodeCommandAllowlist({} as OpenClawConfig, desktopNode);
+      expect(unarmed.has("computer.act")).toBe(false);
+      expect(
+        resolveNodeCommandAllowlist({} as OpenClawConfig, {
+          ...desktopNode,
+          approvedCommands: ["computer.act"],
+        }).has("computer.act"),
+      ).toBe(false);
 
-    const armed = resolveNodeCommandAllowlist(
-      { gateway: { nodes: { allowCommands: ["computer.act"] } } } as OpenClawConfig,
-      macNode,
-    );
-    expect(armed.has("computer.act")).toBe(true);
+      const armed = resolveNodeCommandAllowlist(
+        { gateway: { nodes: { allowCommands: ["computer.act"] } } } as OpenClawConfig,
+        desktopNode,
+      );
+      expect(armed.has("computer.act")).toBe(true);
 
-    const denied = resolveNodeCommandAllowlist(
-      {
-        gateway: { nodes: { allowCommands: ["computer.act"], denyCommands: ["computer.act"] } },
-      } as OpenClawConfig,
-      macNode,
-    );
-    expect(denied.has("computer.act")).toBe(false);
-  });
+      const denied = resolveNodeCommandAllowlist(
+        {
+          gateway: { nodes: { allowCommands: ["computer.act"], denyCommands: ["computer.act"] } },
+        } as OpenClawConfig,
+        desktopNode,
+      );
+      expect(denied.has("computer.act")).toBe(false);
+    },
+  );
 
-  it("keeps computer.act declarable through the macOS pairing allowlist only", () => {
-    const pairing = resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
-      platform: "macos",
-      deviceFamily: "Mac",
-      commands: ["computer.act"],
-    });
-    expect(pairing.has("computer.act")).toBe(true);
+  it("keeps computer.act declarable through desktop pairing allowlists only", () => {
+    for (const [platform, deviceFamily] of [
+      ["macos", "Mac"],
+      ["windows", "Windows"],
+      ["linux", "Linux"],
+    ]) {
+      const pairing = resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
+        platform,
+        deviceFamily,
+        commands: ["computer.act", "screen.snapshot"],
+      });
+      expect(pairing.has("computer.act")).toBe(true);
+      expect(pairing.has("screen.snapshot")).toBe(true);
+    }
+
+    for (const [platform, deviceFamily] of [
+      ["ios", "iPhone"],
+      ["android", "Android"],
+    ]) {
+      const pairing = resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
+        platform,
+        deviceFamily,
+        commands: ["computer.act"],
+      });
+      expect(pairing.has("computer.act")).toBe(false);
+    }
 
     const windowsPairing = resolveNodePairingCommandAllowlist({} as OpenClawConfig, {
       platform: "windows",
       deviceFamily: "Windows",
-      commands: ["computer.act"],
+      commands: ["screen.record"],
     });
-    expect(windowsPairing.has("computer.act")).toBe(false);
-
     // Dangerous commands outside PLATFORM_DEFAULTS stay out of pairing too.
     expect(windowsPairing.has("screen.record")).toBe(false);
   });

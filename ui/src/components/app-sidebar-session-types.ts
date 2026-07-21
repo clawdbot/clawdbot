@@ -1,3 +1,4 @@
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
@@ -68,9 +69,10 @@ export type SidebarRecentSession = {
   acpSession?: boolean;
   worktreeId?: string;
   placementState?: SessionPlacementState;
+  workspaceConflictCount?: number;
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
-  hasOpenPullRequest: boolean;
+  pullRequest?: SessionCatalogPullRequestSummary;
   unread: boolean;
   attention: SidebarSessionAttention;
   agentStatusNote?: string;

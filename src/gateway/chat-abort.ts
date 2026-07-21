@@ -12,6 +12,7 @@ import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import {
   createChatAbortMarker,
@@ -634,19 +635,28 @@ export function updateChatRunProvider(
 export function abortChatRunsForProvider(
   ops: ChatAbortOps,
   params: {
+    cfg: OpenClawConfig;
     providerId: string;
+    agentId?: string;
     stopReason?: string;
   },
 ): { runIds: string[] } {
   const providerId = normalizeProviderIdForActiveRun(params.providerId);
+  const agentId = normalizeActiveAgentId(params.agentId);
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   if (!providerId) {
     return { runIds: [] };
   }
-  const matches = [...ops.chatAbortControllers.entries()].filter(
-    ([, entry]) =>
-      normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
-      normalizeProviderIdForActiveRun(entry.providerId) === providerId,
-  );
+  const matches = [...ops.chatAbortControllers.entries()].filter(([, entry]) => {
+    const entryAgentId = normalizeActiveAgentId(
+      entry.agentId ?? parseAgentSessionKey(entry.sessionKey)?.agentId ?? defaultAgentId,
+    );
+    return (
+      (!agentId || entryAgentId === agentId) &&
+      (normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
+        normalizeProviderIdForActiveRun(entry.providerId) === providerId)
+    );
+  });
   const runIds: string[] = [];
   for (const [runId, entry] of matches) {
     const result = abortChatRunById(ops, {

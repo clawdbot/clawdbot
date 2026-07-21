@@ -139,6 +139,19 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun sessionDashboardRoutePreservesTheOpeningSessionAndReturnsToChat() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Chat)
+
+    nav.openSessionDashboard("agent:main:phone")
+
+    assertEquals(Tab.Dashboard, nav.activeTab)
+    assertEquals("agent:main:phone", nav.dashboardSessionKey)
+    nav.back()
+    assertEquals(Tab.Chat, nav.activeTab)
+  }
+
+  @Test
   fun tabBarSelectionClearsCrossTabReturnOrigin() {
     val nav = ShellNavigation()
     nav.selectTab(Tab.Chat)

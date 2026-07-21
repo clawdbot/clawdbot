@@ -1,14 +1,17 @@
 // Plugin npm runtime build tests validate plugin runtime package builds.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildPluginNpmRuntime,
+  listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../scripts/lib/plugin-npm-runtime-build.mjs";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type PluginNpmRuntimeBuildPlan = NonNullable<ReturnType<typeof resolvePluginNpmRuntimeBuildPlan>>;
 
@@ -192,5 +195,56 @@ describe("plugin npm runtime build planning", () => {
     );
     expect(plan.runtimeSetupEntry).toBe("./dist/setup-api.js");
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
+  });
+
+  it("keeps published Codex runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/codex",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
+
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
+
+  it("detects unresolved side-effect host imports in built plugin runtimes", () => {
+    const outDir = tempDirs.make("openclaw-plugin-runtime-host-import-");
+    writeFileSync(
+      path.join(outDir, "index.js"),
+      [
+        'import "openclaw/plugin-sdk/not-exported";',
+        'const runtime = __require("openclaw/plugin-sdk/not-exported-from-require");',
+        "void runtime;",
+        "",
+      ].join("\n"),
+    );
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir: path.join(repoRoot, "extensions", "codex"),
+      }),
+    );
+
+    expect(listMissingPluginNpmRuntimeHostExports({ ...plan, outDir })).toEqual([
+      "openclaw/plugin-sdk/not-exported",
+      "openclaw/plugin-sdk/not-exported-from-require",
+    ]);
+  });
+
+  it("does not require host metadata when the runtime has no host imports", () => {
+    const syntheticRepoRoot = tempDirs.make("openclaw-plugin-runtime-synthetic-repo-");
+    const outDir = tempDirs.make("openclaw-plugin-runtime-no-host-import-");
+    writeFileSync(path.join(outDir, "index.js"), "export default {};\n");
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
+        repoRoot,
+        packageDir: path.join(repoRoot, "extensions", "codex"),
+      }),
+    );
+
+    expect(
+      listMissingPluginNpmRuntimeHostExports({ ...plan, repoRoot: syntheticRepoRoot, outDir }),
+    ).toEqual([]);
   });
 });

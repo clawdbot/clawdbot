@@ -197,6 +197,7 @@ export function applyTlonSetupConfig(params: {
 }
 
 export const tlonSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["url", "code"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   prepareAccountConfigInput: ({ input }) => {
     const url = normalizeOptionalString(input.url);

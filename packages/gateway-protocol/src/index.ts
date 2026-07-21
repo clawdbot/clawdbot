@@ -65,6 +65,7 @@ import {
   AgentIdentityResultSchema,
   AgentParamsSchema,
   MessageActionParamsSchema,
+  AgentKindSchema,
   AgentSummarySchema,
   AgentsFileEntrySchema,
   AgentsCreateParamsSchema,
@@ -347,6 +348,8 @@ import {
   TerminalUploadParamsSchema,
   TerminalUploadResultSchema,
   UiCommandParamsSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -422,6 +425,10 @@ import {
   SessionPlacementSchema,
   SessionPlacementStateSchema,
   isCloudWorkerPlacementState,
+  SESSION_OBSERVER_HEALTH_VALUES,
+  SessionObserverDigestSchema,
+  SessionObserverHealthSchema,
+  SessionObserverPlanProgressSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -456,6 +463,7 @@ import {
   SessionCatalogDescriptorSchema,
   SessionCatalogHostSchema,
   SessionCatalogLocatorSchema,
+  SessionCatalogPullRequestSummarySchema,
   SessionCatalogSessionSchema,
   SessionCatalogTranscriptItemSchema,
   SessionsCatalogArchiveParamsSchema,
@@ -861,6 +869,8 @@ export const validateChannelsStatusParams = lazyCompile(ChannelsStatusParamsSche
 export const validateChannelsStartParams = lazyCompile(ChannelsStartParamsSchema);
 export const validateChannelsStopParams = lazyCompile(ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = lazyCompile(ChannelsLogoutParamsSchema);
+export const validateModelsAuthLogoutParams = lazyCompile(ModelsAuthLogoutParamsSchema);
+export const validateModelsAuthStatusParams = lazyCompile(ModelsAuthStatusParamsSchema);
 export const validateModelsListParams = lazyCompile(ModelsListParamsSchema);
 export const validateSkillsStatusParams = lazyCompile(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = lazyCompile(ToolsCatalogParamsSchema);
@@ -1076,6 +1086,7 @@ export {
   SessionsListParamsSchema,
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
+  SessionCatalogPullRequestSummarySchema,
   SessionCatalogSessionSchema,
   SessionCatalogHostSchema,
   SessionCatalogLocatorSchema,
@@ -1129,6 +1140,10 @@ export {
   SessionsRewindResultSchema,
   SessionPlacementStateSchema,
   SessionPlacementSchema,
+  SESSION_OBSERVER_HEALTH_VALUES,
+  SessionObserverDigestSchema,
+  SessionObserverHealthSchema,
+  SessionObserverPlanProgressSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -1275,6 +1290,7 @@ export {
   ChannelsLogoutParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
+  AgentKindSchema,
   AgentSummarySchema,
   AgentsFileEntrySchema,
   AgentsCreateParamsSchema,
@@ -1319,6 +1335,8 @@ export {
   PluginsUiDescriptorsResultSchema,
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -1613,6 +1631,7 @@ export type {
   ChannelsLogoutParams,
   WebLoginStartParams,
   WebLoginWaitParams,
+  AgentKind,
   AgentSummary,
   AgentsFileEntry,
   AgentsCreateParams,
@@ -1772,6 +1791,9 @@ export type {
   SessionsDescribeParams,
   SessionsResolveParams,
   SessionOperationEvent,
+  SessionObserverDigest,
+  SessionObserverHealth,
+  SessionObserverPlanProgress,
   SessionPlacementState,
   SessionPlacement,
   SessionWorktreeInfo,

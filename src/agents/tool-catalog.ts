@@ -319,7 +319,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "show_widget",
     label: "show_widget",
-    description: "Show an interactive widget on supported chat surfaces",
+    description: "Show an interactive widget on chat or an auto-fitting dashboard",
     sectionId: "ui",
     profiles: [],
     includeInOpenClawGroup: true,

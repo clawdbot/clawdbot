@@ -4,7 +4,6 @@ import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -27,19 +26,13 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
-import type { SerializedEventPayload } from "./node-registry.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
-import {
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
+import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
 import type { GatewayClient as GatewayMethodClient } from "./server-methods/types.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
-import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
-import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -161,6 +154,16 @@ describe("GatewayClient", () => {
 
     expect(last?.url).toBe("ws://127.0.0.1:1");
     expect(opts?.maxPayload).toBe(25 * 1024 * 1024);
+  });
+
+  test("uses the admitted pairing identity for shared-auth connect failures", async () => {
+    const source = await fs.readFile(
+      new URL("./server/ws-connection/connect-session.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("deviceId: admittedNodePairing.identity.nodeId");
+    expect(source).not.toContain("deviceId: authenticatedNodePairing.nodeId");
   });
 
   test("does not pass an explicit direct agent for loopback control-plane WebSocket connections", () => {
@@ -421,6 +424,20 @@ describe("gateway broadcaster", () => {
     expect(workerSocket.send).not.toHaveBeenCalled();
   });
 
+  it("skips locally invalidated clients before generic broadcast delivery", () => {
+    const socket = makeRecordingSocket();
+    const client = makeOperatorWsClient("c-invalidated", socket, ["operator.read"]);
+    client.invalidated = true;
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new Set([client]),
+    });
+
+    broadcast("heartbeat", { ts: 1 });
+    broadcastToConnIds("heartbeat", { ts: 2 }, new Set([client.connId]));
+
+    expect(socket.send).not.toHaveBeenCalled();
+  });
+
   it("delivers scoped client events only for gateway-owned session subscriptions", () => {
     const legacySocket = makeRecordingSocket();
     const firstSocket = makeRecordingSocket();
@@ -677,8 +694,6 @@ describe("gateway broadcaster", () => {
       "update.available",
     ]);
     expectSentEvents(nodeSocket, [
-      "voicewake.changed",
-      "voicewake.routing.changed",
       "heartbeat",
       "presence",
       "health",
@@ -889,88 +904,6 @@ describe("late-arriving invoke results", () => {
       expect(payload?.ok).toBe(true);
       expect(payload?.ignored).toBe(true);
     }
-  });
-});
-
-describe("node subscription manager", () => {
-  test("routes events to subscribed nodes", () => {
-    const manager = createNodeSubscriptionManager();
-    const sent: Array<{
-      nodeId: string;
-      event: string;
-      payloadJSON?: SerializedEventPayload | null;
-    }> = [];
-    const sendEvent = (evt: {
-      nodeId: string;
-      event: string;
-      payloadJSON?: SerializedEventPayload | null;
-    }) => sent.push(evt);
-
-    manager.subscribe("node-a", "main");
-    manager.subscribe("node-b", "main");
-    manager.sendToSession("main", "chat", { ok: true }, sendEvent);
-
-    expect(sent).toHaveLength(2);
-    expect(sent.map((s) => s.nodeId).toSorted()).toEqual(["node-a", "node-b"]);
-    expect(expectDefined(sent[0], "sent[0] test invariant").event).toBe("chat");
-  });
-
-  test("runtime forwards subscribed node payload json without parsing it again", () => {
-    const frames: string[] = [];
-    const socket: TestSocket = {
-      bufferedAmount: 0,
-      send: vi.fn((payload: string) => frames.push(payload)),
-      close: vi.fn(),
-    };
-    const parseSpy = vi.spyOn(JSON, "parse");
-    try {
-      const runtime = createGatewayNodeSessionRuntime({
-        broadcast: vi.fn(),
-        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-      });
-      runtime.nodeRegistry.register(
-        makeGatewayWsClient("conn-node-a", socket, {
-          role: "node",
-          scopes: [],
-          client: {
-            id: "node-client",
-            version: "1.0.0",
-            platform: "macos",
-            mode: "node",
-          },
-          device: { id: "node-a" },
-        } as unknown as GatewayWsClient["connect"]),
-        {},
-      );
-      runtime.nodeSubscribe("node-a", "main");
-
-      runtime.nodeSendToSession("main", "chat", { ok: true });
-
-      expect(parseSpy).not.toHaveBeenCalled();
-    } finally {
-      parseSpy.mockRestore();
-    }
-    expect(JSON.parse(frames[0] ?? "{}")).toEqual({
-      type: "event",
-      event: "chat",
-      payload: { ok: true },
-    });
-  });
-
-  test("unsubscribeAll clears session mappings", () => {
-    const manager = createNodeSubscriptionManager();
-    const sent: string[] = [];
-    const sendEvent = (evt: { nodeId: string; event: string }) =>
-      sent.push(`${evt.nodeId}:${evt.event}`);
-
-    manager.subscribe("node-a", "main");
-    manager.subscribe("node-a", "secondary");
-    manager.unsubscribeAll("node-a");
-    manager.sendToSession("main", "tick", {}, sendEvent);
-    manager.sendToSession("secondary", "tick", {}, sendEvent);
-
-    expect(sent).toStrictEqual([]);
   });
 });
 

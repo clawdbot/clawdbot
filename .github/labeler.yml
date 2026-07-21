@@ -17,6 +17,10 @@
           - "docs/nodes/camera.md"
           - "docs/nodes/location-command.md"
           - "docs/platforms/linux.md"
+"plugin: cua-computer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cua-computer/**"
 "plugin: pixverse":
   - changed-files:
       - any-glob-to-any-file:

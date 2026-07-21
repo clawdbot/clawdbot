@@ -7,10 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import {
-  collectSingleAccountPromotionEntries,
-  isSetupSingleAccountPromotionKey,
-} from "./setup-promotion-keys.js";
+import { resolveSingleAccountKeysToMove } from "./setup-promotion-helpers.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -18,22 +15,6 @@ type ChannelSectionBase = {
   name?: string;
   defaultAccount?: string;
   accounts?: Record<string, Record<string, unknown>>;
-};
-
-const NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL: Record<string, readonly string[]> = {
-  matrix: [
-    "name",
-    "homeserver",
-    "userId",
-    "accessToken",
-    "password",
-    "deviceId",
-    "deviceName",
-    "avatarUrl",
-    "initialSyncLimit",
-    "encryption",
-  ],
-  telegram: ["botToken", "tokenFile"],
 };
 
 function channelHasAccounts(cfg: OpenClawConfig, channelKey: string): boolean {
@@ -460,22 +441,16 @@ function resolveExistingAccountKey(
   return targetAccountId;
 }
 
-function resolveSingleAccountKeysToMove(params: {
-  channelKey: string;
-  channel: Record<string, unknown>;
-}): string[] {
-  const { entries, hasNamedAccounts } = collectSingleAccountPromotionEntries(params.channel);
-  const keysToMove = entries.filter(isSetupSingleAccountPromotionKey);
-  if (!hasNamedAccounts || keysToMove.length === 0) {
-    return keysToMove;
+function resolveSingleAccountPromotionTarget(params: {
+  channel: ChannelSectionBase;
+  setupSurface?: ChannelSetupAdapter;
+}): string {
+  const pluginTarget = params.setupSurface?.resolveSingleAccountPromotionTarget?.({
+    channel: params.channel,
+  });
+  if (pluginTarget?.trim()) {
+    return normalizeAccountId(pluginTarget);
   }
-  const namedAccountPromotionKeys = NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL[params.channelKey];
-  return namedAccountPromotionKeys
-    ? keysToMove.filter((key) => namedAccountPromotionKeys.includes(key))
-    : keysToMove;
-}
-
-function resolveSingleAccountPromotionTarget(params: { channel: ChannelSectionBase }): string {
   const accounts = params.channel.accounts ?? {};
   const normalizedDefaultAccount =
     typeof params.channel.defaultAccount === "string" && params.channel.defaultAccount.trim()
@@ -500,6 +475,7 @@ function resolveSingleAccountPromotionTarget(params: { channel: ChannelSectionBa
 export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   cfg: OpenClawConfig;
   channelKey: string;
+  setupSurface?: ChannelSetupAdapter;
 }): OpenClawConfig {
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const baseConfig = channels?.[params.channelKey];
@@ -514,6 +490,8 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
     const keysToMove = resolveSingleAccountKeysToMove({
       channelKey: params.channelKey,
       channel: base,
+      setupSurface: params.setupSurface,
+      includeSetupKeys: true,
     });
     if (keysToMove.length === 0) {
       return params.cfg;
@@ -521,6 +499,7 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
 
     const targetAccountId = resolveSingleAccountPromotionTarget({
       channel: base,
+      setupSurface: params.setupSurface,
     });
     // Reuse the existing account key spelling so configs like `accounts.Ops` keep their shape.
     const resolvedTargetAccountKey = resolveExistingAccountKey(accounts, targetAccountId);
@@ -537,6 +516,8 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
   const keysToMove = resolveSingleAccountKeysToMove({
     channelKey: params.channelKey,
     channel: base,
+    setupSurface: params.setupSurface,
+    includeSetupKeys: true,
   });
   return moveSingleAccountKeysIntoAccount({
     cfg: params.cfg,

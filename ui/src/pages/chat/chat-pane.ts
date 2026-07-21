@@ -5,6 +5,7 @@ import { property, state as litState } from "lit/decorators.js";
 import {
   GATEWAY_SERVER_CAPS,
   type SessionCatalogHost,
+  type SessionCatalogPullRequestSummary,
   type SessionCatalogSession,
   type SessionCatalogTranscriptItem,
   type SessionDiscussionInfo,
@@ -91,6 +92,7 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   announceCatalogSessionContinued,
@@ -119,10 +121,12 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   ensureBoardViewElement,
+  ensureWorkboardCardChipElement,
   renderBoardDockMenu,
   renderBoardFaceToggle,
   renderBoardSessionSurface,
   type BoardChatDockSize,
+  type WorkboardCardChipProps,
 } from "./board-session-surface.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
@@ -210,7 +214,10 @@ import {
   type SidebarContent,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
-import { ChatTranscriptController } from "./components/chat-thread.ts";
+import {
+  ChatTranscriptController,
+  resetChatThreadPresentationState,
+} from "./components/chat-thread.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
@@ -233,6 +240,7 @@ import {
 } from "./session-message-cache.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
+import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
@@ -320,7 +328,7 @@ type ChatPaneConnectionScope = {
   sessions: ChatPageContext["sessions"];
 };
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open], details.msg-meta[open]:not([data-preview])";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 const CHAT_TEXT_ENTRY_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
@@ -349,6 +357,21 @@ const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Thread list is still refreshing. Try New Chat again in a moment.";
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
+
+function summarizeSessionPullRequests(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+): SessionCatalogPullRequestSummary | undefined {
+  const current = pullRequests[0];
+  if (!current) {
+    return undefined;
+  }
+  return {
+    numbers: [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
+      .slice(0, 20)
+      .toSorted((left, right) => left - right),
+    state: current.state,
+  };
+}
 
 function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
   return event
@@ -447,6 +470,10 @@ class ChatPane extends OpenClawLightDomElement {
           }),
       )
       .watch(
+        () => this.context?.runtimeConfig,
+        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+      )
+      .watch(
         () => this.resolveBoardProvider(),
         (provider, notify) =>
           provider.snapshot$.subscribe(() => {
@@ -480,6 +507,7 @@ class ChatPane extends OpenClawLightDomElement {
   private sessionPullRequestsRequestVersion = 0;
   private sessionPullRequestsExpanded = false;
   private dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
+  private readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
   @litState() private catalogMessages: unknown[] = [];
   @litState() private catalogLoading = false;
   @litState() private loadingOlder = false;
@@ -622,7 +650,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.requestUpdate();
       return;
     }
-    const openPullRequestEpoch = scope.context.sessions.captureOpenPullRequestEpoch(sessionKey);
+    const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
     try {
       const result = await scope.client.request<ControlUiSessionPullRequests>(
         "controlUi.sessionPullRequests",
@@ -641,10 +669,10 @@ class ChatPane extends OpenClawLightDomElement {
       }
       this.sessionPullRequests = result.pullRequests;
       if (!result.rateLimited || result.pullRequests.length > 0) {
-        scope.context.sessions.setOpenPullRequest(
+        scope.context.sessions.setPullRequestSummary(
           sessionKey,
-          result.pullRequests.some((item) => item.state === "open" || item.state === "draft"),
-          openPullRequestEpoch,
+          summarizeSessionPullRequests(result.pullRequests),
+          pullRequestEpoch,
         );
       }
       this.sessionPullRequestsBranch = result.branch;
@@ -872,6 +900,9 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
+    // Close old-session portals and listener-owning popovers before the next
+    // render detaches their DOM and makes owner-scoped cleanup impossible.
+    resetChatThreadPresentationState(this.paneId, this);
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
     // it against the newly routed row would rename the wrong session.
@@ -1606,6 +1637,26 @@ class ChatPane extends OpenClawLightDomElement {
     this.boardProviderLease = undefined;
   }
 
+  private resolveWorkboardCardChip(board: ResolvedBoardView): WorkboardCardChipProps | null {
+    const gateway = this.context?.gateway.snapshot;
+    const enabled = isWorkboardEnabledInConfigSnapshot(
+      this.context?.runtimeConfig?.state.configSnapshot,
+    );
+    if (!board.hasBoard || board.face !== "dashboard" || !enabled || !gateway?.connected) {
+      return null;
+    }
+    const client = gateway.client;
+    const state = this.state;
+    if (!client || !state) {
+      return null;
+    }
+    return {
+      basePath: state.basePath,
+      client,
+      sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
+    };
+  }
+
   private resolveBoardSessionKey(snapshotSessionKey = ""): string {
     const resolved = resolveSessionKey(
       snapshotSessionKey || this.state?.sessionKey || this.sessionKey,
@@ -2311,6 +2362,9 @@ class ChatPane extends OpenClawLightDomElement {
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
     const board = this.resolveBoardView();
+    if (this.resolveWorkboardCardChip(board)) {
+      void ensureWorkboardCardChipElement().catch(() => undefined);
+    }
     if (
       board.hasBoard &&
       board.face === "dashboard" &&
@@ -2346,7 +2400,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
     this.announceCommandPaletteTarget(null);
-    resetChatViewState(this.paneId);
+    resetChatViewState(this.paneId, this);
     this.state = undefined;
     this.connectedClient = null;
     disposeQuestionPromptState(this.questionPromptState);
@@ -3091,6 +3145,13 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = state.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
+    const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
+    const visibleWorkspaceConflict =
+      workspaceConflict &&
+      this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
+        workspaceConflict.stagedResultRef
+        ? workspaceConflict
+        : undefined;
     const board = this.resolveBoardView();
     const runtimeConfigState = this.context.runtimeConfig.state;
     const configSnapshot = runtimeConfigState.configSnapshot;
@@ -3247,6 +3308,17 @@ class ChatPane extends OpenClawLightDomElement {
       onApprovalDecision: overlays
         ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
         : undefined,
+      workspaceConflict: visibleWorkspaceConflict,
+      onDismissWorkspaceConflict:
+        visibleWorkspaceConflict && selectedSession
+          ? () => {
+              this.dismissedWorkspaceConflictRefs.set(
+                selectedSession.key,
+                visibleWorkspaceConflict.stagedResultRef,
+              );
+              this.requestUpdate();
+            }
+          : undefined,
       sessions: state.sessionsResult,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -3460,9 +3532,9 @@ class ChatPane extends OpenClawLightDomElement {
       onSplitRatioChange: state.handleSplitRatioChange,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
-      userName: state.userName,
-      userAvatar: state.userAvatar,
-      attributedIdentity: Boolean(this.context.gateway.snapshot.selfUser),
+      userId: this.context.gateway.snapshot.selfUser?.id ?? null,
+      userName: this.context.gateway.snapshot.selfUser?.name ?? state.userName,
+      userAvatar: this.context.gateway.snapshot.selfUser?.avatarUrl ?? state.userAvatar,
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
@@ -3472,6 +3544,7 @@ class ChatPane extends OpenClawLightDomElement {
       gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
+    const workboardCardChip = this.resolveWorkboardCardChip(board);
     const content =
       board.hasBoard && board.face === "dashboard"
         ? renderBoardSessionSurface({
@@ -3500,6 +3573,7 @@ class ChatPane extends OpenClawLightDomElement {
                 board.provider.refreshWidgetAppView(name, revision),
             } satisfies BoardViewCallbacks,
             widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
+            workboardCardChip,
             onDockChange: (dock) => this.handleBoardDockChange(dock),
           })
         : chat;

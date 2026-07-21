@@ -457,6 +457,74 @@ describe("cron view run history", () => {
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: [] });
   });
 
+  it("formats run token counts and durations in the rendered entry", () => {
+    const container = renderView({
+      listTab: "activity",
+      runs: [
+        {
+          ts: 4,
+          jobId: "job-total",
+          status: "ok",
+          summary: "total usage",
+          durationMs: 90_000,
+          usage: { total_tokens: 1_234_567 },
+        },
+        {
+          ts: 3,
+          jobId: "job-split",
+          status: "ok",
+          summary: "split usage",
+          durationMs: 500,
+          usage: { input_tokens: 50_000, output_tokens: 999 },
+        },
+        {
+          ts: 2,
+          jobId: "job-zero",
+          status: "ok",
+          summary: "zero duration",
+          durationMs: 0,
+        },
+        {
+          ts: 1.5,
+          jobId: "job-invalid",
+          status: "ok",
+          summary: "invalid duration",
+          durationMs: -1,
+        },
+        { ts: 1, jobId: "job-unknown", status: "ok", summary: "unknown duration" },
+      ],
+    });
+    const entries = Array.from(container.querySelectorAll(".cron-run-entry"));
+    const entryFor = (jobId: string) => {
+      const entry = entries.find((candidate) =>
+        candidate.querySelector(".cron-run-entry__title")?.textContent?.includes(jobId),
+      );
+      expect(entry).toBeInstanceOf(HTMLDivElement);
+      return entry;
+    };
+
+    const total = entryFor("job-total");
+    expect(total?.querySelector(".cron-run-entry__facts")?.textContent).toContain("1.2M Tokens");
+    expect(total?.querySelector(".cron-run-entry__meta")?.textContent).toContain("1m 30s");
+    expect(total?.textContent).not.toContain("1234567");
+    expect(total?.textContent).not.toContain("90000ms");
+
+    const split = entryFor("job-split");
+    expect(split?.querySelector(".cron-run-entry__facts")?.textContent).toContain(
+      "50k in / 999 out",
+    );
+    expect(split?.querySelector(".cron-run-entry__meta")?.textContent).toContain("500ms");
+    expect(entryFor("job-zero")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
+      "0ms",
+    );
+    expect(entryFor("job-invalid")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
+      "n/a",
+    );
+    expect(entryFor("job-unknown")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
+      "n/a",
+    );
+  });
+
   it("renders run summaries as sanitized markdown", () => {
     const container = renderView({
       listTab: "activity",

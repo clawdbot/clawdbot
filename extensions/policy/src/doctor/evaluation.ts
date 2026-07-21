@@ -1,5 +1,6 @@
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { policyRoutingRules } from "../policy-routing.js";
 import {
   collectPolicyEvidence,
   createPolicyAttestation,
@@ -36,11 +37,14 @@ import {
   policyHasExecApprovalsRules,
   policyHasGatewayRules,
   policyHasIngressRules,
+  policyHasRoutingRules,
   policyHasSandboxPostureRules,
   policyHasSecretRules,
   policyHasToolPostureRules,
 } from "./policy-scope.js";
 import { policyContainerShapeFindings } from "./policy-shape.js";
+import { routingFindings } from "./routing-findings.js";
+import { routingPolicyShapeFinding } from "./routing-shapes.js";
 import { sandboxPostureFindings } from "./sandbox-findings.js";
 import { gatewayExposureFindings } from "./scopes/gateway.js";
 import {
@@ -173,6 +177,15 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const includeDataHandling = policyHasDataHandlingRules(policy);
   const includeSandboxPosture = policyHasSandboxPostureRules(policy);
   const includeExecApprovals = policyHasExecApprovalsRules(policy);
+  const routing =
+    policyHasRoutingRules(policy) &&
+    isRecord(policy) &&
+    routingPolicyShapeFinding(policy.routing, {
+      policyDocName: policyFile.ocDocName,
+      policyPath: policyFile.displayName,
+    }) === undefined
+      ? policyRoutingRules(policy)
+      : undefined;
   const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile(ctx) : undefined;
   if (requiredMetadata.size > 0) {
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
@@ -188,6 +201,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       includeAuthProfiles,
       includeExecApprovals,
       execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
+      routing,
     });
   } else {
     evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
@@ -201,6 +215,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       includeAuthProfiles,
       includeExecApprovals,
       execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
+      routing,
     });
   }
   const policyFindings: HealthFinding[] = [
@@ -209,6 +224,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...mcpServerFindings(policy, policyFile.ocDocName, evidence),
     ...modelProviderFindings(policy, policyFile.ocDocName, evidence),
     ...networkFindings(policy, policyFile.ocDocName, evidence),
+    ...routingFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...ingressFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...gatewayExposureFindings(policy, policyFile.ocDocName, evidence),
     ...agentWorkspaceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),

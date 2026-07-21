@@ -263,4 +263,14 @@ describe("label-open-issues helpers", () => {
     expect(prompt).not.toContain("\uD83D");
     expect(prompt).not.toContain("tail");
   });
+
+  it("preserves emoji in readBoundedResponseText within limit", async () => {
+    const response = new Response("abc😀tail");
+    await expect(testing.readBoundedResponseText(response, 10)).resolves.toBe("abc😀tail");
+  });
+
+  it("drops a split surrogate pair at the readBoundedResponseText boundary", async () => {
+    const response = new Response("abc😀tail");
+    await expect(testing.readBoundedResponseText(response, 4)).resolves.toBe("abc\n[truncated]");
+  });
 });

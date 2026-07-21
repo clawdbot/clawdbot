@@ -25,6 +25,20 @@ export const SessionCatalogDescriptorSchema = closedObject({
   capabilities: SessionCatalogCapabilitiesSchema,
 });
 
+export const SessionCatalogPullRequestSummarySchema = closedObject({
+  numbers: Type.Array(Type.Integer({ minimum: 1 }), {
+    minItems: 1,
+    maxItems: 20,
+    uniqueItems: true,
+  }),
+  state: Type.Union([
+    Type.Literal("open"),
+    Type.Literal("draft"),
+    Type.Literal("merged"),
+    Type.Literal("closed"),
+  ]),
+});
+
 export const SessionCatalogSessionSchema = closedObject({
   threadId: NonEmptyString,
   name: Type.Optional(Type.String()),
@@ -38,6 +52,7 @@ export const SessionCatalogSessionSchema = closedObject({
   cliVersion: Type.Optional(Type.String()),
   gitBranch: Type.Optional(Type.String()),
   customGroup: Type.Optional(Type.String()),
+  pullRequest: Type.Optional(SessionCatalogPullRequestSummarySchema),
   archived: Type.Boolean(),
   sessionKey: Type.Optional(NonEmptyString),
   canContinue: Type.Boolean(),
@@ -140,6 +155,9 @@ export const SessionsCatalogArchiveResultSchema = closedObject({ ok: Type.Litera
 export type SessionCatalogCapabilities = Static<typeof SessionCatalogCapabilitiesSchema>;
 export type SessionCatalogLocator = Static<typeof SessionCatalogLocatorSchema>;
 export type SessionCatalogDescriptor = Static<typeof SessionCatalogDescriptorSchema>;
+export type SessionCatalogPullRequestSummary = Static<
+  typeof SessionCatalogPullRequestSummarySchema
+>;
 export type SessionCatalogSession = Static<typeof SessionCatalogSessionSchema>;
 export type SessionCatalogHost = Static<typeof SessionCatalogHostSchema>;
 export type SessionCatalog = Static<typeof SessionCatalogSchema>;

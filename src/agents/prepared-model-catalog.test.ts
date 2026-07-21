@@ -43,6 +43,7 @@ vi.mock("./prepared-model-runtime.js", () => {
   };
 });
 
+import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import {
   getPreparedModelCatalogSnapshot,
   loadPreparedModelCatalogSnapshot,
@@ -120,6 +121,9 @@ describe("prepared model catalog access", () => {
 
     await expect(loadPreparedModelCatalogSnapshot({ readOnly: true })).rejects.toThrow(
       "config was replaced",
+    );
+    await expect(loadPreparedModelCatalogSnapshot({ readOnly: true })).rejects.toBeInstanceOf(
+      PreparedModelCatalogConfigReplacedError,
     );
     expect(mocks.loadSnapshot).not.toHaveBeenCalled();
   });

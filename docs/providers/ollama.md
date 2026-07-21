@@ -65,10 +65,13 @@ OpenAI-SDK-style examples, but new config should use `baseUrl`.
         Select **Ollama**, then pick a mode: **Cloud + Local**, **Cloud only**, or **Local only**.
 
         On a fresh guided setup, OpenClaw first checks the default or configured
-        Ollama host. If an installed model advertises tool support, the shared
-        CLI/macOS setup ladder offers it immediately and verifies it with a real
-        completion. This automatic check never pulls a model; if no suitable
-        installed model exists, onboarding continues to the normal Ollama picker.
+        Ollama host. An installed model is offered automatically only when
+        `/api/show` confirms tool support and a context window of at least 16K;
+        missing or smaller context metadata stays on the manual setup path. The
+        shared CLI/macOS setup ladder still verifies the selected route with a
+        real completion before saving it. This automatic check never pulls a
+        model; if no suitable installed model exists, onboarding continues to the
+        normal Ollama picker.
       </Step>
       <Step title="Select a model">
         `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` prompt for an Ollama base URL, discover available models, and auto-pull the selected local model if missing. An installed `:latest` tag such as `gemma4:latest` is shown once instead of duplicating `gemma4`. `Cloud + Local` also checks whether the host is signed in for cloud access.

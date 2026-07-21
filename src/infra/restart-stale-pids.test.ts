@@ -905,6 +905,91 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(killSpy).not.toHaveBeenCalledWith(protectedPid, expect.anything());
     });
 
+    it("refreshes the protected pid after listener enumeration before filtering", () => {
+      const oldManagedPid = process.pid + 4100;
+      const replacementPid = process.pid + 4101;
+      const stalePid = process.pid + 4102;
+      let listenerSnapshotCaptured = false;
+      let lsofCall = 0;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command !== "lsof") {
+          return createLsofResult({ status: 1 });
+        }
+        lsofCall += 1;
+        if (lsofCall === 1) {
+          listenerSnapshotCaptured = true;
+          return createLsofResult({
+            stdout: lsofOutput([
+              { pid: replacementPid, cmd: "openclaw-gateway" },
+              { pid: stalePid, cmd: "openclaw-gateway" },
+            ]),
+          });
+        }
+        return createLsofResult({ status: 1 });
+      });
+      const resolveProtectedPid = vi.fn(() => {
+        expect(listenerSnapshotCaptured).toBe(true);
+        return replacementPid;
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(0, () =>
+        cleanStaleGatewayProcessesSync(18789, {
+          protectedPid: oldManagedPid,
+          resolveProtectedPid,
+        }),
+      );
+
+      expect(result).toEqual([stalePid]);
+      expect(resolveProtectedPid).toHaveBeenCalledOnce();
+      expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(replacementPid, expect.anything());
+      expect(killSpy).not.toHaveBeenCalledWith(oldManagedPid, expect.anything());
+    });
+
+    it("does not signal the replacement when it is the only enumerated listener", () => {
+      const replacementPid = process.pid + 4201;
+      let listenerSnapshotCaptured = false;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command !== "lsof") {
+          return createLsofResult({ status: 1 });
+        }
+        listenerSnapshotCaptured = true;
+        return createOpenClawBusyResult(replacementPid);
+      });
+      const resolveProtectedPid = vi.fn(() => {
+        expect(listenerSnapshotCaptured).toBe(true);
+        return replacementPid;
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(0, () =>
+        cleanStaleGatewayProcessesSync(18789, { resolveProtectedPid }),
+      );
+
+      expect(result).toEqual([]);
+      expect(resolveProtectedPid).toHaveBeenCalledOnce();
+      expect(killSpy).not.toHaveBeenCalled();
+      expect(mockSpawnSync).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails closed when the refreshed protected pid cannot be resolved", () => {
+      const listenerPid = process.pid + 4301;
+      mockSpawnSync.mockReturnValue(createOpenClawBusyResult(listenerPid));
+      const resolveProtectedPid = vi.fn(() => {
+        throw new Error("launchctl print failed");
+      });
+      const killSpy = vi.spyOn(process, "kill").mockReturnValue(true);
+
+      const result = withStubbedPpid(0, () =>
+        cleanStaleGatewayProcessesSync(18789, { resolveProtectedPid }),
+      );
+
+      expect(result).toEqual([]);
+      expect(resolveProtectedPid).toHaveBeenCalledOnce();
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
     it("escalates to SIGKILL when process survives the SIGTERM window", () => {
       const stalePid = process.pid + 101;
       let call = 0;

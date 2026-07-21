@@ -2,8 +2,8 @@ import {
   getWorkboardState,
   stopWorkboardLifecycleRefresh,
   stopWorkboardLiveRefresh,
-  type WorkboardUiState,
-} from "./index.ts";
+} from "./runtime.ts";
+import type { WorkboardUiState } from "./types.ts";
 
 export type WorkboardCapability = {
   readonly state: WorkboardUiState;

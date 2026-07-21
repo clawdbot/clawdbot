@@ -15,6 +15,7 @@ import {
   resolveTelegramAccount,
 } from "./accounts.js";
 import { promptTelegramAllowFromForAccount } from "./setup-core.js";
+import { telegramSetupAdapter } from "./setup-core.js";
 
 const channel = "telegram" as const;
 
@@ -40,6 +41,7 @@ export function ensureTelegramDefaultGroupMentionGate(
         },
       },
     },
+    setupSurface: telegramSetupAdapter,
   });
 }
 
@@ -104,6 +106,7 @@ export const telegramSetupDmPolicy: ChannelSetupDmPolicy = {
           channel,
           accountId: resolvedAccountId,
           patch,
+          setupSurface: telegramSetupAdapter,
         });
   },
   promptAllowFrom: promptTelegramAllowFromForAccount,

@@ -354,6 +354,7 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   const baseContext = {
     ...params.originalContext,
     SupplementalContext: params.supplemental,
+    ...(params.media ? { media: [...params.media] } : {}),
     ...mediaPayload,
   };
   const untrustedStructuredContext = resolveUntrustedStructuredContext({

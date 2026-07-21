@@ -317,7 +317,7 @@ async function readBoundedResponseText(
 
       text += decoder.decode(value, { stream: true });
       if (text.length > maxChars) {
-        text = text.slice(0, maxChars);
+        text = truncateUtf16Safe(text, maxChars);
         truncated = true;
         break;
       }

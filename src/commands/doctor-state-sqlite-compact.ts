@@ -1,5 +1,6 @@
 /** Explicit doctor maintenance for the canonical shared state SQLite database. */
 import fs from "node:fs";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -63,6 +64,7 @@ export async function runDoctorStateSqliteCompact(
   return await withMaintenanceLock({
     env,
     operation: "state SQLite compaction",
+    protectedPaths: resolveSqliteDatabaseFilePaths(sqlitePath),
     run: () => {
       if (isOpenClawStateDatabaseOpen()) {
         throw new Error(

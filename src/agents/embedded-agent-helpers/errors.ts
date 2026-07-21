@@ -30,6 +30,7 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
+  isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
@@ -1057,6 +1058,13 @@ function classifyFailoverClassificationFromMessage(
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
   }
+  // Provider-completed `finish_reason: error` / stop-reason `error` is not a
+  // hang. Classify as server_error (failover still runs) so operators do not
+  // chase timeout knobs and user copy is not rewritten to "LLM request timed out."
+  // (#109218; keep #59524 fallback by remaining a failover reason).
+  if (isProviderCompletedErrorFinishReasonMessage(raw)) {
+    return toReasonClassification("server_error");
+  }
   if (
     isStructuredServerErrorMessage(raw) &&
     !isBillingErrorMessage(raw) &&
@@ -1159,6 +1167,12 @@ function mergeMessageAndDetailClassification(
     return messageClassification;
   }
   if (detailClassification.kind === "context_overflow") {
+    return detailClassification;
+  }
+  if (
+    classificationReason(detailClassification) === "billing" &&
+    classificationReason(messageClassification) === "rate_limit"
+  ) {
     return detailClassification;
   }
   return classificationReason(messageClassification) === "format"
@@ -1543,6 +1557,12 @@ export function formatAssistantErrorText(
   const transportCopy = formatTransportErrorCopy(raw);
   if (transportCopy) {
     return transportCopy;
+  }
+
+  // Provider finished the stream with finish_reason/stop-reason `error` — not a hang.
+  // Keep the raw reason in the message so operators still see the provider signal (#109218).
+  if (isProviderCompletedErrorFinishReasonMessage(raw)) {
+    return formatRawAssistantErrorForUi(raw);
   }
 
   if (isTimeoutErrorMessage(raw)) {

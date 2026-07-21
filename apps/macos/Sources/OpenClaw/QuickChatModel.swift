@@ -762,7 +762,7 @@ final class QuickChatModel {
     }
 
     private func applyAgentsList(_ result: AgentsListResult) {
-        let displays = result.agents.map(QuickChatAgentDisplay.init(summary:))
+        let displays = result.agents.filter(\.isSelectableAgent).map(QuickChatAgentDisplay.init(summary:))
         let selectedID: String? = if let selectedAgentID,
                                      displays.contains(where: { $0.id == selectedAgentID })
         {

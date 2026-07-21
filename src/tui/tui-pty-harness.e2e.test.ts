@@ -87,8 +87,11 @@ async function writeTuiPtyFixtureScript(dir: string) {
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
+      const launchThinkingLevel = process.env.OPENCLAW_TUI_PTY_LAUNCH_THINKING;
+      const initialMessage = process.env.OPENCLAW_TUI_PTY_INITIAL_MESSAGE;
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = footerModel ?? "fixture-provider/fixture-model";
+      let currentThinkingLevel = footerThinkingLevel;
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
       let pendingPluginApproval: {
         id: string;
@@ -129,7 +132,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
           modelProvider: "fixture-provider",
           contextTokens: 128,
           fastMode,
-          ...(footerThinkingLevel ? { thinkingLevel: footerThinkingLevel } : {}),
+          ...(currentThinkingLevel ? { thinkingLevel: currentThinkingLevel } : {}),
           thinkingLevels: [],
         };
       }
@@ -373,6 +376,9 @@ async function writeTuiPtyFixtureScript(dir: string) {
           if (opts.model) {
             currentModel = opts.model;
           }
+          if (opts.thinkingLevel) {
+            currentThinkingLevel = opts.thinkingLevel;
+          }
           if (typeof opts.fastMode === "boolean") {
             fastMode = opts.fastMode;
           }
@@ -475,6 +481,8 @@ async function writeTuiPtyFixtureScript(dir: string) {
             session: { scope: "per-sender", mainKey: "main" },
           },
           deliver: false,
+          thinking: launchThinkingLevel,
+          message: initialMessage,
           historyLimit: 5,
           title: "openclaw tui pty fixture",
         });
@@ -522,6 +530,7 @@ async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
 describe.sequential("TUI PTY harness", () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let compactFooterFixture: Awaited<ReturnType<typeof startTuiFixture>>;
+  let thinkingOverrideFixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let slowStartupFixture: Awaited<ReturnType<typeof startTuiFixture>>;
 
   beforeAll(async () => {
@@ -539,15 +548,26 @@ describe.sequential("TUI PTY harness", () => {
         },
       }),
       startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
+          OPENCLAW_TUI_PTY_THINKING_LEVEL: "medium",
+          OPENCLAW_TUI_PTY_LAUNCH_THINKING: "high",
+          OPENCLAW_TUI_PTY_INITIAL_MESSAGE: "thinking override proof",
+        },
+      }),
+      startTuiFixture({
         env: { OPENCLAW_TUI_PTY_STARTUP_DELAY_MS: "400" },
       }),
     ]);
-    const [mainBoot, compactBoot, slowBoot] = boots;
+    const [mainBoot, compactBoot, thinkingOverrideBoot, slowBoot] = boots;
     if (mainBoot.status === "fulfilled") {
       fixture = mainBoot.value;
     }
     if (compactBoot.status === "fulfilled") {
       compactFooterFixture = compactBoot.value;
+    }
+    if (thinkingOverrideBoot.status === "fulfilled") {
+      thinkingOverrideFixture = thinkingOverrideBoot.value;
     }
     if (slowBoot.status === "fulfilled") {
       slowStartupFixture = slowBoot.value;
@@ -563,7 +583,12 @@ describe.sequential("TUI PTY harness", () => {
     for (const run of activeRuns.splice(0)) {
       await run.dispose();
     }
-    for (const started of [fixture, compactFooterFixture, slowStartupFixture]) {
+    for (const started of [
+      fixture,
+      compactFooterFixture,
+      thinkingOverrideFixture,
+      slowStartupFixture,
+    ]) {
       await (started as Awaited<ReturnType<typeof startTuiFixture>> | undefined)?.cleanup();
     }
   }, STARTUP_TEST_TIMEOUT_MS);
@@ -578,6 +603,50 @@ describe.sequential("TUI PTY harness", () => {
     async () => {
       await compactFooterFixture.run.waitForOutput("gpt-5.6-sol high", STARTUP_TIMEOUT_MS);
       expect(compactFooterFixture.run.output()).not.toContain("openai:setup-64cddea3");
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the launch thinking override active across session-level changes",
+    async () => {
+      const footerNeedle = "fixture-provider/fixture-model high | tokens";
+      await thinkingOverrideFixture.run.waitForOutput(footerNeedle, STARTUP_TIMEOUT_MS);
+      await thinkingOverrideFixture.run.waitForOutput(
+        "PTY_RESPONSE: thinking override proof",
+        STARTUP_TIMEOUT_MS,
+      );
+      await thinkingOverrideFixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          objectFieldEquals(entry, "message", "thinking override proof") &&
+          objectFieldEquals(entry, "thinking", "high"),
+      );
+      await thinkingOverrideFixture.run.write("/think low\r");
+      await thinkingOverrideFixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "patchSession" && objectFieldEquals(entry, "thinkingLevel", "low"),
+      );
+      const sessionChangeOutputOffset = thinkingOverrideFixture.run.output().length;
+      await thinkingOverrideFixture.run.write("second thinking override proof\r");
+      await thinkingOverrideFixture.run.waitForOutput(
+        "PTY_RESPONSE: second thinking override proof",
+        STARTUP_TIMEOUT_MS,
+      );
+      await thinkingOverrideFixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          objectFieldEquals(entry, "message", "second thinking override proof") &&
+          objectFieldEquals(entry, "thinking", "high"),
+      );
+      const outputAfterSessionChange = thinkingOverrideFixture.run
+        .output()
+        .slice(sessionChangeOutputOffset);
+      expect(outputAfterSessionChange).toContain(footerNeedle);
+      expect(outputAfterSessionChange).not.toContain("fixture-provider/fixture-model low | tokens");
+      expect(outputAfterSessionChange).not.toContain(
+        "fixture-provider/fixture-model medium | tokens",
+      );
     },
     STARTUP_TEST_TIMEOUT_MS,
   );

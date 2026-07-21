@@ -18,6 +18,34 @@ enum WatchReplyDeliveryState: Equatable {
     case notSent
 }
 
+private final class WatchMessageAcknowledgment: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didReply = false
+    private let replyHandler: ([String: Any]) -> Void
+
+    init(replyHandler: @escaping ([String: Any]) -> Void) {
+        self.replyHandler = replyHandler
+    }
+
+    func accept() {
+        self.reply(["ok": true])
+    }
+
+    func rejectUnsupportedPayload() {
+        self.reply(["ok": false, "error": "unsupported_payload"])
+    }
+
+    private func reply(_ payload: [String: Any]) {
+        let shouldReply = self.lock.withLock {
+            guard !self.didReply else { return false }
+            self.didReply = true
+            return true
+        }
+        guard shouldReply else { return }
+        self.replyHandler(payload)
+    }
+}
+
 struct WatchReplySendResult: Equatable {
     var delivery: WatchReplyDeliveryState
     var transport: String
@@ -682,11 +710,10 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void)
     {
-        let accepted = self.consumeIncomingPayload(message, transport: "sendMessage")
-        replyHandler(
-            accepted
-                ? ["ok": true]
-                : ["ok": false, "error": "unsupported_payload"])
+        self.consumeIncomingPayload(
+            message,
+            transport: "sendMessage",
+            acknowledgment: WatchMessageAcknowledgment(replyHandler: replyHandler))
     }
 
     func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
@@ -698,7 +725,11 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
     }
 
     @discardableResult
-    private func consumeIncomingPayload(_ payload: [String: Any], transport: String) -> Bool {
+    private func consumeIncomingPayload(
+        _ payload: [String: Any],
+        transport: String,
+        acknowledgment: WatchMessageAcknowledgment? = nil) -> Bool
+    {
         if let type = payload["type"] as? String,
            type == WatchPayloadType.directNodeSetup.rawValue,
            let setupCode = payload["setupCode"] as? String,
@@ -706,6 +737,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         {
             Task { @MainActor in
                 self.directNodeSetupHandler(setupCode, sentAtMs)
+                acknowledgment?.accept()
             }
             return true
         }
@@ -732,30 +764,35 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                         self.recordAcceptedExecApprovalSnapshot(snapshot)
                     }
                 }
+                acknowledgment?.accept()
             }
             return true
         }
         if let incoming = Self.parseNotificationPayload(payload) {
             Task { @MainActor in
                 self.store.consume(message: incoming, transport: transport)
+                acknowledgment?.accept()
             }
             return true
         }
         if let prompt = Self.parseExecApprovalPromptPayload(payload) {
             Task { @MainActor in
                 self.store.consume(execApprovalPrompt: prompt, transport: transport)
+                acknowledgment?.accept()
             }
             return true
         }
         if let resolved = Self.parseExecApprovalResolvedPayload(payload) {
             Task { @MainActor in
                 self.store.consume(execApprovalResolved: resolved)
+                acknowledgment?.accept()
             }
             return true
         }
         if let expired = Self.parseExecApprovalExpiredPayload(payload) {
             Task { @MainActor in
                 self.store.consume(execApprovalExpired: expired)
+                acknowledgment?.accept()
             }
             return true
         }
@@ -764,6 +801,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 if self.store.consume(execApprovalSnapshot: snapshot, transport: transport) {
                     self.recordAcceptedExecApprovalSnapshot(snapshot)
                 }
+                acknowledgment?.accept()
             }
             return true
         }
@@ -775,15 +813,18 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
                 for snapshot in self.store.replayDeferredGatewayPayloads() {
                     self.recordAcceptedExecApprovalSnapshot(snapshot)
                 }
+                acknowledgment?.accept()
             }
             return true
         }
         if let completion = Self.parseChatCompletionPayload(payload) {
             Task { @MainActor in
                 self.store.consume(chatCompletion: completion)
+                acknowledgment?.accept()
             }
             return true
         }
+        acknowledgment?.rejectUnsupportedPayload()
         return false
     }
 }

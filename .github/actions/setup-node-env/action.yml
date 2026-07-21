@@ -117,13 +117,13 @@ runs:
       if: inputs.sticky-disk == 'true'
       uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
       with:
-        # One stable disk per Node line. v5 starts a fresh lineage for the
-        # preflight-serialized writer after Blacksmith acknowledged repeated v4
+        # One stable disk per Node line. v6 starts a fresh lineage for the
+        # preflight-serialized writer after Blacksmith acknowledged repeated v5
         # commits but kept restoring its original snapshot. The v2 per-PR/per-manifest-hash keys
         # saturated Blacksmith's installation-wide sticky-disk budget. Install
         # inputs, runner platform, and the exact Node patch live in the runtime
         # marker below, so changes refresh this disk in place.
-        key: ${{ github.repository }}-node-deps-bind-v5-${{ inputs.node-version }}
+        key: ${{ github.repository }}-node-deps-bind-v6-${{ inputs.node-version }}
         path: /var/tmp/openclaw-node-deps
         # Single semantic writer: only the designated trusted-push job may
         # commit, so pull_request clones stay read-only. Like every sticky

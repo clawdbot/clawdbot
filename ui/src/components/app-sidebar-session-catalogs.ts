@@ -23,6 +23,7 @@ import { searchForSession } from "../lib/sessions/index.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import { icons } from "./icons.ts";
+import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
@@ -53,6 +54,7 @@ export type CatalogBackingSessionDisplay = {
   subtitle?: string;
   meta: string;
   title: string;
+  pullRequest?: SessionCatalogSession["pullRequest"];
 };
 
 export type CatalogSessionMenuRequest = {
@@ -349,6 +351,7 @@ function renderCatalogSessionRow(
       label,
       meta: formatSidebarTimestamp(timestamp),
       title: `${label} · ${host.label}`,
+      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
     });
   }
   const catalogKey = {
@@ -403,6 +406,10 @@ function renderCatalogSessionRow(
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
         </span>
+        ${renderSessionRowBadges({
+          hasAutomation: false,
+          pullRequest: session.pullRequest,
+        })}
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">

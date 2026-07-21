@@ -14,6 +14,18 @@ private enum GatewayRemovalPhase: Int {
     case scrubbing = 3
 }
 
+private struct RegisteredGatewayIDs {
+    private let exactIDs: Set<Data>
+
+    init(_ gatewayIDs: [String]) {
+        self.exactIDs = Set(gatewayIDs.map { Data($0.utf8) })
+    }
+
+    func contains(_ gatewayID: String) -> Bool {
+        self.exactIDs.contains(Data(gatewayID.utf8))
+    }
+}
+
 /// Installation-wide storage for every paired gateway.
 ///
 /// Gateway-derived snapshots and client-owned work deliberately live in
@@ -32,7 +44,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     public init(
         directoryURL: URL,
         legacyDirectoryURLs: [URL] = [],
-        registeredGatewayIDs: Set<String>? = nil) throws
+        registeredGatewayIDs: [String]? = nil) throws
     {
         self.directoryURL = directoryURL
         self.legacyDirectoryURLs = legacyDirectoryURLs
@@ -42,8 +54,9 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
         self.stateQueue = try Self.openStateDatabase(at: stateURL)
         self.cacheQueue = try Self.openRepairableCacheDatabase(
             at: directoryURL.appendingPathComponent(Self.gatewayCacheFilename, isDirectory: false))
-        self.resolvePendingGatewayRemovals(registeredGatewayIDs: registeredGatewayIDs)
-        self.importLegacyDatabases(registeredGatewayIDs: registeredGatewayIDs)
+        let exactRegisteredGatewayIDs = registeredGatewayIDs.map(RegisteredGatewayIDs.init)
+        self.resolvePendingGatewayRemovals(registeredGatewayIDs: exactRegisteredGatewayIDs)
+        self.importLegacyDatabases(registeredGatewayIDs: exactRegisteredGatewayIDs)
     }
 
     public func store(gatewayID: String) -> OpenClawChatSQLiteTranscriptCache {
@@ -53,8 +66,9 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// Retries one-time import and forgotten-gateway cleanup. iOS calls this
     /// again on foreground because old complete-protection files may have been
     /// unreadable during a locked background launch.
-    public func retryLegacyImport(registeredGatewayIDs: Set<String>? = nil) {
-        self.importLegacyDatabases(registeredGatewayIDs: registeredGatewayIDs)
+    public func retryLegacyImport(registeredGatewayIDs: [String]? = nil) {
+        self.importLegacyDatabases(
+            registeredGatewayIDs: registeredGatewayIDs.map(RegisteredGatewayIDs.init))
     }
 
     public func loadSessionRoutingIdentity(
@@ -238,7 +252,12 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// registered gateway cancels safely; an absent gateway finishes erasure.
     /// Without an authoritative registry, only irreversible commits advance;
     /// cancelable stages remain untouched.
-    public func resolvePendingGatewayRemovals(registeredGatewayIDs: Set<String>? = nil) {
+    public func resolvePendingGatewayRemovals(registeredGatewayIDs: [String]? = nil) {
+        self.resolvePendingGatewayRemovals(
+            registeredGatewayIDs: registeredGatewayIDs.map(RegisteredGatewayIDs.init))
+    }
+
+    private func resolvePendingGatewayRemovals(registeredGatewayIDs: RegisteredGatewayIDs?) {
         let pending: [Row]
         do {
             pending = try self.stateQueue.read { db in
@@ -580,7 +599,7 @@ extension OpenClawClientDatabases {
         var updatedAt: Double
     }
 
-    private func importLegacyDatabases(registeredGatewayIDs: Set<String>?) {
+    private func importLegacyDatabases(registeredGatewayIDs: RegisteredGatewayIDs?) {
         let directories = [self.directoryURL] + self.legacyDirectoryURLs
         let legacyURLs = Set(directories.flatMap(Self.legacyDatabaseURLs(in:)))
         for legacyURL in legacyURLs.sorted(by: { $0.path < $1.path }) {

@@ -410,6 +410,10 @@ async function resolvePluginImplicitProviders(
       };
     };
 
+    if (ctx.providerDiscoveryEntriesOnly === true && !provider.staticCatalog) {
+      // Mandatory startup accepts only provider facts that do not execute live discovery.
+      continue;
+    }
     const useStaticCatalog =
       Boolean(provider.staticCatalog) &&
       (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));

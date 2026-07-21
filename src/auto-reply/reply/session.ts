@@ -197,6 +197,7 @@ type InitSessionStateAttemptContext = {
   agentId: string;
   conversationBindingContext: ReturnType<typeof resolveSessionConversationBindingContext>;
   isSystemEvent: boolean;
+  retargetedSession: boolean;
   sessionCtxForState: MsgContext;
   storePath: string;
 };
@@ -301,6 +302,7 @@ function resolveInitSessionStateAttemptContext(
     agentId,
     conversationBindingContext,
     isSystemEvent,
+    retargetedSession: sessionCtxForState !== ctx,
     sessionCtxForState,
     storePath: resolveStorePath(cfg.session?.store, { agentId }),
   };
@@ -430,8 +432,14 @@ async function initSessionStateAttemptLocked(
   lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
-  const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
-    attemptContext;
+  const {
+    agentId,
+    conversationBindingContext,
+    isSystemEvent,
+    retargetedSession,
+    sessionCtxForState,
+    storePath,
+  } = attemptContext;
   const sessionCfg = cfg.session;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(sessionCfg?.maintenance);
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -611,7 +619,11 @@ async function initSessionStateAttemptLocked(
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
-  const expectedExistingSessionId = params.expectedExistingSessionId?.trim() || undefined;
+  // Gateway admission pins the source session. A conversation or command target owns a
+  // different session id, so applying the source constraint there rejects valid routing.
+  const expectedExistingSessionId = retargetedSession
+    ? undefined
+    : params.expectedExistingSessionId?.trim() || undefined;
   if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
     throw new Error(`session rebound for sessionKey: ${sessionKey}`);
   }

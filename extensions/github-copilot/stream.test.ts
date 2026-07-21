@@ -240,6 +240,8 @@ describe("wrapCopilotAnthropicStream", () => {
     ]);
     expect(payloads[0]?.input[1]?.id).toBeUndefined();
     expect(payloads[0]?.input[2]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
+    expect(payloads[0]?.input[0]).not.toHaveProperty("encrypted_content");
+    expect(payloads[0]?.input[1]).not.toHaveProperty("encrypted_content");
   });
 
   it("rewrites Copilot Responses IDs returned by an existing payload hook", async () => {

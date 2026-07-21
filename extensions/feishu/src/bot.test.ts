@@ -2885,10 +2885,14 @@ describe("handleFeishuMessage command authorization", () => {
     expect(downloadRequest.type).toBe("file");
     const transcribeRequest = mockCallArg<{
       cfg?: { channels?: { feishu?: { dmPolicy?: string } } };
-      ctx?: { ChatType?: string; MediaPaths?: string[]; MediaTypes?: string[] };
+      ctx?: {
+        ChatType?: string;
+        media?: Array<{ path?: string; contentType?: string; kind?: string }>;
+      };
     }>(mockTranscribeFirstAudio, 0, 0);
-    expect(transcribeRequest.ctx?.MediaPaths).toEqual(["/tmp/inbound-voice.ogg"]);
-    expect(transcribeRequest.ctx?.MediaTypes).toEqual(["audio/ogg"]);
+    expect(transcribeRequest.ctx?.media).toEqual([
+      { path: "/tmp/inbound-voice.ogg", contentType: "audio/ogg", kind: "audio" },
+    ]);
     expect(transcribeRequest.ctx?.ChatType).toBe("direct");
     expect(transcribeRequest.cfg?.channels?.feishu?.dmPolicy).toBe("open");
     const finalized = mockCallArg<{

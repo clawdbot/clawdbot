@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isMalformedApiKeyInput } from "../agents/auth-profiles/credential-state.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -77,11 +78,11 @@ export function formatApiKeyPreview(
     const shortHead = Math.min(2, trimmed.length);
     const shortTail = Math.min(2, trimmed.length - shortHead);
     if (shortTail <= 0) {
-      return `${trimmed.slice(0, shortHead)}…`;
+      return `${sliceUtf16Safe(trimmed, 0, shortHead)}…`;
     }
-    return `${trimmed.slice(0, shortHead)}…${trimmed.slice(-shortTail)}`;
+    return `${sliceUtf16Safe(trimmed, 0, shortHead)}…${sliceUtf16Safe(trimmed, -shortTail)}`;
   }
-  return `${trimmed.slice(0, head)}…${trimmed.slice(-tail)}`;
+  return `${sliceUtf16Safe(trimmed, 0, head)}…${sliceUtf16Safe(trimmed, -tail)}`;
 }
 
 /** Normalizes a token-provider selector from CLI/options input. */

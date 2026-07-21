@@ -488,6 +488,9 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       .map(buildOpenAICodexModelFromLiveRow)
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
     if (models.length > 0) {
+      // Successful Codex OAuth discovery is account-scoped and authoritative
+      // for the picker/list catalog. Do not merge static OpenAI fallback rows
+      // into a successful live catalog.
       return {
         baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
         api: "openai-chatgpt-responses",

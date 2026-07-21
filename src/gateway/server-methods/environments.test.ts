@@ -11,6 +11,7 @@ import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments
 
 vi.mock("../../infra/device-pairing.js", () => ({
   listDevicePairing: vi.fn(),
+  resolveNodePairingState: vi.fn(),
 }));
 
 vi.mock("../../infra/node-pairing.js", () => ({
@@ -41,7 +42,7 @@ function mockContext(
       warn: vi.fn(),
     },
     nodeRegistry: {
-      listConnected: () => [
+      listConnectedForPairingStates: () => [
         {
           nodeId: "node-live",
           connId: "conn-live",

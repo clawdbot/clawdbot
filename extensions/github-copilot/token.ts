@@ -19,6 +19,7 @@ import {
   resolveCopilotTokenCache,
   type CachedCopilotToken,
 } from "./token-cache.js";
+import { CopilotTokenExchangeError } from "./token-exchange-error.js";
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 const COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
 let openConfiguredCacheStore: (() => PluginStateSyncKeyedStore<CachedCopilotToken>) | undefined;
@@ -151,17 +152,18 @@ export async function resolveCopilotApiToken(params: {
     });
     if (!response.ok) {
       await cancelUnreadResponseBody(response);
-      throw new Error(`Copilot token exchange failed: HTTP ${response.status}`);
+      throw new CopilotTokenExchangeError({ reason: "http_error", status: response.status });
     }
     payload = parseCopilotTokenResponse(
       await readProviderJsonResponse(response, "github-copilot.token"),
     );
   } catch (error) {
     if (signal.aborted && error === signal.reason) {
-      throw new Error(
-        `Copilot token exchange failed: timed out after ${COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS}ms`,
-        { cause: error },
-      );
+      throw new CopilotTokenExchangeError({
+        reason: "timeout",
+        timeoutMs: COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS,
+        cause: error,
+      });
     }
     throw error;
   }

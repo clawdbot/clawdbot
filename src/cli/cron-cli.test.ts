@@ -1021,6 +1021,21 @@ describe("cron cli", () => {
     expectNoRuntimeErrorContaining("No --agent specified");
   });
 
+  it("does not warn when --command is used (no agent needed)", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "Command",
+      "--cron",
+      "* * * * *",
+      "--command",
+      "printf ok",
+    ]);
+
+    expectNoRuntimeErrorContaining("No --agent specified");
+  });
+
   it("warns even when --session-key is provided (user should still specify agent explicitly)", async () => {
     await runCronCommand([
       "cron",

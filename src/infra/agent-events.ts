@@ -5,6 +5,7 @@ import type { VerboseLevel } from "../auto-reply/thinking.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { createAbortError } from "./abort-signal.js";
+import { hasInvalidLifecycleStartTimestamp } from "./agent-event-lifecycle.js";
 
 /** Stream name for agent events delivered to gateway listeners and plugin host hooks. */
 export type AgentEventStream =
@@ -167,6 +168,7 @@ type AgentEventState = {
     }
   >;
   lifecycleGeneration: string;
+  lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
 
 const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
@@ -223,9 +225,25 @@ export function getAgentEventLifecycleGeneration(): string {
   return getAgentEventState().lifecycleGeneration;
 }
 
+export function isAgentEventLifecycleGenerationCurrent(lifecycleGeneration: string): boolean {
+  return lifecycleGeneration === getAgentEventState().lifecycleGeneration;
+}
+
+/** Registers process-local state cleanup at the gateway lifecycle boundary. */
+export function registerAgentEventLifecycleRotationHandler(
+  key: string,
+  handler: (lifecycleGeneration: string) => void,
+): void {
+  const state = getAgentEventState();
+  const handlers =
+    state.lifecycleRotationHandlers ??
+    (state.lifecycleRotationHandlers = new Map<string, (lifecycleGeneration: string) => void>());
+  handlers.set(key, handler);
+}
+
 /** Rejects work that no longer belongs to the active gateway lifecycle. */
 export function assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration: string): void {
-  if (lifecycleGeneration === getAgentEventState().lifecycleGeneration) {
+  if (isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
     return;
   }
   throw createAbortError("Agent run belongs to a stale gateway lifecycle");
@@ -244,6 +262,18 @@ export function captureAgentRunLifecycleGeneration(runId: string): string {
 export function rotateAgentEventLifecycleGeneration(): string {
   const state = getAgentEventState();
   state.lifecycleGeneration = randomUUID();
+  // Rotation is the liveness choke point: after it returns, no prior-generation
+  // owner is operationally reachable. Recovery and runtime consumers therefore
+  // agree that only current-generation owners can drive or receive work.
+  const errors: unknown[] = [];
+  notifyListeners(
+    state.lifecycleRotationHandlers?.values() ?? [],
+    state.lifecycleGeneration,
+    (error) => errors.push(error),
+  );
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to retire stale agent lifecycle owners");
+  }
   return state.lifecycleGeneration;
 }
 
@@ -610,6 +640,9 @@ function enrichAgentEvent(
     return undefined;
   }
   if (ownedLifecycleGeneration && ownedLifecycleGeneration !== state.lifecycleGeneration) {
+    return undefined;
+  }
+  if (hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
     return undefined;
   }
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;

@@ -9,6 +9,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderMemoryImport } from "./view.ts";
@@ -125,11 +126,14 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     if (!list) {
       return null;
     }
+    const agents = listSelectableAgents(list.agents);
     const selected = this.context.agentSelection.state.selectedId;
-    if (selected && list.agents.some((agent) => agent.id === selected)) {
+    if (selected && agents.some((agent) => agent.id === selected)) {
       return selected;
     }
-    return list.defaultId ?? list.agents[0]?.id ?? null;
+    return agents.some((agent) => agent.id === list.defaultId)
+      ? list.defaultId
+      : (agents[0]?.id ?? null);
   }
 
   private planKey(agentId: string): string {
@@ -316,7 +320,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     const agentId = this.currentAgentId();
     const body = renderMemoryImport({
       connected: snapshot.connected,
-      agents: agentsList?.agents ?? [],
+      agents: listSelectableAgents(agentsList?.agents ?? []),
       selectedAgentId: agentId,
       plan: this.plan,
       loading: this.loading,

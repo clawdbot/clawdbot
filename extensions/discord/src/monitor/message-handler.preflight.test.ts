@@ -559,12 +559,14 @@ describe("preflightDiscordMessage", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     const dmAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
-      | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
+      | { ctx?: { media?: unknown } }
       | undefined;
-    expect(dmAudioCall?.ctx?.MediaUrls).toEqual([
-      "https://cdn.discordapp.com/attachments/voice.ogg",
+    expect(dmAudioCall?.ctx?.media).toEqual([
+      {
+        url: "https://cdn.discordapp.com/attachments/voice.ogg",
+        contentType: "audio/ogg",
+      },
     ]);
-    expect(dmAudioCall?.ctx?.MediaTypes).toEqual(["audio/ogg"]);
     const preflight = expectPreflightResult(result);
     expect(preflight.isDirectMessage).toBe(true);
     expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
@@ -2120,12 +2122,14 @@ describe("preflightDiscordMessage", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
     const guildAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
-      | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
+      | { ctx?: { media?: unknown } }
       | undefined;
-    expect(guildAudioCall?.ctx?.MediaUrls).toEqual([
-      "https://cdn.discordapp.com/attachments/voice.ogg",
+    expect(guildAudioCall?.ctx?.media).toEqual([
+      {
+        url: "https://cdn.discordapp.com/attachments/voice.ogg",
+        contentType: "audio/ogg",
+      },
     ]);
-    expect(guildAudioCall?.ctx?.MediaTypes).toEqual(["audio/ogg"]);
     const preflight = expectPreflightResult(result);
     expect(preflight.wasMentioned).toBe(true);
     expect(preflight.preflightAudioTranscript).toBe("hey openclaw");

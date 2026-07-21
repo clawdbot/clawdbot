@@ -4,6 +4,7 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
+import type { MediaFactInput } from "../media/media-facts.js";
 import type { InputProvenance } from "./input-provenance.js";
 
 type UserTurnSessionEntry = {
@@ -13,10 +14,7 @@ type UserTurnSessionEntry = {
   threadId?: string | number;
 } & Record<string, unknown>;
 
-export type PersistedUserTurnMediaInput = {
-  path?: string | null;
-  url?: string | null;
-  contentType?: string | null;
+export type PersistedUserTurnMediaInput = Pick<MediaFactInput, "contentType" | "path" | "url"> & {
   kind?: string | null;
 };
 
@@ -144,6 +142,8 @@ export type UserTurnTranscriptRecorder = {
     expectedSessionId?: string;
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+    /** Allow a later explicit persistence attempt when this attempt appends nothing. */
+    retryIfUnpersisted?: boolean;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistBlocked: (
     message: PersistedUserTurnMessage,

@@ -59,6 +59,7 @@ export async function invokeNodeClaudeCliRun(params: {
   return await context.nodeRegistry.invoke({
     nodeId: params.nodeId,
     expectedConnId: node.connId,
+    ...(node.pairingGeneration ? { expectedPairingGeneration: node.pairingGeneration } : {}),
     command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
     params: {
       argv: params.argv,

@@ -280,6 +280,11 @@ openclaw-board-widget-cell {
   position: relative;
 }
 
+.board-widget__body--card {
+  box-sizing: border-box;
+  padding: var(--widget-frame-inset);
+}
+
 .board-widget__body--scrollable {
   overflow: auto;
 }
@@ -293,6 +298,12 @@ openclaw-board-widget-cell {
 .board-widget__error-overlay {
   inset: 0;
   position: absolute;
+}
+
+/* Passive trust indicator: only meaningful where chrome hides (fine pointer),
+   so the base rule keeps it off and the overlay block reveals it at rest. */
+.board-widget__grant-dot {
+  display: none;
 }
 
 .board-widget__frame {
@@ -483,6 +494,17 @@ openclaw-board-widget-cell {
       visibility 0s linear 120ms;
     visibility: hidden;
     z-index: 5;
+    /* The overlay strip must not steal clicks from widget content underneath:
+       only real controls stay interactive, everything else passes through. */
+    pointer-events: none;
+  }
+
+  /* Capabilities chip stays interactive for its granted-permissions tooltip;
+     the kind badge and title are display-only and pass clicks through. */
+  .board-widget__bar > .board-widget__drag-handle,
+  .board-widget__bar > .board-widget__capabilities,
+  .board-widget__bar > .board-widget__menu {
+    pointer-events: auto;
   }
 
   .board-widget__resize-handle {
@@ -507,6 +529,46 @@ openclaw-board-widget-cell {
        authoritative because no transition-property is redeclared here. */
     transition-delay: 0s;
     visibility: visible;
+  }
+
+  /* While chrome is hidden, a granted widget keeps a small trust dot in the
+     bar's corner; the revealed bar carries the full capabilities chip, so the
+     dot fades out together with the chrome fade-in. */
+  .board-widget__grant-dot {
+    background: var(--ok, #4ec9a8);
+    border-radius: 50%;
+    display: block;
+    height: 6px;
+    pointer-events: none;
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    transition: opacity 120ms ease;
+    width: 6px;
+    z-index: 4;
+  }
+
+  .board-widget:hover .board-widget__grant-dot,
+  .board-widget:focus-within .board-widget__grant-dot,
+  .board-widget--dragging .board-widget__grant-dot,
+  .board-widget:has(.board-widget__menu[open]) .board-widget__grant-dot {
+    opacity: 0;
+  }
+
+  /* Frameless is a fine-pointer treatment only: touch keeps the card shell
+     because there is no hover to rediscover the widget bounds. While dragging,
+     the reset stops applying so the widget materializes back into a full card
+     (accent border + drop shadow from --dragging) under the pointer. */
+  .board-widget--frameless:not(.board-widget--dragging) {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  .board-widget--frameless:hover,
+  .board-widget--frameless:focus-within,
+  .board-widget--frameless:has(.board-widget__menu[open]) {
+    border-color: var(--board-line);
   }
 
   .board-widget__body {

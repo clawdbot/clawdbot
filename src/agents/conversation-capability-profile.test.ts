@@ -226,6 +226,8 @@ describe("resolveConversationCapabilityProfile", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      spawnedBy: "agent:main:main",
+      inheritedToolPolicyVersion: 1,
       inheritedToolAllow: ["image_generate"],
     } as SessionEntry);
 
@@ -240,6 +242,8 @@ describe("resolveConversationCapabilityProfile", () => {
 
       expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
       expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
+      expect(profile.policy.delegated).toBe(true);
+      expect(profile.policy.requesterPolicySource).toBe("persisted-child");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

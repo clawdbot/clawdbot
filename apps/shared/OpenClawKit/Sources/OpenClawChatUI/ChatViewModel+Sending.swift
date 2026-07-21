@@ -28,6 +28,14 @@ extension OpenClawChatViewModel {
         pendingRunCount > 0 || hasActiveSessionRunWithoutChatSnapshot
     }
 
+    var workingIndicatorIdentity: String {
+        ChatWorkingIdentity.resolve(
+            sessionKey: sessionKey,
+            pendingRunIDs: pendingRuns,
+            localUserMessageIDsByRunID: pendingLocalUserEchoMessageIDsByRunID,
+            fallbackGeneration: runOwnershipGeneration)
+    }
+
     public func send() {
         logDiagnostic(
             "chat.ui send invoked sessionKey=\(sessionKey) "

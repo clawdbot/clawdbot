@@ -50,6 +50,7 @@ class ConnectionManager(
         "operator.write",
       )
 
+    internal const val AGENT_KIND_CLIENT_CAPABILITY = "agent-kind"
     internal const val INLINE_WIDGETS_CLIENT_CAPABILITY = "inline-widgets"
 
     internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
@@ -222,7 +223,11 @@ class ConnectionManager(
     GatewayConnectOptions(
       role = "operator",
       scopes = scopes,
-      caps = if (inlineWidgetsAvailable()) listOf(INLINE_WIDGETS_CLIENT_CAPABILITY) else emptyList(),
+      caps =
+        buildList {
+          add(AGENT_KIND_CLIENT_CAPABILITY)
+          if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
+        },
       commands = emptyList(),
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),

@@ -5,10 +5,30 @@ import {
   validateSystemAgentSetupVerifyParams,
 } from "../index.js";
 import {
+  SystemAgentChatQuestionSchema,
   SystemAgentChatHistoryResultSchema,
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupVerifyResultSchema,
 } from "./openclaw.js";
+
+describe("OpenClaw chat question protocol", () => {
+  const question = {
+    id: "onboarding-next-step",
+    header: "Next step",
+    question: "What would you like to do first?",
+    options: [{ label: "Talk to my agent" }, { label: "Connect a channel" }],
+  };
+
+  it("accepts the additive exit skip action and rejects unknown actions", () => {
+    expect(Value.Check(SystemAgentChatQuestionSchema, question)).toBe(true);
+    expect(Value.Check(SystemAgentChatQuestionSchema, { ...question, skipAction: "exit" })).toBe(
+      true,
+    );
+    expect(Value.Check(SystemAgentChatQuestionSchema, { ...question, skipAction: "dismiss" })).toBe(
+      false,
+    );
+  });
+});
 
 describe("OpenClaw chat history protocol", () => {
   it("accepts the default request and bounds explicit limits", () => {

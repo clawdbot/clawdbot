@@ -399,6 +399,7 @@ describe("method scope resolution", () => {
     ["model", { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" }],
     ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
     ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
+    ["inheritedToolPolicyVersion", { key: "agent:main:ios-1", inheritedToolPolicyVersion: 1 }],
     ["spawnedBy", { key: "agent:main:ios-1", spawnedBy: "agent:main:main" }],
     ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
     ["unknown fields", { key: "agent:main:ios-1", futureField: true }],

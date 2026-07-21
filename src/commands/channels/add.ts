@@ -2,6 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
+import { resolveChannelSetupCliOptionMetadata } from "../../channels/plugins/cli-add-options.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
@@ -49,7 +50,6 @@ export type ChannelsAddOptions = {
 } & Record<string, unknown>;
 
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
-const NEXTCLOUD_TALK_CLI_ALIASES = new Set(["nextcloud-talk", "nc-talk", "nc"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
@@ -78,47 +78,33 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
   });
 }
 
-function parseOptionalInt(value: unknown, flag: string): number | undefined {
-  if (value === undefined || value === null || value === "") {
-    return undefined;
-  }
-  const parsed = parseStrictNonNegativeInteger(value);
-  if (parsed === undefined) {
-    throw new Error(`${flag} must be a non-negative integer.`);
-  }
-  return parsed;
-}
-
-function parseOptionalDelimitedInput(value: unknown): string[] | undefined {
-  if (Array.isArray(value)) {
-    return value.filter((entry): entry is string => typeof entry === "string");
-  }
-  return parseOptionalDelimitedEntries(typeof value === "string" ? value : undefined);
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   const input: Record<string, unknown> = {};
+  const { valueMetadataByAttributeName } = resolveChannelSetupCliOptionMetadata(opts.channel);
   for (const [key, value] of Object.entries(opts)) {
     if (CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) || value === undefined) {
       continue;
     }
-    input[key] = value;
+    const metadata = valueMetadataByAttributeName.get(key);
+    if (metadata?.valueType !== "int") {
+      input[key] =
+        metadata?.valueType === "list"
+          ? Array.isArray(value)
+            ? value.filter((entry): entry is string => typeof entry === "string")
+            : parseOptionalDelimitedEntries(typeof value === "string" ? value : undefined)
+          : value;
+      continue;
+    }
+    if (value === null || value === "") {
+      input[key] = undefined;
+      continue;
+    }
+    const parsed = parseStrictNonNegativeInteger(value);
+    if (parsed === undefined) {
+      throw new Error(`${metadata.longFlag} must be a non-negative integer.`);
+    }
+    input[key] = parsed;
   }
-
-  const rawChannel = readOptionalString(opts.channel)?.trim().toLowerCase();
-  if (rawChannel && NEXTCLOUD_TALK_CLI_ALIASES.has(rawChannel)) {
-    input.baseUrl ??= readOptionalString(input.url);
-    input.secret ??= readOptionalString(input.token) ?? readOptionalString(input.password);
-    input.secretFile ??= readOptionalString(input.tokenFile);
-  }
-
-  input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit, "--initial-sync-limit");
-  input.groupChannels = parseOptionalDelimitedInput(opts.groupChannels);
-  input.dmAllowlist = parseOptionalDelimitedInput(opts.dmAllowlist);
   return input as ChannelSetupInput;
 }
 
@@ -297,6 +283,7 @@ async function channelsAddCommandImpl(
     nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: nextConfig,
       channelKey: channel,
+      setupSurface: plugin.setup,
     });
   }
 

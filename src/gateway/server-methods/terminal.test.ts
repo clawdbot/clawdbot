@@ -571,7 +571,12 @@ describe("terminal gateway policy", () => {
         paramsJSON: JSON.stringify({ threadId: "thread" }),
       }),
     });
-    const node = { nodeId: "node-1", connId: "conn-node", commands: [command] };
+    const node = {
+      nodeId: "node-1",
+      connId: "conn-node",
+      pairingGeneration: "generation-node",
+      commands: [command],
+    };
     const invoke = vi.fn((rawParams: unknown) => {
       const params = rawParams as { onInvokeId?: (id: string) => void };
       params.onInvokeId?.("invoke-1");
@@ -610,7 +615,11 @@ describe("terminal gateway policy", () => {
     )?.at(0);
     await openRequest?.createBackend?.();
     expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({ nodeId: "node-1", expectedConnId: "conn-node" }),
+      expect.objectContaining({
+        nodeId: "node-1",
+        expectedConnId: "conn-node",
+        expectedPairingGeneration: "generation-node",
+      }),
     );
   });
 
@@ -795,6 +804,7 @@ describe("terminal gateway policy", () => {
     const node = {
       nodeId: "node-1",
       connId: "conn-node",
+      pairingGeneration: "generation-node",
       commands: [command, uploadCommand],
     };
     const invoke = vi.fn(async () => ({
@@ -824,6 +834,7 @@ describe("terminal gateway policy", () => {
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
       expectedConnId: "conn-node",
+      expectedPairingGeneration: "generation-node",
       command: uploadCommand,
       params: { name: "report.pdf", contentBase64: "dGVzdA==" },
       timeoutMs: 120_000,

@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type { BoardGrantDecision, BoardViewWidget } from "../../lib/board/view-types.ts";
@@ -60,6 +60,17 @@ export function renderBoardWidgetMenu(options: {
           </wa-dropdown-item>
         `,
       )}
+      ${widget.contentKind === "html"
+        ? html`<wa-dropdown-item
+            class="board-widget__preset"
+            type="checkbox"
+            value="height:auto"
+            ?checked=${widget.heightMode !== "fixed"}
+            ?disabled=${disabled}
+          >
+            ${t("board.widget.autoHeight")}
+          </wa-dropdown-item>`
+        : nothing}
       <div class="board-widget__menu-separator" role="separator"></div>
       <wa-dropdown-item class="board-widget__menu-danger" value="remove" ?disabled=${disabled}>
         ${t("board.widget.remove")}

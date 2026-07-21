@@ -139,6 +139,28 @@ describe("canvas CLI", () => {
     expect(writtenFiles).toHaveLength(0);
   });
 
+  it("rejects malformed node-controlled snapshot base64 before writing", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({
+      payload: {
+        format: "png",
+        base64: "Zh==",
+      },
+    });
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
+    expect(writtenFiles).toHaveLength(0);
+  });
+
   it("rejects unsupported snapshot formats before invoking the node", async () => {
     const program = new Command();
     program.exitOverride();

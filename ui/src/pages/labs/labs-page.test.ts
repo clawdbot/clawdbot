@@ -59,12 +59,16 @@ async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
   return { page, provider, runtimeConfig };
 }
 
-function codeModeToggle(page: LabsPageElement) {
-  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+function labToggle(page: LabsPageElement, index: number, label: string) {
+  const toggle = page.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch").item(index);
   if (!toggle) {
-    throw new Error("Code Mode toggle not rendered");
+    throw new Error(`${label} toggle not rendered`);
   }
   return toggle;
+}
+
+function codeModeToggle(page: LabsPageElement) {
+  return labToggle(page, 0, "Code Mode");
 }
 
 describe("LabsPage", () => {
@@ -125,19 +129,32 @@ describe("LabsPage", () => {
     expect(runtimeConfig.refresh).toHaveBeenCalledOnce();
   });
 
-  it("writes true at the registered config path when enabling", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { codeMode: { enabled: false } },
-    });
-    const toggle = codeModeToggle(page);
+  it.each([
+    {
+      label: "Code Mode",
+      index: 0,
+      sourceConfig: { tools: { codeMode: { enabled: false } } },
+      expectedPatch: { tools: { codeMode: { enabled: true } } },
+      note: "labs: update codeMode",
+    },
+    {
+      label: "Swarm",
+      index: 1,
+      sourceConfig: { tools: { swarm: { enabled: false } } },
+      expectedPatch: { tools: { swarm: { enabled: true } } },
+      note: "labs: update swarm",
+    },
+  ])("writes true at the registered config path when enabling $label", async (testCase) => {
+    const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
+    const toggle = labToggle(page, testCase.index, testCase.label);
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: true } } },
-      note: "labs: update codeMode",
+      raw: testCase.expectedPatch,
+      note: testCase.note,
     });
   });
 });

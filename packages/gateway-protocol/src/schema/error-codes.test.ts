@@ -10,6 +10,7 @@ import {
   missingScopeErrorShape,
   readMissingScopeError,
   readMissingScopeErrorDetails,
+  UnknownAgentIdErrorDetailsSchema,
 } from "./error-codes.js";
 
 describe("gateway error details", () => {
@@ -33,6 +34,13 @@ describe("gateway error details", () => {
     expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
     expect(isMcpAppViewExpiredError({ details })).toBe(true);
     expect(isMcpAppViewExpiredError(new Error("upstream token expired"))).toBe(false);
+  });
+
+  it("validates unknown-agent details", () => {
+    const details = { code: GatewayErrorDetailCodes.UNKNOWN_AGENT_ID, agentId: "retired" };
+    expect(Value.Check(UnknownAgentIdErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(UnknownAgentIdErrorDetailsSchema, { ...details, agentId: "" })).toBe(false);
   });
 
   it("builds a distinct forbidden missing-scope response", () => {

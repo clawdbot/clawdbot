@@ -81,4 +81,11 @@ describe("usage-based overflow", () => {
   it("does not infer overflow from aggregate billing when context is unavailable", () => {
     expect(isContextOverflow(successfulMessage({ state: "unavailable" }), 1_000_000)).toBe(false);
   });
+
+  it("counts cache-write tokens toward the context when no snapshot is available", () => {
+    // input + cacheRead alone is 1_100_012, under this window; the 93_130 cache-write
+    // tokens are prompt tokens too, and providers that report them separately keep
+    // them out of `input`. Omitting the bucket silently under-counts the context.
+    expect(isContextOverflow(successfulMessage(), 1_150_000)).toBe(true);
+  });
 });

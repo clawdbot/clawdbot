@@ -262,6 +262,40 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+  it("runs distinct pluggable-driver channels within the global concurrency budget", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-channel-concurrency-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    let activeChannels = 0;
+    let maxActiveChannels = 0;
+    runQaFlowSuite.mockImplementation(async (params) => {
+      activeChannels += 1;
+      maxActiveChannels = Math.max(maxActiveChannels, activeChannels);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1);
+      });
+      try {
+        return await defaultFlowImplementation(params);
+      } finally {
+        activeChannels -= 1;
+      }
+    });
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-channel-concurrency",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [{ id: "portable-driver", matches: vi.fn(), create: vi.fn() }],
+      concurrency: 2,
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    expect(maxActiveChannels).toBe(2);
+  });
+
   it("binds one portable channel scenario without an explicit channel override", async () => {
     const adapterFactories = [
       {

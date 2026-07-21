@@ -1,6 +1,7 @@
 {
   "$comment": "Gateway events each mobile client intentionally does not handle yet, with a one-line reason. Consumed by scripts/check-protocol-event-coverage.mjs (pnpm check:protocol-coverage). Adding a gateway event without a client handler requires either handling it or adding an entry here; the check also fails when an entry goes stale (event removed or now handled).",
   "ios": {
+    "session.observer": "Web Control UI ships the observer HUD first; native session-status surfaces adopt the digest in a follow-up.",
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
     "session.tool": "Session tool stream is not rendered by the iOS chat surface yet.",
     "task.suggestion": "Task suggestion cards are a Control UI-only surface; iOS does not render them.",
@@ -26,6 +27,7 @@
     "session.approval": "Native approval review uses exec.approval push/nudge delivery; the session-scoped approval stream is a Control UI chat surface."
   },
   "android": {
+    "session.observer": "Web Control UI ships the observer HUD first; native session-status surfaces adopt the digest in a follow-up.",
     "session.operation": "Chat UI derives run state from chat/agent events; no session.operation consumer yet.",
     "session.tool": "Session tool stream is not rendered by the Android chat surface yet.",
     "task.suggestion": "Task suggestion cards are a Control UI-only surface; Android does not render them.",

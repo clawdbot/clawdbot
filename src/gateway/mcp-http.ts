@@ -418,7 +418,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(payload);
       } catch (error) {
-        logWarn(`mcp loopback: request handling failed: ${formatErrorMessage(error)}`);
+        logWarn(`mcp-loopback: request handling failed: ${formatErrorMessage(error)}`);
         logMcpLoopbackTraffic("request-failed", {
           message: formatErrorMessage(error),
         });

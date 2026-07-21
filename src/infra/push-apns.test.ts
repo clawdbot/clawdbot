@@ -1,10 +1,12 @@
 // Tests APNS push signing and request construction.
 import { generateKeyPairSync } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { createServer, type Server as HttpServer } from "node:http";
 import http2 from "node:http2";
 import net from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../test-utils/deferred.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
 import {
   appendApnsResponseBodyCapture,
@@ -508,6 +510,94 @@ describe("push APNs send semantics", () => {
     expect(result.ok).toBe(true);
     expect(result.environment).toBe("production");
     expect(result.transport).toBe("direct");
+  });
+
+  it("guards direct wake transport with current ownership and lifecycle", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-guarded-wake",
+      environment: "production",
+      sendResult: {
+        status: 200,
+        apnsId: "apns-guarded-wake-id",
+        body: "",
+      },
+    });
+    const controller = new AbortController();
+    const isCurrent = vi.fn().mockResolvedValue(true);
+
+    await sendApnsBackgroundWake({
+      registration,
+      nodeId: "ios-node-guarded-wake",
+      wakeReason: "node.invoke",
+      auth,
+      requestSender: send,
+      signal: controller.signal,
+      isCurrent,
+    });
+
+    expect(isCurrent).toHaveBeenCalledTimes(1);
+    const sent = requireSendRequest(send);
+    expect(sent.signal).toBe(controller.signal);
+    expect(sent.isCurrent).toBe(isCurrent);
+
+    await expect(
+      sendApnsBackgroundWake({
+        registration,
+        nodeId: "ios-node-guarded-wake",
+        wakeReason: "node.invoke",
+        auth,
+        requestSender: send,
+        isCurrent: vi.fn().mockResolvedValue(false),
+      }),
+    ).rejects.toThrow("APNs send invalidated");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("owns direct session errors while persistent currentness is pending", async () => {
+    const session = Object.assign(new EventEmitter(), {
+      close: vi.fn(),
+      destroy: vi.fn(),
+      request: vi.fn(),
+    });
+    session.destroy.mockImplementation(() => session.emit("close"));
+    const connect = vi
+      .spyOn(http2, "connect")
+      .mockReturnValue(session as unknown as http2.ClientHttp2Session);
+    const currentness = createDeferred<boolean>();
+    const isCurrent = vi
+      .fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockReturnValueOnce(currentness.promise);
+    const { registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-session-error",
+      environment: "production",
+      sendResult: { status: 200, apnsId: "unused", body: "" },
+    });
+
+    try {
+      const sending = sendApnsBackgroundWake({
+        registration,
+        nodeId: "ios-node-session-error",
+        wakeReason: "node.invoke",
+        auth,
+        isCurrent,
+      });
+      await vi.waitFor(() => {
+        expect(connect).toHaveBeenCalledTimes(1);
+        expect(isCurrent).toHaveBeenCalledTimes(2);
+      });
+
+      expect(session.listenerCount("error")).toBeGreaterThan(0);
+      session.emit("error", new Error("APNs connection failed"));
+      currentness.resolve(true);
+
+      await expect(sending).rejects.toThrow("APNs connection failed");
+      expect(session.destroy).toHaveBeenCalledTimes(1);
+      expect(session.request).not.toHaveBeenCalled();
+    } finally {
+      currentness.resolve(false);
+      connect.mockRestore();
+    }
   });
 
   it("sends exec approval alert pushes with generic modal-only metadata", async () => {

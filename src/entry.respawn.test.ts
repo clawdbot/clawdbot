@@ -39,6 +39,18 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
+  it("does not detach native hook relays through a startup respawn", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
+      }),
+    ).toBeNull();
+  });
+
   it("adds NODE_EXTRA_CA_CERTS and warning suppression in one respawn", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "status"],

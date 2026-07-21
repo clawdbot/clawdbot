@@ -345,6 +345,8 @@ export const zh_TW = {
       ttyRequired:
         "Onboarding 需要互動式 TTY。自動化請使用 `openclaw onboard --non-interactive --accept-risk ...`。",
       welcomeTitle: "設定選項",
+      workspaceConflictClassic:
+        "本次驗證保留了已設定的工作區。執行 `{command}` 以檢視並明確核准移動現有 agent fleet。",
     },
     setup: {
       authChoiceFailedRetry: "請選擇其他提供商或認證方式，或選擇暫時跳過。",
@@ -407,6 +409,10 @@ export const zh_TW = {
       testAiSuccess: "AI 存取正常，在 {seconds} 秒內回覆。",
       testAiTitle: "AI 存取測試",
       whatSetup: "你想設定什麼？",
+      workspaceConflictConfirm: "要將現有 agent fleet 移動到要求的工作區嗎？",
+      workspaceConflictNotice:
+        "現有 agent 目前使用 {current}。要求的工作區是 {requested}。變更此 fleet-wide 預設值可能會使 agent 與其記憶和 bootstrap 檔案中斷連線。",
+      workspaceConflictTitle: "現有 agent 工作區",
       workspaceDirectory: "工作區目錄",
     },
     security: {

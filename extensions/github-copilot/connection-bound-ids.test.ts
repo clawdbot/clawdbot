@@ -1,9 +1,9 @@
 // Github Copilot tests cover connection bound ids plugin behavior.
 import { describe, expect, it } from "vitest";
-import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
+import { sanitizeCopilotReplayResponsePayload } from "./connection-bound-ids.js";
 
 function rewriteInputIds(input: unknown): boolean {
-  return rewriteCopilotResponsePayloadConnectionBoundIds({ input });
+  return sanitizeCopilotReplayResponsePayload({ input });
 }
 
 describe("github-copilot connection-bound response IDs", () => {
@@ -37,7 +37,7 @@ describe("github-copilot connection-bound response IDs", () => {
     expect(input[4]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 
-  it("preserves valid reasoning IDs regardless of encrypted_content", () => {
+  it("preserves valid reasoning IDs but strips encrypted_content", () => {
     const withEncrypted = Buffer.from(`reasoning-${"e".repeat(24)}`).toString("base64");
     const withNull = Buffer.from(`reasoning-${"n".repeat(24)}`).toString("base64");
     const withoutField = Buffer.from(`reasoning-${"a".repeat(24)}`).toString("base64");
@@ -47,13 +47,13 @@ describe("github-copilot connection-bound response IDs", () => {
       { id: withoutField, type: "reasoning" },
     ];
 
-    expect(rewriteInputIds(input)).toBe(false);
-    expect(input[0]?.id).toBe(withEncrypted);
-    expect(input[1]?.id).toBe(withNull);
-    expect(input[2]?.id).toBe(withoutField);
+    expect(rewriteInputIds(input)).toBe(true);
+    expect(input[0]).toEqual({ id: withEncrypted, type: "reasoning" });
+    expect(input[1]).toEqual({ id: withNull, type: "reasoning" });
+    expect(input[2]).toEqual({ id: withoutField, type: "reasoning" });
   });
 
-  it("preserves valid base64-ish reasoning IDs with and without encrypted content", () => {
+  it("strips encrypted_content from valid reasoning IDs at payload send time", () => {
     const withEncrypted = "abcDEF0123+/=";
     const withoutEncrypted = "reasoning/abc+123=";
     const input = [
@@ -61,11 +61,12 @@ describe("github-copilot connection-bound response IDs", () => {
       { id: withoutEncrypted, type: "reasoning" },
     ];
 
-    expect(rewriteInputIds(input)).toBe(false);
-    expect(input.map((item) => item.id)).toEqual([withEncrypted, withoutEncrypted]);
+    expect(rewriteInputIds(input)).toBe(true);
+    expect(input[0]).toEqual({ id: withEncrypted, type: "reasoning" });
+    expect(input[1]).toEqual({ id: withoutEncrypted, type: "reasoning" });
   });
 
-  it("drops unsafe reasoning replay item IDs while keeping idless reasoning replay", () => {
+  it("drops unsafe reasoning IDs and strips encrypted_content from kept items", () => {
     const overlongId = `5PX6gLHXT5wE+Y2tPmUV4gn+${"B".repeat(384)}`;
     const input = [
       {
@@ -81,8 +82,8 @@ describe("github-copilot connection-bound response IDs", () => {
 
     expect(rewriteInputIds(input)).toBe(true);
     expect(input).toEqual([
-      { type: "reasoning", encrypted_content: "missing-id", summary: [] },
-      { id: "rs_valid", type: "reasoning", encrypted_content: "valid", summary: [] },
+      { type: "reasoning", summary: [] },
+      { id: "rs_valid", type: "reasoning", summary: [] },
     ]);
   });
 
@@ -90,9 +91,9 @@ describe("github-copilot connection-bound response IDs", () => {
     const messageId = Buffer.from(`message-${"m".repeat(24)}`).toString("base64");
     const payload = { input: [{ id: messageId, type: "message" }] };
 
-    expect(rewriteCopilotResponsePayloadConnectionBoundIds(payload)).toBe(true);
+    expect(sanitizeCopilotReplayResponsePayload(payload)).toBe(true);
     expect(payload.input[0]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
-    expect(rewriteCopilotResponsePayloadConnectionBoundIds(undefined)).toBe(false);
-    expect(rewriteCopilotResponsePayloadConnectionBoundIds({ input: "text" })).toBe(false);
+    expect(sanitizeCopilotReplayResponsePayload(undefined)).toBe(false);
+    expect(sanitizeCopilotReplayResponsePayload({ input: "text" })).toBe(false);
   });
 });

@@ -92,6 +92,7 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
@@ -138,6 +139,7 @@ internal enum class Tab(
   Settings(key = "settings", label = nativeText("Settings"), icon = Icons.Outlined.Settings),
   ProvidersModels(key = "providers-models", label = nativeText("Providers"), icon = Icons.Outlined.Inventory2),
   Files(key = "files", label = nativeText("Files"), icon = Icons.Outlined.Folder),
+  Dashboard(key = "dashboard", label = nativeText("Dashboard"), icon = Icons.Outlined.Dashboard),
 }
 
 private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Settings)
@@ -254,6 +256,7 @@ fun ShellScreen(
             UnifiedChatShellScreen(
               viewModel = viewModel,
               onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
+              onOpenDashboard = nav::openSessionDashboard,
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
             )
           Tab.Voice ->
@@ -276,6 +279,12 @@ fun ShellScreen(
           Tab.Files ->
             WorkspaceFilesScreen(
               viewModel = viewModel,
+              onBack = nav::back,
+            )
+          Tab.Dashboard ->
+            SessionDashboardScreen(
+              viewModel = viewModel,
+              sessionKey = nav.dashboardSessionKey,
               onBack = nav::back,
             )
           Tab.Settings ->

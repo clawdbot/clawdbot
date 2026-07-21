@@ -2,10 +2,12 @@
 // Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectRegisteredEmbeddingProviderIds,
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
+  listAmbientOnlyConfiguredChannelIds,
 } from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -54,6 +56,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   log: GatewayPluginBootstrapLog;
   loadRuntimePlugins?: boolean;
   loadSetupRuntimePlugins?: boolean;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
@@ -122,6 +125,7 @@ export async function prepareGatewayPluginBootstrap(params: {
           ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
           : {}),
         discovery: params.pluginMetadataSnapshot?.discovery,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
@@ -136,11 +140,26 @@ export async function prepareGatewayPluginBootstrap(params: {
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
           workerProviderIds: params.workerProviderIds ?? [],
+          ambientEnvTriggers: params.ambientEnvTriggers,
         });
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
   ];
   const startupPluginIds = [...(pluginLookUpTable?.startup.pluginIds ?? [])];
+  const ambientAutostartSuppressedChannelIds =
+    params.ambientEnvTriggers === "suppress"
+      ? new Set(
+          listAmbientOnlyConfiguredChannelIds({
+            config: params.cfgAtStart,
+            activationSourceConfig,
+            env: process.env,
+            includePersistedAuthState: false,
+            ...(pluginLookUpTable?.manifestRegistry.plugins
+              ? { manifestRecords: pluginLookUpTable.manifestRegistry.plugins }
+              : {}),
+          }),
+        )
+      : new Set<string>();
 
   const baseMethods = listGatewayMethods();
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
@@ -166,6 +185,7 @@ export async function prepareGatewayPluginBootstrap(params: {
         pluginLookUpTable,
         preferSetupRuntimeForChannelPlugins: true,
         suppressPluginInfoLogs: true,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       },
     ));
   } else if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
@@ -183,6 +203,7 @@ export async function prepareGatewayPluginBootstrap(params: {
         pluginLookUpTable,
         preferSetupRuntimeForChannelPlugins: false,
         suppressPluginInfoLogs: false,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       },
     ));
   } else {
@@ -207,6 +228,7 @@ export async function prepareGatewayPluginBootstrap(params: {
     pluginRegistry,
     baseGatewayMethods,
     runtimePluginsLoaded,
+    ambientAutostartSuppressedChannelIds,
   };
 }
 
@@ -246,6 +268,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
   startupTrace?: GatewayStartupTrace;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
@@ -265,6 +288,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   if (params.preferSetupRuntimeForChannelPlugins !== true) {
     // Surface configured memory embedding providers after the full startup

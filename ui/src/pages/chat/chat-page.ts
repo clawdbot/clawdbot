@@ -10,10 +10,15 @@ import "../../components/resizable-divider.ts";
 import { McpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
 import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
+import { updateBoardSessionView } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
+  normalizeSessionKeyForUiComparison,
+} from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/chat.css";
@@ -52,6 +57,7 @@ function splitRatio(weights: number[], index: number, context: string): number {
 type ChatRouteData = {
   sessionKey: string;
   draft?: string;
+  face?: "dashboard";
 };
 
 const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
@@ -123,7 +129,7 @@ export class ChatPage extends OpenClawLightDomElement {
     const data = this.data;
     const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
     const routeDraftWasRendered =
-      Boolean(data?.draft) &&
+      Boolean(data?.draft || data?.face) &&
       this.consumedDraftData !== data &&
       (!this.layout || activePane?.sessionKey === data.sessionKey);
     if (changedProperties.has("data")) {
@@ -135,6 +141,9 @@ export class ChatPage extends OpenClawLightDomElement {
       queueMicrotask(() => {
         if (this.isConnected && this.data === data && this.consumedDraftData !== data) {
           this.consumedDraftData = data;
+          if (data.face) {
+            this.applyRouteFace(data.sessionKey, data.face);
+          }
           // Route drafts are one-shot actions. Once the matching pane owns the
           // text, remove it from history so reload/back cannot replay it.
           this.context.replace("chat", { search: searchForSession(data.sessionKey) });
@@ -503,6 +512,24 @@ export class ChatPage extends OpenClawLightDomElement {
       }
     }
   };
+
+  // Route-owned face intent persists here, keyed exactly like chat-pane's
+  // board settings, because pane-level board resolution is not ready at
+  // navigation time and would file the face under the wrong session.
+  private applyRouteFace(sessionKey: string, face: "dashboard"): void {
+    const resolved = resolveSessionKey(sessionKey, this.context.gateway.snapshot.hello);
+    const normalized = normalizeSessionKeyForUiComparison(resolved);
+    const boardSessionKey =
+      normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
+    if (!boardSessionKey) {
+      return;
+    }
+    patchSettings({
+      boardSessionViews: updateBoardSessionView(loadSettings().boardSessionViews, boardSessionKey, {
+        face,
+      }),
+    });
+  }
 
   private routeDraftForActivePane(sessionKey = this.data?.sessionKey): string | undefined {
     const data = this.data;

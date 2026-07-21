@@ -310,6 +310,54 @@ describe("prepared model runtime snapshots", () => {
     firstLease.release();
   });
 
+  it("activates a standalone lease on a configless gateway with no configured owners", async () => {
+    mocks.configuredAgentIds = [];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const input = {
+      agentId: "openclaw",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/configless-workspace",
+    };
+    const lease = await acquireAgentRunPreparedModelRuntime(input);
+    expect(lease.snapshot.agentDir).toBe("/tmp/unused-agent");
+    lease.release();
+  });
+
+  it("activates a standalone lease for a configless runtime while another agent is configured", async () => {
+    mocks.configuredAgentIds = ["other"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const input = {
+      agentId: "openclaw",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/configless-mixed-workspace",
+    };
+    const lease = await acquireAgentRunPreparedModelRuntime(input);
+    expect(lease.snapshot.agentDir).toBe("/tmp/unused-agent");
+    lease.release();
+  });
+
+  it("rejects an ordinary unconfigured agent on an active gateway", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+
+    await expect(
+      acquireAgentRunPreparedModelRuntime({
+        agentId: "missing",
+        config,
+        agentDir: "/tmp/configured-missing",
+        inheritedAuthDir: "/tmp/unused-agent",
+        workspaceDir: "/tmp/workspace-missing",
+      }),
+    ).rejects.toThrow("prepared model runtime owner was not committed");
+  });
+
   it("rebases a stale dynamic owner onto the committed configured generation", async () => {
     mocks.configuredAgentIds = ["default"];
     const initialConfig = {};
@@ -712,7 +760,7 @@ describe("prepared model runtime snapshots", () => {
       .mockImplementationOnce(async () => await new Promise<never>(() => {}));
 
     await expect(
-      refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true }),
+      refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
     ).resolves.toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });

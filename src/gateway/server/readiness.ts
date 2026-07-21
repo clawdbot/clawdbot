@@ -81,7 +81,7 @@ export function createReadinessChecker(deps: {
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();
-    const autostartSuppressed = channelManager.getAutostartSuppression() !== null;
+    const globallyAutostartSuppressed = channelManager.getAutostartSuppression() !== null;
     const failing: string[] = [];
     const suppressed: string[] = [];
 
@@ -89,6 +89,8 @@ export function createReadinessChecker(deps: {
       if (!accounts) {
         continue;
       }
+      const autostartSuppressed =
+        globallyAutostartSuppressed || channelManager.isAmbientAutostartSuppressed(channelId);
       for (const accountSnapshot of Object.values(accounts)) {
         if (!accountSnapshot) {
           continue;

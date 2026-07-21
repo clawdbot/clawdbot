@@ -192,6 +192,9 @@ class ChatController internal constructor(
   private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
   val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
+  private val _transcriptAnchor = MutableStateFlow<ChatTranscriptAnchorState?>(null)
+  val transcriptAnchor: StateFlow<ChatTranscriptAnchorState?> = _transcriptAnchor.asStateFlow()
+
   // True while the transcript shown came from the offline cache and no live history replaced it yet.
   private val _messagesFromCache = MutableStateFlow(false)
   val messagesFromCache: StateFlow<Boolean> = _messagesFromCache.asStateFlow()
@@ -2608,6 +2611,7 @@ class ChatController internal constructor(
     generation: Long,
     updateSessionInfo: Boolean,
     runIdsToReconcile: Set<String> = emptySet(),
+    markCompletedTranscript: Boolean = false,
   ): HistoryRefreshResult {
     val requestSequence = historyRequestSequence.incrementAndGet()
     val runIdsOwnedAtRequest = synchronized(pendingRuns) { pendingRuns.toSet() }
@@ -2702,8 +2706,23 @@ class ChatController internal constructor(
                 !unresolvedRepliesByRunId.containsKey(it)
             }.forEach(::clearPendingRun)
         }
+        val nextMessages = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
         _messagesFromCache.value = false
-        _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
+        _messages.value = nextMessages
+        val previousAnchor = _transcriptAnchor.value?.takeIf { it.sessionKey == sessionKey }
+        val completionSettled =
+          markCompletedTranscript &&
+            runIdsToReconcile.none(unresolvedRepliesByRunId::containsKey) &&
+            history.sessionInfo?.endedAt != null
+        _transcriptAnchor.value =
+          ChatTranscriptAnchorState(
+            sessionKey = sessionKey,
+            newestItemId = nextMessages.lastOrNull()?.id,
+            completedEndedAt =
+              if (completionSettled) history.sessionInfo.endedAt else previousAnchor?.completedEndedAt,
+            completedNewestItemId =
+              if (completionSettled) history.messages.lastOrNull()?.id else previousAnchor?.completedNewestItemId,
+          )
         _sessionId.value = history.sessionId
         markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
         _historyLoading.value = false
@@ -4454,6 +4473,7 @@ class ChatController internal constructor(
         generation,
         updateSessionInfo = true,
         runIdsToReconcile = runIdsToReconcile,
+        markCompletedTranscript = runIdsToReconcile.isNotEmpty(),
       )
     } catch (err: CancellationException) {
       throw err
@@ -4475,6 +4495,7 @@ class ChatController internal constructor(
           generation = generation,
           updateSessionInfo = updateSessionInfo,
           runIdsToReconcile = runIdsToReconcile,
+          markCompletedTranscript = runIdsToReconcile.isNotEmpty(),
         )
       } catch (_: Throwable) {
         // best-effort
@@ -4613,6 +4634,17 @@ class ChatController internal constructor(
         obj["activeRunIds"]
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) },
+      status = obj["status"].asStringOrNull()?.trim(),
+      startedAt = obj["startedAt"].asLongOrNull(),
+      endedAt = obj["endedAt"].asLongOrNull(),
+      runtimeMs = obj["runtimeMs"].asLongOrNull(),
+      outputTokens = obj["outputTokens"].asLongOrNull(),
+      hasRunMetadata =
+        "status" in obj ||
+          "startedAt" in obj ||
+          "endedAt" in obj ||
+          "runtimeMs" in obj ||
+          "outputTokens" in obj,
     )
   }
 
@@ -5379,6 +5411,12 @@ internal fun mergeChatSessionEntry(
         preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
         else -> next.hasContextUsageMetadata
       },
+    status = if (next.hasRunMetadata) next.status else existing.status,
+    startedAt = if (next.hasRunMetadata) next.startedAt else existing.startedAt,
+    endedAt = if (next.hasRunMetadata) next.endedAt else existing.endedAt,
+    runtimeMs = if (next.hasRunMetadata) next.runtimeMs else existing.runtimeMs,
+    outputTokens = if (next.hasRunMetadata) next.outputTokens else existing.outputTokens,
+    hasRunMetadata = existing.hasRunMetadata || next.hasRunMetadata,
   )
 }
 

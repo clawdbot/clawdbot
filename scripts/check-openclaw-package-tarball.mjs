@@ -85,6 +85,11 @@ const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
       { specifier: "@openclaw/ai", entry: "dist/index.mjs" },
       { specifier: "@openclaw/ai/providers", entry: "dist/providers.mjs" },
       {
+        specifier: "@openclaw/ai/transports",
+        entry: "dist/transports.mjs",
+        whenExported: "./transports",
+      },
+      {
         specifier: "@openclaw/ai/internal/runtime",
         entry: "dist/internal/runtime.mjs",
       },
@@ -176,7 +181,17 @@ function collectBundledPackageRuntimeErrors({ name, entries, files, packageRoot,
   if (bundledPackageJson.name !== name) {
     errors.push(`bundled ${name} package.json must name ${name}`);
   }
-  const runtimeEntries = REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.get(name) ?? [];
+  const packageExports =
+    bundledPackageJson.exports &&
+    typeof bundledPackageJson.exports === "object" &&
+    !Array.isArray(bundledPackageJson.exports)
+      ? bundledPackageJson.exports
+      : {};
+  // Trusted current-main harnesses validate frozen release targets. Require
+  // post-cut runtime subpaths only when the candidate manifest owns them.
+  const runtimeEntries = (REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.get(name) ?? []).filter(
+    ({ whenExported }) => !whenExported || Object.hasOwn(packageExports, whenExported),
+  );
   const resolutions = resolveBundledPackageSpecifiers(
     packageRoot,
     runtimeEntries.map(({ specifier }) => specifier),

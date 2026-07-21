@@ -146,8 +146,9 @@ export async function checkOllamaCloudAuth(
       url: `${apiBase}/api/me`,
       init: {
         method: "POST",
-        signal: AbortSignal.timeout(5000),
       },
+      // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
+      timeoutMs: 5000,
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
       auditContext: "ollama-setup.me",
     });

@@ -12,7 +12,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resetPluginConversationBindingStateForTest } from "./conversation-binding.test-fixtures.js";
+import {
+  resetPluginConversationBindingStateForTest,
+  seedPluginConversationBindingApprovalForTest,
+} from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -446,19 +449,9 @@ function insertPluginBindingApprovalRow(params: {
   accountId: string;
   pluginId: string;
 }): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      approvalsDb.insertInto("plugin_binding_approvals").values({
-        plugin_root: params.pluginRoot,
-        channel: params.channel,
-        account_id: params.accountId,
-        plugin_id: params.pluginId,
-        plugin_name: null,
-        approved_at: 1,
-      }),
-    );
+  seedPluginConversationBindingApprovalForTest({
+    ...params,
+    approvedAt: 1,
   });
 }
 

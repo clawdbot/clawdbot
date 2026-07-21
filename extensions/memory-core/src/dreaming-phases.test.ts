@@ -382,6 +382,83 @@ async function readCandidateSnippets(workspaceDir: string, nowIso: string): Prom
 }
 
 describe("memory-core dreaming phases", () => {
+  it("ranks a valid duplicate ahead of an invalid dreaming timestamp", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const now = new Date("2026-04-15T12:00:00.000Z");
+    const snippet = "Use bounded retries for provider requests.";
+    const sourcePath = "memory/.dreams/session-corpus/2026-04-14.txt";
+    await fs.mkdir(path.dirname(path.join(workspaceDir, sourcePath)), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, sourcePath), `${snippet}\n`, "utf-8");
+    const entry = {
+      path: sourcePath,
+      startLine: 1,
+      endLine: 1,
+      source: "memory",
+      snippet,
+      recallCount: 1,
+      dailyCount: 0,
+      groundedCount: 0,
+      totalScore: 0.9,
+      maxScore: 0.9,
+      firstRecalledAt: "2026-04-14T12:00:00.000Z",
+      queryHashes: ["query"],
+      recallDays: ["2026-04-14"],
+      conceptTags: ["bounded", "retries"],
+    };
+    await shortTermTesting.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: now.toISOString(),
+      entries: {
+        invalid: { ...entry, key: "invalid", lastRecalledAt: "not-a-date" },
+        valid: { ...entry, key: "valid", lastRecalledAt: "2026-04-14T12:00:00.000Z" },
+      },
+    });
+    expect(
+      Object.keys(
+        (await shortTermTesting.readRecallStore(workspaceDir, now.toISOString())).entries,
+      ),
+    ).toEqual(["invalid", "valid"]);
+    const { beforeAgentReply, logger } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  timezone: "UTC",
+                  storage: { mode: "inline", separateReports: false },
+                  phases: {
+                    light: { enabled: true, limit: 1, lookbackDays: 3, dedupeSimilarity: 0.9 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      await beforeAgentReply(
+        { cleanedBody: LIGHT_SLEEP_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(logger.error).not.toHaveBeenCalled();
+    const phaseSignals = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      now.toISOString(),
+    );
+    expect(Object.keys(phaseSignals.entries)).toEqual(["valid"]);
+  });
+
   it("uses the hashed narrative session key for sweep-level fallback cleanup", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [

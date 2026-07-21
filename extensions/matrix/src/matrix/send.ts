@@ -298,7 +298,7 @@ export async function sendMessageMatrix(
           buffer: media.buffer,
           contentType: media.contentType,
           fileName: media.fileName,
-          kind: media.kind ?? "unknown",
+          kind: media.kind === "sticker" ? "unknown" : (media.kind ?? "unknown"),
         });
         const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
         const { useVoice } = resolveMatrixVoiceDecision({

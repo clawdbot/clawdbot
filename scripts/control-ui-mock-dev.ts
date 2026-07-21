@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
+import type { UserProfile } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -50,16 +51,35 @@ const boardFixtureHtml = `<!doctype html>
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
     <title>OpenClaw Board Fixture</title>
+    <script>
+      // This standalone fixture bypasses app bootstrap, so mirror its root theme contract.
+      const mediaQuery = matchMedia("(prefers-color-scheme: light)");
+      const applyTheme = () => {
+        const mode = mediaQuery.matches ? "light" : "dark";
+        document.documentElement.dataset.theme = mode;
+        document.documentElement.dataset.themeMode = mode;
+        document.documentElement.classList.toggle("wa-light", mode === "light");
+        document.documentElement.classList.toggle("wa-dark", mode === "dark");
+        document.documentElement.style.colorScheme = mode;
+      };
+      applyTheme();
+      if (typeof mediaQuery.addEventListener === "function") {
+        mediaQuery.addEventListener("change", applyTheme);
+      } else {
+        mediaQuery.addListener(applyTheme);
+      }
+    </script>
     <link rel="stylesheet" href="/src/styles.css" />
     <style>
-      body { margin: 0; min-width: 320px; min-height: 100vh; background: #0f1115; }
+      body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); }
       .board-fixture-shell { box-sizing: border-box; margin: 0 auto; max-width: 1440px; padding: 36px; }
       .board-fixture-header { align-items: end; display: flex; justify-content: space-between; margin-bottom: 24px; }
-      .board-fixture-header span { color: #747e8d; font: 10px ui-monospace, monospace; letter-spacing: .15em; }
-      .board-fixture-header h1 { color: #e5e7eb; font-size: 24px; letter-spacing: -.03em; margin: 5px 0 0; }
-      .board-fixture-status { color: #8892a0; font: 11px ui-monospace, monospace; }
-      .board-fixture-status i { background: #4ec9a8; border-radius: 50%; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
+      .board-fixture-header span { color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .15em; }
+      .board-fixture-header h1 { color: var(--text-strong); font-size: 24px; letter-spacing: -.03em; margin: 5px 0 0; }
+      .board-fixture-status { color: var(--muted); font: 11px ui-monospace, monospace; }
+      .board-fixture-status i { background: var(--accent-2); border-radius: 50%; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
       @media (max-width: 700px) { .board-fixture-shell { padding: 18px; } }
     </style>
   </head>
@@ -779,6 +799,16 @@ function searchPrefixes(term: string): string[] {
 
 async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const selfProfile: UserProfile = {
+    id: "presence-riley",
+    displayName: "Riley",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: baseTime,
+    updatedAt: baseTime,
+    emails: ["riley@example.com"],
+    hasAvatar: false,
+  };
   const devicePairSetupCode = Buffer.from(
     JSON.stringify({
       url: "wss://gateway.example.test",
@@ -1045,13 +1075,21 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       pinned: true,
       icon: "name:spark",
     }),
-    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000),
+    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
+      execCwd: "/Users/peter/Projects/clawdbot",
+    }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
+      execCwd: "/Users/peter/Projects/openclaw",
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
+    sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
+      execCwd: "/Users/peter/Work/openclaw",
+    }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
+      execCwd: "/Users/peter/Projects",
+      execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       pinned: true,
       icon: "🛠️",
     }),
@@ -1126,17 +1164,114 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       "question.list",
       "sessions.diff",
       "sessions.files.set",
+      "system.info",
     ],
     historyMessages: buildScrollableChatHistory(baseTime),
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
     presenceUsers: [
-      { self: true, id: "presence-riley", name: "Riley", email: "riley@example.com" },
+      {
+        self: true,
+        id: selfProfile.id,
+        name: selfProfile.displayName ?? undefined,
+        email: selfProfile.emails[0],
+      },
       { id: "presence-colin", name: "Colin", email: "colin@example.com" },
       { id: "presence-patricia", email: "patricia.erichsen@example.com" },
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      "users.self": { profile: selfProfile },
+      "system.info": {
+        machineName: "Peters-Mac-Studio",
+        hostname: "peters-mac-studio.local",
+        platform: "darwin",
+        release: "25.0.0",
+        arch: "arm64",
+        osLabel: "macOS 26.5",
+        nodeVersion: "24.15.0",
+        pid: 4242,
+        uptimeMs: 86_400_000,
+        cpuCount: 16,
+        memoryTotalBytes: 68_719_476_736,
+        memoryFreeBytes: 34_359_738_368,
+      },
+      "fs.listDir": {
+        cases: [
+          {
+            match: { path: "/Users/peter/Projects/openclaw" },
+            response: {
+              path: "/Users/peter/Projects/openclaw",
+              parent: "/Users/peter/Projects",
+              home: "/Users/peter",
+              entries: [
+                { name: "ui", path: "/Users/peter/Projects/openclaw/ui" },
+                { name: "src", path: "/Users/peter/Projects/openclaw/src" },
+                { name: "docs", path: "/Users/peter/Projects/openclaw/docs" },
+                { name: "packages", path: "/Users/peter/Projects/openclaw/packages" },
+              ],
+            },
+          },
+          {
+            match: { path: "/Users/peter/Projects" },
+            response: {
+              path: "/Users/peter/Projects",
+              parent: "/Users/peter",
+              home: "/Users/peter",
+              entries: [
+                { name: "openclaw", path: "/Users/peter/Projects/openclaw" },
+                { name: "clawdbot", path: "/Users/peter/Projects/clawdbot" },
+                { name: "sweetistics", path: "/Users/peter/Projects/sweetistics" },
+                { name: "Peekaboo", path: "/Users/peter/Projects/Peekaboo" },
+              ],
+            },
+          },
+          {
+            match: {},
+            response: {
+              path: "/Users/peter",
+              parent: "/Users",
+              home: "/Users/peter",
+              entries: [
+                { name: "Projects", path: "/Users/peter/Projects" },
+                { name: "Downloads", path: "/Users/peter/Downloads" },
+                { name: ".config", path: "/Users/peter/.config", hidden: true },
+              ],
+            },
+          },
+        ],
+      },
+      "worktrees.branches": {
+        cases: [
+          {
+            match: { repoRoot: "/Users/peter/Projects/openclaw" },
+            response: {
+              repoRoot: "/Users/peter/Projects/openclaw",
+              branches: [
+                { kind: "local", name: "main" },
+                { kind: "local", name: "steipete/place-picker" },
+              ],
+              defaultBranch: "main",
+              headBranch: "main",
+            },
+          },
+          {
+            match: { repoRoot: "/Users/peter/Projects/clawdbot" },
+            response: {
+              repoRoot: "/Users/peter/Projects/clawdbot",
+              branches: [
+                { kind: "local", name: "main" },
+                { kind: "local", name: "steipete/storage-selector-design" },
+              ],
+              defaultBranch: "main",
+              headBranch: "main",
+            },
+          },
+        ],
+      },
+      "environments.list": {
+        profiles: [{ id: "aws", providerId: "aws" }],
+      },
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
@@ -1323,6 +1458,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             nodeId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
             displayName: "Mac Studio",
             platform: "darwin",
+            deviceFamily: "Mac",
+            modelIdentifier: "Mac14,12",
+            remoteIp: "192.168.1.11",
             version: "2026.6.11",
             connected: true,
             paired: true,
@@ -1342,8 +1480,11 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             nodeId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
             displayName: "Mac Studio",
             platform: "darwin",
+            deviceFamily: "Mac",
+            modelIdentifier: "Mac15,14",
+            remoteIp: "192.168.1.12",
             version: "2026.6.10",
-            connected: false,
+            connected: true,
             paired: true,
             approvalState: "approved",
             lastSeenAtMs: baseTime - 82_800_000,
@@ -1354,14 +1495,22 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             nodeId: "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
             displayName: "iPhone",
             platform: "iOS 26.4",
+            deviceFamily: "iPhone",
+            modelIdentifier: "iPhone17,2",
+            remoteIp: "192.168.1.30",
             version: "2026.6.11",
-            connected: false,
+            connected: true,
             paired: true,
-            approvalState: "pending-reapproval",
-            pendingRequestId: "mock-node-reapproval",
+            approvalState: "approved",
             lastSeenAtMs: baseTime - 3_600_000,
             caps: ["camera", "canvas", "contacts", "device", "location"],
-            commands: ["camera.list", "contacts.search", "device.info", "location.get"],
+            commands: [
+              "camera.list",
+              "contacts.search",
+              "device.info",
+              "location.get",
+              "system.run",
+            ],
           },
         ],
       },
@@ -1551,6 +1700,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     },
     sessionArchiveFiltering: true,
     sessionKey: "agent:main:main",
+    workspace: "/Users/peter/Projects/openclaw",
+    workspaceGit: true,
   };
 }
 

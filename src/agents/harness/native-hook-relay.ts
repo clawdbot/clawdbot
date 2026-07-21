@@ -18,6 +18,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -615,7 +616,7 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
       ? ["openclaw"]
       : [params.nodeExecutable ?? process.execPath, executable];
   const nicePrefix = resolveNativeHookRelayNicePrefix(params.nice);
-  return shellQuoteArgs([
+  const command = shellQuoteArgs([
     ...nicePrefix,
     ...argv,
     "hooks",
@@ -634,6 +635,9 @@ function buildNativeHookRelayCommandWithStateDatabase(params: {
     "--timeout",
     String(timeoutMs),
   ]);
+  // Codex kills the shell process when a hook times out. Replace that shell so
+  // the timeout targets this relay instead of leaving its Node child behind.
+  return process.platform === "win32" ? command : `exec ${command}`;
 }
 
 function nativePreToolUseMayRunLoopDetection(
@@ -2135,7 +2139,12 @@ async function waitForNativeHookRelayApprovalDecision(params: {
       "plugin.approval.waitDecision",
       { timeoutMs: params.timeoutMs + 10_000 },
       { id: params.approvalId },
-    );
+    ).catch((error: unknown) => {
+      if (isApprovalNotFoundError(error)) {
+        return undefined;
+      }
+      throw error;
+    });
   if (!params.signal) {
     return waitPromise;
   }

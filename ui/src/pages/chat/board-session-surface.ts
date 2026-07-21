@@ -1,5 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -11,6 +13,12 @@ import type { BoardViewSnapshot, BoardWidgetFrameUrl } from "../../lib/board/vie
 export type BoardChatDockSize = {
   height: number;
   width: number;
+};
+
+export type WorkboardCardChipProps = {
+  basePath: string;
+  client: GatewayBrowserClient;
+  sessionKey: string;
 };
 
 type BoardSessionSurfaceProps = {
@@ -26,10 +34,18 @@ type BoardSessionSurfaceProps = {
   canGrant: boolean;
   callbacks: BoardViewCallbacks;
   widgetFrameUrl: BoardWidgetFrameUrl;
+  workboardCardChip?: WorkboardCardChipProps | null;
   onDockChange: (dock: BoardTab["chatDock"]) => void;
 };
 
 let boardViewLoad: Promise<unknown> | null = null;
+
+export function ensureWorkboardCardChipElement(): Promise<void> {
+  return ensureCustomElementDefined(
+    "openclaw-workboard-card-chip",
+    () => import("./workboard-card-chip.runtime.ts"),
+  );
+}
 
 export async function ensureBoardViewElement(): Promise<boolean> {
   if (customElements.get("openclaw-board-view")) {
@@ -135,6 +151,15 @@ export function renderBoardDockMenu(
 function renderBoardView(props: BoardSessionSurfaceProps) {
   return html`
     <div class="board-session-surface__board">
+      ${props.workboardCardChip
+        ? html`
+            <openclaw-workboard-card-chip
+              .basePath=${props.workboardCardChip.basePath}
+              .client=${props.workboardCardChip.client}
+              .sessionKey=${props.workboardCardChip.sessionKey}
+            ></openclaw-workboard-card-chip>
+          `
+        : nothing}
       <openclaw-board-view
         .snapshot=${props.snapshot}
         .activeTabId=${props.activeTabId}

@@ -11,7 +11,7 @@ minimumReleaseAgeExclude:
   - "@openclaw/crabline@0.1.11"
   - "@openclaw/fs-safe@0.4.4"
   - "@openclaw/libterminal@0.3.2"
-  - "@openclaw/proxyline@0.3.3"
+  - "@openclaw/proxyline@0.3.4"
   - "@openclaw/uirouter@0.1.0"
   - "acpx"
   - "tokenjuice"
@@ -104,7 +104,7 @@ overrides:
   "@aws-sdk/xml-builder": 3.972.33
   hono: 4.12.25
   "@hono/node-server": 1.19.14
-  axios: 1.16.0
+  axios: 1.18.0
   fast-uri: 3.1.2
   follow-redirects: 1.16.0
   defu: 6.1.5
@@ -123,7 +123,7 @@ overrides:
   tar: 7.5.19
   tough-cookie: 4.1.3
   yauzl: 3.2.1
-  protobufjs: 7.6.3
+  protobufjs: 7.6.5
   uuid: 14.0.0
 
 allowBuilds:

@@ -92,6 +92,97 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(self.app?.state, .runningForeground)
     }
 
+    func testSidebarMoreAgentsMenuShowsAvatarsAndKeepsFooterVisible() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "sidebar-more-agents"))
+
+        let showSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Show"])
+        XCTAssertTrue(showSidebar.waitForExistence(timeout: 8))
+        showSidebar.tap()
+
+        let moreAgents = try XCTUnwrap(self.app?.buttons["More Agents"])
+        XCTAssertTrue(moreAgents.waitForExistence(timeout: 5))
+        let gatewayFooter = try XCTUnwrap(self.app?.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "OpenClaw Gateway")).firstMatch)
+        XCTAssertTrue(gatewayFooter.exists)
+        moreAgents.tap()
+
+        XCTAssertTrue(self.app?.buttons["Research"].waitForExistence(timeout: 5) == true)
+        XCTAssertTrue(self.app?.buttons["Automation"].exists == true)
+        self.attachScreenshot(named: "sidebar-more-agents")
+    }
+
+    func testSidebarSlowEdgeDragOpensFromEveryRootDestination() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
+        let destinations = [
+            "chat", "overview", "activity", "agents", "workboard", "skillWorkshop",
+            "instances", "sessions", "files", "dreaming", "usage", "cron", "terminal",
+            "docs", "settings", "gateway",
+        ]
+        var testedDestinations: [String] = []
+
+        for destination in destinations {
+            self.launchApp(for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: destination,
+                name: "sidebar-slow-edge-drag-\(destination)"))
+
+            let showSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Show"])
+            XCTAssertTrue(showSidebar.waitForExistence(timeout: 8), destination)
+            XCTAssertTrue(showSidebar.isHittable, destination)
+            if destination == "overview" {
+                showSidebar.tap()
+                let hideSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Hide"])
+                self.waitForHittable(true, of: hideSidebar)
+                hideSidebar.tap()
+                self.waitForHittable(true, of: showSidebar)
+            }
+            try self.openSidebarWithSlowEdgeDrag()
+            if destination == "overview" {
+                self.attachScreenshot(named: "sidebar-slow-edge-drag-overview")
+            }
+            try self.closeSidebarWithSlowDrag()
+            testedDestinations.append(destination)
+        }
+        XCTAssertEqual(testedDestinations, destinations)
+    }
+
+    func testSidebarEdgeDragPreservesPushedScreenBackGesture() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "sidebar-pushed-screen-back-gesture"), appearance: nil, screenshotMode: false)
+
+        if self.app?.buttons["Close"].waitForExistence(timeout: 2) == true {
+            self.app?.buttons["Close"].tap()
+        }
+        let appearance = try XCTUnwrap(self.app?.buttons["settings-appearance-row"])
+        XCTAssertTrue(appearance.waitForExistence(timeout: 8))
+        self.waitForHittable(true, of: appearance)
+        try self.verifyLeadingEdgeVerticalScrollPassesThrough(marker: appearance)
+        // Appearance is a destination-style NavigationLink, so this exercises
+        // the root-visibility guard rather than the typed Settings path guard.
+        appearance.tap()
+        XCTAssertTrue(self.app?.navigationBars["Appearance"].waitForExistence(timeout: 5) == true)
+
+        let app = try XCTUnwrap(self.app)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.5))
+        start.press(
+            forDuration: 0.1,
+            thenDragTo: end,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1)
+
+        self.waitForHittable(false, of: app.buttons["RootTabs.Sidebar.Hide"])
+        self.waitForHittable(true, of: appearance)
+        XCTAssertFalse(app.navigationBars["Appearance"].exists)
+    }
+
     func testLocationAlwaysWaitsForSlowSystemPermissionResponse() throws {
         XCUIApplication().resetAuthorizationStatus(for: .location)
         self.launchApp(for: ScreenshotTarget(
@@ -838,6 +929,67 @@ final class OpenClawSnapshotUITests: XCTestCase {
             predicate: NSPredicate(format: "hittable == %@", NSNumber(value: isHittable)),
             object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
+    }
+
+    private func openSidebarWithSlowEdgeDrag(
+        file: StaticString = #filePath,
+        line: UInt = #line) throws
+    {
+        let app = try XCTUnwrap(self.app, file: file, line: line)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.78, dy: 0.5))
+        start.press(
+            forDuration: 0.1,
+            thenDragTo: end,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1)
+
+        self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Hide"])
+    }
+
+    private func verifyLeadingEdgeVerticalScrollPassesThrough(
+        marker: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line) throws
+    {
+        let app = try XCTUnwrap(self.app, file: file, line: line)
+        XCTAssertTrue(marker.waitForExistence(timeout: 5), file: file, line: line)
+        let initialY = marker.frame.minY
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.78))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.22))
+        start.press(
+            forDuration: 0.1,
+            thenDragTo: end,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1)
+
+        XCTAssertLessThan(marker.frame.minY, initialY - 20, file: file, line: line)
+        self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Show"])
+
+        let restoreStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
+        let restoreEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.78))
+        restoreStart.press(
+            forDuration: 0.1,
+            thenDragTo: restoreEnd,
+            withVelocity: .fast,
+            thenHoldForDuration: 0.1)
+        self.waitForHittable(true, of: marker)
+    }
+
+    private func closeSidebarWithSlowDrag(
+        file: StaticString = #filePath,
+        line: UInt = #line) throws
+    {
+        let app = try XCTUnwrap(self.app, file: file, line: line)
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
+        start.press(
+            forDuration: 0.1,
+            thenDragTo: end,
+            withVelocity: .slow,
+            thenHoldForDuration: 0.1)
+
+        self.waitForHittable(true, of: app.buttons["RootTabs.Sidebar.Show"])
     }
 
     private func selectSidebarDestination(

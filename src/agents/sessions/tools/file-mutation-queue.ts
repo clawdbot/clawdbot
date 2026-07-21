@@ -5,7 +5,7 @@
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "../../../plugin-sdk/keyed-async-queue.js";
 
 const fileMutationQueue = new KeyedAsyncQueue();
 

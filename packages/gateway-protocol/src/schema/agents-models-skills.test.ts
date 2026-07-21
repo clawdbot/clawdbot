@@ -5,6 +5,8 @@ import {
   AgentsDeleteResultSchema,
   AgentsListResultSchema,
   AgentsUpdateParamsSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
   ModelsProbeParamsSchema,
@@ -69,6 +71,7 @@ describe("AgentsListResultSchema", () => {
       agents: [
         {
           id: "investment-master",
+          kind: "agent",
           name: "Investment Master",
           workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
@@ -83,6 +86,23 @@ describe("AgentsListResultSchema", () => {
     };
 
     expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+  });
+
+  it("accepts system and legacy omitted kinds but rejects unknown kinds", () => {
+    const result = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "custodian", kind: "system" }],
+    };
+
+    expect(Value.Check(AgentsListResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(AgentsListResultSchema, {
+        ...result,
+        agents: [{ id: "custodian", kind: "worker" }],
+      }),
+    ).toBe(false);
   });
 });
 
@@ -109,6 +129,31 @@ describe("ModelsListParamsSchema", () => {
       }),
     ).toBe(true);
     expect(Value.Check(ModelsListParamsSchema, { view: "provider-route" })).toBe(false);
+  });
+});
+
+describe("Models auth params schemas", () => {
+  it("accepts optional agent-scoped status and logout requests", () => {
+    expect(Value.Check(ModelsAuthStatusParamsSchema, {})).toBe(true);
+    expect(Value.Check(ModelsAuthStatusParamsSchema, { refresh: true, agentId: "writer" })).toBe(
+      true,
+    );
+    expect(Value.Check(ModelsAuthStatusParamsSchema, { agentId: "" })).toBe(true);
+
+    expect(
+      Value.Check(ModelsAuthLogoutParamsSchema, {
+        provider: "openai",
+        profileIds: ["openai:writer"],
+        agentId: "writer",
+      }),
+    ).toBe(true);
+    expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai" })).toBe(true);
+    expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai", agentId: "" })).toBe(
+      true,
+    );
+    expect(Value.Check(ModelsAuthLogoutParamsSchema, { provider: "openai", profileIds: [] })).toBe(
+      false,
+    );
   });
 });
 
@@ -143,8 +188,10 @@ describe("ModelsProbe schemas", () => {
         provider: "openai",
         profileId: "work",
         timeoutMs: 20_000,
+        agentId: "writer",
       }),
     ).toBe(true);
+    expect(Value.Check(ModelsProbeParamsSchema, { provider: "openai", agentId: "" })).toBe(true);
     expect(
       Value.Check(ModelsProbeResultSchema, {
         provider: "openai",

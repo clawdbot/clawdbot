@@ -34,9 +34,12 @@ export type GatewayThinkingLevelOption = {
   label: string;
 };
 
+export type GatewayAgentKind = "agent" | "system";
+
 /** Common agent row shape used by session list responses. */
 export type GatewayAgentRow = {
   id: string;
+  kind?: GatewayAgentKind;
   name?: string;
   identity?: GatewayAgentIdentity;
   workspace?: string;

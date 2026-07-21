@@ -6,8 +6,11 @@ import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
-    @Test func `mac chat advertises inline widgets`() {
-        #expect(GatewayConnection.operatorClientCaps == [OpenClawGatewayClientCapability.inlineWidgets])
+    @Test func `mac chat advertises typed agent rosters and inline widgets`() {
+        #expect(GatewayConnection.operatorClientCaps == [
+            OpenClawGatewayClientCapability.agentKind,
+            OpenClawGatewayClientCapability.inlineWidgets,
+        ])
     }
 
     @Test func `bare global session target carries normalized selected agent`() {

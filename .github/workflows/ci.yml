@@ -878,6 +878,33 @@ jobs:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
+      - name: Fetch pull request scan history
+        if: github.event_name == 'pull_request'
+        env:
+          PR_COMMIT_COUNT: ${{ github.event.pull_request.commits }}
+          PR_MERGE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_COMMIT_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid pull request commit count: $PR_COMMIT_COUNT"
+            exit 2
+          fi
+          # Include the synthetic merge, every pull request commit, and one
+          # ancestor so TruffleHog can clone and resolve the bounded range.
+          fetch_depth=$((PR_COMMIT_COUNT + 2))
+          timeout --signal=TERM --kill-after=10s 120s git \
+            -c protocol.version=2 \
+            fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"
+
+      - name: Scan pull request for leaked credentials
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55 # v3.95.9
+        with:
+          base: ${{ steps.diff_base.outputs.sha }}
+          head: ${{ github.sha }}
+          version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42"
+          extra_args: --results=verified,unknown --fail-on-scan-errors
+
       - name: Prepare trusted pre-commit config
         if: github.event_name == 'pull_request'
         env:

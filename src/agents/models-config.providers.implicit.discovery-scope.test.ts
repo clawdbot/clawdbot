@@ -177,6 +177,19 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(discoveryOptions?.discoveryEntriesOnly).toBe(true);
   });
 
+  it("does not fall through to live catalogs when entries-only providers lack static rows", async () => {
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      providerDiscoveryEntriesOnly: true,
+    });
+
+    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
+    expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
+  });
+
   it("uses static provider catalogs for entries-only startup discovery", async () => {
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
       createProviderWithStaticCatalog("codex"),

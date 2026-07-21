@@ -9,6 +9,7 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -124,9 +125,7 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
         // Full lifecycle owners include provider augmentation omitted by read-only fallback builds.
         const prepared = await prepareModelRuntimeSnapshot(candidate);
         if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {
-          throw new Error(
-            `prepared model catalog owner config was replaced during the read (${candidate.agentDir})`,
-          );
+          throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
         }
         return prepared;
       } catch (error) {
@@ -138,9 +137,7 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
     const lease = await acquireReadOnlyPreparedModelRuntime(activationExact);
     try {
       if (!preparedModelRuntimeConfigsMatch(lease.snapshot.config, activationExact.config)) {
-        throw new Error(
-          `prepared model catalog owner config was replaced during the read (${activationExact.agentDir})`,
-        );
+        throw new PreparedModelCatalogConfigReplacedError(activationExact.agentDir);
       }
       return lease.snapshot;
     } finally {

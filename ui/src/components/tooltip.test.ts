@@ -37,7 +37,13 @@ function hoverTrigger(trigger: HTMLElement) {
 }
 
 function webAwesomeTooltip(tooltip: TooltipElement) {
-  return tooltip.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip");
+  return tooltip.shadowRoot?.querySelector<
+    HTMLElement & {
+      anchor: Element | null;
+      open: boolean;
+      readonly updateComplete: Promise<boolean>;
+    }
+  >("wa-tooltip");
 }
 
 function expectOpenCount(count: number) {
@@ -89,6 +95,17 @@ describe("openclaw-tooltip", () => {
 
     expectOpenCount(1);
     expect(webAwesomeTooltip(tooltip)?.textContent).toBe("Single portal");
+  });
+
+  it("anchors the Web Awesome popup after its initial update", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createTooltip("Anchored tooltip");
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+    await webAwesomeTooltip(tooltip)?.updateComplete;
+
+    expect(webAwesomeTooltip(tooltip)?.anchor).toBe(trigger);
   });
 
   it("restores the normal hover delay after the provider reconnects", async () => {

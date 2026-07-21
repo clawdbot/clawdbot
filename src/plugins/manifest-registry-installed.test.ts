@@ -677,6 +677,47 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.channelCatalogMeta).toBeUndefined();
   });
 
+  it("normalizes persisted channel CLI option value types", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageChannel: {
+              id: "installed",
+              cliAddOptions: [
+                {
+                  flags: "--limit <n>",
+                  description: "Limit",
+                  valueType: "int",
+                },
+                {
+                  flags: "--ignored <value>",
+                  description: "Ignored",
+                  valueType: "string",
+                },
+              ],
+            },
+          },
+        ],
+      } as unknown as InstalledPluginIndex,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.packageChannel?.cliAddOptions).toEqual([
+      { flags: "--limit <n>", description: "Limit", valueType: "int" },
+      { flags: "--ignored <value>", description: "Ignored" },
+    ]);
+  });
+
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();

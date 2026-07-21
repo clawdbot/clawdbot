@@ -87,11 +87,17 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     );
   });
 
-  it("forwards the live Codex bind provider override into Docker", () => {
+  it("forwards the live Codex bind controls into Docker", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain(
       '-e OPENCLAW_LIVE_CODEX_BIND_PROVIDER="${OPENCLAW_LIVE_CODEX_BIND_PROVIDER:-}"',
+    );
+    expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_BIND_REQUEST_TIMEOUT_MS="${OPENCLAW_LIVE_CODEX_BIND_REQUEST_TIMEOUT_MS:-}"',
+    );
+    expect(script).toContain(
+      '-e OPENCLAW_LIVE_CODEX_BIND_TIMEOUT_MS="${OPENCLAW_LIVE_CODEX_BIND_TIMEOUT_MS:-}"',
     );
   });
 

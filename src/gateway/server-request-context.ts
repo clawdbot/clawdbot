@@ -250,8 +250,11 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
-        // Marking is separate from socket close so already-buffered requests
-        // fail authorization even if transport teardown has not completed.
+        // Retire node-owned projections and pending invokes synchronously; socket
+        // close remains separate so already-buffered requests fail authorization.
+        if (gatewayClient.connId) {
+          params.nodeRegistry.invalidateConnectionForPairingChange(gatewayClient.connId, reason);
+        }
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }

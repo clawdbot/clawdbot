@@ -43,6 +43,7 @@ export const GATEWAY_EVENTS = [
   "ui.command",
   "session.approval",
   "session.message",
+  "session.observer",
   "session.operation",
   "session.tool",
   "sessions.changed",

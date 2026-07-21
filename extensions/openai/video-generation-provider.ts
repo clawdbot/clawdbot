@@ -1,6 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -45,7 +45,7 @@ type OpenAIVideoRequestPolicy = {
 type OpenAIVideoStatus = "queued" | "in_progress" | "completed" | "failed";
 
 type OpenAIReferenceAsset = {
-  kind: "image" | "video";
+  kind: Extract<MediaKind, "image" | "video">;
   file: File;
   buffer: Buffer;
   mimeType: string;

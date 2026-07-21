@@ -96,6 +96,11 @@ export class SessionManager extends SessionManagerBranching {
     super.clearPreservedOpaqueFileEntries();
   }
 
+  /** Makes pending append-oriented persistence durable without rewriting committed entries. */
+  override flushPendingPersistence(): void {
+    super.flushPendingPersistence();
+  }
+
   override isPersisted(): boolean {
     return super.isPersisted();
   }

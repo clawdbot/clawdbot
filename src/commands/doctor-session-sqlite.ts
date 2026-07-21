@@ -22,6 +22,8 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
@@ -63,6 +65,10 @@ import {
   type DoctorSessionSqliteReport,
   type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
+import {
+  assertDoctorSqliteMaintenancePathsNotHardLinked,
+  isDestructiveDoctorSessionSqliteMode,
+} from "./doctor-sqlite-maintenance-lock.js";
 export {
   restoreSessionSqliteMigrationRun,
   writeSessionSqliteMigrationFailureReports,
@@ -97,6 +103,12 @@ export async function runDoctorSessionSqlite(
     mode: options.mode,
     store: options.store,
   });
+  if (isDestructiveDoctorSessionSqliteMode(options.mode)) {
+    assertDoctorSqliteMaintenancePathsNotHardLinked(
+      `session SQLite ${options.mode}`,
+      resolveDoctorSessionSqliteMaintenancePaths(targets),
+    );
+  }
   if (options.mode === "restore") {
     return restoreDoctorSessionSqliteTargets({
       env,
@@ -146,6 +158,18 @@ export async function runDoctorSessionSqlite(
     writeSessionSqliteMigrationManifest(activeRun);
   }
   return summarizeDoctorSessionSqliteReport(options.mode, reports, activeRun);
+}
+
+function resolveDoctorSessionSqliteMaintenancePaths(
+  targets: readonly SessionStoreTarget[],
+): string[] {
+  const protectedPaths = new Set<string>();
+  for (const target of targets) {
+    for (const databasePath of resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))) {
+      protectedPaths.add(databasePath);
+    }
+  }
+  return [...protectedPaths];
 }
 
 // Direct store migrations are scoped by path; broader agent discovery needs runtime config.
@@ -347,14 +371,34 @@ function readLegacySessionRecords(
   issues: DoctorSessionSqliteIssue[],
   options: { allowMissingStore?: boolean } = {},
 ): LegacySessionRecord[] {
-  let parsed: unknown;
+  // Open a file descriptor first, then stat and read through it to eliminate
+  // the TOCTOU race where a file can change between size validation and read.
+  // Use O_NONBLOCK so a path substituted with a FIFO cannot block waiting for
+  // a writer; fstat on the descriptor then rejects non-regular files.
+  const openFlags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+  let fd: number;
   try {
-    parsed = JSON.parse(fs.readFileSync(target.storePath, "utf-8"));
+    fd = fs.openSync(target.storePath, openFlags);
   } catch (err) {
-    if (
-      options.allowMissingStore === true &&
-      (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
-    ) {
+    const nodeErr = err as NodeJS.ErrnoException;
+    if (options.allowMissingStore === true && nodeErr.code === "ENOENT") {
+      try {
+        const parentStat = fs.statSync(path.dirname(target.storePath));
+        if (!parentStat.isDirectory()) {
+          issues.push({
+            code: "store_unreadable",
+            message: `${target.storePath}: parent path is not a directory`,
+          });
+        }
+      } catch (parentErr) {
+        if ((parentErr as NodeJS.ErrnoException).code !== "ENOENT") {
+          issues.push({
+            code: "store_unreadable",
+            message: `${target.storePath}: ${String(parentErr)}`,
+          });
+        }
+      }
       return [];
     }
     issues.push({
@@ -363,32 +407,57 @@ function readLegacySessionRecords(
     });
     return [];
   }
-  if (!isRecord(parsed)) {
-    issues.push({
-      code: "store_not_object",
-      message: `${target.storePath} does not contain an object session store.`,
-    });
-    return [];
-  }
-  const records: LegacySessionRecord[] = [];
-  for (const [sessionKey, value] of Object.entries(parsed)) {
-    if (!isSessionEntry(value)) {
+
+  try {
+    let parsed: unknown;
+    try {
+      const storeStat = fs.fstatSync(fd);
+      if (!storeStat.isFile()) {
+        issues.push({
+          code: "store_unreadable",
+          message: `${target.storePath}: not a regular file`,
+        });
+        return [];
+      }
+      // Fail closed if the pinned file grows past the size validated above.
+      const raw = readFileDescriptorBoundedSync(fd, storeStat.size).toString("utf-8");
+      parsed = JSON.parse(raw);
+    } catch (err) {
       issues.push({
-        code: "entry_invalid",
-        message: "Session entry is missing a valid sessionId.",
-        sessionKey,
+        code: "store_unreadable",
+        message: `${target.storePath}: ${String(err)}`,
       });
-      continue;
+      return [];
     }
-    records.push({
-      // Import is the migration boundary: repair legacy delivery/route shapes
-      // here because the SQLite runtime read path assumes canonical entries.
-      entry: normalizeSessionEntryDelivery(value),
-      sessionKey,
-      transcriptPath: resolveLegacyTranscriptPath(target, value),
-    });
+    if (!isRecord(parsed)) {
+      issues.push({
+        code: "store_not_object",
+        message: `${target.storePath} does not contain an object session store.`,
+      });
+      return [];
+    }
+    const records: LegacySessionRecord[] = [];
+    for (const [sessionKey, value] of Object.entries(parsed)) {
+      if (!isSessionEntry(value)) {
+        issues.push({
+          code: "entry_invalid",
+          message: "Session entry is missing a valid sessionId.",
+          sessionKey,
+        });
+        continue;
+      }
+      records.push({
+        // Import is the migration boundary: repair legacy delivery/route shapes
+        // here because the SQLite runtime read path assumes canonical entries.
+        entry: normalizeSessionEntryDelivery(value),
+        sessionKey,
+        transcriptPath: resolveLegacyTranscriptPath(target, value),
+      });
+    }
+    return records;
+  } finally {
+    fs.closeSync(fd);
   }
-  return records;
 }
 
 function isLegacySessionRecordOwnedByTarget(

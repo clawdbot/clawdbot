@@ -278,3 +278,60 @@ describe("widget-card", () => {
     expect(missingView.querySelector("[data-pin-widget]")).toBeNull();
   });
 });
+
+describe("widget-card presentation", () => {
+  const preview = {
+    kind: "canvas",
+    surface: "assistant_message",
+    render: "url",
+    title: "Clock",
+    viewId: "cv_clock",
+    url: "/__openclaw__/canvas/documents/cv_clock/index.html",
+    sandbox: "scripts",
+  } as const;
+
+  function providerWith(presentation?: "card" | "full-bleed" | "frameless"): BoardProvider {
+    return {
+      sessionKey: "agent:main:main",
+      canPinWidgets: true,
+      pinWidget: vi.fn(async () => undefined),
+      snapshot$: {
+        value: {
+          sessionKey: "agent:main:main",
+          revision: 1,
+          tabs: [],
+          widgets: [
+            {
+              name: "canvas-cv_clock",
+              tabId: "main",
+              contentKind: "html",
+              ...(presentation ? { presentation } : {}),
+              sizeW: 6,
+              sizeH: 4,
+              position: 0,
+              grantState: "none",
+              revision: 1,
+            },
+          ],
+        },
+        subscribe: () => () => {},
+      },
+    } as unknown as BoardProvider;
+  }
+
+  it("drops the panel inset for non-card pinned presentations", () => {
+    const host = document.createElement("div");
+    render(
+      renderToolPreview(preview, "chat_message", { boardProvider: providerWith("full-bleed") }),
+      host,
+    );
+    expect(host.querySelector(".chat-tool-card__preview-panel")?.hasAttribute("data-bleed")).toBe(
+      true,
+    );
+
+    render(renderToolPreview(preview, "chat_message", { boardProvider: providerWith() }), host);
+    expect(host.querySelector(".chat-tool-card__preview-panel")?.hasAttribute("data-bleed")).toBe(
+      false,
+    );
+  });
+});

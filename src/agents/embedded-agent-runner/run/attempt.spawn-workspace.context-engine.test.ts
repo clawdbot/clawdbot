@@ -618,8 +618,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             ],
           };
           (
-            options as { onPayload?: (payload: Record<string, unknown>) => void } | undefined
-          )?.onPayload?.(payload);
+            options as
+              | {
+                  onPayload?: (payload: Record<string, unknown>, model: typeof _model) => void;
+                }
+              | undefined
+          )?.onPayload?.(payload, _model);
           payloads.push(structuredClone(payload));
           return {
             async result() {
@@ -2484,8 +2488,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 
-  it("keeps the generic precheck active when owning context engine assembly fails", async () => {
-    const lockEvents = trackSessionWriteLocks();
+  it("submits once to the provider when owning context engine assembly fails", async () => {
     let sawPrompt = false;
     const hugeHistory = "large raw history ".repeat(2_000);
 
@@ -2516,12 +2519,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(sawPrompt).toBe(false);
-    expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery?.route).toBe("compact_only");
+    expect(sawPrompt).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
-    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
   it("repairs tool-result pairing after context engine assembly", async () => {
@@ -2562,8 +2565,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(promptMessages)).not.toContain("orphaned result");
   });
 
-  it("honors context engines that opt into preassembly overflow authority", async () => {
-    const lockEvents = trackSessionWriteLocks();
+  it("treats preassembly overflow authority as diagnostic before provider submission", async () => {
     let sawPrompt = false;
     const hugeHistory = "large raw history ".repeat(2_000);
 
@@ -2592,15 +2594,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(sawPrompt).toBe(false);
-    expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery?.route).toBe("compact_only");
+    expect(sawPrompt).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.preflightRecovery).toBeUndefined();
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
-    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
-  it("keeps the preassembly overflow precheck active for owning context engines", async () => {
-    const lockEvents = trackSessionWriteLocks();
+  it("submits owning context-engine preassembly pressure to the provider once", async () => {
     let sawPrompt = false;
     const hugeHistory = "large raw history ".repeat(2_000);
 
@@ -2635,12 +2637,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(sawPrompt).toBe(false);
-    expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery?.route).toBe("compact_only");
+    expect(sawPrompt).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
-    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
   it("snapshots pre-assembly messages before assemble even when the engine windows in place", async () => {
@@ -2803,7 +2805,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const afterTurn = vi.fn(async () => {
       events.push("afterTurn");
     });
-    hoisted.sessionManager.replacePersistedTranscript.mockImplementation(() => {
+    hoisted.sessionManager.flushPendingPersistence.mockImplementation(() => {
       events.push("flush");
     });
 
@@ -3691,7 +3693,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");
   });
 
-  it("routes aggregate prompt-history truncation to compact-then-truncate before prompt submission", async () => {
+  it("submits aggregate prompt-history pressure to the provider before recovery", async () => {
     let sawPrompt = false;
     const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
     for (let index = 0; index < 5; index += 1) {
@@ -3731,13 +3733,14 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       },
     });
 
-    expect(sawPrompt).toBe(false);
-    expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({ route: "compact_then_truncate" });
-    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
+    expect(sawPrompt).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.preflightRecovery).toBeUndefined();
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
   });
 
-  it("routes protected trailing aggregate pressure to compact-then-truncate", async () => {
+  it("submits protected trailing aggregate pressure to the provider before recovery", async () => {
     let sawPrompt = false;
     const sessionMessages: AgentMessage[] = [
       { role: "user", content: "seed", timestamp: 1 },
@@ -3776,10 +3779,11 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       },
     });
 
-    expect(sawPrompt).toBe(false);
-    expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({ route: "compact_then_truncate" });
-    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
+    expect(sawPrompt).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.preflightRecovery).toBeUndefined();
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

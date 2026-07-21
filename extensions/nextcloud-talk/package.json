@@ -24,6 +24,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "nextcloud-talk",
       "configuredState": {
@@ -44,7 +47,29 @@
         "nc"
       ],
       "order": 65,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "cliAddOptions": [
+        {
+          "flags": "--base-url <url>",
+          "description": "Channel base URL"
+        },
+        {
+          "flags": "--secret <secret>",
+          "description": "Channel shared secret"
+        },
+        {
+          "flags": "--secret-file <path>",
+          "description": "Read channel shared secret from file"
+        },
+        {
+          "flags": "--password <password>",
+          "description": "Channel password or login secret"
+        },
+        {
+          "flags": "--url <url>",
+          "description": "Channel setup URL"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/nextcloud-talk",

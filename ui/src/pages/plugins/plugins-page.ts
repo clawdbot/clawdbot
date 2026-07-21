@@ -2,7 +2,7 @@ import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { serializeSidebarEntry, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -654,6 +654,18 @@ class PluginsPage extends OpenClawLightDomElement {
     this.replaceResult(withPlugin(this.result, result.plugin), true);
   }
 
+  private pinEnabledPluginRoute(pluginId: string) {
+    const navigation = this.context.navigation;
+    if (pluginId !== "workboard" || !navigation) {
+      return;
+    }
+    const entry = serializeSidebarEntry({ type: "route", route: "workboard" });
+    const current = navigation.snapshot.sidebarEntries;
+    if (!current.includes(entry)) {
+      navigation.update({ sidebarEntries: [...current, entry] });
+    }
+  }
+
   /** Plugin changes can affect both catalog state and route visibility (for example Workboard). */
   private async refreshAfterMutation(
     client: GatewayBrowserClient,
@@ -760,7 +772,15 @@ class PluginsPage extends OpenClawLightDomElement {
         kind: "success",
         text: mutationSuccessMessage(enabled ? "enabled" : "disabled", result),
       });
+      if (enabled) {
+        this.pinEnabledPluginRoute(pluginId);
+      }
       await this.refreshAfterMutation(client, sourceGeneration);
+      if (isCurrent() && !result.restartRequired) {
+        // Plugin-provided tabs are projected in the connection hello. Re-handshake
+        // after the registry refresh so sidebar navigation reflects this mutation.
+        this.context.gateway.connect();
+      }
     } catch (error) {
       if (isCurrent()) {
         this.setMessage(key, { kind: "error", text: errorMessage(error) });

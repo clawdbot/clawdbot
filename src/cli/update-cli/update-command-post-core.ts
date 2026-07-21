@@ -18,6 +18,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { hasErrnoCode } from "../../infra/errors.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
@@ -326,12 +327,31 @@ export async function readPostCorePluginInstallRecordsFile(
   if (!filePath) {
     return undefined;
   }
+  // Missing handoff is optional (parent may omit the path). Corrupt / unreadable
+  // handoff must fail closed: silent undefined previously dropped parent install
+  // recovery context when the post-doctor index was still empty.
+  let raw: string;
   try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf-8")) as unknown;
-    return normalizePluginInstallRecordMap(parsed);
-  } catch {
-    return undefined;
+    raw = await fs.readFile(filePath, "utf-8");
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      return undefined;
+    }
+    throw new Error(
+      `Unable to read plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `Malformed JSON in plugin install records file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
+  }
+  return normalizePluginInstallRecordMap(parsed);
 }
 
 async function execFileStdout(file: string, args: string[]): Promise<string | undefined> {

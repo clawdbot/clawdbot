@@ -19,7 +19,7 @@ import {
 } from "../../gateway/session-compaction-checkpoints.js";
 import {
   formatActiveNodeContextLabel,
-  getActiveNodeContext,
+  getCurrentActiveNodeContext,
 } from "../../infra/active-node-context.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
@@ -1121,6 +1121,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
       spawnWorkspaceDir,
       skillsSnapshot: skillsSnapshotForRun,
       sandboxToolPolicy: sandbox?.tools,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
     const toolsRaw = toolsEnabled
@@ -1319,7 +1321,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           agentId: sessionAgentId,
         }),
       }),
-      activeNode: formatActiveNodeContextLabel(getActiveNodeContext()),
+      activeNode: formatActiveNodeContextLabel(getCurrentActiveNodeContext()),
     };
     const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
       config: params.config,

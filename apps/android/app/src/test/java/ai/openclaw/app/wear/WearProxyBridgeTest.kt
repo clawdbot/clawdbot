@@ -1,5 +1,6 @@
 package ai.openclaw.app.wear
 
+import ai.openclaw.wear.shared.WearConnectionFailure
 import ai.openclaw.wear.shared.WearDecodeResult
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
@@ -22,6 +23,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -721,6 +723,58 @@ class WearProxyBridgeTest {
       assertEquals("hello", payload.getValue("deltaText").jsonPrimitive.content)
       assertEquals("hello", payload.getValue("streamText").jsonPrimitive.content)
     }
+
+  @Test
+  fun connectionEventsCarrySemanticFailureReasons() =
+    runTest {
+      val sent = mutableListOf<SentWearMessage>()
+      val bridge =
+        WearProxyBridge(
+          scope = backgroundScope,
+          sender =
+            WearMessageSender { nodeId, path, data ->
+              sent += SentWearMessage(nodeId, path, data)
+            },
+          peerResolver = WearPeerResolver { setOf("watch-1") },
+          handleRequest = { _, request ->
+            WearMessage.Response(requestId = request.requestId, ok = true)
+          },
+        )
+      bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
+      sent.clear()
+
+      bridge.publishConnection(
+        connected = false,
+        status = "Update required",
+        failure = WearConnectionFailure.Incompatible,
+      )
+      bridge.awaitIdleForTests()
+
+      val event =
+        sent
+          .single { it.path == WearProtocol.EVENT_PATH }
+          .let { (WearProtocolCodec.decode(it.data) as WearDecodeResult.Success).message }
+          as WearMessage.Event
+      val payload = checkNotNull(event.payload).jsonObject
+      assertEquals(false, payload.getValue("connected").jsonPrimitive.boolean)
+      assertEquals("incompatible", payload.getValue("failure").jsonPrimitive.content)
+    }
+
+  @Test
+  fun connectionFailurePreservesProtocolMismatchAndLegacyUpdateSignals() {
+    assertEquals(
+      WearConnectionFailure.Incompatible,
+      wearConnectionFailure(problemCode = "PROTOCOL_MISMATCH", status = "Connection failed"),
+    )
+    assertEquals(
+      WearConnectionFailure.Incompatible,
+      wearConnectionFailure(problemCode = null, status = "Update required"),
+    )
+    assertEquals(
+      WearConnectionFailure.GatewayOffline,
+      wearConnectionFailure(problemCode = null, status = "Offline"),
+    )
+  }
 
   @Test
   fun canceledGoogleTaskResumesAsSendFailure() =

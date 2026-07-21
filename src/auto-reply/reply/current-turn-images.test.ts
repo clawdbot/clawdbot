@@ -40,10 +40,7 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPath: relativePath,
-          MediaPaths: [relativePath],
-          MediaType: "image/jpeg",
-          MediaTypes: ["image/jpeg"],
+          media: [{ path: relativePath, contentType: "image/jpeg" }],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
       });

@@ -42,6 +42,17 @@ describe("buildSystemPromptParams", () => {
     expect(runtimeInfo.activeNode).toBe("mac-123");
   });
 
+  it("omits an active node that fails current-generation validation", () => {
+    setActiveNodeContext(
+      { nodeId: "mac-123", pairingGeneration: "generation-a" },
+      { isCurrent: () => false },
+    );
+
+    const { runtimeInfo } = buildParams({});
+
+    expect(runtimeInfo.activeNode).toBeUndefined();
+  });
+
   it("detects repo root from workspaceDir", async () => {
     const temp = await makeTempDir("workspace");
     const repoRoot = path.join(temp, "repo");

@@ -26,6 +26,37 @@
   word-break: break-word;
 }
 
+.chat-user-message-disclosure__preview {
+  white-space: pre-wrap;
+}
+
+.chat-user-message-disclosure__toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 78%, transparent);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.chat-user-message-disclosure__toggle:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  color: var(--text);
+}
+
+.chat-user-message-disclosure__toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table) {
   margin: 0;
 }

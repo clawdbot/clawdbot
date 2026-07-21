@@ -78,9 +78,12 @@ function renderTextStep(props: WizardViewProps) {
       }}
     >
       ${step.message
-        ? html`<div class="model-setup-wizard__message">${step.message}</div>`
+        ? html`<div class="model-setup-wizard__message">
+            <label for="model-setup-wizard-text-input">${step.message}</label>
+          </div>`
         : nothing}
       <input
+        id="model-setup-wizard-text-input"
         class="input"
         name="wizard-text"
         type=${step.sensitive ? "password" : "text"}

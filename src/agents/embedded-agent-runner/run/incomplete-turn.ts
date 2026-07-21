@@ -127,6 +127,7 @@ const RETRY_GUARD_MODEL_APIS = new Set([
   "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
 // Allow one immediate continuation plus one follow-up continuation before

@@ -863,8 +863,8 @@ export const talkHandlers: GatewayRequestHandlers = {
       respond(false, undefined, talkSpeakError("synthesis_failed", formatForLog(err)));
     }
   },
-  "talk.mode": ({ params, respond, context, client, isWebchatConnect }) => {
-    if (client && isWebchatConnect(client.connect) && !context.hasConnectedTalkNode()) {
+  "talk.mode": async ({ params, respond, context, client, isWebchatConnect }) => {
+    if (client && isWebchatConnect(client.connect) && !(await context.hasConnectedTalkNode())) {
       respond(
         false,
         undefined,

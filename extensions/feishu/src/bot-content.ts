@@ -361,9 +361,7 @@ async function resolveSavedFeishuMedia(params: {
   );
 }
 
-function resolveFeishuMediaKind(
-  messageType: string,
-): "image" | "video" | "audio" | "document" | "sticker" {
+function resolveFeishuMediaKind(messageType: string): FeishuMediaInfo["kind"] {
   switch (messageType) {
     case "image":
       return "image";

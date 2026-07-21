@@ -1637,6 +1637,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requesterSessionOrigin: slackThreadOrigin,
       completionDirectOrigin: slackThreadOrigin,
       directOrigin: slackThreadOrigin,
+      sourceSessionKey: "agent:main:subagent:child",
       requesterIsSubagent: false,
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
@@ -1661,6 +1662,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       allowSyntheticCronRunContinuation: false,
       expectFinal: true,
       forceSyntheticClient: true,
+      delegatedToolPolicyHandoff: true,
       timeoutMs: 120_000,
     });
   });

@@ -75,6 +75,9 @@ openclaw gateway run   # equivalent, explicit form
 <ParamField path="--dev" type="boolean">
   Create a dev config + workspace if missing (skips `BOOTSTRAP.md`).
 </ParamField>
+<ParamField path="--dev-ambient-channels" type="boolean">
+  Allow a dev Gateway to auto-configure channels from ambient environment variables. Requires `--dev`.
+</ParamField>
 <ParamField path="--reset" type="boolean">
   Reset dev config, credentials, sessions, and workspace. Requires `--dev`.
 </ParamField>

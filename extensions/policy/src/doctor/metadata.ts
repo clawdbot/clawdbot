@@ -7,7 +7,8 @@ type PolicyStrictnessKind =
   | "ordered-string"
   | "requires-true"
   | "requires-false"
-  | "exact-list";
+  | "exact-list"
+  | "routing-probes";
 
 type PolicyEmptyListSemantics = "disabled" | "meaningful";
 
@@ -16,7 +17,12 @@ export type PolicyScopeSelectorKind = "agentIds" | "channelIds";
 export type PolicyRuleMetadata = {
   readonly policyPath: readonly string[];
   readonly strictness: PolicyStrictnessKind;
-  readonly valueType: "boolean" | "channel-provider-deny-rules" | "string" | "string-list";
+  readonly valueType:
+    | "boolean"
+    | "channel-provider-deny-rules"
+    | "routing-probes"
+    | "string"
+    | "string-list";
   readonly checkIds: readonly (typeof POLICY_CHECK_IDS)[number][];
   readonly emptyList?: PolicyEmptyListSemantics;
   readonly allowedValues?: readonly string[];
@@ -132,6 +138,24 @@ export const POLICY_RULE_METADATA = [
     strictness: "requires-false",
     valueType: "boolean",
     checkIds: [CHECK_IDS.policyPrivateNetworkAccess],
+  },
+  {
+    policyPath: ["routing", "requireBindings"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyRoutingBindingsRequired],
+  },
+  {
+    policyPath: ["routing", "requireConfiguredChannels"],
+    strictness: "requires-true",
+    valueType: "boolean",
+    checkIds: [CHECK_IDS.policyRoutingBindingChannelUnconfigured],
+  },
+  {
+    policyPath: ["routing", "probes"],
+    strictness: "routing-probes",
+    valueType: "routing-probes",
+    checkIds: [CHECK_IDS.policyRoutingAgentMismatch, CHECK_IDS.policyRoutingMatchKindMismatch],
   },
   {
     policyPath: ["ingress", "session", "requireDmScope"],

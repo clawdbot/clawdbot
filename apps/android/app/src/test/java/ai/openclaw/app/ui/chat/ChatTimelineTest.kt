@@ -77,6 +77,29 @@ class ChatTimelineTest {
   }
 
   @Test
+  fun finishedTurnRecapUsesNewestSlotWithoutChangingReaderAnchorRow() {
+    val user = textMessage(id = "user-1", role = "user", text = "hello")
+    val assistant = textMessage(id = "assistant-1", role = "assistant", text = "done")
+    val timeline =
+      buildChatTimeline(
+        messages = listOf(user, assistant),
+        pendingRunCount = 0,
+        pendingToolCalls = emptyList(),
+        streamingAssistantText = null,
+      )
+
+    val withRecap = timeline.withTurnRecap(TurnRecap(runtimeMs = 2_000L, outputTokens = 10L))
+
+    assertEquals(
+      listOf("turn-recap", "message:assistant-1", "message:user-1"),
+      withRecap.items.map(::chatTimelineItemKey),
+    )
+    assertEquals(0, withRecap.latestContentIndex)
+    assertEquals(2, withRecap.readAnchorIndex)
+    assertEquals("user-1", withRecap.latestUserMessageId)
+  }
+
+  @Test
   fun emptyTimelineHasNoScrollTarget() {
     val timeline =
       buildChatTimeline(

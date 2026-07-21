@@ -117,6 +117,12 @@ function createRuntime(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+describe("WhatsApp setup promotion contract", () => {
+  it("exposes authDir on the setup-only plugin surface", () => {
+    expect(whatsappSetupPlugin.setup?.singleAccountKeysToMove).toEqual(["authDir"]);
+  });
+});
+
 async function runConfigureWithHarness(params: {
   harness: ReturnType<typeof createQueuedWizardPrompter>;
   cfg?: OpenClawConfig;

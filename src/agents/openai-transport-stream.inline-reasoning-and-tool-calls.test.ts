@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { createOpenAICompletionsTransportStreamFn } from "./openai-transport-stream.js";
 import {
   type OpenAICompletionsOutput,
   type CapturedStreamEvent,

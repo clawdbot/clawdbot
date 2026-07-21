@@ -39,4 +39,38 @@ describe("renderAgentScopeControl", () => {
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(setScope).toHaveBeenCalledWith("retired");
   });
+
+  it("supports a concrete-agent selector without an all-agents option", () => {
+    const container = document.createElement("div");
+    const setScope = vi.fn();
+    const selection = {
+      state: { selectedId: "main", scopeId: null },
+      set: vi.fn(),
+      setScope,
+      subscribe: vi.fn(),
+    } as unknown as AgentSelectionCapability;
+
+    render(
+      renderAgentScopeControl({
+        agents: [
+          { id: "main", name: "Main agent" },
+          { id: "writer", name: "Writer" },
+        ],
+        selection,
+        allowAll: false,
+        selectedId: "writer",
+      }),
+      container,
+    );
+
+    const select = container.querySelector("select");
+    expect(select?.value).toBe("writer");
+    expect(Array.from(select?.options ?? []).map((option) => option.value)).toEqual([
+      "main",
+      "writer",
+    ]);
+    select!.value = "main";
+    select!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(setScope).toHaveBeenCalledWith("main");
+  });
 });

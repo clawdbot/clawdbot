@@ -203,7 +203,11 @@ export function createChatSendReplyDispatch(params: {
       logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
     },
     deliver: async (payload, info) => {
-      if (getReplyPayloadMetadata(payload)?.beforeAgentRunBlocked === true) {
+      const payloadMetadata = getReplyPayloadMetadata(payload);
+      if (
+        payloadMetadata?.beforeAgentRunBlocked === true ||
+        payloadMetadata?.sourceReplyTranscriptMirror?.transcriptWriteBlocked === true
+      ) {
         userTurnRecorder.markBlocked();
       }
       switch (info.kind) {

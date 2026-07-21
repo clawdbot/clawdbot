@@ -24,7 +24,7 @@ class ClientDatabasesTest {
       val databases = open(names, registeredGatewayIds = setOf("gateway-test"))
       try {
         assertEquals(
-          1,
+          2,
           databases
             .gatewayCacheDatabase()
             .openHelper.writableDatabase.version,

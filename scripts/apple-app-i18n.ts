@@ -37,15 +37,17 @@ const INFLECTED_COUNT_SEGMENT_RE =
   /\^\[[^\]]*\\\([A-Za-z_][A-Za-z0-9_]*\)[^\]]*\]\(inflect: true\)/gu;
 const INFLECTED_COUNT_MARKER = "](inflect: true)";
 const IOS_CATALOG_PATH = "apps/ios/Resources/Localizable.xcstrings";
+const MACOS_CATALOG_PATH = "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings";
 const IOS_CONTRADICTIONS_PATH = "apps/.i18n/apple-translation-contradictions.json";
 const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
 const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
+const SHARED_CHAT_UI_SOURCE_PREFIX = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/";
 const IOS_SOURCE_PREFIXES = [
   "apps/ios/",
-  "apps/shared/OpenClawKit/Sources/OpenClawChatUI/",
+  SHARED_CHAT_UI_SOURCE_PREFIX,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/",
 ] as const;
-const IOS_CATALOG_KINDS = new Set([
+const APPLE_CATALOG_KINDS = new Set([
   "conditional-branch",
   "ui-call",
   "ui-call-multiline",
@@ -59,6 +61,14 @@ const IOS_CATALOG_EXCLUSIONS = new Set([
   // Product names and preview-only single-character fixtures are intentionally verbatim.
   "OpenClaw",
   "z",
+]);
+const MACOS_SOURCE_PREFIXES = [
+  "apps/macos/Sources/OpenClaw/",
+  SHARED_CHAT_UI_SOURCE_PREFIX,
+] as const;
+const MACOS_CATALOG_EXCLUSIONS = new Set([
+  // Product names are intentionally verbatim.
+  "OpenClaw",
 ]);
 const IOS_INFO_PLIST_TARGETS = [
   {
@@ -143,6 +153,18 @@ const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
   "zh-TW": "zh-Hant",
 };
 const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
+  "apps/macos/Sources/OpenClaw/SettingsComponents.swift": [
+    "enum SettingsTextValue: ExpressibleByStringLiteral",
+    "case localized(LocalizedStringKey)",
+    "case verbatim(String)",
+    "static func localized(_ value: String) -> Self",
+    "struct SettingsPageHeader: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
+    "struct SettingsCardGroup<Content: View>: View {\n    let title: SettingsTextValue",
+    "struct SettingsCardRow<Content: View>: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
+    "struct SettingsCardToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
+    "struct SettingsToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
+    "Text(verbatim: value)",
+  ],
   "apps/ios/Sources/Design/OpenClawProComponents.swift": [
     "enum OpenClawTextValue: ExpressibleByStringLiteral",
     "struct ProSectionHeader: View {\n    let title: OpenClawTextValue",
@@ -283,6 +305,12 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   ],
 };
 const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
+  "apps/macos/Sources/OpenClaw/SettingsComponents.swift": [
+    "let title: String",
+    "let subtitle: String?",
+    "Text(self.title)",
+    "Text(subtitle)",
+  ],
   "apps/ios/Sources/Design/SettingsProTabSections.swift": [
     "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: String",
     "func aboutLinkRow(title: String",
@@ -371,19 +399,6 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
     'self.replyStatusText = "',
   ],
 };
-
-const MACOS_CATALOG = {
-  path: "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
-  coverage: {
-    "apps/macos/Sources/OpenClaw/ChannelsSettings+ChannelSections.swift": [
-      "Logout",
-      "Refresh",
-      "Save",
-    ],
-    "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
-    "apps/macos/Sources/OpenClaw/OnboardingSystemAgentChat.swift": ["Wake up, my friend!"],
-  },
-} as const;
 
 type StringUnit = {
   state?: string;
@@ -530,9 +545,19 @@ function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
     IOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
-    IOS_CATALOG_KINDS.has(entry.kind) &&
+    APPLE_CATALOG_KINDS.has(entry.kind) &&
     (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
     !IOS_CATALOG_EXCLUSIONS.has(entry.source)
+  );
+}
+
+function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
+  return (
+    entry.surface === "apple" &&
+    MACOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
+    APPLE_CATALOG_KINDS.has(entry.kind) &&
+    !entry.source.includes("\\(") &&
+    !MACOS_CATALOG_EXCLUSIONS.has(entry.source)
   );
 }
 
@@ -578,18 +603,19 @@ function chooseTranslation(source: string, translations: readonly string[]): str
   );
 }
 
-export function buildIosCatalog(
+function buildAppleCatalog(
   existingCatalog: Catalog,
   nativeSource: NativeSourceArtifact,
   translations: readonly NativeTranslationArtifact[],
+  includesEntry: (entry: NativeSourceEntry) => boolean,
 ): AppleCatalogBuild {
-  const iosEntries = nativeSource.entries.filter(isIosCatalogEntry);
-  const catalogEntries = iosEntries.map(
-    (entry) => [entry, appleCatalogValue(entry.source)] as const,
-  );
+  const catalogEntries = nativeSource.entries
+    .filter(includesEntry)
+    .map((entry) => [entry, appleCatalogValue(entry.source)] as const);
   const sources = [...new Set(catalogEntries.map(([, source]) => source))].toSorted(
     compareCodeUnits,
   );
+  const sourceSet = new Set(sources);
   const appleIdsBySource = new Map<string, Set<string>>();
   for (const [entry, source] of catalogEntries) {
     const ids = appleIdsBySource.get(source) ?? new Set<string>();
@@ -602,7 +628,7 @@ export function buildIosCatalog(
       const bySource = new Map<string, string[]>();
       for (const entry of artifact.entries) {
         const source = appleCatalogValue(entry.source);
-        if (!sources.includes(source)) {
+        if (!sourceSet.has(source)) {
           continue;
         }
         const appleIds = appleIdsBySource.get(source);
@@ -664,6 +690,22 @@ export function buildIosCatalog(
         compareCodeUnits(left.source, right.source) || compareCodeUnits(left.locale, right.locale),
     ),
   };
+}
+
+export function buildIosCatalog(
+  existingCatalog: Catalog,
+  nativeSource: NativeSourceArtifact,
+  translations: readonly NativeTranslationArtifact[],
+): AppleCatalogBuild {
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, isIosCatalogEntry);
+}
+
+export function buildMacosCatalog(
+  existingCatalog: Catalog,
+  nativeSource: NativeSourceArtifact,
+  translations: readonly NativeTranslationArtifact[],
+): AppleCatalogBuild {
+  return buildAppleCatalog(existingCatalog, nativeSource, translations, isMacosCatalogEntry);
 }
 
 async function listSwiftFiles(directory: string): Promise<string[]> {
@@ -742,6 +784,17 @@ async function readIosCatalogBuild(): Promise<AppleCatalogBuild> {
   ) as NativeSourceArtifact;
   const translations = await readNativeTranslations();
   return buildIosCatalog(existingCatalog, nativeSource, translations);
+}
+
+async function readMacosCatalogBuild(): Promise<AppleCatalogBuild> {
+  const existingCatalog = JSON.parse(
+    await readFile(path.join(ROOT, MACOS_CATALOG_PATH), "utf8"),
+  ) as Catalog;
+  const nativeSource = JSON.parse(
+    await readFile(path.join(ROOT, NATIVE_SOURCE_PATH), "utf8"),
+  ) as NativeSourceArtifact;
+  const translations = await readNativeTranslations();
+  return buildMacosCatalog(existingCatalog, nativeSource, translations);
 }
 
 function validateCatalog(pathName: string, catalog: Catalog): number {
@@ -859,18 +912,42 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
   return build;
 }
 
+export async function syncMacosCatalog(write: boolean): Promise<AppleCatalogBuild> {
+  const build = await readMacosCatalogBuild();
+  const catalogPath = path.join(ROOT, MACOS_CATALOG_PATH);
+  const expected = serializeCatalog(build.catalog);
+  const actual = await readFile(catalogPath, "utf8");
+  if (actual !== expected) {
+    if (!write) {
+      assertMacosCatalogCurrent(actual, build);
+      return build;
+    }
+    await writeFile(catalogPath, expected, "utf8");
+  }
+  return build;
+}
+
+export function assertMacosCatalogCurrent(actual: string, build: AppleCatalogBuild): void {
+  if (actual !== serializeCatalog(build.catalog)) {
+    throw new Error(
+      `Apple catalog ${MACOS_CATALOG_PATH} is stale; run native-app-i18n.ts sync --write`,
+    );
+  }
+}
+
 /**
- * Regenerates every Apple derived artifact (iOS catalog, contradiction report,
+ * Regenerates every Apple derived artifact (app catalogs, contradiction report,
  * InfoPlist strings). Shared by this CLI and native-app-i18n's sync so the
  * inventory can never be rewritten without its derived catalogs.
  */
 export async function syncAppleAppI18n(): Promise<{
   build: AppleCatalogBuild;
   infoPlistFiles: number;
+  macosBuild: AppleCatalogBuild;
 }> {
-  const build = await syncIosCatalog(true);
+  const [build, macosBuild] = await Promise.all([syncIosCatalog(true), syncMacosCatalog(true)]);
   const infoPlistFiles = await syncIosInfoPlist(true);
-  return { build, infoPlistFiles };
+  return { build, infoPlistFiles, macosBuild };
 }
 
 export async function verifyAppleAppI18n() {
@@ -894,48 +971,29 @@ export async function verifyAppleAppI18n() {
     }
   }
 
-  const macosCatalog = JSON.parse(
-    await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
-  ) as Catalog;
-  if (!macosCatalog.strings) {
-    throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG.path}`);
-  }
-  const expectedMacosKeys: Set<string> = new Set(Object.values(MACOS_CATALOG.coverage).flat());
-  const actualMacosKeys = new Set(Object.keys(macosCatalog.strings));
-  const missingMacosKeys = [...expectedMacosKeys].filter((key) => !actualMacosKeys.has(key));
-  const extraMacosKeys = [...actualMacosKeys].filter((key) => !expectedMacosKeys.has(key));
-  if (missingMacosKeys.length || extraMacosKeys.length) {
-    throw new Error(
-      [
-        `Apple catalog ${MACOS_CATALOG.path} does not match its phased source coverage.`,
-        `missing=${missingMacosKeys.join(",") || "none"}`,
-        `extra=${extraMacosKeys.join(",") || "none"}`,
-      ].join("\n"),
-    );
-  }
-  for (const [sourcePath, keys] of Object.entries(MACOS_CATALOG.coverage)) {
-    const source = await readFile(path.join(ROOT, sourcePath), "utf8");
-    const absent = keys.filter((key) => !source.includes(key));
-    if (absent.length) {
-      throw new Error(`Apple i18n coverage ${sourcePath} no longer contains: ${absent.join(", ")}`);
-    }
-  }
-  const macosKeys = validateCatalog(MACOS_CATALOG.path, macosCatalog);
+  const macosBuild = await readMacosCatalogBuild();
+  const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
 
   process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);
 }
 
 export async function checkAppleAppI18n() {
   await verifyAppleAppI18n();
-  const iosBuild = await syncIosCatalog(false);
+  const [iosBuild, macosBuild] = await Promise.all([
+    syncIosCatalog(false),
+    syncMacosCatalog(false),
+  ]);
   const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
+  const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
   const infoPlistFiles = await syncIosInfoPlist(false);
 
   process.stdout.write(
     [
       `apple-app-i18n: iosKeys=${iosKeys}`,
+      `macosKeys=${macosKeys}`,
       `infoPlistFiles=${infoPlistFiles}`,
       `translationContradictions=${iosBuild.contradictions.length}`,
+      `macosTranslationContradictions=${macosBuild.contradictions.length}`,
       `locales=${APPLE_I18N_LOCALES.join(",")}`,
       "\n",
     ].join(" "),
@@ -943,14 +1001,13 @@ export async function checkAppleAppI18n() {
 }
 
 export async function compileMacosLocalizations(outputDir: string) {
-  // Source PRs intentionally leave generated iOS catalogs for the serialized
-  // post-merge refresh. Packaging only needs the source-owned macOS contract.
+  // Source PRs intentionally leave generated Apple catalogs for the serialized
+  // post-merge refresh. Package from the derived catalog so source changes
+  // cannot ship stale localization coverage before that refresh lands.
   await verifyAppleAppI18n();
-  const catalog = JSON.parse(
-    await readFile(path.join(ROOT, MACOS_CATALOG.path), "utf8"),
-  ) as Catalog;
+  const catalog = (await readMacosCatalogBuild()).catalog;
   if (!catalog.strings) {
-    throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG.path}`);
+    throw new Error(`invalid Apple string catalog: ${MACOS_CATALOG_PATH}`);
   }
 
   for (const locale of REQUIRED_LOCALES) {
@@ -962,7 +1019,7 @@ export async function compileMacosLocalizations(outputDir: string) {
         const value = entry.localizations?.[locale]?.stringUnit?.value;
         if (!value) {
           throw new Error(
-            `Apple catalog ${MACOS_CATALOG.path} is missing ${locale} for ${JSON.stringify(key)}`,
+            `Apple catalog ${MACOS_CATALOG_PATH} is missing ${locale} for ${JSON.stringify(key)}`,
           );
         }
         return `${stringsLiteral(key)} = ${stringsLiteral(value)};`;
@@ -977,9 +1034,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   if (command === "check") {
     await checkAppleAppI18n();
   } else if (command === "sync-ios" && flag === "--write") {
-    const { build, infoPlistFiles } = await syncAppleAppI18n();
+    const { build, infoPlistFiles, macosBuild } = await syncAppleAppI18n();
     process.stdout.write(
-      `apple-app-i18n: synced iOS catalog and ${infoPlistFiles} InfoPlist files; contradictions=${build.contradictions.length}\n`,
+      `apple-app-i18n: synced Apple catalogs and ${infoPlistFiles} InfoPlist files; contradictions=${build.contradictions.length + macosBuild.contradictions.length}\n`,
     );
   } else if (command === "compile-macos" && flag === "--output" && value) {
     await compileMacosLocalizations(path.resolve(value));

@@ -182,7 +182,9 @@ const hoisted = vi.hoisted(() => ({
   rejectPendingPreparedModelRuntimeReplacement: vi.fn(
     (_gateId: symbol | undefined, _error: unknown) => {},
   ),
-  refreshPreparedModelRuntimeSnapshots: vi.fn(async (_cfg: OpenClawConfig) => {}),
+  refreshPreparedModelRuntimeSnapshots: vi.fn(
+    async (_cfg: OpenClawConfig, _options?: { catalogMode?: "live" | "static" }) => {},
+  ),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
@@ -274,9 +276,12 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
   },
   rejectPendingPreparedModelRuntimeReplacement: (gateId: symbol | undefined, error: unknown) =>
     hoisted.rejectPendingPreparedModelRuntimeReplacement(gateId, error),
-  refreshPreparedModelRuntimeSnapshots: (cfg: OpenClawConfig) => {
+  refreshPreparedModelRuntimeSnapshots: (
+    cfg: OpenClawConfig,
+    options?: { catalogMode?: "live" | "static" },
+  ) => {
     hoisted.reloadEvents.push("refresh-prepared-model-runtime");
-    return hoisted.refreshPreparedModelRuntimeSnapshots(cfg);
+    return hoisted.refreshPreparedModelRuntimeSnapshots(cfg, options);
   },
 }));
 
@@ -1324,7 +1329,9 @@ describe("gateway hot reload model state", () => {
       "prepared model runtime owner is stale before config publication",
       { waitForReplacement: true },
     );
-    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig);
+    expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
+      catalogMode: "static",
+    });
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 

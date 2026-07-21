@@ -11,6 +11,7 @@ import type {
 } from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
+  buildPinnedCopyPlan,
   buildPinnedMkdirpPlan,
   buildPinnedRemovePlan,
   buildPinnedRenamePlan,
@@ -78,6 +79,39 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
     return this.readPinnedFile(target);
+  }
+
+  async copyFile(params: {
+    sourcePath: string;
+    destinationPath: string;
+    cwd?: string;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const source = this.resolveResolvedPath({ filePath: params.sourcePath, cwd: params.cwd });
+    const destination = this.resolveResolvedPath({
+      filePath: params.destinationPath,
+      cwd: params.cwd,
+    });
+    this.ensureWriteAccess(destination, "copy files");
+    const sourceCheck = {
+      target: source,
+      options: { action: "copy files", allowedType: "file" } as const,
+    };
+    const destinationCheck = {
+      target: destination,
+      options: { action: "copy files", requireWritable: true } as const,
+    };
+    await this.runCheckedCommand({
+      ...buildPinnedCopyPlan({
+        sourceCheck,
+        destinationCheck,
+        source: await this.pathGuard.resolveAnchoredPinnedEntry(source, "copy files"),
+        destination: await this.pathGuard.resolveAnchoredPinnedEntry(destination, "copy files"),
+        mkdir: params.mkdir !== false,
+      }),
+      signal: params.signal,
+    });
   }
 
   async writeFile(params: {

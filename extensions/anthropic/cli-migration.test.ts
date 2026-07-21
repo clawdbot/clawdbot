@@ -332,6 +332,100 @@ describe("anthropic cli migration", () => {
     });
   });
 
+  it.each([
+    {
+      descriptor: {
+        value: { inherited: true },
+        writable: true,
+      },
+      name: "writable data descriptor",
+    },
+    {
+      descriptor: {
+        value: { inherited: true },
+        writable: false,
+      },
+      name: "non-writable data descriptor",
+    },
+    {
+      descriptor: {
+        get: () => ({ inherited: true }),
+      },
+      name: "getter-only accessor",
+    },
+  ])("writes migrated refs as own entries over an inherited $name", ({ descriptor }) => {
+    // Process-global prototype pollution can expose a converted ref. The
+    // migration must write the converted entry as an own property without
+    // invoking inherited getters/setters or throwing on non-writable descriptors.
+    const convertedRef = "anthropic/claude-opus-4-7";
+    const priorDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, convertedRef);
+    try {
+      Reflect.defineProperty(Object.prototype, convertedRef, {
+        configurable: true,
+        ...descriptor,
+      });
+
+      const result = buildAnthropicCliMigrationResult({
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/claude-opus-4-7" },
+            models: {
+              "claude-cli/claude-opus-4-7": { alias: "Opus" },
+            },
+          },
+        },
+      });
+
+      const models = result.configPatch?.agents?.defaults?.models ?? {};
+      const migrated = models[convertedRef];
+      expect(migrated).toEqual({ alias: "Opus", agentRuntime: { id: "claude-cli" } });
+      expect(Object.hasOwn(models, convertedRef)).toBe(true);
+    } finally {
+      if (priorDescriptor) {
+        Reflect.defineProperty(Object.prototype, convertedRef, priorDescriptor);
+      } else {
+        Reflect.deleteProperty(Object.prototype, convertedRef);
+      }
+    }
+  });
+
+  it("writes migrated refs as own entries without invoking an inherited setter", () => {
+    const convertedRef = "anthropic/claude-opus-4-7";
+    let setterCalled = false;
+    const priorDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, convertedRef);
+    try {
+      Reflect.defineProperty(Object.prototype, convertedRef, {
+        configurable: true,
+        set: () => {
+          setterCalled = true;
+        },
+      });
+
+      const result = buildAnthropicCliMigrationResult({
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/claude-opus-4-7" },
+            models: {
+              "claude-cli/claude-opus-4-7": { alias: "Opus" },
+            },
+          },
+        },
+      });
+
+      const models = result.configPatch?.agents?.defaults?.models ?? {};
+      const migrated = models[convertedRef];
+      expect(migrated).toEqual({ alias: "Opus", agentRuntime: { id: "claude-cli" } });
+      expect(Object.hasOwn(models, convertedRef)).toBe(true);
+      expect(setterCalled).toBe(false);
+    } finally {
+      if (priorDescriptor) {
+        Reflect.defineProperty(Object.prototype, convertedRef, priorDescriptor);
+      } else {
+        Reflect.deleteProperty(Object.prototype, convertedRef);
+      }
+    }
+  });
+
   it("preserves explicit model runtime policy while filling missing Claude CLI policies", () => {
     const result = buildAnthropicCliMigrationResult({
       agents: {

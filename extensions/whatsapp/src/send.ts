@@ -30,11 +30,11 @@ import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
-function supportsForcedDocumentDelivery(kind: "image" | "audio" | "video" | "document"): boolean {
+type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
+
+function supportsForcedDocumentDelivery(kind: PreparedWhatsAppOutboundMedia["kind"]): boolean {
   return kind === "image" || kind === "video";
 }
-
-type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
 
 type WhatsAppMediaSendState = {
   mediaBuffer: Buffer;
@@ -135,7 +135,7 @@ export async function sendMessageWhatsApp(
     mediaPayload?: {
       buffer: Buffer;
       contentType?: string;
-      kind?: "image" | "audio" | "video" | "document";
+      kind?: PreparedWhatsAppOutboundMedia["kind"];
       fileName?: string;
     };
     gifPlayback?: boolean;

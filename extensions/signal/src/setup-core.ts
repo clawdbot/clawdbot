@@ -128,6 +128,7 @@ async function promptSignalAllowFrom(params: {
         channel,
         accountId,
         allowFrom,
+        setupSurface: signalSetupAdapter,
       }),
   });
 }
@@ -172,6 +173,7 @@ export const signalDmPolicy = {
               ),
             }
           : { dmPolicy: policy },
+      setupSurface: signalSetupAdapter,
     }),
   promptAllowFrom: promptSignalAllowFrom,
 };
@@ -224,24 +226,34 @@ export const signalCompletionNote = {
   ],
 };
 
-export const signalSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
-  channelKey: channel,
-  validateInput: createSetupInputPresenceValidator({
-    validate: ({ input }) => {
-      if (
-        !input.signalNumber &&
-        !input.httpUrl &&
-        !input.httpHost &&
-        !input.httpPort &&
-        !input.cliPath
-      ) {
-        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
-      }
-      return null;
-    },
+export const signalSetupAdapter: ChannelSetupAdapter = {
+  ...createPatchedAccountSetupAdapter({
+    channelKey: channel,
+    validateInput: createSetupInputPresenceValidator({
+      validate: ({ input }) => {
+        if (
+          !input.signalNumber &&
+          !input.httpUrl &&
+          !input.httpHost &&
+          !input.httpPort &&
+          !input.cliPath
+        ) {
+          return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
+        }
+        return null;
+      },
+    }),
+    buildPatch: (input) => buildSignalSetupPatch(input),
   }),
-  buildPatch: (input) => buildSignalSetupPatch(input),
-});
+  singleAccountKeysToMove: [
+    "signalNumber",
+    "account",
+    "cliPath",
+    "httpUrl",
+    "httpHost",
+    "httpPort",
+  ],
+};
 
 export function createSignalSetupWizardProxy(loadWizard: () => Promise<ChannelSetupWizard>) {
   return createDelegatedSetupWizardProxy({

@@ -34,7 +34,13 @@
       "docsPath": "/channels/synology-chat",
       "docsLabel": "synology-chat",
       "blurb": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
-      "order": 90
+      "order": 90,
+      "cliAddOptions": [
+        {
+          "flags": "--url <url>",
+          "description": "Channel setup URL"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/synology-chat",

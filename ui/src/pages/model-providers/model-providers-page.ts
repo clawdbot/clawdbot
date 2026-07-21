@@ -6,9 +6,12 @@ import type { ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
@@ -36,6 +39,8 @@ export type ModelProvidersRouteData = {
   data: ModelProvidersData;
   /** Client the loader fetched from; null when it ran disconnected. */
   client: GatewayBrowserClient | null;
+  /** Concrete agent whose credential store populated the auth snapshot. */
+  agentId: string;
 };
 
 function errorMessage(error: unknown): string {
@@ -101,6 +106,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private addProviderId = "";
   @state() private addProviderKey = "";
   @state() private defaultsDraft: DefaultModelSelection | null = null;
+  @state() private selectedAgentId = "main";
 
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
@@ -109,10 +115,20 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private refreshEpoch = 0;
   private refreshQueue: Promise<void> = Promise.resolve();
   private probeEpochs = new Map<string, number>();
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
-  );
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+      () => this.syncSelectedAgent(),
+    )
+    .effect(
+      () => this.context?.agentSelection,
+      (selection) => selection.subscribe(() => this.syncSelectedAgent()),
+    );
 
   override disconnectedCallback() {
     this.refreshEpoch += 1;
@@ -122,8 +138,15 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeData") && this.routeData) {
-      this.data = this.routeData.data;
-      this.dataClient = this.routeData.client;
+      const selectedAgentId = this.resolveSelectedAgentId();
+      this.selectedAgentId = selectedAgentId;
+      if (this.routeData.agentId === selectedAgentId) {
+        this.data = this.routeData.data;
+        this.dataClient = this.routeData.client;
+      } else {
+        this.data = null;
+        this.dataClient = null;
+      }
     }
   }
 
@@ -131,6 +154,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     if (snapshot.client !== this.observedClient) {
       this.resetClientState(snapshot.client);
+    }
+    if (!this.context.agents.state.agentsList && !this.context.agents.state.agentsLoading) {
+      void this.context.agents.ensureList();
     }
     if (!snapshot.connected || !snapshot.client || this.refreshing) {
       return;
@@ -171,6 +197,35 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     );
   }
 
+  private resolveSelectedAgentId(): string {
+    const agentsList = this.context.agents.state.agentsList;
+    const requested = this.context.agentSelection.state.scopeId;
+    const normalizedRequested = requested ? normalizeAgentId(requested) : null;
+    const rosterIds = new Set(agentsList?.agents.map((agent) => normalizeAgentId(agent.id)) ?? []);
+    if (normalizedRequested && rosterIds.has(normalizedRequested)) {
+      return normalizedRequested;
+    }
+    return normalizeAgentId(agentsList?.defaultId ?? agentsList?.agents[0]?.id ?? "main");
+  }
+
+  private syncSelectedAgent() {
+    const agentId = this.resolveSelectedAgentId();
+    if (agentId === this.selectedAgentId) {
+      return;
+    }
+    this.selectedAgentId = agentId;
+    this.refreshEpoch += 1;
+    this.data = null;
+    this.busy = {};
+    this.pendingLogoutProvider = null;
+    this.messages = {};
+    this.probeResults = {};
+    // probeEpochs stays: per-card counters must remain monotonic across agent
+    // switches, or an in-flight probe from the old agent can reuse an epoch
+    // and clobber a newer probe's state (A->B->A ABA race).
+    this.requestUpdate();
+  }
+
   private refresh(opts: { force: boolean }): Promise<void> {
     const task = this.refreshQueue.then(() => this.performRefresh(opts));
     this.refreshQueue = task.catch(() => undefined);
@@ -182,18 +237,29 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!client) {
       return;
     }
+    const agentId = this.selectedAgentId;
     const epoch = ++this.refreshEpoch;
     this.refreshing = true;
     try {
-      const data = await loadModelProvidersData(client, opts.force ? { refresh: true } : undefined);
-      if (epoch === this.refreshEpoch && this.context.gateway.snapshot.client === client) {
+      const data = await loadModelProvidersData(client, {
+        agentId,
+        ...(opts.force ? { refresh: true } : {}),
+      });
+      if (
+        epoch === this.refreshEpoch &&
+        this.selectedAgentId === agentId &&
+        this.context.gateway.snapshot.client === client
+      ) {
         this.data = data;
         this.dataClient = client;
       }
     } finally {
-      if (epoch === this.refreshEpoch && this.context.gateway.snapshot.client === client) {
-        this.refreshing = false;
-      }
+      // refreshQueue serializes performRefresh calls, so this is always the
+      // only in-flight refresh: clear unconditionally. An epoch-guarded clear
+      // orphans `refreshing` when a selection change invalidates us mid-await,
+      // permanently blocking maybeRefresh for the new agent.
+      this.refreshing = false;
+      this.requestUpdate();
     }
   }
 
@@ -359,6 +425,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       return;
     }
     const clientEpoch = this.clientEpoch;
+    const agentId = this.selectedAgentId;
     const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
     this.probeEpochs.set(cardId, probeEpoch);
     this.setBusy(key, true);
@@ -366,10 +433,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     try {
       const results: ModelsProbeResult[] = [];
       for (const provider of providers) {
-        results.push(await client.request<ModelsProbeResult>("models.probe", { provider }));
+        results.push(
+          await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
+        );
       }
       if (
         this.isCurrentClient(client, clientEpoch) &&
+        this.selectedAgentId === agentId &&
         this.probeEpochs.get(cardId) === probeEpoch
       ) {
         this.probeResults = {
@@ -380,6 +450,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     } catch (error) {
       if (
         !this.isCurrentClient(client, clientEpoch) ||
+        this.selectedAgentId !== agentId ||
         this.probeEpochs.get(cardId) !== probeEpoch
       ) {
         return;
@@ -410,6 +481,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       return;
     }
     const clientEpoch = this.clientEpoch;
+    const agentId = this.selectedAgentId;
     this.clearProbe(cardId);
     this.setBusy(key, true);
     this.setMessage(cardId, null);
@@ -417,16 +489,16 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       let firstError: unknown;
       for (const target of targets) {
         try {
-          await client.request("models.authLogout", target);
+          await client.request("models.authLogout", { ...target, agentId });
         } catch (error) {
           firstError ??= error;
         }
       }
-      if (!this.isCurrentClient(client, clientEpoch)) {
+      if (!this.isCurrentClient(client, clientEpoch) || this.selectedAgentId !== agentId) {
         return;
       }
       await this.refresh({ force: true });
-      if (!this.isCurrentClient(client, clientEpoch)) {
+      if (!this.isCurrentClient(client, clientEpoch) || this.selectedAgentId !== agentId) {
         return;
       }
       if (firstError) {
@@ -436,11 +508,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.pendingLogoutProvider = null;
       this.setMessage(cardId, { kind: "success", text: t("modelProviders.logout.done") });
     } catch (error) {
-      if (this.isCurrentClient(client, clientEpoch)) {
+      if (this.isCurrentClient(client, clientEpoch) && this.selectedAgentId === agentId) {
         this.setMessage(cardId, { kind: "error", text: errorMessage(error) });
       }
     } finally {
-      if (this.isCurrentClient(client, clientEpoch)) {
+      if (this.isCurrentClient(client, clientEpoch) && this.selectedAgentId === agentId) {
         this.setBusy(key, false);
       }
     }
@@ -488,6 +560,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
 
   override render() {
     const gatewaySnapshot = this.context.gateway.snapshot;
+    const agents = this.context.agents.state.agentsList?.agents ?? [];
+    const selectedAgent = agents.find(
+      (agent) => normalizeAgentId(agent.id) === this.selectedAgentId,
+    );
+    const selectedAgentLabel = selectedAgent
+      ? normalizeAgentLabel(selectedAgent)
+      : this.selectedAgentId;
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const config = readModelProviderConfig(data.config);
     const defaults = this.defaultsDraft ?? config.defaults;
@@ -512,6 +591,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       error: data.error,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
+      credentialAgentLabel: selectedAgentLabel,
       cards,
       configuredModels: buildSelectableDefaultModels(data.models, defaults),
       defaultModels: defaults,
@@ -587,9 +667,17 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("model-providers")}</div>
         </div>
-        <button class="btn" @click=${() => this.context.navigate("model-setup")}>
-          ${t("modelSetup.heading")}
-        </button>
+        <div class="page-header-actions">
+          ${renderAgentScopeControl({
+            agents,
+            selection: this.context.agentSelection,
+            allowAll: false,
+            selectedId: this.selectedAgentId,
+          })}
+          <button class="btn" @click=${() => this.context.navigate("model-setup")}>
+            ${t("modelSetup.heading")}
+          </button>
+        </div>
       </section>
       ${renderSettingsWorkspace(body)}
     `;

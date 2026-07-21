@@ -275,19 +275,25 @@ describe("native app i18n inventory", () => {
     expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
   });
 
-  it("ignores Android collection resource references", () => {
+  it("respects non-translatable Android collections and retains lowercase choices", () => {
     const entries = extractNativeI18nCandidates(
       "android",
       "apps/android/app/src/main/res/values/wear.xml",
       `<resources>
-        <string-array name="capabilities">
+        <string-array name="capabilities" translatable="false">
           <item>@string/native_capability</item>
+          <item>openclaw_wear_companion_v1</item>
+          <item>Visible choice</item>
+        </string-array>
+        <string-array name="modes">
+          <item>@string/native_mode</item>
+          <item>off</item>
           <item>Visible choice</item>
         </string-array>
       </resources>`,
     );
 
-    expect(entries.map((entry) => entry.source)).toEqual(["Visible choice"]);
+    expect(entries.map((entry) => entry.source)).toEqual(["off", "Visible choice"]);
   });
 
   it("collects stable Android and Apple UI entries", async () => {
@@ -317,6 +323,22 @@ describe("native app i18n inventory", () => {
             entry.path,
           ),
         ),
+    ).toBe(true);
+    expect(
+      entries
+        .filter((entry) => entry.surface === "android")
+        .every(
+          (entry) =>
+            entry.path.startsWith("apps/android/app/src/main/") ||
+            entry.path === "apps/android/wear/src/main/res/values/strings.xml",
+        ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path === "apps/android/wear/src/main/res/values/strings.xml" &&
+          entry.source === "Current session",
+      ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(

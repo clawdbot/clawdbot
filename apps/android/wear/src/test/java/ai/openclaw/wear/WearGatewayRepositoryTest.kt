@@ -104,7 +104,7 @@ class WearGatewayRepositoryTest {
 
       assertEquals("Main", agents.agents.single().name)
       assertTrue(agents.agents.single().selected)
-      assertEquals("Offline", status.detail)
+      assertFalse(status.connected)
       assertEquals("main", status.activeAgentId)
       assertEquals("openai/gpt-test", status.selectedModelRef)
       assertEquals(capabilities, status.capabilities)

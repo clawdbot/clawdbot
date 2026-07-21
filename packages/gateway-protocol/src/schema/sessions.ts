@@ -10,6 +10,45 @@ import { SessionsCreateParamsSchema } from "./sessions-create.js";
 
 export { SessionsCreateParamsSchema };
 
+export const SESSION_OBSERVER_HEALTH_VALUES = [
+  "on-track",
+  "grinding",
+  "stuck",
+  "waiting-on-user",
+  "wrapping-up",
+  "done",
+  "failed",
+] as const;
+
+/** Trajectory judgment produced for one observed agent session. */
+export const SessionObserverHealthSchema = Type.Union([
+  Type.Literal("on-track"),
+  Type.Literal("grinding"),
+  Type.Literal("stuck"),
+  Type.Literal("waiting-on-user"),
+  Type.Literal("wrapping-up"),
+  Type.Literal("done"),
+  Type.Literal("failed"),
+]);
+
+/** Completed and total step counts from the session's current plan. */
+export const SessionObserverPlanProgressSchema = closedObject({
+  completed: Type.Integer({ minimum: 0 }),
+  total: Type.Integer({ minimum: 0 }),
+});
+
+/** Live session status judgment broadcast to subscribed operator clients. */
+export const SessionObserverDigestSchema = closedObject({
+  sessionKey: NonEmptyString,
+  runId: Type.Optional(NonEmptyString),
+  revision: Type.Integer({ minimum: 1 }),
+  updatedAt: Type.Integer({ minimum: 0 }),
+  headline: Type.String({ minLength: 1, maxLength: 120 }),
+  assessment: Type.Optional(Type.String({ minLength: 1, maxLength: 320 })),
+  health: SessionObserverHealthSchema,
+  planProgress: Type.Optional(SessionObserverPlanProgressSchema),
+});
+
 /**
  * Session protocol schemas.
  *
@@ -406,6 +445,7 @@ export const SessionsPatchParamsSchema = closedObject({
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnedCwd: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
@@ -415,6 +455,7 @@ export const SessionsPatchParamsSchema = closedObject({
   subagentControlScope: Type.Optional(
     Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
   ),
+  inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   sendPolicy: Type.Optional(Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()])),
@@ -693,6 +734,9 @@ export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;
 export type SessionsSearchResult = Static<typeof SessionsSearchResultSchema>;
 export type SessionCompactionCheckpoint = Static<typeof SessionCompactionCheckpointSchema>;
 export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
+export type SessionObserverHealth = Static<typeof SessionObserverHealthSchema>;
+export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgressSchema>;
+export type SessionObserverDigest = Static<typeof SessionObserverDigestSchema>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
 export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;

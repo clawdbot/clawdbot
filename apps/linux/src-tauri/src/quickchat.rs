@@ -291,6 +291,7 @@ fn build_agents(catalog: &AgentsListResult) -> Result<Vec<QuickChatAgent>, Strin
     let agents = catalog
         .agents
         .iter()
+        .filter(|summary| summary.kind.as_deref() != Some("system"))
         .map(|summary| {
             let id = summary.id.clone();
             let identity = summary.identity.as_ref();
@@ -716,27 +717,66 @@ pub fn quickchat_set_expanded(webview: Webview, expanded: bool) -> Result<(), St
 }
 
 #[tauri::command]
-pub async fn quickchat_hide(webview: Webview, generation: u64) -> Result<(), String> {
+pub async fn quickchat_activate(
+    webview: Webview,
+    state: State<'_, QuickChatState>,
+    session_id: String,
+    renderer_epoch: u64,
+    generation: u64,
+) -> Result<bool, String> {
+    require_quickchat_webview(&webview)?;
+    state
+        .widget_state()
+        .activate(
+            &webview.window(),
+            &session_id,
+            renderer_epoch,
+            generation,
+            &state.hide_requested,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn quickchat_hide(
+    webview: Webview,
+    session_id: String,
+    renderer_epoch: u64,
+    generation: u64,
+) -> Result<bool, String> {
     require_quickchat_webview(&webview)?;
     let window = webview.window();
     let app = window.app_handle();
     let state = app.state::<QuickChatState>();
-    state.hide_requested.store(true, Ordering::SeqCst);
-    state.widget_state().close(app, generation).await;
-    window
-        .hide()
-        .map_err(|error| format!("Could not hide Quick Chat: {error}"))?;
-    let _ = window.set_size(LogicalSize::new(QUICKCHAT_WIDTH, QUICKCHAT_HEIGHT));
-    Ok(())
+    state
+        .widget_state()
+        .hide(
+            app,
+            &window,
+            &session_id,
+            renderer_epoch,
+            generation,
+            &state.hide_requested,
+        )
+        .await
 }
 
 #[tauri::command]
-pub fn quickchat_ready(
+pub async fn quickchat_ready(
     webview: Webview,
     gateway: State<'_, GatewayClient>,
     state: State<'_, QuickChatState>,
+    session_id: String,
+    renderer_epoch: u64,
 ) -> Result<bool, String> {
     require_quickchat_webview(&webview)?;
+    if !state
+        .widget_state()
+        .start_session(webview.app_handle(), &session_id, renderer_epoch)
+        .await?
+    {
+        return Ok(false);
+    }
     gateway.emit_current_state(&webview)?;
     Ok(!state.hide_requested.load(Ordering::SeqCst))
 }
@@ -836,6 +876,7 @@ mod tests {
             agents: vec![
                 crate::gateway_ws::GatewayAgentSummary {
                     id: "main".to_string(),
+                    kind: Some("agent".to_string()),
                     name: Some("Configured".to_string()),
                     identity: Some(crate::gateway_ws::GatewayAgentIdentity {
                         name: Some("Molty".to_string()),
@@ -845,7 +886,14 @@ mod tests {
                 },
                 crate::gateway_ws::GatewayAgentSummary {
                     id: "other".to_string(),
+                    kind: None,
                     name: None,
+                    identity: None,
+                },
+                crate::gateway_ws::GatewayAgentSummary {
+                    id: "ordinary-looking-id".to_string(),
+                    kind: Some("system".to_string()),
+                    name: Some("System".to_string()),
                     identity: None,
                 },
             ],
@@ -859,6 +907,7 @@ mod tests {
             Some("data:image/png;base64,AA==")
         );
         assert_eq!(agents[1].name, "other");
+        assert_eq!(agents.len(), 2);
     }
 
     #[test]

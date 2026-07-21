@@ -198,6 +198,15 @@ function renderBlockItem(props: SettingsSidebarProps, block: SettingsSearchBlock
   `;
 }
 
+function syncSettingsSearchScrollShadow(nav: HTMLElement) {
+  // The nav's top padding scrolls away with its rows. Keep the fixed search
+  // region visually separated once content reaches that boundary.
+  nav
+    .closest(".settings-sidebar")
+    ?.querySelector(".settings-sidebar__search")
+    ?.classList.toggle("settings-sidebar__search--scrolled", nav.scrollTop > 0);
+}
+
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const gatewayStatus = t("chat.gatewayStatus", {
     status: props.connected ? t("common.online") : t("common.offline"),
@@ -255,7 +264,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             `
           : nothing}
       </div>
-      <nav class="settings-sidebar__nav" aria-label=${t("common.settingsSections")}>
+      <nav
+        class="settings-sidebar__nav"
+        aria-label=${t("common.settingsSections")}
+        @scroll=${(event: Event) =>
+          syncSettingsSearchScrollShadow(event.currentTarget as HTMLElement)}
+      >
         ${navigationGroups.length === 0
           ? html`<p class="settings-sidebar__empty" role="status">
               ${t("nav.settingsSearchNoResults")}

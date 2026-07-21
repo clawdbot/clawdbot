@@ -894,13 +894,11 @@ describe("isFailoverErrorMessage", () => {
   });
 
   it("matches abort stop-reason timeout variants", () => {
+    // Bare `error` stop reasons are provider-completed failures (#109218), not hangs.
     expectTimeoutFailoverSamples([
       "Unhandled stop reason: abort",
-      "Unhandled stop reason: error",
       "stop reason: abort",
-      "stop reason: error",
       "reason: abort",
-      "reason: error",
     ]);
   });
 
@@ -950,6 +948,22 @@ describe("isFailoverErrorMessage", () => {
       "Provider finish_reason: abort",
       "Provider finish_reason: malformed_response",
     ]);
+  });
+
+  it("classifies Provider finish_reason: error as server_error, not timeout (#109218)", () => {
+    // OpenRouter/Google can complete quickly with finish_reason:error; that is a
+    // provider-completed failure, not a hung request. Fallback must remain eligible.
+    const samples = [
+      "Provider finish_reason: error",
+      "finish_reason: error",
+      "stop reason: error",
+      "Unhandled stop reason: error",
+    ];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(false);
+      expect(classifyFailoverReason(sample)).toBe("server_error");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
   });
 
   it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {

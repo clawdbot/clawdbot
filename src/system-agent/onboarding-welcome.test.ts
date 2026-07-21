@@ -205,6 +205,7 @@ describe("buildOnboardingWelcome", () => {
 
     expect(propose).toHaveBeenCalledTimes(configured ? 0 : 1);
     expect(question.id).toBe(configured ? "onboarding-next-step" : "onboarding-apply-setup");
+    expect(question.skipAction).toBe(configured ? "exit" : undefined);
     expect(welcome.includes("Say **yes**")).toBe(!configured);
   });
 });

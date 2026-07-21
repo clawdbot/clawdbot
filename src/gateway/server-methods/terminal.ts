@@ -87,6 +87,9 @@ async function stageNodeTerminalUpload(
   const result = await context.nodeRegistry.invoke({
     nodeId,
     expectedConnId: access.node.connId,
+    ...(access.node.pairingGeneration
+      ? { expectedPairingGeneration: access.node.pairingGeneration }
+      : {}),
     command: NODE_TERMINAL_UPLOAD_COMMAND,
     params: file,
     timeoutMs: 120_000,
@@ -290,6 +293,7 @@ export const terminalHandlers: GatewayRequestHandlers = {
           registry: context.nodeRegistry,
           nodeId: relay.plan.nodeId,
           expectedConnId: access.node.connId,
+          expectedPairingGeneration: access.node.pairingGeneration,
           command: relay.plan.command,
           params: relay.params,
         });

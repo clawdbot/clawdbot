@@ -878,6 +878,16 @@ describe("buildOpenAIProvider", () => {
   it.each([
     ["fails", () => new Response("temporarily unavailable", { status: 503 })],
     ["returns no models", () => Response.json({ models: [] })],
+    [
+      "returns hidden-only models",
+      () =>
+        Response.json({
+          models: [
+            { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", visibility: "hide" },
+            { slug: "gpt-5.5", display_name: "GPT-5.5", show_in_picker: false },
+          ],
+        }),
+    ],
   ])("keeps static OpenAI OAuth rows when Codex catalog discovery %s", async (_label, response) => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({

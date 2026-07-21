@@ -22,6 +22,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
   });
 
+  it("advertises session observer digests", () => {
+    expect(GATEWAY_EVENTS).toContain("session.observer");
+  });
+
   it("advertises question methods and events", () => {
     expect(GATEWAY_EVENTS).toContain("question.requested");
     expect(GATEWAY_EVENTS).toContain("question.resolved");

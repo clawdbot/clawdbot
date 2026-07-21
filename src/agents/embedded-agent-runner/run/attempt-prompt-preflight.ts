@@ -1,5 +1,5 @@
 /**
- * Owns prompt overflow admission and mid-turn recovery routing.
+ * Reports prompt pressure and owns explicit mid-turn recovery routing.
  */
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -39,8 +39,6 @@ type PreflightRecoveryBudgetSnapshot = Pick<
   MidTurnPrecheckRequest,
   "estimatedPromptTokens" | "promptBudgetBeforeReserve" | "overflowTokens"
 >;
-
-type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
 // Carries the measured prompt budget into the outer recovery loop. The synthetic
 // precheck error is only a routing signal, so compaction engines need these
@@ -149,24 +147,16 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   includeBoundaryTimestamp: boolean;
   promptForPrecheck: string;
   reserveTokens: number;
-  sessionAgentId: string;
-  sessionManager: SessionManager;
   sessionMessageCount: number;
   state: AttemptPromptPreflightState;
   systemPrompt: string;
   timezone?: string;
   toolResultMaxChars: number;
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
-  withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
 }): Promise<AttemptPromptPreflightState> {
   const { attempt } = input;
-  let {
-    contextBudgetStatus,
-    preflightRecovery,
-    promptError,
-    promptErrorSource,
-    skipPromptSubmission,
-  } = input.state;
+  let contextBudgetStatus = input.state.contextBudgetStatus;
+  const { skipPromptSubmission } = input.state;
   const boundaryOptions =
     input.timezone || !input.includeBoundaryTimestamp
       ? {
@@ -249,92 +239,17 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
         ...(attempt.sessionFile ? { sessionFile: attempt.sessionFile } : {}),
       }),
     );
-  }
-  if (preemptiveCompaction?.route === "truncate_tool_results_only") {
-    const toolResultMaxChars = resolveLiveToolResultMaxChars({
-      contextWindowTokens: input.contextTokenBudget,
-      cfg: attempt.config,
-      agentId: input.sessionAgentId,
-    });
-    const truncationResult = await input.withOwnedSessionWriteLock(() =>
-      truncateOversizedToolResultsInSessionManager({
-        sessionManager: input.sessionManager,
-        contextWindowTokens: input.contextTokenBudget,
-        maxCharsOverride: toolResultMaxChars,
-        sessionFile: attempt.sessionFile,
-        sessionId: attempt.sessionId,
-        sessionKey: attempt.sessionKey,
-        agentId: input.sessionAgentId,
-      }),
-    );
-    if (truncationResult.truncated) {
-      preflightRecovery = {
-        route: "truncate_tool_results_only",
-        ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-        handled: true,
-        truncatedCount: truncationResult.truncatedCount,
-      };
+    if (preemptiveCompaction.route !== "fits") {
+      // Character pressure remains observable, but it is not authoritative enough to
+      // discard history or manufacture an overflow before the provider sees the payload.
       log.info(
-        `[context-overflow-precheck] early tool-result truncation succeeded for ` +
+        `[context-pressure-diagnostic] admitted provider attempt for ` +
           `${attempt.provider}/${attempt.modelId} route=${preemptiveCompaction.route} ` +
-          `truncatedCount=${truncationResult.truncatedCount} ` +
           `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
-          `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
-          `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
-          `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
-          `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
-          `sessionFile=${attempt.sessionFile}`,
+          `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve}`,
       );
-      skipPromptSubmission = true;
     }
-    if (!skipPromptSubmission) {
-      log.warn(
-        `[context-overflow-precheck] early tool-result truncation did not help for ` +
-          `${attempt.provider}/${attempt.modelId}; falling back to compaction ` +
-          `reason=${truncationResult.reason ?? "unknown"} sessionFile=${attempt.sessionFile}`,
-      );
-      preflightRecovery = {
-        route: "compact_only",
-        ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-      };
-      promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-      promptErrorSource = "precheck";
-      skipPromptSubmission = true;
-    }
-  }
-  if (preemptiveCompaction?.shouldCompact) {
-    preflightRecovery =
-      preemptiveCompaction.route === "compact_then_truncate"
-        ? {
-            route: "compact_then_truncate",
-            ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-          }
-        : {
-            route: "compact_only",
-            ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
-          };
-    promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
-    promptErrorSource = "precheck";
-    log.warn(
-      `[context-overflow-precheck] sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +
-        `provider=${attempt.provider}/${attempt.modelId} ` +
-        `route=${preemptiveCompaction.route} ` +
-        `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
-        `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
-        `overflowTokens=${preemptiveCompaction.overflowTokens} ` +
-        `toolResultReducibleChars=${preemptiveCompaction.toolResultReducibleChars} ` +
-        `reserveTokens=${input.reserveTokens} ` +
-        `effectiveReserveTokens=${preemptiveCompaction.effectiveReserveTokens} ` +
-        `sessionFile=${attempt.sessionFile}`,
-    );
-    skipPromptSubmission = true;
   }
 
-  return {
-    contextBudgetStatus,
-    preflightRecovery,
-    promptError,
-    promptErrorSource,
-    skipPromptSubmission,
-  };
+  return { ...input.state, contextBudgetStatus };
 }

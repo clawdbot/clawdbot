@@ -4,7 +4,7 @@ import { createGateway, createSessionsHarness, mountSidebar } from "../app-sideb
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar pull request state", () => {
-  it("shows the green PR indicator for the matching session", async () => {
+  it("shows the PR summary for the matching session", async () => {
     const key = "agent:main:pr-detection";
     const gateway = createGateway({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", [key, "agent:main:other"]);
@@ -13,11 +13,11 @@ describe("AppSidebar pull request state", () => {
 
     expect(row?.querySelector(".session-row-badge--pull-request")).toBeNull();
 
-    sessions.sessions.setOpenPullRequest(key, true);
+    sessions.sessions.setPullRequestSummary(key, { numbers: [111532], state: "draft" });
     await sidebar.updateComplete;
 
     const badge = row?.querySelector(".session-row-badge--pull-request");
-    expect(badge?.getAttribute("aria-label")).toBe("Open PR");
+    expect(badge?.getAttribute("aria-label")).toBe("#111532 · Draft");
     expect(
       sidebar.querySelector(
         '[data-session-key="agent:main:other"] .session-row-badge--pull-request',

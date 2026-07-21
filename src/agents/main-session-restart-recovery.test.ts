@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
@@ -19,6 +20,7 @@ import {
   getAgentEventLifecycleGeneration,
   registerAgentRunContext,
   resetAgentEventsForTest,
+  rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -32,6 +34,14 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
+import { setActiveEmbeddedRunLifecycleGeneration } from "./embedded-agent-runner/run-state.js";
+import {
+  clearActiveEmbeddedRun,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+  resolveActiveEmbeddedRunHandleSessionId,
+  setActiveEmbeddedRun,
+  type EmbeddedAgentQueueHandle,
+} from "./embedded-agent-runner/runs.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -2033,6 +2043,179 @@ describe("main-session-restart-recovery", () => {
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
+  });
+
+  it.each([
+    ["current owner before delayed stale registration", "current-first"],
+    ["stale owner before current registration", "stale-first"],
+  ] as const)("keeps a live session running with %s", async (_label, registrationOrder) => {
+    const sessionsDir = await makeSessionsDir();
+    const cutoff = Date.now();
+    const sessionKey = "agent:main:generation-race";
+    const sessionId = "generation-race-session";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: cutoff - 10_000,
+        status: "running",
+      },
+    });
+
+    const createHandle = (runId: string): EmbeddedAgentQueueHandle => ({
+      kind: "embedded",
+      runId,
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    });
+    const priorLifecycleGeneration = getAgentEventLifecycleGeneration();
+    const staleHandle = createHandle("stale-generation-run");
+    setActiveEmbeddedRunLifecycleGeneration(staleHandle, priorLifecycleGeneration);
+    if (registrationOrder === "stale-first") {
+      setActiveEmbeddedRun(sessionId, staleHandle, sessionKey);
+    }
+
+    rotateAgentEventLifecycleGeneration();
+    const currentHandle = createHandle("current-generation-run");
+    setActiveEmbeddedRun(sessionId, currentHandle, sessionKey);
+    if (registrationOrder === "current-first") {
+      setActiveEmbeddedRun(sessionId, staleHandle, sessionKey);
+    }
+
+    try {
+      await expect(
+        recoverStartupOrphanedMainSessions({ stateDir: tmpDir, updatedBeforeMs: cutoff }),
+      ).resolves.toEqual({ marked: 0, recovered: 0, failed: 0, skipped: 0 });
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(
+        loadSessionEntry({
+          sessionKey,
+          storePath: path.join(sessionsDir, "sessions.json"),
+        }),
+      ).toMatchObject({ status: "running" });
+    } finally {
+      clearActiveEmbeddedRun(sessionId, currentHandle, sessionKey);
+      clearActiveEmbeddedRun(sessionId, staleHandle, sessionKey);
+    }
+  });
+
+  it("reconciles only prior-lifecycle running sessions after an in-process restart", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const cutoff = Date.now();
+    const abandonedKey = "agent:main:abandoned-client";
+    const liveKey = "agent:main:live-client";
+    await writeStore(sessionsDir, {
+      [abandonedKey]: {
+        sessionId: "abandoned-session",
+        updatedAt: cutoff - 10_000,
+        status: "running",
+      },
+      [liveKey]: {
+        sessionId: "live-session",
+        updatedAt: cutoff - 10_000,
+        status: "running",
+      },
+    });
+    await writeTranscript(sessionsDir, "abandoned-session", [
+      { role: "system", content: "the client disappeared before the turn became resumable" },
+    ]);
+
+    const createHandle = (
+      runId: string,
+      queueMessage: EmbeddedAgentQueueHandle["queueMessage"] = async () => {},
+      abort: EmbeddedAgentQueueHandle["abort"] = () => {},
+    ): EmbeddedAgentQueueHandle => ({
+      kind: "embedded",
+      runId,
+      queueMessage,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort,
+    });
+    const abandonedReply = createReplyOperation({
+      sessionKey: abandonedKey,
+      sessionId: "abandoned-session",
+      resetTriggered: false,
+    });
+    const abandonedReplyQueue = vi.fn(async () => {});
+    const abandonedReplyCancel = vi.fn();
+    abandonedReply.setPhase("running");
+    abandonedReply.attachBackend({
+      kind: "embedded",
+      cancel: abandonedReplyCancel,
+      isStreaming: () => true,
+      queueMessage: abandonedReplyQueue,
+    });
+    const abandonedEmbeddedQueue = vi.fn(async () => {});
+    const abandonedEmbeddedAbort = vi.fn();
+    const abandonedHandle = createHandle(
+      "abandoned-run",
+      abandonedEmbeddedQueue,
+      abandonedEmbeddedAbort,
+    );
+    setActiveEmbeddedRun("abandoned-session", abandonedHandle, abandonedKey);
+
+    const firstRecovery = recoverStartupOrphanedMainSessions({
+      stateDir: tmpDir,
+      updatedBeforeMs: cutoff,
+    });
+    // Advance ownership while the async store discovery above is pending. The
+    // older scan must drop the stale owner without overlooking this new live one.
+    rotateAgentEventLifecycleGeneration();
+    setActiveEmbeddedRun("abandoned-session", abandonedHandle, abandonedKey);
+
+    await expect(
+      queueEmbeddedAgentMessageWithOutcomeAsync("abandoned-session", "do not route stale"),
+    ).resolves.toMatchObject({ queued: false, reason: "no_active_run" });
+    expect(abandonedEmbeddedQueue).not.toHaveBeenCalled();
+    expect(abandonedEmbeddedAbort).toHaveBeenCalledWith("restart");
+    expect(abandonedReplyQueue).not.toHaveBeenCalled();
+    expect(abandonedReplyCancel).toHaveBeenCalledWith("restart");
+    expect(resolveActiveEmbeddedRunHandleSessionId(abandonedKey)).toBeUndefined();
+
+    const liveReply = createReplyOperation({
+      sessionKey: liveKey,
+      sessionId: "live-session",
+      resetTriggered: false,
+    });
+    const liveAbort = vi.fn();
+    const liveHandle = createHandle("live-run", undefined, liveAbort);
+    setActiveEmbeddedRun("live-session", liveHandle, liveKey);
+    try {
+      const first = await firstRecovery;
+
+      expect(first).toEqual({ marked: 1, recovered: 0, failed: 1, skipped: 0 });
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(
+        loadSessionEntry({
+          sessionKey: abandonedKey,
+          storePath: path.join(sessionsDir, "sessions.json"),
+        }),
+      ).toMatchObject({
+        status: "failed",
+        abortedLastRun: true,
+      });
+      expect(
+        loadSessionEntry({
+          sessionKey: liveKey,
+          storePath: path.join(sessionsDir, "sessions.json"),
+        }),
+      ).toMatchObject({
+        status: "running",
+      });
+      expect(liveAbort).not.toHaveBeenCalled();
+      expect(liveReply.abortSignal.aborted).toBe(false);
+
+      await expect(
+        recoverStartupOrphanedMainSessions({ stateDir: tmpDir, updatedBeforeMs: cutoff }),
+      ).resolves.toEqual({ marked: 0, recovered: 0, failed: 0, skipped: 0 });
+    } finally {
+      clearActiveEmbeddedRun("abandoned-session", abandonedHandle, abandonedKey);
+      clearActiveEmbeddedRun("live-session", liveHandle, liveKey);
+      abandonedReply.complete();
+      liveReply.complete();
+    }
   });
 
   it("recovers only the configured store for duplicate startup-orphaned session keys", async () => {

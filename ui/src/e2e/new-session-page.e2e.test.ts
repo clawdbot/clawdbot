@@ -1,4 +1,4 @@
-// Control UI tests cover the full-page new-session draft and its folder browser
+// Control UI tests cover the full-page new-session draft and its place picker
 // against a mocked Gateway: sidebar entry, fs.listDir browsing, and the final
 // sessions.create payload.
 import { mkdir } from "node:fs/promises";
@@ -139,19 +139,15 @@ async function deferTargetRepositorySelection(
   await page.goto(`${server.baseUrl}new`);
   await gateway.waitForRequest("worktrees.branches");
 
-  const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
-  await page.locator("#new-session-where-trigger").click();
-  await whereSelect.getByRole("button", { name: "Worktree" }).click();
+  const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
+  await page.locator("#new-session-place-trigger").click();
+  await placeSelect.getByRole("button", { name: "Worktree" }).click();
   const baseInput = page.getByLabel("Base branch");
   await expect.poll(() => baseInput.inputValue()).toBe("alpha");
   const requestsBeforeSwitch = (await gateway.getRequests("worktrees.branches")).length;
 
   await gateway.deferNext("worktrees.branches");
-  await page.locator("#new-session-folder-trigger").click();
-  await page
-    .locator(".new-session-page__browser-list")
-    .getByRole("button", { name: "Gateway" })
-    .click();
+  await placeSelect.getByRole("button", { name: "Browse folders" }).click();
   await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
   await page.getByRole("button", { name: "Use this folder" }).click();
   await expect
@@ -525,6 +521,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         await page.locator('.new-session-page__triggers [data-chat-model-select="true"]').count(),
       ).toBe(0);
       await modelSelect.click();
+      const pickerOpen = () =>
+        modelSelect.evaluate(
+          (element) => element.closest("details")?.hasAttribute("open") ?? false,
+        );
       const modelTriggerBox = await modelSelect.boundingBox();
       const modelMenuBox = await page
         .locator(".chat-controls__inline-select-menu--combined")
@@ -537,15 +537,19 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         0,
       );
       await page.locator('[data-chat-model-provider="anthropic"]').click();
+      await expect.poll(pickerOpen).toBe(true);
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
-      await modelSelect.click();
+      // Inside changes stay grouped; only explicit light-dismissal closes the picker.
+      await expect.poll(pickerOpen).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(pickerOpen).toBe(false);
       await expect
-        .poll(() =>
-          modelSelect.evaluate(
-            (element) => element.closest("details")?.hasAttribute("open") ?? false,
-          ),
-        )
-        .toBe(false);
+        .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await modelSelect.click();
+      await expect.poll(pickerOpen).toBe(true);
+      await page.mouse.click(8, 8);
+      await expect.poll(pickerOpen).toBe(false);
       await page.locator(".new-session-page__message").fill("use this model");
       await page.getByRole("button", { name: "Start thread" }).click();
 
@@ -670,22 +674,16 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
 
-      // The folder trigger labels the workspace and opens the browser menu.
-      const folderSelect = page.locator(".new-session-page__select--folder");
+      // The place trigger labels the workspace and opens the unified menu.
+      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
+      const placeTrigger = page.locator("#new-session-place-trigger");
       await expect
-        .poll(() =>
-          page
-            .locator("#new-session-folder-trigger .new-session-page__trigger-label")
-            .textContent(),
-        )
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
         .toBe("openclaw");
 
       // Browse from the workspace, descend one level, then adopt the folder.
-      await page.locator("#new-session-folder-trigger").click();
-      await page
-        .locator(".new-session-page__browser-list")
-        .getByRole("button", { name: "Gateway" })
-        .click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
       await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
       await expect
         .poll(() => page.locator("input.new-session-page__browser-path").inputValue())
@@ -693,51 +691,38 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Use this folder" }).click();
 
       // The adopted folder closes the menu and updates the trigger label.
-      await expect.poll(() => folderSelect.getAttribute("open")).toBeNull();
+      await expect.poll(() => placeSelect.getAttribute("open")).toBeNull();
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
-        .toBe("new-session-folder-trigger");
+        .toBe("new-session-place-trigger");
       await expect
-        .poll(() =>
-          page
-            .locator("#new-session-folder-trigger .new-session-page__trigger-label")
-            .textContent(),
-        )
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
         .toBe("packages");
 
-      // Custom host folders force a managed worktree (badge on the where
-      // trigger; the menu item is checked and locked).
-      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
-      const whereTrigger = page.locator('.new-session-page__trigger[data-worktree="true"]');
-      await whereTrigger.waitFor();
-      await whereTrigger.click();
+      // Custom host folders force a managed worktree; the unified chip carries
+      // the badge and its worktree row stays checked and locked.
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      await placeTrigger.click();
       const worktreeItem = page.getByRole("button", { name: "Worktree" });
       await expect.poll(() => worktreeItem.getAttribute("aria-pressed")).toBe("true");
       expect(await worktreeItem.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
-        .toBe("new-session-where-trigger");
+        .toBe("new-session-place-trigger");
 
-      // Pointer light-dismiss keeps focus on the newly chosen control after
-      // the asynchronous hide animation completes.
-      await whereTrigger.click();
-      const afterPointerHide = whereSelect.evaluate(
+      // Pointer light-dismiss still retires the unified popover after its
+      // asynchronous hide animation completes.
+      await placeTrigger.click();
+      const afterPointerHide = placeSelect.evaluate(
         (element) =>
           new Promise<void>((resolve) => {
             element.addEventListener("wa-after-hide", () => resolve(), { once: true });
           }),
       );
-      await page.locator("#new-session-folder-trigger").click();
+      await page.locator(".agent-chat__welcome h2").click();
       await afterPointerHide;
-      expect(await folderSelect.evaluate((element) => element === document.activeElement)).toBe(
-        true,
-      );
-      await page.keyboard.press("Escape");
-      await expect.poll(() => folderSelect.getAttribute("open")).toBeNull();
-      await expect
-        .poll(() => page.evaluate(() => document.activeElement?.id))
-        .toBe("new-session-folder-trigger");
+      await expect.poll(() => placeSelect.getAttribute("open")).toBeNull();
 
       const message = page.locator(".new-session-page__message");
       await message.fill("fix the flaky test");
@@ -755,6 +740,312 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => new URL(page.url()).search)
         .toContain(`session=${encodeURIComponent("agent:main:draft-e2e")}`);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("hides the destination axis when the Gateway is the only place", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "node.list": { nodes: [] },
+        "environments.list": { environments: [], profiles: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("node.list");
+      const trigger = page.locator("#new-session-place-trigger");
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
+      await trigger.click();
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      expect(await place.getByText("Places", { exact: true }).count()).toBe(0);
+      await place.getByText("Runs on Gateway · local", { exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("uses advertised system info for Gateway place labels", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      featureMethods: ["chat.metadata", "chat.startup", "system.info"],
+      methodResponses: {
+        "system.info": {
+          machineName: "Peters-Mac-Studio",
+          hostname: "peters-mac-studio.local",
+          platform: "darwin",
+        },
+        "node.list": {
+          nodes: [
+            {
+              nodeId: "macbook",
+              displayName: "MacBook",
+              connected: true,
+              commands: ["system.run"],
+            },
+          ],
+        },
+        "environments.list": { environments: [], profiles: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("system.info");
+      const trigger = page.locator("#new-session-place-trigger");
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw · Gateway · Peters-Mac-Studio");
+      await trigger.click();
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await place.getByRole("button", { name: "Gateway · Peters-Mac-Studio" }).waitFor();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await expect
+        .poll(() =>
+          page.locator("input.new-session-page__browser-path").getAttribute("placeholder"),
+        )
+        .toBe("Gateway · Peters-Mac-Studio");
+
+      await gateway.setMethodResponse("node.list", { nodes: [] });
+      const nodeRequests = (await gateway.getRequests("node.list")).length;
+      await replaceGatewayClient(page);
+      await expect
+        .poll(async () => (await gateway.getRequests("node.list")).length)
+        .toBeGreaterThan(nodeRequests);
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
+      await trigger.click();
+      await place.getByText("Runs on Gateway · Peters-Mac-Studio", { exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("disambiguates duplicate node names without changing the selected chip", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "node.list": {
+          nodes: [
+            {
+              nodeId: "11111111aaaaaaaa",
+              displayName: "Mac Studio",
+              platform: "darwin",
+              modelIdentifier: "Mac14,12",
+              remoteIp: "192.168.1.11",
+              connected: true,
+              commands: ["system.run"],
+            },
+            {
+              nodeId: "22222222bbbbbbbb",
+              displayName: "Mac Studio",
+              platform: "darwin",
+              modelIdentifier: "Mac15,14",
+              remoteIp: "192.168.1.12",
+              connected: true,
+              commands: ["system.run"],
+            },
+            {
+              nodeId: "33333333cccccccc",
+              displayName: "iPhone",
+              platform: "iOS 26.4",
+              deviceFamily: "iPhone",
+              modelIdentifier: "iPhone17,2",
+              remoteIp: "192.168.1.30",
+              connected: true,
+              commands: ["system.run"],
+            },
+          ],
+        },
+        "environments.list": { environments: [], profiles: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("node.list");
+      const trigger = page.locator("#new-session-place-trigger");
+      await trigger.click();
+      const first = page.locator('[data-value="node:11111111aaaaaaaa"]');
+      const second = page.locator('[data-value="node:22222222bbbbbbbb"]');
+      const phone = page.locator('[data-value="node:33333333cccccccc"]');
+      await expect.poll(() => first.locator(".session-menu__sub").textContent()).toBe("Mac14,12");
+      await expect.poll(() => second.locator(".session-menu__sub").textContent()).toBe("Mac15,14");
+      await expect.poll(() => phone.locator(".session-menu__text").textContent()).toBe("iPhone");
+      expect(await first.locator(".session-menu__icon svg").count()).toBe(1);
+      expect(await second.locator(".session-menu__icon svg").count()).toBe(1);
+      expect(await phone.locator(".session-menu__icon svg").count()).toBe(1);
+      expect(await first.getAttribute("title")).toBe("macOS · Mac14,12 · 192.168.1.11");
+      expect(await second.getAttribute("title")).toContain("192.168.1.12");
+      await second.click();
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("Agent workspace · Mac Studio");
+      expect(await trigger.textContent()).not.toContain("Mac15,14");
+      expect(await trigger.textContent()).not.toContain("192.168.1.12");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("disambiguates duplicate recent basenames and applies the selected path", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "node.list": { nodes: [] },
+        "environments.list": { environments: [], profiles: [] },
+        "sessions.list": {
+          count: 2,
+          defaults: SESSION_LIST_DEFAULTS,
+          path: "",
+          sessions: [
+            { key: "agent:main:a", kind: "direct", updatedAt: 2, execCwd: "/a/openclaw" },
+            { key: "agent:main:b", kind: "direct", updatedAt: 1, execCwd: "/b/openclaw" },
+          ],
+          ts: Date.now(),
+        },
+        "sessions.create": { key: "agent:main:recent-collision" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("node.list");
+      const trigger = page.locator("#new-session-place-trigger");
+      await trigger.click();
+      const first = page.locator('[data-value="recent::/a/openclaw"]');
+      const second = page.locator('[data-value="recent::/b/openclaw"]');
+      await expect.poll(() => first.locator(".session-menu__sub").textContent()).toBe("a");
+      await expect.poll(() => second.locator(".session-menu__sub").textContent()).toBe("b");
+      await second.click();
+      await page.locator(".new-session-page__message").fill("continue in work checkout");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        cwd: "/b/openclaw",
+        message: "continue in work checkout",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("applies a recent folder and node as one place", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "node.list": {
+          nodes: [
+            {
+              nodeId: "macbook",
+              displayName: "MacBook",
+              connected: true,
+              commands: ["system.run", "fs.listDir"],
+            },
+          ],
+        },
+        "sessions.list": {
+          count: 2,
+          defaults: SESSION_LIST_DEFAULTS,
+          path: "",
+          sessions: [
+            {
+              key: "agent:main:recent-node",
+              kind: "direct",
+              updatedAt: 2,
+              execCwd: NODE_PICKED,
+              execNode: "macbook",
+            },
+            {
+              key: "agent:main:workspace",
+              kind: "direct",
+              updatedAt: 1,
+              execCwd: WORKSPACE,
+            },
+          ],
+          ts: Date.now(),
+        },
+        "sessions.create": { key: "agent:main:recent-place" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("node.list");
+      const trigger = page.locator("#new-session-place-trigger");
+      await trigger.click();
+      await page
+        .locator("wa-popover.new-session-page__place-popover")
+        .getByRole("button", { name: "Projects · MacBook", exact: true })
+        .click();
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("Projects · MacBook");
+
+      await page.locator(".new-session-page__message").fill("continue on the recent node");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        cwd: NODE_PICKED,
+        execNode: "macbook",
+        message: "continue on the recent node",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("returns from the browse root to the place menu", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "fs.listDir": {
+          path: WORKSPACE,
+          home: WORKSPACE,
+          entries: [],
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const trigger = page.locator("#new-session-place-trigger");
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await gateway.waitForRequest("fs.listDir");
+      await place.getByRole("button", { name: "Parent folder" }).click();
+      await place.getByRole("button", { name: "Worktree" }).waitFor();
+      expect(await place.getAttribute("open")).not.toBeNull();
+
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await page.locator("input.new-session-page__browser-path").press("Escape");
+      await place.getByRole("button", { name: "Worktree" }).waitFor();
+      expect(await place.getAttribute("open")).not.toBeNull();
     } finally {
       await context.close();
     }
@@ -837,10 +1128,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         })),
       ).toEqual({ hasSubtleCrypto: true, isSecureContext: true });
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      const where = page.locator("wa-popover.new-session-page__where-popover");
-      await where.getByRole("button", { name: "Cloud · aws" }).click();
-      const trigger = page.locator("#new-session-where-trigger");
+      await page.locator("#new-session-place-trigger").click();
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      const trigger = page.locator("#new-session-place-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("main");
@@ -869,18 +1160,15 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       // Picking a Gateway repo keeps the cloud selection: that folder is what
       // the managed worktree checks out and dispatch syncs to the worker.
-      await page.locator("#new-session-folder-trigger").click();
-      await page
-        .locator(".new-session-page__browser-list")
-        .getByRole("button", { name: "Gateway" })
-        .click();
+      await trigger.click();
+      await place.getByRole("button", { name: "Browse folders" }).click();
       await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
-      await page.locator("#new-session-where-trigger").click();
+      await trigger.click();
       await expect
-        .poll(() => where.locator(".new-session-page__menu-note").textContent())
+        .poll(() => place.locator(".new-session-page__menu-note").textContent())
         .toContain("Syncs target-repo to the cloud worker");
       await captureUiProof(page, "01-cloud-worker-target.png");
       await page.keyboard.press("Escape");
@@ -1087,12 +1375,12 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      await page.locator("#new-session-place-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator("wa-popover.new-session-page__place-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
-      const trigger = page.locator("#new-session-where-trigger");
+      const trigger = page.locator("#new-session-place-trigger");
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
 
       await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
@@ -1110,7 +1398,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() =>
           page
-            .locator("wa-popover.new-session-page__where-popover")
+            .locator("wa-popover.new-session-page__place-popover")
             .getByRole("button", { name: "Cloud · aws" })
             .isDisabled(),
         )
@@ -1196,9 +1484,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      await page.locator("#new-session-place-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator("wa-popover.new-session-page__place-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.evaluate(() => {
@@ -1432,9 +1720,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      await page.locator("#new-session-place-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator("wa-popover.new-session-page__place-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill(message);
@@ -1511,9 +1799,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      await page.locator("#new-session-place-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator("wa-popover.new-session-page__place-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.locator(".new-session-page__message").fill(message);
@@ -1621,9 +1909,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      await page.locator("#new-session-place-trigger").click();
       await page
-        .locator("wa-popover.new-session-page__where-popover")
+        .locator("wa-popover.new-session-page__place-popover")
         .getByRole("button", { name: "Cloud · aws" })
         .click();
       await page.evaluate(() => {
@@ -2038,9 +2326,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toContain("Research");
       await expect
         .poll(() =>
-          page
-            .locator("#new-session-folder-trigger .new-session-page__trigger-label")
-            .textContent(),
+          page.locator("#new-session-place-trigger .new-session-page__trigger-label").textContent(),
         )
         .toBe("research-next");
       await expect
@@ -2050,10 +2336,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         repoRoot: REFRESHED_RESEARCH_WORKSPACE,
       });
 
-      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
-      const whereTrigger = page.locator("#new-session-where-trigger");
-      await whereTrigger.click();
-      const worktreeItem = whereSelect.getByRole("button", { name: "Worktree" });
+      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      await placeTrigger.click();
+      const worktreeItem = placeSelect.getByRole("button", { name: "Worktree" });
       await worktreeItem.click();
       const baseInput = page.getByLabel("Base branch");
       await expect.poll(() => baseInput.inputValue()).toBe("main");
@@ -2138,9 +2424,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       await gateway.waitForRequest("node.list");
-      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
-      await page.locator("#new-session-where-trigger").click();
-      await whereSelect.getByRole("button", { name: "Old device" }).click();
+      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
+      await page.locator("#new-session-place-trigger").click();
+      await placeSelect.getByRole("button", { name: "Old device" }).click();
       await page.locator(".new-session-page__message").fill("use a validated device");
       const start = page.locator("button.chat-send-btn");
       const nodeRequestsBefore = (await gateway.getRequests("node.list")).length;
@@ -2213,22 +2499,17 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await gateway.waitForRequest("worktrees.branches");
 
       const message = page.locator(".new-session-page__message");
-      const folderSelect = page.locator(".new-session-page__select--folder");
-      const folderTrigger = page.locator("#new-session-folder-trigger");
-      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
-      const whereTrigger = page.locator("#new-session-where-trigger");
+      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
+      const placeTrigger = page.locator("#new-session-place-trigger");
       await message.fill("preserve this replacement draft");
-      await whereTrigger.click();
-      await whereSelect.getByRole("button", { name: "Old device" }).click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "Old device" }).click();
 
       // Keep an old-client browser request in flight. Replacement must close
       // its menu and prevent its eventual completion from reviving old state.
       await gateway.deferNext("fs.listDir");
-      await folderTrigger.click();
-      await page
-        .locator(".new-session-page__browser-list")
-        .getByRole("button", { name: "Old device" })
-        .click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
       await gateway.waitForRequest("fs.listDir");
 
       await gateway.setMethodResponse("agents.list", {
@@ -2276,20 +2557,21 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
       await expect
         .poll(() =>
-          folderSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+          placeSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(false);
       await expect
-        .poll(() => folderTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("target-repo");
+        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("target-repo · Gateway · local");
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
       expect(branchRequests.at(-1)?.params).toEqual({ repoRoot: TARGET_REPO });
-      await whereTrigger.click();
-      await whereSelect.getByRole("button", { name: "New device" }).waitFor();
-      expect(await whereSelect.getByRole("button", { name: "Old device" }).count()).toBe(0);
-      await whereSelect.getByRole("button", { name: "Worktree" }).click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "New device" }).waitFor();
+      expect(await placeSelect.getByRole("button", { name: "Old device" }).count()).toBe(0);
+      await placeSelect.getByRole("button", { name: "Worktree" }).click();
       await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("beta");
+      await page.keyboard.press("Escape");
 
       await gateway.resolveDeferred("fs.listDir", {
         path: "/stale-device-path",
@@ -2298,7 +2580,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
       await expect
         .poll(() =>
-          folderSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+          placeSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(false);
       await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
@@ -2450,7 +2732,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new?agent=research`);
       const folderLabel = page.locator(
-        "#new-session-folder-trigger .new-session-page__trigger-label",
+        "#new-session-place-trigger .new-session-page__trigger-label",
       );
       await expect.poll(() => folderLabel.textContent()).toBe("research");
 
@@ -2526,15 +2808,12 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       const draft = page.locator(".new-session-page__scroll");
       const message = page.locator(".new-session-page__message");
-      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
-      const whereSummary = page.locator("#new-session-where-trigger");
-      const targetSummaries = page.locator(
-        "#new-session-folder-trigger, #new-session-where-trigger",
-      );
+      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
+      const placeSummary = page.locator("#new-session-place-trigger");
 
       await message.fill(submittedMessage);
-      await whereSummary.click();
-      expect(await whereSelect.getAttribute("open")).not.toBeNull();
+      await placeSummary.click();
+      expect(await placeSelect.getAttribute("open")).not.toBeNull();
       await page.getByRole("button", { name: "Start thread" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
@@ -2542,19 +2821,15 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect.poll(() => message.isDisabled()).toBe(true);
       expect(await draft.getAttribute("inert")).not.toBeNull();
       expect(await draft.getAttribute("aria-busy")).toBe("true");
-      expect(await whereSelect.getAttribute("open")).toBeNull();
-      expect(
-        await targetSummaries.evaluateAll((summaries) =>
-          summaries.map((summary) => (summary as HTMLButtonElement).disabled),
-        ),
-      ).toEqual([true, true]);
+      expect(await placeSelect.getAttribute("open")).toBeNull();
+      expect(await placeSummary.isDisabled()).toBe(true);
 
       await expect(
         message.fill("silently discarded late edit", { timeout: 250 }),
       ).rejects.toThrow();
-      await whereSummary.click({ force: true });
+      await placeSummary.click({ force: true });
       await page.locator(".agent-chat__suggestion").first().click({ force: true });
-      expect(await whereSelect.getAttribute("open")).toBeNull();
+      expect(await placeSelect.getAttribute("open")).toBeNull();
       expect(await message.inputValue()).toBe(submittedMessage);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
 
@@ -2566,11 +2841,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       expect(await draft.getAttribute("inert")).toBeNull();
       expect(await draft.getAttribute("aria-busy")).toBe("false");
       expect(await message.inputValue()).toBe(submittedMessage);
-      expect(
-        await targetSummaries.evaluateAll((summaries) =>
-          summaries.map((summary) => (summary as HTMLButtonElement).disabled),
-        ),
-      ).toEqual([false, false]);
+      expect(await placeSummary.isDisabled()).toBe(false);
 
       await page.getByRole("button", { name: "Start thread" }).click();
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
@@ -2624,7 +2895,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
     try {
       const baseInput = await deferTargetRepositorySelection(page, gateway);
-      await page.locator("#new-session-where-trigger").click();
+      await page.locator("#new-session-place-trigger").click();
       await baseInput.fill("feature-choice");
       await gateway.resolveDeferred("worktrees.branches");
       await expect.poll(() => baseInput.getAttribute("placeholder")).not.toBe("Loading…");
@@ -2717,15 +2988,19 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
         timeout: 30_000,
       });
-      await expect.poll(() => page.locator(".chat-queue__text").allInnerTexts()).toContain(message);
       await expect
-        .poll(() => page.locator(".chat-queue__error").allInnerTexts())
+        .poll(() => page.locator(".chat-queue__text").allInnerTexts(), { timeout: 30_000 })
+        .toContain(message);
+      await expect
+        .poll(() => page.locator(".chat-queue__error").allInnerTexts(), { timeout: 30_000 })
         .toContain(runError);
 
       await page.reload();
-      await expect.poll(() => page.locator(".chat-queue__text").allInnerTexts()).toContain(message);
       await expect
-        .poll(() => page.locator(".chat-queue__error").allInnerTexts())
+        .poll(() => page.locator(".chat-queue__text").allInnerTexts(), { timeout: 30_000 })
+        .toContain(message);
+      await expect
+        .poll(() => page.locator(".chat-queue__error").allInnerTexts(), { timeout: 30_000 })
         .toContain(runError);
 
       await page.getByRole("button", { name: "Retry queued message" }).click();
@@ -2787,9 +3062,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
         timeout: 30_000,
       });
-      await expect.poll(() => page.locator(".chat-queue__text").allInnerTexts()).toContain(message);
       await expect
-        .poll(() => page.locator(".chat-queue__error").allInnerTexts())
+        .poll(() => page.locator(".chat-queue__text").allInnerTexts(), { timeout: 30_000 })
+        .toContain(message);
+      await expect
+        .poll(() => page.locator(".chat-queue__error").allInnerTexts(), { timeout: 30_000 })
         .toContain(runError);
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
@@ -2887,107 +3164,73 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor();
-      const folderSelect = page.locator(".new-session-page__select--folder");
-      const folderTrigger = page.locator("#new-session-folder-trigger");
-      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
-      const whereTrigger = page.locator("#new-session-where-trigger");
-      const whereLabel = whereTrigger.locator(".new-session-page__trigger-label");
+      const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
+      const placeTrigger = page.locator("#new-session-place-trigger");
+      const placeLabel = placeTrigger.locator(".new-session-page__trigger-label");
+      const browserEntries = page.locator(".new-session-page__browser-list");
 
-      // Pick the node from the where menu.
-      await whereTrigger.click();
-      await whereSelect.getByRole("button", { name: "MacBook" }).click();
-      await expect.poll(() => whereLabel.textContent()).toBe("MacBook");
+      // Pick the node from Places.
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "MacBook" }).click();
+      await expect.poll(() => placeLabel.textContent()).toBe("Agent workspace · MacBook");
       // Node sessions cannot use managed worktrees, so the menu drops the item.
-      await whereTrigger.click();
-      expect(await whereSelect.getByRole("button", { name: "Worktree" }).count()).toBe(0);
+      await placeTrigger.click();
+      expect(await placeSelect.getByRole("button", { name: "Worktree" }).count()).toBe(0);
       await page.keyboard.press("Escape");
 
       // Manual path entry in the browser head preserves UNC paths; these
       // cannot be rediscovered by starting at the node home directory.
-      await folderTrigger.click();
-      const roots = page.locator(".new-session-page__browser-list");
-      await roots.getByRole("button", { name: "MacBook" }).click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
       const pathInput = page.locator("input.new-session-page__browser-path");
       await expect.poll(() => pathInput.inputValue()).toBe(NODE_HOME);
       await pathInput.fill(NODE_UNC);
       await pathInput.press("Enter");
       await expect.poll(() => pathInput.inputValue()).toBe(NODE_UNC);
-      // Close without applying; the draft keeps the node home default.
+      // Escape returns to the picker root without applying or closing it.
       await page.keyboard.press("Escape");
       await expect
         .poll(() =>
-          folderSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-        )
-        .toBe(false);
-
-      // Back on the Gateway, the browser super-root lists every node.
-      await whereSelect.evaluate((element) => {
-        (element as HTMLElement & { open: boolean }).open = true;
-      });
-      await expect
-        .poll(() =>
-          whereSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
+          placeSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(true);
-      await whereSelect.getByRole("button", { name: "Gateway · local" }).click();
-      await expect.poll(() => whereLabel.textContent()).toBe("Gateway · local");
-      await folderTrigger.click();
-      await expect
-        .poll(() =>
-          roots
-            .getByRole("button")
-            .evaluateAll((buttons) =>
-              buttons.map((button) => button.textContent?.trim().replace(/\s+/g, " ")),
-            ),
-        )
-        .toEqual(["Gateway · local", "MacBook", "Offline node", "Old node"]);
-      const macbookRoot = roots.getByRole("button", { name: "MacBook" });
-      const offlineRoot = roots.getByRole("button", { name: "Offline node" });
-      const oldRoot = roots.getByRole("button", { name: "Old node" });
-      expect(await macbookRoot.isEnabled()).toBe(true);
-      expect(await macbookRoot.getAttribute("title")).toBeNull();
-      // Offline rows stay disabled; exec-only rows accept a manual path.
-      expect(await offlineRoot.isDisabled()).toBe(true);
-      expect(await offlineRoot.getAttribute("title")).toBe("Device is offline");
-      expect(await oldRoot.isEnabled()).toBe(true);
-      expect(await oldRoot.getAttribute("title")).toBe(
-        "This device doesn't support folder browsing",
-      );
+      await placeSelect.getByText("Places", { exact: true }).waitFor();
 
-      await roots.getByRole("button", { name: "MacBook" }).click();
-      await roots.getByRole("button", { name: "Projects" }).click();
+      // Destination selection stays in Places; browsing is fixed to the current target.
+      await placeSelect.getByRole("button", { name: "Gateway · local" }).click();
+      await expect.poll(() => placeLabel.textContent()).toBe("openclaw · Gateway · local");
+      await placeTrigger.click();
+      expect(await placeSelect.getByRole("button", { name: "Offline node" }).count()).toBe(0);
+      await placeSelect.getByRole("button", { name: "MacBook" }).click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
+      await browserEntries.getByRole("button", { name: "Projects" }).click();
       await page.getByRole("button", { name: "Use this folder" }).click();
 
       // Using a node folder retargets the draft to that node.
-      await expect.poll(() => whereLabel.textContent()).toBe("MacBook");
-      await expect
-        .poll(() => folderTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("Projects");
+      await expect.poll(() => placeLabel.textContent()).toBe("Projects · MacBook");
 
       // Clearing the path applies the node's default directory (empty folder),
       // the state the replaced clearable folder textbox could express.
-      await folderTrigger.click();
-      await roots.getByRole("button", { name: "MacBook" }).click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
       await expect.poll(() => pathInput.inputValue()).toBe(NODE_PICKED);
       await pathInput.fill("");
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect
-        .poll(() => folderTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("Agent workspace");
-      await expect.poll(() => whereLabel.textContent()).toBe("MacBook");
+      await expect.poll(() => placeLabel.textContent()).toBe("Agent workspace · MacBook");
 
       // Browse back to the custom folder, then retarget to the exec-only node
       // with a manual absolute path for the final create assertion.
-      await folderTrigger.click();
-      await roots.getByRole("button", { name: "MacBook" }).click();
-      await roots.getByRole("button", { name: "Projects" }).click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
+      await browserEntries.getByRole("button", { name: "Projects" }).click();
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect
-        .poll(() => folderTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("Projects");
+      await expect.poll(() => placeLabel.textContent()).toBe("Projects · MacBook");
 
-      await folderTrigger.click();
-      await roots.getByRole("button", { name: "Old node" }).click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "Old node" }).click();
+      await placeTrigger.click();
+      await placeSelect.getByRole("button", { name: "Browse folders" }).click();
       await expect.poll(() => pathInput.inputValue()).toBe("");
       await pathInput.fill(EXEC_ONLY_PICKED);
       await pathInput.press("Enter");
@@ -2997,10 +3240,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         ),
       ).toHaveLength(0);
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect.poll(() => whereLabel.textContent()).toBe("Old node");
-      await expect
-        .poll(() => folderTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("repo");
+      await expect.poll(() => placeLabel.textContent()).toBe("repo · Old node");
 
       await page.locator(".new-session-page__message").fill("inspect the remote checkout");
       await page.getByRole("button", { name: "Start thread" }).click();

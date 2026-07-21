@@ -9,10 +9,13 @@ type AgentScopeControlParams = {
   agents: readonly GatewayAgentRow[];
   additionalAgentIds?: readonly string[];
   selection: AgentSelectionCapability;
+  allowAll?: boolean;
+  selectedId?: string | null;
 };
 
 export function renderAgentScopeControl(params: AgentScopeControlParams) {
-  const selected = params.selection.state.scopeId ?? "";
+  const selected = params.selectedId ?? params.selection.state.scopeId ?? "";
+  const allowAll = params.allowAll !== false;
   const agentsById = new Map(
     params.agents.map((agent) => {
       const agentId = normalizeAgentId(agent.id);
@@ -44,10 +47,20 @@ export function renderAgentScopeControl(params: AgentScopeControlParams) {
           params.selection.setScope(value || null);
         }}
       >
-        <option value="">${t("agentScope.allAgents")}</option>
-        ${selectedAgentMissing ? html`<option value=${selected}>${selected}</option>` : null}
+        ${allowAll
+          ? html`<option value="" ?selected=${selected === ""}>
+              ${t("agentScope.allAgents")}
+            </option>`
+          : null}
+        ${selectedAgentMissing
+          ? html`<option value=${selected} selected>${selected}</option>`
+          : null}
         ${agents.map(
-          (agent) => html`<option value=${agent.id}>${normalizeAgentLabel(agent)}</option>`,
+          (agent) => html`
+            <option value=${agent.id} ?selected=${agent.id === selected}>
+              ${normalizeAgentLabel(agent)}
+            </option>
+          `,
         )}
       </select>
     </label>

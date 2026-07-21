@@ -135,6 +135,8 @@ export type GatewayControlUiConfig = {
    * utility-model routing and caches them per agent.
    */
   toolTitles?: boolean;
+  /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
+  sessionObserver?: boolean;
   /**
    * Embed sandbox mode for hosted Control UI previews.
    * - strict: no script execution inside embeds

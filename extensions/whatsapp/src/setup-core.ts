@@ -9,6 +9,7 @@ import {
 const channel = "whatsapp" as const;
 
 export const whatsappSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["authDir"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({

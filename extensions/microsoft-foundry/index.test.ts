@@ -3,7 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAccessTokenResultAsync } from "./cli.js";
+import { azLoginDeviceCodeWithOptions, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
   promptApiKeyEndpointAndModel,
@@ -37,6 +37,7 @@ const {
 
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() =>
   vi.fn(() => ({
     profiles: {},
@@ -48,6 +49,7 @@ vi.mock("node:child_process", async () => {
   return {
     ...actual,
     execFileSync: execFileSyncMock,
+    spawn: spawnMock,
   };
 });
 
@@ -2043,4 +2045,50 @@ describe("isAnthropicFoundryDeployment", () => {
     },
   );
 });
+describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    spawnMock.mockReset();
+  });
+
+  it("reassembles split-byte UTF-8 across both spawned process streams", async () => {
+    const { PassThrough } = await import("node:stream");
+    const { EventEmitter } = await import("node:events");
+
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+
+    // Build a fake ChildProcess that mirrors spawn()'s return shape
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      pid: 99999,
+    });
+
+    spawnMock.mockReturnValue(child);
+    const stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWriteSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const loginPromise = azLoginDeviceCodeWithOptions({});
+
+    const writeSplitUtf8 = (stream: typeof stdout, text: string) => {
+      const bytes = Buffer.from(text);
+      stream.write(bytes.subarray(0, 2));
+      stream.write(bytes.subarray(2));
+    };
+    writeSplitUtf8(stderr, "😊");
+    writeSplitUtf8(stdout, "🚀");
+    stderr.end();
+    stdout.end();
+
+    child.emit("close", 1);
+
+    const err = await loginPromise.catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("az login exited with code 1: 😊🚀");
+    expect(stdoutWriteSpy).toHaveBeenCalledWith("🚀");
+    expect(stderrWriteSpy).toHaveBeenCalledWith("😊");
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

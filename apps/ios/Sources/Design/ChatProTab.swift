@@ -27,6 +27,11 @@ struct ChatProTab: View {
         let fileURL: URL
     }
 
+    private struct SessionDashboardPresentation: Identifiable {
+        let id = UUID()
+        let sessionKey: String
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @AppStorage("openclaw.webchat.showAssistantTrace")
     private var showsAssistantTrace = true
@@ -37,6 +42,7 @@ struct ChatProTab: View {
     @State private var showsBackgroundTasks = false
     @State private var showsSessions = false
     @State private var showsNewSessionOptions = false
+    @State private var sessionDashboardPresentation: SessionDashboardPresentation?
     // Transport can start unscoped while the UI uses its "main" fallback.
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
@@ -138,9 +144,9 @@ struct ChatProTab: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if let headerSidebarAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarRevealButton(action: headerSidebarAction)
-                    }
+                    OpenClawSidebarToolbarItem(
+                        action: headerSidebarAction,
+                        placement: .topBarLeading)
                 }
                 if self.showsAgentBadge {
                     if #available(iOS 26.0, *) {
@@ -180,6 +186,11 @@ struct ChatProTab: View {
                     }
                     .presentationDetents([.medium])
                     .presentationDragIndicator(.visible)
+                }
+            }
+            .sheet(item: self.$sessionDashboardPresentation) { presentation in
+                NavigationStack {
+                    SessionDashboardScreen(sessionKey: presentation.sessionKey)
                 }
             }
             .alert(
@@ -628,6 +639,19 @@ struct ChatProTab: View {
                     Image(systemName: "rectangle.stack")
                 }
             }
+
+            Button {
+                guard let sessionKey = self.viewModel?.sessionKey else { return }
+                self.sessionDashboardPresentation = SessionDashboardPresentation(sessionKey: sessionKey)
+            } label: {
+                Label {
+                    Text("Dashboard")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "rectangle.grid.2x2")
+                }
+            }
+            .disabled(self.viewModel == nil)
 
             Divider()
 

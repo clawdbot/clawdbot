@@ -266,8 +266,13 @@ export async function processMessage(params: {
       const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
       audioTranscript = await transcribeFirstAudio({
         ctx: {
-          MediaPaths: [params.msg.payload.media?.path],
-          MediaTypes: params.msg.payload.media?.type ? [params.msg.payload.media?.type] : undefined,
+          media: [
+            {
+              path: params.msg.payload.media.path,
+              contentType: params.msg.payload.media.type,
+              kind: params.msg.payload.media.kind ?? undefined,
+            },
+          ],
           From: conversationId,
           To: params.msg.platform.recipientJid,
           Provider: "whatsapp",

@@ -1,6 +1,10 @@
 import { extractShellWrapperInlineCommand } from "../infra/shell-wrapper-resolution.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
+// Codex 0.144.6 retains at most 1 MiB per exec stream. Leave headroom so this
+// soak measures compaction behavior instead of the dependency's output boundary.
+export const CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES = 800_000;
+
 /**
  * Text matchers shared by live Codex harness tests.
  *

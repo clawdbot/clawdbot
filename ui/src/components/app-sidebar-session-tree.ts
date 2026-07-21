@@ -89,6 +89,13 @@ export function projectSessionTree(params: {
         child.failedChildCount,
       0,
     );
+    // Conflict attention is transitive: a collapsed parent must expose staged
+    // cloud results held by descendants or the recovery signal disappears.
+    const workspaceConflictCount = Math.min(
+      Number.MAX_SAFE_INTEGER,
+      (projected.workspaceConflictCount ?? 0) +
+        children.reduce((count, child) => count + (child.workspaceConflictCount ?? 0), 0),
+    );
     const unloadedChildKeys = childSessionKeys.filter((key) => !rowsByKey.has(key));
     // Only direct unloaded children can match: parents carry their keys, but not grandchildren's.
     // Grandchildren join the normal transitive fold after their branch is materialized.
@@ -122,6 +129,7 @@ export function projectSessionTree(params: {
       containsActiveDescendant: children.some(
         (child) => child.active || child.visuallyActive || child.containsActiveDescendant,
       ),
+      workspaceConflictCount: workspaceConflictCount || undefined,
       runningChildCount,
       failedChildCount,
     };

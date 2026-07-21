@@ -13,11 +13,17 @@ function draftFromLocation(location: RouteLocation): string | undefined {
   return draft || undefined;
 }
 
+// Only "dashboard" is meaningful: chat is the default face, so a chat value
+// would be a no-op that still dirties history replaces.
+function faceFromLocation(location: RouteLocation): "dashboard" | undefined {
+  return new URLSearchParams(location.search).get("face") === "dashboard" ? "dashboard" : undefined;
+}
+
 export const page = definePage({
   id: "chat",
   path: "/chat",
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-    `${sessionKeyFromLocation(location) ?? ""}\u0000${draftFromLocation(location) ?? ""}`,
+    `${sessionKeyFromLocation(location) ?? ""}\u0000${draftFromLocation(location) ?? ""}\u0000${faceFromLocation(location) ?? ""}`,
   loader: async (_context: ApplicationContext, { location }) => {
     const sessionKey = sessionKeyFromLocation(location);
     if (!sessionKey) {
@@ -26,6 +32,7 @@ export const page = definePage({
     return {
       sessionKey,
       draft: draftFromLocation(location),
+      face: faceFromLocation(location),
     };
   },
   component: () =>

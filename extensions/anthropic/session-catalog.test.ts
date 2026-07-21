@@ -348,6 +348,86 @@ function sdkCliMessage(sessionId: string, text: string): Record<string, unknown>
   };
 }
 
+async function writeLongPagedTranscript(params: {
+  home: string;
+  sessionId: string;
+  truncated?: boolean;
+}): Promise<string> {
+  const oldUser = "old user ".repeat(20_000);
+  await writeProject({
+    home: params.home,
+    entries: [
+      {
+        sessionId: params.sessionId,
+        fullPath: path.join(
+          params.home,
+          ".claude",
+          "projects",
+          "-workspace",
+          `${params.sessionId}.jsonl`,
+        ),
+        summary: "Transcript",
+        modified: "2026-07-04T00:00:00.000Z",
+        isSidechain: false,
+      },
+    ],
+    transcripts: {
+      [params.sessionId]: params.truncated
+        ? [
+            message(params.sessionId, "user", oldUser, 1),
+            message(params.sessionId, "assistant", "new assistant", 2),
+          ]
+        : [
+            { type: "queue-operation", sessionId: params.sessionId },
+            message(params.sessionId, "user", oldUser, 1),
+            message(params.sessionId, "assistant", "old assistant", 2),
+            message(params.sessionId, "user", "new user", 3),
+            message(params.sessionId, "assistant", "new assistant", 4),
+          ],
+    },
+  });
+  return oldUser;
+}
+
+// Cap positional reads on one transcript; a zero cap simulates mid-window EOF.
+function injectTranscriptShortReads(
+  sessionId: string,
+  plan: (input: {
+    length: number;
+    position: number;
+    call: number;
+    firstPosition: number;
+  }) => number,
+): void {
+  const realOpen = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+    const handle = await realOpen(...args);
+    const [target] = args;
+    if (typeof target === "string" && target.endsWith(`${sessionId}.jsonl`)) {
+      const realRead = handle.read.bind(handle) as (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => Promise<{ bytesRead: number; buffer: Buffer }>;
+      let call = 0;
+      let firstPosition = -1;
+      Object.defineProperty(handle, "read", {
+        configurable: true,
+        value: (buffer: Buffer, offset: number, length: number, position: number) => {
+          if (firstPosition < 0) {
+            firstPosition = position;
+          }
+          const allowed = plan({ length, position, call, firstPosition });
+          call += 1;
+          return realRead(buffer, offset, allowed, position);
+        },
+      });
+    }
+    return handle;
+  });
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   nodeHostMocks.runNodePtyCommand.mockClear();
@@ -774,6 +854,7 @@ describe("Claude session catalog", () => {
                 status: "stored",
                 source: "claude-cli",
                 modelProvider: "anthropic",
+                pullRequest: { numbers: [1234], state: "open" },
                 archived: false,
               },
             ],
@@ -810,6 +891,7 @@ describe("Claude session catalog", () => {
     const hosts = await provider?.list({ hostIds: ["node:node-a"] });
     expect(hosts?.[0]?.sessions[0]).toMatchObject({
       threadId,
+      pullRequest: { numbers: [1234], state: "open" },
       canContinue: true,
       canOpenTerminal: true,
     });
@@ -1077,6 +1159,87 @@ describe("Claude session catalog", () => {
     });
   });
 
+  it("retains the current Claude Desktop pull request when history is truncated", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-pull-requests";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "pull request prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "pull-requests", {
+      sessionId: "local_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop pull requests",
+      prNumber: 111772,
+      prs: [
+        { prNumber: 111772, state: "MERGED" },
+        { prNumber: 111179, state: "MERGED", dismissed: true },
+        ...Array.from({ length: 1_000 }, (_value, index) => ({
+          prNumber: index + 1,
+          state: "CLOSED",
+        })),
+      ],
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [
+        {
+          threadId: sessionId,
+          pullRequest: {
+            numbers: [...Array.from({ length: 19 }, (_value, index) => index + 982), 111772],
+            state: "merged",
+          },
+          source: "claude-desktop",
+        },
+      ],
+    });
+  });
+
+  it("adds the current Claude Desktop pull request when history omits it", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-current-pull-request";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "draft prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "current-pull-request", {
+      sessionId: "local_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop pull request",
+      prNumber: 107302,
+      prState: "OPEN",
+      prs: [{ prNumber: 107301, state: "CLOSED" }],
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [
+        {
+          threadId: sessionId,
+          pullRequest: { numbers: [107301, 107302], state: "open" },
+          source: "claude-desktop",
+        },
+      ],
+    });
+  });
+
   it("skips custom group names spliced with decoder garbage", async () => {
     const home = await createHome();
     const sessionId = "desktop-garbage-group";
@@ -1228,7 +1391,7 @@ describe("Claude session catalog", () => {
     expect(page.sessions[0]).not.toHaveProperty("customGroup");
   });
 
-  it("rejects sidechain, unindexed, and symlink-escaped transcript ids", async () => {
+  it("discovers CLI fallback transcripts and rejects sidechains, foreign entrypoints, and escapes", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
     const escapedId = "escaped-session";
@@ -1247,19 +1410,40 @@ describe("Claude session catalog", () => {
       transcripts: {
         "sidechain-session": [message("sidechain-session", "user", "sidechain", 1)],
         "unindexed-session": [message("unindexed-session", "user", "unindexed", 1)],
+        "cli-session": [
+          {
+            ...message("cli-session", "user", "Interactive CLI prompt", 1),
+            entrypoint: "cli",
+            cwd: "/work/cli",
+            version: "2.1.216",
+          },
+        ],
         "sdk-cli-session": [
           {
-            ...message("sdk-cli-session", "user", "CLI prompt", 1),
+            ...message("sdk-cli-session", "user", "Headless CLI prompt", 1),
             entrypoint: "sdk-cli",
             cwd: "/work/sdk",
             version: "2.1.204",
           },
         ],
+        "cli-sidechain-session": [
+          {
+            ...message("cli-sidechain-session", "user", "interactive sidechain", 1),
+            entrypoint: "cli",
+            isSidechain: true,
+          },
+        ],
         "discovered-sidechain": [
           {
-            ...message("discovered-sidechain", "user", "sidechain", 1),
+            ...message("discovered-sidechain", "user", "headless sidechain", 1),
             entrypoint: "sdk-cli",
             isSidechain: true,
+          },
+        ],
+        "foreign-entrypoint-session": [
+          {
+            ...message("foreign-entrypoint-session", "user", "SDK session", 1),
+            entrypoint: "sdk-ts",
           },
         ],
       },
@@ -1274,27 +1458,49 @@ describe("Claude session catalog", () => {
       title: "Desktop sidechain",
       isArchived: false,
     });
+    await writeDesktopMetadata(home, "cli-sidechain", {
+      cliSessionId: "cli-sidechain-session",
+      title: "Interactive Desktop sidechain",
+      isArchived: false,
+    });
     await writeDesktopMetadata(home, "discovered-sidechain", {
       cliSessionId: "discovered-sidechain",
-      title: "Discovered Desktop sidechain",
+      title: "Headless Desktop sidechain",
       isArchived: false,
     });
 
-    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([
-      expect.objectContaining({
-        threadId: "sdk-cli-session",
-        name: "CLI prompt",
-        source: "claude-cli",
-      }),
+    const sessions = (await listLocalClaudeSessionPage({}, home)).sessions;
+    expect(sessions.map((session) => session.threadId).toSorted()).toEqual([
+      "cli-session",
+      "sdk-cli-session",
     ]);
-    await expect(
-      readLocalClaudeTranscriptPage({ threadId: "sdk-cli-session", limit: 1 }, home),
-    ).resolves.toEqual(
-      expect.objectContaining({ items: [expect.objectContaining({ text: "CLI prompt" })] }),
+    expect(sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          threadId: "cli-session",
+          name: "Interactive CLI prompt",
+          source: "claude-cli",
+        }),
+        expect.objectContaining({
+          threadId: "sdk-cli-session",
+          name: "Headless CLI prompt",
+          source: "claude-cli",
+        }),
+      ]),
     );
+    for (const [threadId, text] of [
+      ["cli-session", "Interactive CLI prompt"],
+      ["sdk-cli-session", "Headless CLI prompt"],
+    ] as const) {
+      await expect(readLocalClaudeTranscriptPage({ threadId, limit: 1 }, home)).resolves.toEqual(
+        expect.objectContaining({ items: [expect.objectContaining({ text })] }),
+      );
+    }
     for (const threadId of [
       "sidechain-session",
+      "cli-sidechain-session",
       "discovered-sidechain",
+      "foreign-entrypoint-session",
       "unindexed-session",
       escapedId,
     ]) {
@@ -1419,28 +1625,7 @@ describe("Claude session catalog", () => {
   it("reads newest transcript messages first by page while returning each page chronologically", async () => {
     const home = await createHome();
     const sessionId = "transcript-session";
-    const oldUser = "old user ".repeat(20_000);
-    await writeProject({
-      home,
-      entries: [
-        {
-          sessionId,
-          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          summary: "Transcript",
-          modified: "2026-07-04T00:00:00.000Z",
-          isSidechain: false,
-        },
-      ],
-      transcripts: {
-        [sessionId]: [
-          { type: "queue-operation", sessionId },
-          message(sessionId, "user", oldUser, 1),
-          message(sessionId, "assistant", "old assistant", 2),
-          message(sessionId, "user", "new user", 3),
-          message(sessionId, "assistant", "new assistant", 4),
-        ],
-      },
-    });
+    const oldUser = await writeLongPagedTranscript({ home, sessionId });
 
     const latest = await readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home);
     expect(latest.items.map((item) => item.text)).toEqual(["new assistant", "new user"]);
@@ -1545,6 +1730,41 @@ describe("Claude session catalog", () => {
     await expect(
       provider.read({ hostId: "node:node-a", threadId: "session-a", limit: 1 }),
     ).rejects.toThrow("Claude node returned an invalid transcript page");
+  });
+
+  it("pages transcripts identically when every reverse-scan read returns short", async () => {
+    const home = await createHome();
+    const sessionId = "short-read-session";
+    const oldUser = await writeLongPagedTranscript({ home, sessionId });
+
+    // The fixture spans multiple 128 KiB windows; each is filled in 4 KiB reads.
+    injectTranscriptShortReads(sessionId, ({ length }) => Math.min(length, 4096));
+
+    const latest = await readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home);
+    expect(latest.items.map((item) => item.text)).toEqual(["new assistant", "new user"]);
+    expect(latest.nextCursor).toEqual(expect.any(String));
+
+    const older = await readLocalClaudeTranscriptPage(
+      { threadId: sessionId, limit: 2, cursor: latest.nextCursor },
+      home,
+    );
+    expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
+    expect(older.nextCursor).toBeUndefined();
+  });
+
+  it("still reports a truncated transcript when a reverse-scan read hits EOF mid-window", async () => {
+    const home = await createHome();
+    const sessionId = "truncated-read-session";
+    await writeLongPagedTranscript({ home, sessionId, truncated: true });
+
+    // Return one partial reverse read, then simulate truncation with zero bytes.
+    injectTranscriptShortReads(sessionId, ({ length, call, firstPosition }) =>
+      firstPosition === 0 ? length : call === 0 ? Math.min(length, 8) : 0,
+    );
+
+    await expect(
+      readLocalClaudeTranscriptPage({ threadId: sessionId, limit: 2 }, home),
+    ).rejects.toThrow("Claude transcript changed while it was being read");
   });
 
   it("advertises terminal resume only when the store and Claude binary exist", async () => {

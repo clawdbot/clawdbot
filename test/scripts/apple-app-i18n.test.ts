@@ -4,7 +4,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   APPLE_I18N_LOCALES,
+  assertMacosCatalogCurrent,
   buildIosCatalog,
+  buildMacosCatalog,
   compileMacosLocalizations,
   findAmbiguousRuntimeInterpolations,
   infoPlistTranslationCandidates,
@@ -64,6 +66,100 @@ describe("Apple app i18n catalogs", () => {
 
   it("keeps the Apple and native shipped locale sets identical", () => {
     expect(APPLE_I18N_LOCALES).toEqual(NATIVE_I18N_LOCALES);
+  });
+
+  it("derives broad macOS catalog coverage from the native source inventory", async () => {
+    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
+      entries: Array<{
+        id: string;
+        kind: string;
+        line: number;
+        path: string;
+        source: string;
+        surface: string;
+      }>;
+      version: number;
+    };
+    const build = buildMacosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      inventory,
+      [],
+    );
+    const keys = Object.keys(build.catalog.strings ?? {});
+
+    expect(keys.length).toBeGreaterThan(900);
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        "Browse ClawHub",
+        "Done in %@",
+        "Enable debug tools",
+        "Everyday OpenClaw app behavior.",
+        "General",
+        "Shelling",
+        "Voice Wake requires macOS 26 or newer",
+      ]),
+    );
+    expect(keys).not.toContain("OpenClaw");
+    expect(keys.some((key) => key.includes("\\("))).toBe(false);
+  });
+
+  it("rejects a checked-in macOS catalog that lags the derived inventory", () => {
+    const build = buildMacosCatalog(
+      { sourceLanguage: "en", strings: {}, version: "1.0" },
+      {
+        version: 1,
+        entries: [
+          {
+            id: "native.apple.settings",
+            kind: "ui-call",
+            line: 1,
+            path: "apps/macos/Sources/OpenClaw/Settings.swift",
+            source: "Settings",
+            surface: "apple",
+          },
+        ],
+      },
+      [],
+    );
+
+    expect(() =>
+      assertMacosCatalogCurrent(
+        `${JSON.stringify({ sourceLanguage: "en", strings: {}, version: "1.0" }, null, 2)}\n`,
+        build,
+      ),
+    ).toThrow("Apple catalog apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings is stale");
+  });
+
+  it("keeps macOS settings literals localized and runtime values verbatim", async () => {
+    const [components, channels, clawHub, gateways, general, approvals, voiceWake] =
+      await Promise.all([
+        readFile("apps/macos/Sources/OpenClaw/SettingsComponents.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/ChannelConfigForm.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/GatewaySettings.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/GeneralSettings.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift", "utf8"),
+        readFile("apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift", "utf8"),
+      ]);
+
+    expect(components).toContain("enum SettingsTextValue: ExpressibleByStringLiteral");
+    expect(components).toContain("case localized(LocalizedStringKey)");
+    expect(components).toContain("case verbatim(String)");
+    expect(components).toContain("let title: SettingsTextValue");
+    expect(components).not.toContain("let title: String");
+    expect(channels).toContain('title: label.map(SettingsTextValue.verbatim) ?? "Enabled"');
+    expect(channels).toContain("subtitle: help.map(SettingsTextValue.verbatim)");
+    expect(clawHub).toContain("title: .verbatim(self.skill.displayName)");
+    expect(gateways).toContain("subtitle: .verbatim(profile.url.absoluteString)");
+    expect(general).toContain(
+      "subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim)",
+    );
+    expect(approvals).toContain(
+      "subtitle: self.model.readErrorMessage.map(SettingsTextValue.verbatim)",
+    );
+    expect(approvals).toContain("subtitle: .localized(self.model.security.policyDescription)");
+    expect(approvals).toContain("subtitle: .localized(self.model.ask.policyDescription)");
+    expect(voiceWake).toContain('format: String(localized: "Language %lld")');
   });
 
   it("selects duplicate-source translations deterministically while preserving shipped translations", () => {
@@ -459,6 +555,11 @@ describe("Apple app i18n catalogs", () => {
         "utf8",
       );
       expect(swedish).toContain('"Logout" = "Logga ut";');
+      const turkish = await readFile(
+        path.join(outputDir, "tr.lproj", "Localizable.strings"),
+        "utf8",
+      );
+      expect(turkish).toContain('"General" = "Genel";');
       await expect(
         readFile(path.join(outputDir, "zh-Hans.lproj", "Localizable.strings"), "utf8"),
       ).resolves.toContain('"Save" = ');

@@ -1,4 +1,5 @@
 // QA Lab Matrix tool-progress diagnostics preserve actionable failure evidence.
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { isMatrixQaMessageLikeKind } from "./scenario-runtime-shared.js";
 
@@ -56,7 +57,7 @@ function truncateMatrixQaToolProgressBody(body: string | undefined) {
   if (!body) {
     return "<none>";
   }
-  return body.length <= 240 ? body : `${body.slice(0, 237)}...`;
+  return body.length <= 240 ? body : `${truncateUtf16Safe(body, 237)}...`;
 }
 
 function describeMatrixQaToolProgressCandidate(event: MatrixQaObservedEvent) {

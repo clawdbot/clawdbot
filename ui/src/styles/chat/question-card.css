@@ -189,10 +189,12 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__prompt {
+  min-width: 0;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
   font-weight: 600;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .chat-question-panel__options {

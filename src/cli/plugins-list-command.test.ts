@@ -45,7 +45,14 @@ describe("runPluginsListCommand", () => {
         workspaceDir: "/workspace",
         registrySource: "config",
         registryDiagnostics: [],
-        plugins: [{ id: "demo", enabled: true }],
+        plugins: [
+          {
+            id: "demo",
+            enabled: true,
+            commands: ["demo"],
+            agentHarnessIds: ["runtime-only"],
+          },
+        ],
         diagnostics: [],
       }),
     }));
@@ -102,7 +109,7 @@ describe("runPluginsListCommand", () => {
           source: "config",
           diagnostics: [],
         },
-        plugins: [{ id: "demo", enabled: true }],
+        plugins: [{ id: "demo", enabled: true, commands: ["demo"] }],
         diagnostics: [],
       },
     ]);

@@ -312,12 +312,13 @@ function buildComputerActParams(params: {
 }
 
 function isEligibleComputerNode(node: NodeListNode): boolean {
-  const platform = normalizeOptionalLowercaseString(node.platform) ?? "";
   const commands = Array.isArray(node.commands) ? node.commands : [];
+  // The tool loop authorizes coordinates against captured frames, so screenshot
+  // support is a functional requirement rather than gating by platform name.
   return (
     node.connected === true &&
-    (platform.startsWith("mac") || platform.startsWith("darwin")) &&
-    commands.includes(COMPUTER_ACT_COMMAND)
+    commands.includes(COMPUTER_ACT_COMMAND) &&
+    commands.includes(SCREEN_SNAPSHOT_COMMAND)
   );
 }
 
@@ -343,7 +344,7 @@ async function resolveComputerNode(
   const trimmed = query?.trim();
   if (trimmed) {
     // Shared resolver: prefers exact node ids and rejects ambiguous
-    // display-name collisions, so control never lands on the wrong Mac.
+    // display-name collisions, so control never lands on the wrong machine.
     let nodeId: string;
     try {
       nodeId = resolveNodeIdFromList(eligible, trimmed, false);
@@ -351,7 +352,7 @@ async function resolveComputerNode(
       const ineligible = nodes.find((node) => nodeMatchesQuery(node, trimmed));
       if (ineligible && !isEligibleComputerNode(ineligible)) {
         throw new Error(
-          `node "${trimmed}" is not computer-capable (needs a connected macOS node advertising ${COMPUTER_ACT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
+          `node "${trimmed}" is not computer-capable (needs a connected node advertising ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
           { cause: err },
         );
       }
@@ -371,7 +372,7 @@ async function resolveComputerNode(
   }
   if (eligible.length === 0) {
     throw new Error(
-      `no connected computer-capable node (a macOS node must advertise ${COMPUTER_ACT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
+      `no connected computer-capable node (a node must advertise ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
     );
   }
   throw new Error(
@@ -452,7 +453,7 @@ async function captureScreenshot(params: {
   const parsed = parseScreenSnapshotPayload(payload);
   if (!parsed.displayFrameId) {
     throw new Error(
-      "screen.snapshot response missing displayFrameId; update the macOS node before computer use",
+      "screen.snapshot response missing displayFrameId; update the node app before computer use",
     );
   }
   return {
@@ -613,7 +614,7 @@ export function createComputerTool(options?: {
         contextEpoch: number;
       };
   // Keep target affinity after pixels expire so cleanup input such as
-  // left_mouse_up still reaches the Mac/display that received the matching down.
+  // left_mouse_up still reaches the machine/display that received the matching down.
   // Only the frame state authorizes coordinates from model-visible pixels.
   let computerState: ComputerState = { kind: "unbound" };
   const setComputerState = (
@@ -639,7 +640,7 @@ export function createComputerTool(options?: {
   };
   // A down timeout is ambiguous: input may have landed even when no response
   // arrived. Pin subsequent actions to that target until an up is confirmed,
-  // so retargeting cannot strand a held button on another Mac.
+  // so retargeting cannot strand a held button on another machine.
   let heldButtonTarget: ComputerTarget | undefined;
   // Serialize execute() per tool instance. This runtime can dispatch parallel
   // tool calls (some providers enable it by default), but desktop input and the
@@ -693,7 +694,7 @@ export function createComputerTool(options?: {
           (COORDINATE_OPTIONAL_ACTIONS.has(action) && Array.isArray(params.coordinate));
         const priorTarget = computerState.kind === "unbound" ? undefined : computerState.target;
         const implicitTarget = heldButtonTarget ?? priorTarget;
-        // Bind the node to the established target: reuse the last Mac unless the
+        // Bind the node to the established target: reuse the last machine unless the
         // caller names one, so cleanup input never drifts to a different desktop.
         let nodeId: string;
         if (explicitNode !== undefined) {

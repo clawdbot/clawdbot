@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import "../../styles/base.css";
 import "./board-view.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
@@ -132,6 +133,13 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
     widget!.focus();
     expect(getComputedStyle(bar!).visibility).toBe("visible");
+    // The revealed strip must not steal clicks from widget content under it;
+    // only real controls (drag handle, kebab) stay interactive.
+    expect(getComputedStyle(bar!).pointerEvents).toBe("none");
+    const handle = bar!.querySelector<HTMLElement>(".board-widget__drag-handle");
+    const trigger = bar!.querySelector<HTMLElement>(".board-widget__menu-trigger");
+    expect(getComputedStyle(handle!).pointerEvents).toBe("auto");
+    expect(getComputedStyle(trigger!).pointerEvents).toBe("auto");
 
     sink.focus();
     expect(widget!.matches(":focus-within")).toBe(false);
@@ -181,7 +189,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([
-        { kind: "widget_resize", name: "first", sizeW: 8, sizeH: 5 },
+        { kind: "widget_resize", name: "first", sizeW: 8, sizeH: 5, heightMode: "fixed" },
       ]),
     );
   });
@@ -234,9 +242,51 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     );
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([
-        { kind: "widget_resize", name: "first", sizeW: 7, sizeH: 4 },
+        { kind: "widget_resize", name: "first", sizeW: 7, sizeH: 4, heightMode: "fixed" },
       ]),
     );
+  });
+
+  it("grows an auto-height card from its frame message and reflows its neighbor", async () => {
+    const view = await mount();
+    view.snapshot = {
+      ...structuredClone(source),
+      widgets: [
+        { ...source.widgets[0]!, sizeW: 8 },
+        { ...source.widgets[1]!, sizeW: 6, presentation: "frameless" },
+      ],
+    };
+    await view.updateComplete;
+    await Promise.all(
+      [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
+    );
+    const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
+    const first = cells[0]!;
+    const second = cells[1]!;
+    const frame = first.querySelector<HTMLIFrameElement>("iframe")!;
+    const secondTopBefore = second.getBoundingClientRect().top;
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "openclaw:widget-size", height: 300 },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(Math.round(first.getBoundingClientRect().height)).toBe(
+        BOARD_GRID_ROW_HEIGHT * 5 + BOARD_GRID_GAP * 4,
+      ),
+    );
+    expect(second.getBoundingClientRect().top).toBeGreaterThan(secondTopBefore);
+
+    const cardBody = first.querySelector<HTMLElement>(".board-widget__body");
+    expect(first.classList.contains("board-widget--card")).toBe(true);
+    expect(getComputedStyle(cardBody!).paddingTop).toBe("12px");
+    expect(second.classList.contains("board-widget--frameless")).toBe(true);
+    expect(getComputedStyle(second).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(getComputedStyle(second).borderTopColor).toBe("rgba(0, 0, 0, 0)");
+    second.focus();
+    expect(getComputedStyle(second).borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
   });
 
   it("rejects tab drop targets owned by another board", async () => {

@@ -31,6 +31,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "tlon",
       "label": "Tlon",
@@ -42,6 +45,10 @@
       "quickstartAllowFrom": true,
       "cliAddOptions": [
         {
+          "flags": "--url <url>",
+          "description": "Channel setup URL"
+        },
+        {
           "flags": "--ship <ship>",
           "description": "Tlon ship name (~sampel-palnet)"
         },
@@ -51,11 +58,13 @@
         },
         {
           "flags": "--group-channels <list>",
-          "description": "Tlon group channels (comma-separated)"
+          "description": "Tlon group channels (comma-separated)",
+          "valueType": "list"
         },
         {
           "flags": "--dm-allowlist <list>",
-          "description": "Tlon DM allowlist (comma-separated ships)"
+          "description": "Tlon DM allowlist (comma-separated ships)",
+          "valueType": "list"
         },
         {
           "flags": "--auto-discover-channels",

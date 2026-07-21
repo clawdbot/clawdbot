@@ -966,20 +966,26 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "OVERLOADED_ERROR" })).toBe("overloaded");
   });
 
-  it("infers timeout from abort/error stop-reason messages", () => {
+  it("infers timeout from abort/network stop-reason messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
     );
-    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
-      "timeout",
-    );
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({ message: "Unhandled stop reason: network_error" }),
     ).toBe("timeout");
+  });
+
+  it("infers server_error from bare error finish/stop reasons (#109218)", () => {
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
+      "server_error",
+    );
+    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("server_error");
+    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("server_error");
+    expect(resolveFailoverReasonFromError({ message: "Provider finish_reason: error" })).toBe(
+      "server_error",
+    );
   });
 
   it("infers timeout from connection/network error messages", () => {

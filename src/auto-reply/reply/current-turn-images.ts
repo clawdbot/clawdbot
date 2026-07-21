@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ImageContent } from "../../llm/types.js";
+import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
 import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
@@ -52,29 +53,14 @@ function resolveCurrentImageMediaType(pathValue: unknown, mediaType?: unknown): 
 }
 
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
-  const paths =
-    pathsFromArray && pathsFromArray.length > 0
-      ? pathsFromArray
-      : normalizeOptionalString(ctx.MediaPath)
-        ? [ctx.MediaPath]
-        : [];
-  if (paths.length === 0) {
-    return [];
-  }
-  const types =
-    Array.isArray(ctx.MediaTypes) && ctx.MediaTypes.length === paths.length
-      ? ctx.MediaTypes
-      : undefined;
-  const attachments: CurrentImageAttachment[] = [];
-  for (const [index, pathValue] of paths.entries()) {
-    const mediaPath = normalizeOptionalString(pathValue);
-    const mediaType = resolveCurrentImageMediaType(pathValue, types?.[index] ?? ctx.MediaType);
+  return normalizeAttachments(ctx).flatMap((attachment) => {
+    const mediaPath = normalizeOptionalString(attachment.path);
+    const mediaType = resolveCurrentImageMediaType(attachment.path, attachment.mime);
     if (mediaPath && mediaType) {
-      attachments.push({ index, path: mediaPath, mediaType });
+      return [{ index: attachment.index, path: mediaPath, mediaType }];
     }
-  }
-  return attachments;
+    return [];
+  });
 }
 
 function collectDescribedImageAttachmentIndexes(ctx: MsgContext): Set<number> {
@@ -92,9 +78,15 @@ function createUndescribedImageContext(
   const first = undescribedAttachments[0];
   return {
     ...ctx,
+    media: undescribedAttachments.map((attachment) => ({
+      path: attachment.path,
+      contentType: attachment.mediaType,
+    })),
     MediaPath: first?.path,
+    MediaUrl: first?.path,
     MediaType: first?.mediaType,
     MediaPaths: undescribedAttachments.map((attachment) => attachment.path),
+    MediaUrls: undescribedAttachments.map((attachment) => attachment.path),
     MediaTypes: undescribedAttachments.map((attachment) => attachment.mediaType),
   };
 }

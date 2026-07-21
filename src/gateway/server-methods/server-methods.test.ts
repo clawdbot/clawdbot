@@ -852,6 +852,37 @@ describe("injectTimestamp", () => {
 });
 
 describe("sanitizeChatHistoryMessages", () => {
+  it("preserves bounded cloud workspace conflict details for Control UI history", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        content: "Cloud result applied with conflicts.",
+        details: {
+          paths: ["src/local.ts", "ui/src/app.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+          totalCount: 3,
+          internal: "discard",
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        content: "Cloud result applied with conflicts.",
+        details: {
+          paths: ["src/local.ts", "ui/src/app.ts"],
+          stagedResultRef: "refs/openclaw/worker-results/claim-1",
+          totalCount: 3,
+        },
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("truncates display text without splitting surrogate pairs", () => {
     const prefix = "a".repeat(7);
     const result = sanitizeChatHistoryMessages(

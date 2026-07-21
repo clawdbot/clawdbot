@@ -15,6 +15,7 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
+  type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -24,7 +25,10 @@ import {
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
-import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
+import {
+  hasExplicitChannelConfig,
+  listExplicitConfiguredChannelIdsForConfig,
+} from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
@@ -103,9 +107,19 @@ function isConfigActivationValueEnabled(value: unknown): boolean {
   return true;
 }
 
-function listPotentialEnabledChannelIds(config: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+function listPotentialEnabledChannelIds(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+): string[] {
   const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(config));
-  return listPotentialConfiguredChannelIds(config, env, { includePersistedAuthState: false })
+  return sortUniquePluginIds([
+    ...listPotentialConfiguredChannelIds(config, env, {
+      includePersistedAuthState: false,
+      ambientEnvTriggers,
+    }),
+    ...listExplicitConfiguredChannelIdsForConfig(config),
+  ])
     .map((id) => normalizeOptionalLowercaseString(id) ?? "")
     .filter((id) => id && !disabled.has(id));
 }
@@ -806,10 +820,15 @@ function collectConfiguredStartupChannelIds(params: {
   activationSourceConfig: OpenClawConfig;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] {
   return sortUniquePluginIds([
-    ...listPotentialEnabledChannelIds(params.config, params.env),
-    ...listPotentialEnabledChannelIds(params.activationSourceConfig, params.env),
+    ...listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+    ...listPotentialEnabledChannelIds(
+      params.activationSourceConfig,
+      params.env,
+      params.ambientEnvTriggers,
+    ),
   ]);
 }
 
@@ -970,6 +989,7 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   index: InstalledPluginIndex;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] | undefined {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
   const activationSourceConfig = params.activationSourceConfig ?? params.config;
@@ -1031,6 +1051,7 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     config: params.config,
     activationSourceConfig,
     env: params.env,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   if (!lookup.hasDirectChannelOwners(configuredChannelIds)) {
     return undefined;
@@ -1106,11 +1127,13 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
   env: NodeJS.ProcessEnv;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): PluginMetadataSnapshotPluginIdScope {
   const configuredChannelIds = collectConfiguredStartupChannelIds({
     config: params.config,
     activationSourceConfig: params.activationSourceConfig ?? params.config,
     env: params.env,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const workerProviderIds = normalizeWorkerProviderIds(params.workerProviderIds ?? []);
   return {
@@ -1121,6 +1144,7 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
       configuredChannelIds,
       workerProviderIds,
       platform: params.platform ?? null,
+      ambientEnvTriggers: params.ambientEnvTriggers ?? "allow",
     }),
     resolve: ({ index }) =>
       resolveGatewayStartupMetadataPluginIds({
@@ -1132,6 +1156,9 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
         index,
         ...(workerProviderIds.length > 0 ? { workerProviderIds } : {}),
         ...(params.platform !== undefined ? { platform: params.platform } : {}),
+        ...(params.ambientEnvTriggers !== undefined
+          ? { ambientEnvTriggers: params.ambientEnvTriggers }
+          : {}),
       }),
   };
 }
@@ -1870,8 +1897,11 @@ export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
   env: NodeJS.ProcessEnv;
   index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] {
-  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
+  const configuredChannelIds = new Set(
+    listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+  );
   if (configuredChannelIds.size === 0) {
     return [];
   }
@@ -1933,6 +1963,7 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] {
   return [...loadGatewayStartupPluginPlan(params).configuredDeferredChannelPluginIds];
 }
@@ -1945,11 +1976,14 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   manifestRegistry: PluginManifestRegistry;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): GatewayStartupPluginPlan {
   const channelPluginIds = resolveChannelPluginIdsFromRegistry({
     manifestRegistry: params.manifestRegistry,
   });
-  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
+  const configuredChannelIds = new Set(
+    listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+  );
   const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
     manifestRegistry: params.manifestRegistry,
   });
@@ -2268,6 +2302,7 @@ export function loadGatewayStartupPluginPlan(params: {
   metadataSnapshot?: PluginMetadataSnapshot;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): GatewayStartupPluginPlan {
   const snapshotConfig = params.activationSourceConfig ?? params.config;
   const pluginIdScope = createGatewayStartupMetadataPluginIdScope({
@@ -2278,6 +2313,9 @@ export function loadGatewayStartupPluginPlan(params: {
     env: params.env,
     workerProviderIds: params.workerProviderIds ?? [],
     ...(params.platform !== undefined ? { platform: params.platform } : {}),
+    ...(params.ambientEnvTriggers !== undefined
+      ? { ambientEnvTriggers: params.ambientEnvTriggers }
+      : {}),
   });
   const metadataSnapshot =
     params.metadataSnapshot &&
@@ -2312,6 +2350,7 @@ export function loadGatewayStartupPluginPlan(params: {
     manifestRegistry: metadataSnapshot.manifestRegistry,
     workerProviderIds: params.workerProviderIds ?? [],
     platform: params.platform,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
 }
 
@@ -2322,6 +2361,7 @@ export function resolveGatewayStartupPluginIds(params: {
   env: NodeJS.ProcessEnv;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] {
   return [...loadGatewayStartupPluginPlan(params).pluginIds];
 }

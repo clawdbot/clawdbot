@@ -1,5 +1,6 @@
 import { html, nothing, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
+import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   serializeSidebarEntry,
   type NavigationRouteId,
@@ -26,7 +27,12 @@ import { sessionHasBoard } from "../lib/board/provider.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
-import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
+import { pluginTabKey } from "../pages/plugin/route.ts";
+import {
+  renderSidebarPluginTab,
+  shouldHandleNavigationClick,
+  sidebarPluginTabs,
+} from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionListElement } from "./app-sidebar-session-list.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -139,6 +145,10 @@ class AppSidebar extends AppSidebarSessionListElement {
     if (changed.has("connected")) {
       this.syncOfflineIndicator();
     }
+  }
+
+  protected override firstUpdated() {
+    requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
   }
 
   private syncOfflineIndicator(schedule = !this.connected) {
@@ -273,7 +283,7 @@ class AppSidebar extends AppSidebarSessionListElement {
               role="img"
               aria-label=${t("sessionsView.dashboardAvailable")}
               title=${t("sessionsView.dashboardAvailable")}
-              >${icons.barChart}</span
+              >${icons.layoutDashboard}</span
             >`
           : nothing}
         ${stateBadge !== nothing || approvalNeeded
@@ -441,6 +451,21 @@ class AppSidebar extends AppSidebarSessionListElement {
     `;
   }
 
+  private renderPluginTabEntry(tab: GatewayControlUiPluginTab) {
+    const ref = { pluginId: tab.pluginId, id: tab.id };
+    const key = pluginTabKey(ref);
+    return html`
+      <div class="sidebar-zone-entry" data-sidebar-entry=${`plugin:${key}`}>
+        ${renderSidebarPluginTab({
+          tab,
+          basePath: this.basePath,
+          active: this.activeRouteId === "plugin" && this.activePluginTabId === key,
+          onNavigate: (search) => this.onNavigate?.("plugin", { search }),
+        })}
+      </div>
+    `;
+  }
+
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
     return html`
@@ -463,6 +488,9 @@ class AppSidebar extends AppSidebarSessionListElement {
                 ${this.renderHomeRow()}
                 ${sidebarZone.entries.map((entry) =>
                   this.renderSidebarZoneEntry(entry, sidebarZone.sessionRows),
+                )}
+                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
+                  (tab) => this.renderPluginTabEntry(tab),
                 )}
               </div>
             </nav>

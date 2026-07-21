@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
+  packagedPrivatePluginSdkRuntimeEntrypoints,
   pluginSdkEntrypoints,
   privateLocalOnlyPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
@@ -45,6 +46,7 @@ function parsePluginSdkSurfaceReportArgs(argv) {
 }
 const publicEntrypointSet = new Set(publicPluginSdkEntrypoints);
 const localOnlyEntrypointSet = new Set(privateLocalOnlyPluginSdkEntrypoints);
+const packagedPrivateRuntimeEntrypointSet = new Set(packagedPrivatePluginSdkRuntimeEntrypoints);
 const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoints);
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
@@ -515,8 +517,9 @@ export function collectPluginSdkSurfaceReport() {
   const leakedForbiddenExports = readPackageExportedSubpaths().filter((subpath) =>
     forbiddenPublicSubpaths.has(subpath),
   );
-  const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter((entrypoint) =>
-    publicEntrypointSet.has(entrypoint),
+  const localOnlyStillPublic = privateLocalOnlyPluginSdkEntrypoints.filter(
+    (entrypoint) =>
+      publicEntrypointSet.has(entrypoint) && !packagedPrivateRuntimeEntrypointSet.has(entrypoint),
   );
   const localOnlyMissingFromInventory = [...localOnlyEntrypointSet].filter(
     (entrypoint) => !pluginSdkEntrypoints.includes(entrypoint),

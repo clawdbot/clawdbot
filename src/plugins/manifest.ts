@@ -243,6 +243,29 @@ export type PluginManifestQaRunner = {
   description?: string;
 };
 
+export type PluginManifestDashboardDataBinding = {
+  /** Plugin-local id. Widget grants receive the plugin-id prefix. */
+  id: string;
+  /** Read-scoped Gateway method registered by this plugin. */
+  method: string;
+  description: string;
+};
+
+export type PluginManifestDashboardActionVerb = {
+  /** Plugin-local id. Widget grants receive the plugin-id prefix. */
+  id: string;
+  /** Write-scoped Gateway method registered by this plugin. */
+  method: string;
+  description: string;
+  /** Optional JSON Schema for the action params object. */
+  paramShape?: JsonSchemaObject;
+};
+
+export type PluginManifestDashboard = {
+  dataBindings?: PluginManifestDashboardDataBinding[];
+  actionVerbs?: PluginManifestDashboardActionVerb[];
+};
+
 type PluginManifestConfigLiteral = string | number | boolean | null;
 
 type PluginManifestDangerousConfigFlag = {
@@ -372,6 +395,8 @@ export type PluginManifest = {
   setup?: PluginManifestSetup;
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
   qaRunners?: PluginManifestQaRunner[];
+  /** Widget data and action capabilities validated against runtime registrations. */
+  dashboard?: PluginManifestDashboard;
   skills?: string[];
   name?: string;
   description?: string;
@@ -1527,6 +1552,87 @@ function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunner[] | 
   return normalized.length > 0 ? normalized : undefined;
 }
 
+type DashboardManifestResult =
+  | { ok: true; dashboard?: PluginManifestDashboard }
+  | { ok: false; error: string };
+
+function normalizeDashboardCapabilityBase(
+  value: unknown,
+  field: string,
+  index: number,
+): { id: string; method: string; description: string } | string {
+  if (!isRecord(value)) {
+    return `${field}[${index}] must be an object`;
+  }
+  const id = normalizeOptionalString(value.id);
+  const method = normalizeOptionalString(value.method);
+  const description = normalizeOptionalString(value.description);
+  if (!id || !/^[a-z0-9][a-z0-9._-]*$/u.test(id)) {
+    return `${field}[${index}].id must be a lowercase capability id`;
+  }
+  if (!method) {
+    return `${field}[${index}].method must be a non-empty string`;
+  }
+  if (!description) {
+    return `${field}[${index}].description must be a non-empty string`;
+  }
+  return { id, method, description };
+}
+
+function normalizeManifestDashboard(value: unknown): DashboardManifestResult {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  if (!isRecord(value)) {
+    return { ok: false, error: "dashboard must be an object" };
+  }
+  if (value.dataBindings !== undefined && !Array.isArray(value.dataBindings)) {
+    return { ok: false, error: "dashboard.dataBindings must be an array" };
+  }
+  if (value.actionVerbs !== undefined && !Array.isArray(value.actionVerbs)) {
+    return { ok: false, error: "dashboard.actionVerbs must be an array" };
+  }
+
+  const dataBindings: PluginManifestDashboardDataBinding[] = [];
+  for (const [index, entry] of (value.dataBindings ?? []).entries()) {
+    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.dataBindings", index);
+    if (typeof normalized === "string") {
+      return { ok: false, error: normalized };
+    }
+    dataBindings.push(normalized);
+  }
+
+  const actionVerbs: PluginManifestDashboardActionVerb[] = [];
+  for (const [index, entry] of (value.actionVerbs ?? []).entries()) {
+    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.actionVerbs", index);
+    if (typeof normalized === "string") {
+      return { ok: false, error: normalized };
+    }
+    const rawParamShape = isRecord(entry) ? entry.paramShape : undefined;
+    if (rawParamShape !== undefined && !isRecord(rawParamShape)) {
+      return {
+        ok: false,
+        error: `dashboard.actionVerbs[${index}].paramShape must be a JSON Schema object`,
+      };
+    }
+    actionVerbs.push({
+      ...normalized,
+      ...(rawParamShape ? { paramShape: rawParamShape as JsonSchemaObject } : {}),
+    });
+  }
+
+  if (dataBindings.length === 0 && actionVerbs.length === 0) {
+    return { ok: true };
+  }
+  return {
+    ok: true,
+    dashboard: {
+      ...(dataBindings.length > 0 ? { dataBindings } : {}),
+      ...(actionVerbs.length > 0 ? { actionVerbs } : {}),
+    },
+  };
+}
+
 function normalizeManifestHttpsUrl(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
@@ -1872,6 +1978,15 @@ export function loadPluginManifest(
   const activation = normalizeManifestActivation(raw.activation);
   const setup = normalizeManifestSetup(raw.setup);
   const qaRunners = normalizeManifestQaRunners(raw.qaRunners);
+  const dashboardResult = normalizeManifestDashboard(raw.dashboard);
+  if (!dashboardResult.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest dashboard: ${dashboardResult.error}`,
+      manifestPath,
+    });
+  }
+  const dashboard = dashboardResult.dashboard;
   const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
   const mediaUnderstandingProviderMetadata = normalizeMediaUnderstandingProviderMetadata(
@@ -1928,6 +2043,7 @@ export function loadPluginManifest(
       activation,
       setup,
       qaRunners,
+      dashboard,
       skills,
       name,
       description,
@@ -2001,10 +2117,11 @@ export type PluginPackageChannelDoctorCapabilities = {
   warnOnEmptyGroupSenderAllowlist?: boolean;
 };
 
-type PluginPackageChannelCliOption = {
+export type PluginPackageChannelCliOption = {
   flags: string;
   description: string;
   defaultValue?: boolean | string;
+  valueType?: "int" | "list";
 };
 
 export type PluginPackageInstall = {

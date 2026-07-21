@@ -184,7 +184,21 @@
           "commands": {
             "nativeCommandsAutoEnabled": false,
             "nativeSkillsAutoEnabled": false
-          }
+          },
+          "cliAddOptions": [
+            {
+              "flags": "--base-url <url>",
+              "description": "Channel base URL"
+            },
+            {
+              "flags": "--code <code>",
+              "description": "ClickClack one-time setup code or setup URL"
+            },
+            {
+              "flags": "--workspace <workspace>",
+              "description": "ClickClack workspace id, slug, or name"
+            }
+          ]
         },
         "install": {
           "clawhubSpec": "clawhub:@openclaw/clickclack",
@@ -324,7 +338,13 @@
             "IRC_NICKSERV_PASSWORD",
             "IRC_NICKSERV_REGISTER_EMAIL"
           ],
-          "systemImage": "network"
+          "systemImage": "network",
+          "cliAddOptions": [
+            {
+              "flags": "--password <password>",
+              "description": "Channel password or login secret"
+            }
+          ]
         },
         "install": {
           "clawhubSpec": "clawhub:@openclaw/irc",
@@ -351,7 +371,13 @@
           "blurb": "LINE Messaging API webhook bot.",
           "systemImage": "message",
           "order": 75,
-          "quickstartAllowFrom": true
+          "quickstartAllowFrom": true,
+          "cliAddOptions": [
+            {
+              "flags": "--secret-file <path>",
+              "description": "Read channel shared secret from file"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/line",
@@ -377,7 +403,17 @@
             "MATTERMOST_BOT_TOKEN",
             "MATTERMOST_URL"
           ],
-          "order": 65
+          "order": 65,
+          "cliAddOptions": [
+            {
+              "flags": "--bot-token <token>",
+              "description": "Bot token"
+            },
+            {
+              "flags": "--http-url <url>",
+              "description": "Channel HTTP service URL"
+            }
+          ]
         },
         "install": {
           "clawhubSpec": "clawhub:@openclaw/mattermost",
@@ -424,12 +460,17 @@
               "description": "Matrix access token"
             },
             {
+              "flags": "--password <password>",
+              "description": "Channel password or login secret"
+            },
+            {
               "flags": "--device-name <name>",
               "description": "Matrix device name"
             },
             {
               "flags": "--initial-sync-limit <n>",
-              "description": "Matrix initial sync limit"
+              "description": "Matrix initial sync limit",
+              "valueType": "int"
             }
           ]
         },
@@ -480,7 +521,29 @@
           "blurb": "Self-hosted chat via Nextcloud Talk webhook bots.",
           "aliases": ["nc-talk", "nc"],
           "order": 65,
-          "quickstartAllowFrom": true
+          "quickstartAllowFrom": true,
+          "cliAddOptions": [
+            {
+              "flags": "--base-url <url>",
+              "description": "Channel base URL"
+            },
+            {
+              "flags": "--secret <secret>",
+              "description": "Channel shared secret"
+            },
+            {
+              "flags": "--secret-file <path>",
+              "description": "Read channel shared secret from file"
+            },
+            {
+              "flags": "--password <password>",
+              "description": "Channel password or login secret"
+            },
+            {
+              "flags": "--url <url>",
+              "description": "Channel setup URL"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/nextcloud-talk",
@@ -503,7 +566,17 @@
           "docsLabel": "nostr",
           "blurb": "Decentralized protocol; encrypted DMs via NIP-04.",
           "order": 55,
-          "quickstartAllowFrom": true
+          "quickstartAllowFrom": true,
+          "cliAddOptions": [
+            {
+              "flags": "--private-key <key>",
+              "description": "Nostr private key (nsec... or hex)"
+            },
+            {
+              "flags": "--relay-urls <list>",
+              "description": "Nostr relay URLs (comma-separated)"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/nostr",
@@ -553,6 +626,14 @@
           "markdownCapable": true,
           "cliAddOptions": [
             {
+              "flags": "--cli-path <path>",
+              "description": "Channel CLI path"
+            },
+            {
+              "flags": "--http-url <url>",
+              "description": "Channel HTTP service URL"
+            },
+            {
               "flags": "--signal-number <e164>",
               "description": "Signal account number (E.164)"
             },
@@ -590,7 +671,17 @@
           "docsLabel": "slack",
           "blurb": "supported (Socket Mode).",
           "systemImage": "number",
-          "markdownCapable": true
+          "markdownCapable": true,
+          "cliAddOptions": [
+            {
+              "flags": "--bot-token <token>",
+              "description": "Bot token"
+            },
+            {
+              "flags": "--app-token <token>",
+              "description": "App token"
+            }
+          ]
         },
         "channelConfigs": {
           "slack": {
@@ -659,7 +750,13 @@
           "docsPath": "/channels/synology-chat",
           "docsLabel": "synology-chat",
           "blurb": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
-          "order": 90
+          "order": 90,
+          "cliAddOptions": [
+            {
+              "flags": "--url <url>",
+              "description": "Channel setup URL"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/synology-chat",
@@ -732,7 +829,39 @@
           "docsLabel": "tlon",
           "blurb": "decentralized messaging on Urbit; install the plugin to enable.",
           "order": 90,
-          "quickstartAllowFrom": true
+          "quickstartAllowFrom": true,
+          "cliAddOptions": [
+            {
+              "flags": "--url <url>",
+              "description": "Channel setup URL"
+            },
+            {
+              "flags": "--ship <ship>",
+              "description": "Tlon ship name (~sampel-palnet)"
+            },
+            {
+              "flags": "--code <code>",
+              "description": "Tlon login code"
+            },
+            {
+              "flags": "--group-channels <list>",
+              "description": "Tlon group channels (comma-separated)",
+              "valueType": "list"
+            },
+            {
+              "flags": "--dm-allowlist <list>",
+              "description": "Tlon DM allowlist (comma-separated ships)",
+              "valueType": "list"
+            },
+            {
+              "flags": "--auto-discover-channels",
+              "description": "Tlon auto-discover group channels"
+            },
+            {
+              "flags": "--no-auto-discover-channels",
+              "description": "Disable Tlon auto-discovery"
+            }
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/tlon",
@@ -776,7 +905,13 @@
           "docsPath": "/channels/whatsapp",
           "docsLabel": "whatsapp",
           "blurb": "works with your own number; recommend a separate phone + eSIM.",
-          "systemImage": "message"
+          "systemImage": "message",
+          "cliAddOptions": [
+            {
+              "flags": "--auth-dir <path>",
+              "description": "WhatsApp auth directory override"
+            }
+          ]
         },
         "install": {
           "clawhubSpec": "clawhub:@openclaw/whatsapp",

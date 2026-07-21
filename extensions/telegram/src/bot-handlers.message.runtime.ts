@@ -339,10 +339,16 @@ export function createTelegramHandlerMessageRuntime({
         const promptMediaPath = entry.mediaPath
           ? resolveTelegramPromptMediaPath(entry.mediaPath)
           : undefined;
+        // Stored kinds are typed non-unknown; MIME inference fills gaps and
+        // collapses an "unknown" inference to document for this deliverable-only surface.
+        const inferredKind = kindFromMime(entry.mediaType);
+        const mediaKind =
+          entry.mediaKind ??
+          (inferredKind && inferredKind !== "unknown" ? inferredKind : "document");
         if (entry.messageId && entry.mediaPath && promptMediaPath) {
           promptContextMediaByMessageId.set(entry.messageId, {
             path: promptMediaPath,
-            kind: entry.mediaKind ?? kindFromMime(entry.mediaType) ?? "document",
+            kind: mediaKind,
             ...(entry.mediaType ? { contentType: entry.mediaType } : {}),
           });
         }

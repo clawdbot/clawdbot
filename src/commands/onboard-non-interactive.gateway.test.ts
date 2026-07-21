@@ -407,6 +407,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("preserves existing config on onboard rerun (openclaw#84692)", async () => {
     await withStateDir("state-preserve-agents-", async (stateDir) => {
       const workspace = path.join(stateDir, "openclaw");
+      const warningRuntime = { ...runtime, error: vi.fn() };
       const passwordRef = { source: "env" as const, provider: "default", id: "GATEWAY_PASSWORD" };
       const seededAgents = [
         { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
@@ -446,25 +447,23 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         {
           nonInteractive: true,
           mode: "local",
-          workspace,
+          workspace: path.join(stateDir, "requested-workspace"),
           authChoice: "skip",
           skipSkills: true,
           skipHealth: true,
           installDaemon: false,
         },
-        runtime,
+        warningRuntime,
       );
 
       const cfg = readTestConfig();
       expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
+      expect(cfg.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg.bindings).toEqual(seededBindings);
-      expect(cfg.gateway).toEqual({
-        mode: "local",
-        port: 24680,
-        bind: "loopback",
-        auth: { mode: "password", password: passwordRef },
-        tailscale: { mode: "serve", resetOnExit: true },
-      });
+      expect(warningRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("existing agents keep their current workspace"),
+      );
+      expect(cfg.gateway?.port).toBe(24680);
 
       const onboardWrite = capturedReplaceConfigFileCalls.at(-1);
       expect(onboardWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);

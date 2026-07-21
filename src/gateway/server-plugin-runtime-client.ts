@@ -20,6 +20,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  delegatedToolPolicyHandoff?: boolean;
   scopes?: string[];
 }): NonNullable<GatewayRequestOptions["client"]> {
   const pluginRuntimeOwnerId =
@@ -53,6 +54,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
       ...(params?.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
+        : {}),
+      ...(params?.delegatedToolPolicyHandoff === true
+        ? { delegatedToolPolicyHandoff: true as const }
         : {}),
     },
   };

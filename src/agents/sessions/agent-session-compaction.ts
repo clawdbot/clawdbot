@@ -278,6 +278,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "length") &&
       isContextOverflow(assistantMessage, contextWindow)
     ) {
+      if (this.contextOverflowRecoveryOwner === "caller") {
+        return false;
+      }
       if (this.overflowRecoveryAttempted) {
         this.emit({
           type: "compaction_end",

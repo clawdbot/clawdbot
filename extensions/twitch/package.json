@@ -21,6 +21,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "install": {
       "npmSpec": "@openclaw/twitch",
       "defaultChoice": "npm",

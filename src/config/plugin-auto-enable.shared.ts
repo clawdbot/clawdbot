@@ -6,6 +6,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import {
   listPotentialConfiguredChannelPresenceSignals,
+  type AmbientEnvTriggerPolicy,
   type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
 import {
@@ -292,11 +293,13 @@ function collectConfiguredChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   discovery?: PluginDiscoveryResult,
+  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
 ): string[] {
   const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState(discovery));
   return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
     includePersistedAuthState: false,
     discovery,
+    ambientEnvTriggers,
   })
     .map((signal) => ({
       source: signal.source,
@@ -578,6 +581,7 @@ export function resolvePluginAutoEnableReadiness(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   discovery?: PluginDiscoveryResult,
+  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
 ): { mayNeedAutoEnable: boolean; configuredChannelIds: string[] } {
   if (arePluginsGloballyDisabled(cfg)) {
     return { mayNeedAutoEnable: false, configuredChannelIds: [] };
@@ -588,7 +592,7 @@ export function resolvePluginAutoEnableReadiness(
   if (hasConfiguredPluginConfigEntry(cfg)) {
     return { mayNeedAutoEnable: true, configuredChannelIds: [] };
   }
-  const configuredChannelIds = collectConfiguredChannelIds(cfg, env, discovery);
+  const configuredChannelIds = collectConfiguredChannelIds(cfg, env, discovery, ambientEnvTriggers);
   if (configuredChannelIds.length > 0) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }

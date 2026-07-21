@@ -20,6 +20,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
@@ -310,9 +311,12 @@ function renderSkillsToolbar(
   statusCounts: Record<SkillsStatusFilter, number>,
   shownCount: number,
 ) {
-  const agents = props.agentsList?.agents ?? [];
-  const selectedAgentId =
-    props.selectedAgentId ?? props.agentsList?.defaultId ?? agents[0]?.id ?? "";
+  const agents = listSelectableAgents(props.agentsList?.agents ?? []);
+  const selectedAgentId = agents.some((agent) => agent.id === props.selectedAgentId)
+    ? (props.selectedAgentId ?? "")
+    : agents.some((agent) => agent.id === props.agentsList?.defaultId)
+      ? (props.agentsList?.defaultId ?? "")
+      : (agents[0]?.id ?? "");
   return html`
     <div class="plugins-toolbar plugins-toolbar--fields">
       ${renderSettingsSegmented<SkillsStatusFilter>({

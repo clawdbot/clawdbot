@@ -88,7 +88,7 @@ describe("sweepCronRunSessions", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:cron:job1": {
         sessionId: "base-session",
-        updatedAt: now,
+        updatedAt: now - 25 * 3_600_000, // stale base row — preserve
       },
       "agent:main:cron:job1:run:old-run": {
         sessionId: "old-run",
@@ -132,7 +132,7 @@ describe("sweepCronRunSessions", () => {
     ]);
     expect(updated["agent:main:cron:job1"]).toMatchObject({
       sessionId: "base-session",
-      updatedAt: now,
+      updatedAt: now - 25 * 3_600_000,
     });
     expect(updated["agent:main:cron:job1:run:recent-run"]).toMatchObject({
       sessionId: "recent-run",

@@ -949,7 +949,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
-      await refreshPreparedModelRuntimeSnapshots(nextConfig);
+      await refreshPreparedModelRuntimeSnapshots(nextConfig, { catalogMode: "static" });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
       return;

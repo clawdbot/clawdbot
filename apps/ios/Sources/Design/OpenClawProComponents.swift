@@ -293,11 +293,28 @@ struct OpenClawSidebarRevealButton: View {
                     height: OpenClawProMetric.compactControlSize)
                 .contentShape(Rectangle())
         }
-        .frame(width: 44, height: 44)
         .buttonBorderShape(.circle)
-        .openClawGlassButton(tint: OpenClawBrand.accent)
         .accessibilityLabel(self.headerAction.accessibilityLabel.text)
 
+        if #available(iOS 26.0, *) {
+            self.identified(
+                button
+                    .buttonStyle(.plain)
+                    .foregroundStyle(OpenClawBrand.accent)
+                    .frame(width: 44, height: 44)
+                    .glassEffect(
+                        .regular.interactive(),
+                        in: Circle()))
+        } else {
+            self.identified(
+                button
+                    .frame(width: 44, height: 44)
+                    .openClawGlassButton(tint: OpenClawBrand.accent))
+        }
+    }
+
+    @ViewBuilder
+    private func identified(_ button: some View) -> some View {
         if let accessibilityIdentifier = headerAction.accessibilityIdentifier {
             button.accessibilityIdentifier(accessibilityIdentifier)
         } else {
@@ -312,6 +329,27 @@ struct OpenClawSidebarHeaderLeadingSlot: View {
     var body: some View {
         OpenClawSidebarRevealButton(action: self.action)
             .frame(width: 44, height: 44, alignment: .center)
+    }
+}
+
+struct OpenClawSidebarToolbarItem: ToolbarContent {
+    let action: OpenClawSidebarHeaderAction
+    let placement: ToolbarItemPlacement
+
+    @ToolbarContentBuilder
+    var body: some ToolbarContent {
+        if #available(iOS 26.0, *) {
+            ToolbarItem(placement: self.placement) {
+                OpenClawSidebarRevealButton(action: self.action)
+            }
+            // The button owns an explicit circular glass shape; suppress the
+            // toolbar's shared pill so it cannot stretch the leading control.
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItem(placement: self.placement) {
+                OpenClawSidebarRevealButton(action: self.action)
+            }
+        }
     }
 }
 

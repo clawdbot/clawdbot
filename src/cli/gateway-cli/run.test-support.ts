@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import "./run.js";
 
@@ -7,6 +8,9 @@ type GatewayRunTestLogger = {
 };
 
 type GatewayRunTestApi = {
+  createConfiguredGatewayHealthProbe(
+    cfg: OpenClawConfig,
+  ): (params: { host: string; port: number }) => Promise<boolean>;
   isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean;
   normalizeGatewayHealthProbeHost(host: string): string;
   probeGatewayHealthz(params: {
@@ -15,11 +19,7 @@ type GatewayRunTestApi = {
     timeoutMs?: number;
     tlsFingerprint?: string;
   }): Promise<boolean>;
-  resolveGatewayLockErrorExitCode(
-    err: unknown,
-    supervisor: RespawnSupervisor | null,
-    healthyGatewayConfirmed: boolean,
-  ): number;
+  resolveGatewayLockErrorExitCode(err: unknown): number;
   resolveGatewayStartupFailureExitCode(err: unknown): number;
   runGatewayLoopWithSupervisedLockRecovery(params: {
     startLoop: () => Promise<void>;
@@ -42,6 +42,9 @@ function getTestApi(): GatewayRunTestApi {
 }
 
 export const testing: GatewayRunTestApi = {
+  createConfiguredGatewayHealthProbe(cfg) {
+    return getTestApi().createConfiguredGatewayHealthProbe(cfg);
+  },
   isGatewayHealthzResponse(statusCode, body) {
     return getTestApi().isGatewayHealthzResponse(statusCode, body);
   },
@@ -51,8 +54,8 @@ export const testing: GatewayRunTestApi = {
   async probeGatewayHealthz(params) {
     return await getTestApi().probeGatewayHealthz(params);
   },
-  resolveGatewayLockErrorExitCode(err, supervisor, healthyGatewayConfirmed) {
-    return getTestApi().resolveGatewayLockErrorExitCode(err, supervisor, healthyGatewayConfirmed);
+  resolveGatewayLockErrorExitCode(err) {
+    return getTestApi().resolveGatewayLockErrorExitCode(err);
   },
   resolveGatewayStartupFailureExitCode(err) {
     return getTestApi().resolveGatewayStartupFailureExitCode(err);

@@ -12,8 +12,10 @@ private-local entries explicitly. Three files define the boundary:
 
 - `scripts/lib/plugin-sdk-entrypoints.json`: the maintained entrypoint inventory
   the build compiles.
-- `scripts/lib/plugin-sdk-private-local-only-subpaths.json`: repo-local
-  test/internal subpaths. Package exports are the inventory minus this list.
+- `scripts/lib/plugin-sdk-private-local-only-subpaths.json`: internal subpaths
+  excluded from the typed, documented SDK. Production entries remain available
+  as JavaScript-only host runtime exports for separately published official
+  plugins; test-only entries stay unexported.
 - `src/plugin-sdk/entrypoints.ts`: classification metadata for deprecated
   subpaths, reserved bundled helpers, supported bundled facades, and
   plugin-owned public surfaces.

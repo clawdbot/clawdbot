@@ -548,6 +548,79 @@ describe("runAgentTurnWithFallback: lifecycle progress", () => {
     expect(typeof lifecycleData.endedAt).toBe("number");
   });
 
+  it("settles a successful same-candidate retry instead of its deferred failed attempt", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "provider rejected the first attempt",
+          livenessState: "blocked",
+          aborted: false,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 2_000 },
+      });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "finishing", livenessState: "working", aborted: false },
+      });
+      return {
+        payloads: [{ text: "recovered" }],
+        meta: { stopReason: "stop", livenessState: "working", aborted: false },
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { runId: "run-recovered" } as GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    const lifecycleEvent = requireRecord(
+      requireMockCallArgWithFields(
+        emitAgentEvent,
+        { runId: "run-recovered", sessionKey: "main", stream: "lifecycle" },
+        "agent event",
+      ),
+      "agent event",
+    );
+    expectRecordFields(requireRecord(lifecycleEvent.data, "lifecycle data"), {
+      phase: "end",
+      startedAt: 2_000,
+      stopReason: "stop",
+      livenessState: "working",
+      aborted: false,
+    });
+  });
+
   it("uses a rebound lifecycle generation for embedded terminal events", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);

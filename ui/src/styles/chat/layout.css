@@ -144,6 +144,102 @@ openclaw-chat-page {
   opacity: 0.5;
 }
 
+.chat-workspace-conflict-notice {
+  flex: 0 0 auto;
+  margin: 12px 16px 0;
+  color: var(--text);
+}
+
+.chat-workspace-conflict-notice__content {
+  display: grid;
+  gap: 8px;
+}
+
+.chat-workspace-conflict-notice__content p,
+.chat-workspace-conflict-event p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.chat-workspace-conflict-notice__title,
+.chat-workspace-conflict-event__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: color-mix(in srgb, var(--warn) 82%, var(--text-strong));
+}
+
+.chat-workspace-conflict-notice__title svg,
+.chat-workspace-conflict-event__header svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.chat-workspace-conflict-paths {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.chat-workspace-conflict-paths code,
+.chat-workspace-conflict-ref code,
+.chat-workspace-conflict-commands code {
+  overflow-wrap: anywhere;
+}
+
+.chat-workspace-conflict-more {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-workspace-conflict-command-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-workspace-conflict-ref,
+.chat-workspace-conflict-commands > div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-workspace-conflict-ref > span,
+.chat-workspace-conflict-commands span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-workspace-conflict-ref code,
+.chat-workspace-conflict-commands code {
+  min-width: 0;
+  padding: 4px 7px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  font-size: 11px;
+}
+
+.chat-workspace-conflict-commands {
+  display: grid;
+  gap: 5px;
+}
+
+@media (max-width: 640px) {
+  .chat-workspace-conflict-ref,
+  .chat-workspace-conflict-commands > div {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+
+  .chat-workspace-conflict-ref > span,
+  .chat-workspace-conflict-commands span {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .chat::after,
   .chat > * {
@@ -935,7 +1031,9 @@ openclaw-chat-page {
 }
 
 .chat-message-image {
-  max-width: 300px;
+  width: auto;
+  max-width: min(100%, 300px);
+  height: auto;
   max-height: 200px;
   border-radius: var(--radius-md);
   object-fit: contain;
@@ -1159,12 +1257,6 @@ openclaw-chat-page {
   outline: none;
 }
 
-.chat-reply-context-menu button svg {
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-}
-
 .chat-selection-popup {
   position: fixed;
   z-index: 9999;
@@ -1209,7 +1301,7 @@ openclaw-chat-page {
   align-items: end;
   gap: 6px;
   width: calc(100% - 36px);
-  max-width: 48rem;
+  max-width: var(--chat-thread-max-width, 48rem);
   margin: 8px auto 14px;
 }
 
@@ -1350,7 +1442,7 @@ openclaw-chat-page {
   /* Mirror .agent-chat__composer-shell sizing: the rows belong to the input
      stack and must not read as a full-pane banner above a narrower composer. */
   width: calc(100% - 36px);
-  max-width: 48rem;
+  max-width: var(--chat-thread-max-width, 48rem);
   margin: 0 auto;
   padding: 0 0 8px;
 }

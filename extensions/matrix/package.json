@@ -84,12 +84,17 @@
           "description": "Matrix access token"
         },
         {
+          "flags": "--password <password>",
+          "description": "Channel password or login secret"
+        },
+        {
           "flags": "--device-name <name>",
           "description": "Matrix device name"
         },
         {
           "flags": "--initial-sync-limit <n>",
-          "description": "Matrix initial sync limit"
+          "description": "Matrix initial sync limit",
+          "valueType": "int"
         }
       ],
       "persistedAuthState": {

@@ -1,18 +1,18 @@
 // TTS contract suites provide reusable text-to-speech plugin contract assertions.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  createEmptyPluginRegistry,
-  pluginRegistrationContractRegistry,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { withEnv, withEnvAsync, withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantMessage, Model } from "../../llm/types.js";
+import {
+  createEmptyPluginRegistry,
+  pluginRegistrationContractRegistry,
+  setActivePluginRegistry,
+} from "../../plugin-sdk/plugin-test-runtime.js";
+import { withEnv, withEnvAsync, withServer } from "../../plugin-sdk/test-env.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 
@@ -458,7 +458,7 @@ const loadTtsRuntime = createLazyRuntimeModule(
   () => import(speechCoreRuntimeApiModuleId) as Promise<TtsRuntimeModule>,
 );
 
-const loadTtsCore = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/speech-core"));
+const loadTtsCore = createLazyRuntimeModule(() => import("../../plugin-sdk/speech-core.js"));
 
 function createPrepareSimpleCompletionModelMock(): SummarizeTextDeps["prepareSimpleCompletionModel"] {
   return vi.fn(async ({ provider, modelId }) => ({
@@ -532,7 +532,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("openclaw/plugin-sdk/llm"));
+  ({ completeSimple } = await import("../../plugin-sdk/llm.js"));
   prepareSimpleCompletionModelMock = createPrepareSimpleCompletionModelMock();
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
   vi.mocked(completeSimple).mockResolvedValue(

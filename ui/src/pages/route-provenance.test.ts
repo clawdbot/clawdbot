@@ -166,6 +166,16 @@ describe("route preload gateway provenance", () => {
     const mutable = mutableGateway(snapshot(originalClient, true));
     const request = loadRoute<ModelProvidersRouteData>(modelProvidersPage, {
       gateway: mutable.gateway,
+      agents: {
+        state: { agentsList: null },
+        ensureList: vi.fn(async () => ({
+          defaultId: "main",
+          mainKey: "main",
+          scope: "project",
+          agents: [{ id: "main" }],
+        })),
+      },
+      agentSelection: { state: { selectedId: null, scopeId: null } },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(replacementClient, true));

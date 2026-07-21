@@ -20,6 +20,7 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest,
   type PluginPackageChannel,
+  type PluginPackageChannelCliOption,
 } from "./manifest.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
@@ -406,7 +407,7 @@ function normalizePackageChannelCliOptions(
   if (!Array.isArray(cliAddOptions)) {
     return undefined;
   }
-  const normalized = cliAddOptions.flatMap((option) => {
+  const normalized = cliAddOptions.flatMap<PluginPackageChannelCliOption>((option) => {
     if (!isRecord(option)) {
       return [];
     }
@@ -419,11 +420,14 @@ function normalizePackageChannelCliOptions(
       typeof option.defaultValue === "boolean" || typeof option.defaultValue === "string"
         ? option.defaultValue
         : undefined;
+    const valueType =
+      option.valueType === "int" || option.valueType === "list" ? option.valueType : undefined;
     return [
       {
         flags,
         description,
         ...(defaultValue !== undefined ? { defaultValue } : {}),
+        ...(valueType ? { valueType } : {}),
       },
     ];
   });

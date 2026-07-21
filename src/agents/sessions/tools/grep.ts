@@ -276,7 +276,10 @@ export function createGrepToolDefinition(
             let linesTruncated = false;
             const outputLines: string[] = [];
 
-            spawnedChild.stderr?.on("data", (chunk) => {
+            // Decode stderr as UTF-8 at the stream so pipe chunk boundaries
+            // cannot split multibyte characters into U+FFFD replacement noise.
+            spawnedChild.stderr?.setEncoding("utf8");
+            spawnedChild.stderr?.on("data", (chunk: string) => {
               stderr = appendBoundedTextTail(stderr, chunk);
             });
             const onStreamError = (stream: "stdout" | "stderr", error: Error) => {

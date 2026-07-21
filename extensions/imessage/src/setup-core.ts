@@ -135,6 +135,7 @@ async function promptIMessageAllowFrom(params: {
         channel,
         accountId,
         allowFrom,
+        setupSurface: imessageSetupAdapter,
       }),
   });
 }
@@ -180,6 +181,7 @@ export const imessageDmPolicy = {
               ),
             }
           : { dmPolicy: policy },
+      setupSurface: imessageSetupAdapter,
     });
   },
   promptAllowFrom: promptIMessageAllowFrom,
@@ -222,10 +224,13 @@ export const imessageCompletionNote = {
   ],
 };
 
-export const imessageSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
-  channelKey: channel,
-  buildPatch: (input) => buildIMessageSetupPatch(input),
-});
+export const imessageSetupAdapter: ChannelSetupAdapter = {
+  ...createPatchedAccountSetupAdapter({
+    channelKey: channel,
+    buildPatch: (input) => buildIMessageSetupPatch(input),
+  }),
+  singleAccountKeysToMove: ["cliPath", "dbPath", "service", "region"],
+};
 
 export const imessageSetupStatusBase = {
   configuredLabel: t("wizard.channels.statusConfigured"),

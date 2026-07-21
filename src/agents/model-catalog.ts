@@ -67,6 +67,7 @@ export type BuildPreparedModelCatalogParams = {
   config: OpenClawConfig;
   modelRegistry: ModelRegistry;
   readOnly?: boolean;
+  includeProviderPluginAugmentation?: boolean;
   metadataSnapshot: PluginMetadataSnapshot;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -476,7 +477,7 @@ export async function buildPreparedModelCatalogSnapshot(
     }
     logStage("configured-models-prepared", `entries=${models.length}`);
 
-    if (!params.readOnly) {
+    if (!params.readOnly && params.includeProviderPluginAugmentation !== false) {
       const { createProviderApiKeyResolverFromPreparedCredentials } =
         await loadProviderApiKeyResolver();
       const resolveProviderApiKeyForProvider = createProviderApiKeyResolverFromPreparedCredentials(

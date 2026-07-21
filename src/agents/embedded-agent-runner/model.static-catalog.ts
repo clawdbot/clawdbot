@@ -205,6 +205,7 @@ type BundledProviderStaticCatalogResolverParams = {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerIds?: readonly string[];
 };
 
 /**
@@ -371,11 +372,25 @@ export async function loadBundledProviderStaticCatalogContextModels(
       plugin.origin === "bundled" && plugin.providerDiscoverySource ? [plugin.id] : [],
     ),
   );
-  const pluginIds = resolveBundledProviderCompatPluginIds({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env,
-  }).filter((pluginId) => discoveryEntryPluginIds.has(pluginId));
+  const providerScopedPluginIds = params.providerIds?.flatMap((provider) =>
+    resolveBundledProviderStaticCatalogPluginIds({
+      provider,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    }),
+  );
+  const candidatePluginIds =
+    providerScopedPluginIds === undefined
+      ? resolveBundledProviderCompatPluginIds({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env,
+        })
+      : providerScopedPluginIds;
+  const pluginIds = [...new Set(candidatePluginIds)]
+    .filter((pluginId) => discoveryEntryPluginIds.has(pluginId))
+    .toSorted((left, right) => left.localeCompare(right));
   if (pluginIds.length === 0) {
     return [];
   }

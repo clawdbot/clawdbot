@@ -295,6 +295,12 @@ function resolveNpmProvenanceVerificationPolicy(
   const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
   const workflowRef = workflow?.ref;
   const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
+  // A month's final patch >=33 releases stay on its canonical .33 maintenance branch.
+  const isExpectedExtendedStableRef =
+    parsedVersion.channel === "stable" &&
+    parsedVersion.correctionNumber === undefined &&
+    parsedVersion.patch >= 33 &&
+    workflowRef === `refs/heads/extended-stable/${parsedVersion.year}.${parsedVersion.month}.33`;
   const protectedReleasePublishMatch =
     /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(workflowRef ?? "");
   let protectedReleasePublishTrusted = false;
@@ -325,6 +331,7 @@ function resolveNpmProvenanceVerificationPolicy(
   const isTrustedRef =
     workflowRef === "refs/heads/main" ||
     workflowRef === expectedReleaseRef ||
+    isExpectedExtendedStableRef ||
     protectedReleasePublishTrusted ||
     (parsedVersion.channel === "alpha" &&
       /^refs\/heads\/tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(

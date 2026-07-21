@@ -7,10 +7,8 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString as parseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString as parseString } from "@openclaw/normalization-core/string-coerce";
+import { isApprovalNotFoundError } from "../infra/approval-errors.js";
 import type {
   ExecApprovalCommandSpan,
   ExecApprovalUnavailableDecision,
@@ -197,8 +195,7 @@ export async function resolveRegisteredExecApprovalDecision(params: {
     return parseDecision(decisionResult).value;
   } catch (err) {
     // Timeout/cleanup path: treat missing/expired as no decision so askFallback applies.
-    const message = normalizeLowercaseStringOrEmpty(String(err));
-    if (message.includes("approval expired or not found")) {
+    if (isApprovalNotFoundError(err)) {
       return null;
     }
     throw err;

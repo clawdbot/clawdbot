@@ -4,6 +4,7 @@ import SwiftUI
 
 struct RootSidebar: View {
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
     @Bindable var model: RootSidebarModel
     @State private var searchText = ""
@@ -15,6 +16,7 @@ struct RootSidebar: View {
 
     let selectedDestination: RootTabs.SidebarDestination
     let isDrawerLayout: Bool
+    let showsDismissButton: Bool
     let selectDestination: (RootTabs.SidebarDestination) -> Void
     let selectSettingsRoute: (SettingsRoute) -> Void
     let hideSidebar: () -> Void
@@ -102,7 +104,7 @@ struct RootSidebar: View {
                 self.selectSidebarDestination(.settings)
             }
 
-            if self.isDrawerLayout {
+            if self.isDrawerLayout, self.showsDismissButton {
                 Button(action: self.dismissSidebar) {
                     Image(systemName: "xmark")
                         .font(OpenClawType.subheadSemiBold)
@@ -152,7 +154,7 @@ struct RootSidebar: View {
 
     /// Selected agent leads; the rest keep the gateway roster order.
     private var orderedAgents: [AgentSummary] {
-        let agents = self.appModel.gatewayAgents
+        let agents = self.appModel.gatewayAgents.filter(\.isSelectableAgent)
         guard let index = agents.firstIndex(where: { $0.id == self.currentAgentID }), index != 0 else {
             return agents
         }
@@ -169,14 +171,7 @@ struct RootSidebar: View {
         } label: {
             HStack(spacing: 9) {
                 ZStack(alignment: .bottomTrailing) {
-                    ZStack {
-                        Circle()
-                            .fill(OpenClawSidebarPalette.elevated)
-                        Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
-                            .font(OpenClawType.caption2Bold)
-                            .foregroundStyle(OpenClawSidebarPalette.textStrong)
-                    }
-                    .frame(width: 28, height: 28)
+                    self.agentAvatarBadge(agent, size: 28)
                     if isSelected {
                         Circle()
                             .fill(OpenClawBrand.ok)
@@ -218,9 +213,15 @@ struct RootSidebar: View {
                 Button {
                     self.appModel.setSelectedAgentId(agent.id)
                 } label: {
-                    Text(verbatim: Self.agentDisplayName(agent))
-                        .font(OpenClawType.subheadSemiBold)
+                    Label {
+                        Text(verbatim: Self.agentDisplayName(agent))
+                            .font(OpenClawType.subheadSemiBold)
+                    } icon: {
+                        self.agentMenuAvatarImage(agent)
+                            .renderingMode(.original)
+                    }
                 }
+                .accessibilityLabel(Self.agentDisplayName(agent))
             }
         } label: {
             HStack(spacing: 9) {
@@ -281,18 +282,34 @@ struct RootSidebar: View {
     }
 
     static func agentBadge(name: String, identity: [String: AnyCodable]?) -> String {
-        if let emoji = (identity?["emoji"]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !emoji.isEmpty
-        {
-            return emoji
+        AgentIdentityPresentation.badge(
+            avatarText: identity?["emoji"]?.value as? String,
+            displayName: name)
+    }
+
+    private func agentAvatarBadge(_ agent: AgentSummary, size: CGFloat) -> some View {
+        ZStack {
+            Circle()
+                .fill(OpenClawSidebarPalette.elevated)
+            Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
+                .font(OpenClawType.caption2Bold)
+                .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                .minimumScaleFactor(0.65)
+                .lineLimit(1)
         }
-        let initials = name
-            .split(whereSeparator: { $0.isWhitespace || $0 == "-" || $0 == "_" })
-            .prefix(2)
-            .compactMap(\.first)
-            .map(String.init)
-            .joined()
-        return initials.isEmpty ? "OC" : initials.uppercased()
+        .frame(width: size, height: size)
+        .overlay(Circle().strokeBorder(OpenClawSidebarPalette.hairline, lineWidth: 1))
+        .accessibilityHidden(true)
+    }
+
+    private func agentMenuAvatarImage(_ agent: AgentSummary) -> Image {
+        let renderer = ImageRenderer(content: self.agentAvatarBadge(agent, size: 24)
+            .environment(\.colorScheme, self.colorScheme))
+        renderer.scale = self.displayScale
+        guard let image = renderer.uiImage else {
+            return Image(systemName: "person.crop.circle")
+        }
+        return Image(uiImage: image)
     }
 
     private var searchField: some View {
@@ -502,6 +519,7 @@ struct RootSidebar: View {
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 8)
+        .fixedSize(horizontal: false, vertical: true)
         .background(OpenClawSidebarPalette.background)
     }
 

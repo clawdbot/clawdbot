@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardViewWidget } from "../../lib/board/view-types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
+// Side-effect import: registers the custom elements mount() depends on
+// without relying on transitive fixture imports.
+import "./board-view.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import {
@@ -14,7 +17,6 @@ import {
   settleCells,
   snapshot,
 } from "./board-view.test-support.ts";
-import "./board-view.ts";
 
 afterEach(() => {
   vi.useRealTimers();

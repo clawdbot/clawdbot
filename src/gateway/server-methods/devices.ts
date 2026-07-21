@@ -28,6 +28,8 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
+import { invalidateNodeWakeState } from "../node-wake-state.js";
 import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
@@ -329,6 +331,16 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const normalizedDeviceId = approved.device.deviceId.trim();
+    if (approved.nodePairingGenerationChanged) {
+      invalidateNodeWakeState(normalizedDeviceId);
+      // Mark the retired node generation before publishing success so buffered
+      // node RPCs cannot retain authority while transport teardown is deferred.
+      context.invalidateClientsForDevice?.(normalizedDeviceId, {
+        role: "node",
+        reason: "device-pairing-reapproved",
+      });
+    }
     context.logGateway.info(
       `device pairing approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
     );
@@ -354,6 +366,11 @@ export const deviceHandlers: GatewayRequestHandlers = {
       { dropIfSlow: true },
     );
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
+    if (approved.nodePairingGenerationChanged) {
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: "node" });
+      });
+    }
   },
   "device.pair.reject": async ({ params, respond, context, client }) => {
     if (!validateDevicePairRejectParams(params)) {
@@ -481,6 +498,10 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
       return;
     }
+    clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
+    context.invalidateClientsForDevice?.(removed.deviceId, {
+      reason: "device-pair-removed",
+    });
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.removed",
@@ -488,13 +509,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
       authz,
       targetDeviceId: removed.deviceId,
       controlId: "device.pair.remove",
-    });
-    // Mark affected clients invalid *before* responding so any RPCs already
-    // pipelined into their WS socket buffer are rejected at the per-request
-    // dispatch check, closing the race between queueMicrotask-scheduled
-    // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(removed.deviceId, {
-      reason: "device-pair-removed",
     });
     respond(true, removed, undefined);
     queueMicrotask(() => {
@@ -671,6 +685,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const entry = rotated.entry;
+    const normalizedDeviceId = deviceId.trim();
     context.logGateway.info(
       `device token rotated device=${deviceId} role=${entry.role} scopes=${entry.scopes.join(",")}`,
     );
@@ -683,11 +698,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: entry.role,
       scopeCount: entry.scopes.length,
     });
+    if (entry.role === "node") {
+      invalidateNodeWakeState(normalizedDeviceId);
+    }
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
     // dispatch check, closing the race between queueMicrotask-scheduled
     // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(deviceId.trim(), {
+    context.invalidateClientsForDevice?.(normalizedDeviceId, {
       role: entry.role,
       reason: "device-token-rotated",
     });
@@ -703,7 +721,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       undefined,
     );
     queueMicrotask(() => {
-      context.disconnectClientsForDevice?.(deviceId.trim(), { role: entry.role });
+      context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
     });
   },
   "device.token.revoke": async ({ params, respond, context, client }) => {
@@ -798,6 +816,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       controlId: "device.token.revoke",
       role: entry.role,
     });
+    if (entry.role === "node") {
+      invalidateNodeWakeState(normalizedDeviceId);
+    }
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request
     // dispatch check, closing the race between queueMicrotask-scheduled

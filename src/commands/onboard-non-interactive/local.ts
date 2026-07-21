@@ -12,7 +12,11 @@ import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js"
 import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } from "../onboard-config.js";
+import {
+  applyLocalSetupWorkspaceConfig,
+  applySkipBootstrapConfig,
+  resolveOnboardingWorkspaceConflict,
+} from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -167,13 +171,28 @@ export async function runNonInteractiveLocalSetup(params: {
   const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "local" as const;
 
-  const workspaceDir = resolveNonInteractiveWorkspaceDir({
+  const requestedWorkspaceDir = resolveNonInteractiveWorkspaceDir({
     opts,
     baseConfig,
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
+  const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
+  const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
+  if (workspaceConflict) {
+    runtime.error(
+      [
+        "Warning: existing agents keep their current workspace during non-interactive onboarding.",
+        `Current workspace: ${workspaceConflict.currentWorkspaceDir}`,
+        `Requested workspace: ${workspaceConflict.requestedWorkspaceDir}`,
+        `Run \`${formatCliCommand("openclaw onboard --classic")}\` to confirm moving the existing agent fleet.`,
+      ].join("\n"),
+    );
+  }
 
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
+    baseConfig,
+    requestedWorkspaceDir,
+  );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }

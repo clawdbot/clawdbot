@@ -8,7 +8,7 @@ import {
   validateEnvironmentsListParams,
   validateEnvironmentsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { listNodePairing } from "../../infra/node-pairing.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
@@ -84,10 +84,20 @@ export function summarizeWorkerEnvironment(
 }
 async function listEnvironments(context: GatewayRequestContext): Promise<EnvironmentSummary[]> {
   const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
+  const currentPairingStates = new Map<string, { identity: string; generation?: string }>();
+  for (const device of devices.paired) {
+    const state = resolveNodePairingState(device);
+    if (state) {
+      currentPairingStates.set(state.identity.nodeId, {
+        identity: state.identity.key,
+        ...(state.generation ? { generation: state.generation.key } : {}),
+      });
+    }
+  }
   const catalog = createKnownNodeCatalog({
     pairedDevices: devices.paired,
     pairedNodes: nodes.paired,
-    connectedNodes: context.nodeRegistry.listConnected(),
+    connectedNodes: context.nodeRegistry.listConnectedForPairingStates(currentPairingStates),
   });
   return [GATEWAY_ENVIRONMENT, ...listKnownNodes(catalog).map(summarizeNodeEnvironment)];
 }

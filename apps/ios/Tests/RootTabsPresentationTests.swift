@@ -574,12 +574,26 @@ struct RootTabsPresentationTests {
         #expect(width <= RootTabs.sidebarDrawerMaximumWidth)
     }
 
+    @Test func `phone drawer uses the wider cap when space allows`() {
+        #expect(RootTabs.sidebarWidth(containerWidth: 402, isDrawerLayout: true) == 340)
+    }
+
     @Test func `sidebar shows configured agent rows with sane clamping`() {
         #expect(RootSidebar.shownAgentCount(configured: 1, total: 5) == 1)
         #expect(RootSidebar.shownAgentCount(configured: 3, total: 5) == 3)
         #expect(RootSidebar.shownAgentCount(configured: 0, total: 5) == 1)
         #expect(RootSidebar.shownAgentCount(configured: 3, total: 2) == 2)
         #expect(RootSidebar.shownAgentCount(configured: 1, total: 0) == 1)
+    }
+
+    @Test func `sidebar agent badges use canonical identity fallback`() {
+        #expect(RootSidebar.agentBadge(
+            name: "Research Agent",
+            identity: ["emoji": AnyCodable(" 🦞 ")]) == "🦞")
+        #expect(RootSidebar.agentBadge(
+            name: "Research Agent",
+            identity: ["emoji": AnyCodable("?")]) == "RA")
+        #expect(RootSidebar.agentBadge(name: "Research Agent", identity: nil) == "RA")
     }
 
     @Test func `session work subtitle mirrors the web repo and branch line`() {

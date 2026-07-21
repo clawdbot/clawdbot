@@ -310,6 +310,7 @@ export function createManifestPluginRecord(params: {
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
+    dashboard: manifestRecord.dashboard,
   });
 }
 

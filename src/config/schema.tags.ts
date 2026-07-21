@@ -50,6 +50,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.controlUi.allowExternalEmbedUrls": ["security", "access", "network", "advanced"],
   "gateway.controlUi.chatMessageMaxWidth": ["advanced"],
   "gateway.controlUi.toolTitles": ["advanced"],
+  "gateway.controlUi.sessionObserver": ["advanced"],
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback": [
     "security",
     "access",

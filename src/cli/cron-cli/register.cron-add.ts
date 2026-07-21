@@ -454,9 +454,7 @@ export function registerCronAddCommand(cron: Command) {
               : undefined;
 
             if (
-              (resolvedPayload.kind === "agentTurn" ||
-                resolvedPayload.kind === "command" ||
-                resolvedPayload.kind === "script") &&
+              (resolvedPayload.kind === "agentTurn" || resolvedPayload.kind === "script") &&
               !agentId
             ) {
               defaultRuntime.error(

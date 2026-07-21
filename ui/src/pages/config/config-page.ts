@@ -230,13 +230,19 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
+  @state() private microphonePermissionRequired = true;
   @state() private microphoneLoading = false;
   @state() private microphoneError: string | null = null;
   private microphoneLoaded = false;
+  private microphoneRefreshRequestsPermission = false;
+  private microphonePermissionRefreshPending = false;
   @state() private cameraDevices: RealtimeTalkCameraDevice[] = [];
+  @state() private cameraPermissionRequired = true;
   @state() private cameraLoading = false;
   @state() private cameraError: string | null = null;
   private cameraLoaded = false;
+  private cameraRefreshRequestsPermission = false;
+  private cameraPermissionRefreshPending = false;
   private cameraSelectionRequest = 0;
   @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
     config: "form",
@@ -362,11 +368,19 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private async refreshMicrophones(requestPermission: boolean) {
+    if (this.microphoneLoading) {
+      if (requestPermission && !this.microphoneRefreshRequestsPermission) {
+        this.microphonePermissionRefreshPending = true;
+      }
+      return;
+    }
     this.microphoneLoading = true;
+    this.microphoneRefreshRequestsPermission = requestPermission;
     this.microphoneError = null;
     try {
       const result = await discoverRealtimeTalkInputs(requestPermission);
       this.microphoneDevices = result.devices;
+      this.microphonePermissionRequired = result.permissionRequired;
       this.microphoneError = result.warning;
     } catch (error) {
       // Discovery is best-effort in blocked/inactive contexts; a rejection
@@ -374,20 +388,38 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.microphoneError = error instanceof Error ? error.message : String(error);
     } finally {
       this.microphoneLoading = false;
+      this.microphoneRefreshRequestsPermission = false;
+    }
+    if (this.microphonePermissionRefreshPending) {
+      this.microphonePermissionRefreshPending = false;
+      await this.refreshMicrophones(true);
     }
   }
 
   private async refreshCameras(requestPermission: boolean) {
+    if (this.cameraLoading) {
+      if (requestPermission && !this.cameraRefreshRequestsPermission) {
+        this.cameraPermissionRefreshPending = true;
+      }
+      return;
+    }
     this.cameraLoading = true;
+    this.cameraRefreshRequestsPermission = requestPermission;
     this.cameraError = null;
     try {
       const result = await discoverRealtimeTalkCameras(requestPermission);
       this.cameraDevices = result.devices;
+      this.cameraPermissionRequired = result.permissionRequired;
       this.cameraError = result.warning;
     } catch (error) {
       this.cameraError = error instanceof Error ? error.message : String(error);
     } finally {
       this.cameraLoading = false;
+      this.cameraRefreshRequestsPermission = false;
+    }
+    if (this.cameraPermissionRefreshPending) {
+      this.cameraPermissionRefreshPending = false;
+      await this.refreshCameras(true);
     }
   }
 
@@ -852,6 +884,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
         devices: this.microphoneDevices,
+        permissionRequired: this.microphonePermissionRequired,
         selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
         loading: this.microphoneLoading,
         error: this.microphoneError,
@@ -862,6 +895,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
       camera: {
         devices: this.cameraDevices,
+        permissionRequired: this.cameraPermissionRequired,
         selectedDeviceId: this.settings.realtimeTalkVideoDeviceId ?? "",
         loading: this.cameraLoading,
         error: this.cameraError,

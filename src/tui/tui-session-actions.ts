@@ -150,6 +150,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.sessionScope = result.scope ?? state.sessionScope;
     state.agents = result.agents.map((agent) => ({
       id: normalizeAgentId(agent.id),
+      kind: agent.kind,
       name: normalizeOptionalString(agent.name),
     }));
     agentNames.clear();

@@ -251,6 +251,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             platform: "windows",
             deviceFamily: "Windows",
             declaredCommands: [testCase.command],
@@ -309,6 +310,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             clientId: "openclaw-macos",
             clientMode: "node",
             platform: "macOS 26.5.2",
@@ -323,6 +325,8 @@ describe("exec approvals gateway methods", () => {
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command,
       params: { includeResolvedDefaults: true },
     });
@@ -396,6 +400,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             clientId: identity.clientId,
             clientMode: identity.clientMode,
             platform: identity.platform,
@@ -410,6 +415,8 @@ describe("exec approvals gateway methods", () => {
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command,
       params: {},
     });
@@ -452,6 +459,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "windows-node",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             platform: "windows",
             deviceFamily: "Windows",
             declaredCommands: [command],
@@ -464,6 +472,8 @@ describe("exec approvals gateway methods", () => {
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "windows-node",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command,
       params: {
         defaultAction: "deny",
@@ -498,6 +508,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "windows-node",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             platform: "windows",
             deviceFamily: "Windows",
             declaredCommands: [command],

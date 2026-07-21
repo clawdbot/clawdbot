@@ -122,6 +122,11 @@
   --space-7: 32px;
   --space-8: 40px;
 
+  /* One inset shared by every widget frame (chat preview panel, board card)
+     so agent-authored widget documents meet identical breathing room on all
+     surfaces. Board layout math mirrors this value numerically. */
+  --widget-frame-inset: var(--space-3);
+
   /* Radii - Slightly larger for modern feel */
   --radius-sm: 6px;
   --radius-md: 10px;

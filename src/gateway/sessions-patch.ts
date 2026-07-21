@@ -244,7 +244,7 @@ export async function projectSessionsPatchEntry(params: {
       ? null
       : invalid(`${field} is only supported for subagent:* or acp:* sessions`);
   const applyImmutableString = (
-    field: "spawnedBy" | "spawnedWorkspaceDir" | "spawnedCwd",
+    field: "spawnedBy" | "completionOwnerSessionKey" | "spawnedWorkspaceDir" | "spawnedCwd",
     checkLineageBeforeEmpty: boolean,
   ): PatchError => {
     if (!(field in patch)) {
@@ -307,6 +307,7 @@ export async function projectSessionsPatchEntry(params: {
 
   for (const fieldParams of [
     { field: "spawnedBy" as const, checkLineageBeforeEmpty: false },
+    { field: "completionOwnerSessionKey" as const, checkLineageBeforeEmpty: false },
     { field: "spawnedWorkspaceDir" as const, checkLineageBeforeEmpty: true },
     { field: "spawnedCwd" as const, checkLineageBeforeEmpty: true },
   ]) {
@@ -357,6 +358,24 @@ export async function projectSessionsPatchEntry(params: {
     );
     if (result) {
       return result;
+    }
+  }
+
+  if ("inheritedToolPolicyVersion" in patch) {
+    const raw = patch.inheritedToolPolicyVersion;
+    if (raw === null) {
+      if (existing?.inheritedToolPolicyVersion !== undefined) {
+        return invalid("inheritedToolPolicyVersion cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      const lineage = checkSpawnLineage("inheritedToolPolicyVersion");
+      if (lineage) {
+        return lineage;
+      }
+      if (raw !== 1) {
+        return invalid("invalid inheritedToolPolicyVersion (expected 1)");
+      }
+      next.inheritedToolPolicyVersion = 1;
     }
   }
 

@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -245,6 +246,7 @@ type DispatchGatewayMethodInProcessOptions = {
   onAccepted?: (payload: unknown) => void;
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  delegatedToolPolicyHandoff?: boolean;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
@@ -285,15 +287,22 @@ export async function dispatchGatewayMethodInProcessRaw(
     ...(options?.runtimePluginToolGrant
       ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
       : {}),
+    delegatedToolPolicyHandoff: options?.delegatedToolPolicyHandoff === true,
     scopes: options?.syntheticScopes,
   });
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking || options?.runtimePluginToolGrant
+    pluginRuntimeOwnerId ||
+      options?.agentRunTracking ||
+      options?.runtimePluginToolGrant ||
+      options?.delegatedToolPolicyHandoff ||
+      scope?.client?.internal?.delegatedToolPolicyHandoff
       ? {
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,
+          delegatedToolPolicyHandoff:
+            options?.delegatedToolPolicyHandoff === true ? (true as const) : undefined,
         }
       : undefined,
   );
@@ -589,6 +598,7 @@ export function loadGatewayPlugins(params: {
   startupTrace?: {
     detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
   };
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const started = performance.now();
   const activationAutoEnabled =
@@ -600,6 +610,7 @@ export function loadGatewayPlugins(params: {
             ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
             : {}),
           discovery: params.pluginLookUpTable?.discovery,
+          ambientEnvTriggers: params.ambientEnvTriggers,
         })
       : undefined;
   const autoEnableMs = performance.now() - started;
@@ -624,6 +635,7 @@ export function loadGatewayPlugins(params: {
               ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
               : {}),
             discovery: params.pluginLookUpTable?.discovery,
+            ambientEnvTriggers: params.ambientEnvTriggers,
           });
   const resolvedConfigMs = performance.now() - started;
   const resolvedConfig = autoEnabled.config;
@@ -635,6 +647,7 @@ export function loadGatewayPlugins(params: {
         activationSourceConfig: params.activationSourceConfig,
         workspaceDir: params.workspaceDir,
         env: process.env,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       })
     ).startup.pluginIds,
   ];

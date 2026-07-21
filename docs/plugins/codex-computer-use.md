@@ -70,10 +70,11 @@ available as a normal OpenClaw MCP server. Use the Codex Computer Use setup on
 this page when Codex app-server should own plugin installation, MCP reloads,
 and native tool calls inside Codex-mode turns.
 
-CUA's driver is macOS-specific and still requires the local macOS permissions
-its app prompts for, such as Accessibility and Screen Recording. OpenClaw does
-not install `cua-driver`, grant those permissions, or bypass the upstream
-driver's safety model.
+CUA's driver ships prerelease builds for macOS, Windows (x64 and ARM64), and
+Linux (x64 and ARM64, preview tier). It still requires the local OS
+permissions its app prompts for, such as Accessibility and Screen Recording on
+macOS. OpenClaw does not install `cua-driver`, grant those permissions, or
+bypass the upstream driver's safety model.
 
 ## Quick setup
 

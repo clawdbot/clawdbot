@@ -54,6 +54,10 @@
       },
       "cliAddOptions": [
         {
+          "flags": "--base-url <url>",
+          "description": "Channel base URL"
+        },
+        {
           "flags": "--code <code>",
           "description": "ClickClack one-time setup code or setup URL"
         },

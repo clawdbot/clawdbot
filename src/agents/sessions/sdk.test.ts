@@ -25,6 +25,7 @@ import { takeRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-t
 import { AuthStorage } from "./auth-storage.js";
 import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
+import * as publicSessionSdk from "./index.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
@@ -47,6 +48,10 @@ const testModel: Model = {
 };
 
 describe("createAgentSession runtime ownership", () => {
+  it("keeps embedded recovery construction out of the public sessions barrel", () => {
+    expect(publicSessionSdk).not.toHaveProperty("createAgentSessionForEmbeddedRunner");
+  });
+
   it("binds the installed stream wrapper to the model-registry lifecycle", async () => {
     const modelRegistry = createTestModelRegistry();
     const { session } = await createAgentSession({

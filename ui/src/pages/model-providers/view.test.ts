@@ -31,6 +31,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     error: null,
     updatedAt: 1,
     costDays: 30,
+    credentialAgentLabel: "Writer",
     cards: [card()],
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
     defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
@@ -122,10 +123,53 @@ describe("renderModelProviders", () => {
       }),
     );
     const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(text(provider)).toContain("Credentials for Writer");
+    expect(text(provider)).toContain("Global usage and cost");
     expect(text(provider)).toContain("API key from environment (OPENAI_API_KEY)");
     expect(text(provider)).toContain("Connected");
     expect(text(provider)).toContain("145 ms");
     expect(text(provider)).toContain("Default profile");
+  });
+
+  it("labels provider usage and session cost as global", () => {
+    const container = mount(
+      props({
+        cards: [
+          card({
+            localCost: { totalCost: 12, totalTokens: 1_000, sessionCount: 2 },
+          }),
+        ],
+      }),
+    );
+
+    const provider = container.querySelector('[data-provider-id="openai"]');
+    expect(text(provider)).toContain("Credentials for Writer");
+    expect(text(provider)).toContain("Global usage and cost");
+    expect(text(provider)).toContain("Global session spend · 30d");
+  });
+
+  it("preserves complete graphemes in custom provider fallback icons", () => {
+    const cases = [
+      { id: "🧭-proxy", expected: "🧭" },
+      { id: "🇺🇸-proxy", expected: "🇺🇸" },
+      { id: "👩‍💻-proxy", expected: "👩‍💻" },
+      { id: "e\u0301-proxy", expected: "E\u0301" },
+      { id: "ß-provider", expected: "S" },
+    ];
+    const container = mount(
+      props({
+        cards: cases.map(({ id }) => card({ id, displayName: id, credentialProviderIds: [id] })),
+      }),
+    );
+
+    for (const { id, expected } of cases) {
+      const row = [...container.querySelectorAll<HTMLElement>("[data-provider-id]")].find(
+        (candidate) => candidate.dataset.providerId === id,
+      );
+      expect(row?.querySelector(".provider-brand-icon--fallback")?.textContent?.trim()).toBe(
+        expected,
+      );
+    }
   });
 
   it("shows config key provenance when auth status is unavailable", () => {

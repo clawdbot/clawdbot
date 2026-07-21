@@ -374,6 +374,22 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("createUserTurnTranscriptRecorder", () => {
+    it("accepts and normalizes provider-defined persisted media kinds", () => {
+      const input: UserTurnInput = {
+        text: "inspect this attachment",
+        media: [{ path: " /tmp/provider-media.bin ", kind: " provider/custom-media " }],
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        input,
+        target: unusedRecorderTarget,
+      });
+
+      expect(recorder.message).toMatchObject({
+        MediaPath: "/tmp/provider-media.bin",
+        MediaType: "provider/custom-media",
+      });
+    });
+
     it("persists fallback user turns only once", async () => {
       const dir = createTempDir("openclaw-user-turn-recorder-fallback-");
       const target = createSqliteTranscriptTarget({ dir });
@@ -807,6 +823,68 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({
           role: "user",
           content: "persist me in the admitted session",
+        }),
+      ]);
+    });
+
+    it("re-resolves the target after an explicitly retryable persistence miss", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-retry-");
+      const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
+      let targetResolutionCount = 0;
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "persist me after the target rotates",
+          timestamp: 123,
+        },
+        target: () => {
+          targetResolutionCount += 1;
+          return targetResolutionCount === 1 ? undefined : admittedTarget;
+        },
+        updateMode: "none",
+      });
+
+      await expect(recorder.persistApproved({ retryIfUnpersisted: true })).resolves.toBeUndefined();
+      const persisted = await recorder.persistApproved({ retryIfUnpersisted: true });
+
+      expect(targetResolutionCount).toBe(2);
+      expect(persisted?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "persist me after the target rotates",
+        }),
+      ]);
+    });
+
+    it("keeps concurrent persistence retries single-flight", async () => {
+      const dir = createTempDir("openclaw-user-turn-recorder-concurrent-retry-");
+      const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
+      let targetResolutionCount = 0;
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "persist me once after concurrent retries",
+          timestamp: 123,
+        },
+        target: () => {
+          targetResolutionCount += 1;
+          return targetResolutionCount === 1 ? undefined : admittedTarget;
+        },
+        updateMode: "none",
+      });
+
+      await expect(recorder.persistApproved({ retryIfUnpersisted: true })).resolves.toBeUndefined();
+      const [first, second] = await Promise.all([
+        recorder.persistApproved({ retryIfUnpersisted: true }),
+        recorder.persistApproved({ retryIfUnpersisted: true }),
+      ]);
+
+      expect(targetResolutionCount).toBe(2);
+      expect(first?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      expect(second?.sessionFile).toBe(admittedTarget.sqliteMarker);
+      await expect(readTranscriptMessages(admittedTarget)).resolves.toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "persist me once after concurrent retries",
         }),
       ]);
     });

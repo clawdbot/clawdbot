@@ -119,6 +119,24 @@ data class QuestionListResult(
 )
 
 @Serializable
+data class SessionObserverPlanProgress(
+  val completed: Long,
+  val total: Long,
+)
+
+@Serializable
+data class SessionObserverDigest(
+  val sessionKey: String,
+  val runId: String? = null,
+  val revision: Long,
+  val updatedAt: Long,
+  val headline: String,
+  val assessment: String? = null,
+  val health: String,
+  val planProgress: SessionObserverPlanProgress? = null,
+)
+
+@Serializable
 data class GatewayEventFrameStateVersion(
   val presence: Long,
   val health: Long,
@@ -473,6 +491,7 @@ enum class GatewayEvent(
   UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
+  SessionObserver("session.observer"),
   SessionOperation("session.operation"),
   SessionTool("session.tool"),
   SessionsChanged("sessions.changed"),

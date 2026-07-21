@@ -183,6 +183,64 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
     }
   });
 
+  it("renders one complete uppercased grapheme in custom provider fallback icons", async () => {
+    const bottomProviderId = "e\u0301-proxy";
+    const cases = [
+      { id: "ß-provider", expected: "S" },
+      { id: "🧭-proxy", expected: "🧭" },
+      { id: "🇺🇸-proxy", expected: "🇺🇸" },
+      { id: "👩‍💻-proxy", expected: "👩‍💻" },
+      { id: bottomProviderId, expected: "E\u0301" },
+    ];
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1280 },
+      ...(recordVisuals
+        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      models: cases.map(({ id }) => ({
+        id: "test-model",
+        name: "Test Model",
+        provider: id,
+        available: true,
+      })),
+      methodResponses: {
+        "models.authStatus": { ts: NOW, providers: [] },
+        "usage.status": { updatedAt: NOW, providers: [] },
+        "sessions.usage": { aggregates: { byProvider: [] } },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}settings/model-providers`);
+      await page.locator(".page-title", { hasText: "Model Providers" }).first().waitFor();
+
+      for (const { id, expected } of cases) {
+        const icon = page.locator(`[data-provider-id="${id}"] .provider-brand-icon--fallback`);
+        await icon.waitFor();
+        await expect.poll(async () => (await icon.textContent())?.trim()).toBe(expected);
+      }
+
+      if (recordVisuals) {
+        await page.screenshot({
+          path: path.join(artifactDir, "03-unicode-fallback-icons.png"),
+          fullPage: true,
+        });
+        await page.locator(`[data-provider-id="${bottomProviderId}"]`).scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: path.join(artifactDir, "04-unicode-fallback-icons-bottom.png"),
+          fullPage: true,
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("configures credentials, probes a provider, and changes default models", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -346,7 +404,7 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
 
       await openaiCard.getByRole("button", { name: "Test connection" }).click();
       const probe = await gateway.waitForRequest("models.probe");
-      expect(probe.params).toEqual({ provider: "openai" });
+      expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
       await expect.poll(async () => openaiCard.textContent()).toContain("87 ms");
 
       const primary = page.locator(".model-providers__defaults select").first();

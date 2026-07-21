@@ -1292,6 +1292,29 @@ describe("gateway sessions patch", () => {
     expect(entry.spawnedBy).toBe("agent:main:main");
   });
 
+  test("sets an immutable completion owner for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: {
+          key: "agent:main:acp:child",
+          completionOwnerSessionKey: "agent:main:main",
+        },
+      }),
+    );
+    expect(entry.completionOwnerSessionKey).toBe("agent:main:main");
+
+    const result = await runPatch({
+      storeKey: "agent:main:acp:child",
+      store: { "agent:main:acp:child": entry },
+      patch: {
+        key: "agent:main:acp:child",
+        completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      },
+    });
+    expectPatchError(result, "completionOwnerSessionKey cannot be changed once set");
+  });
+
   test("sets spawnedWorkspaceDir for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -1313,6 +1336,23 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.spawnDepth).toBe(2);
+  });
+
+  test("sets an immutable requester policy snapshot version for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: { key: "agent:main:acp:child", inheritedToolPolicyVersion: 1 },
+      }),
+    );
+    expect(entry.inheritedToolPolicyVersion).toBe(1);
+
+    const result = await runPatch({
+      storeKey: "agent:main:acp:child",
+      store: { "agent:main:acp:child": entry },
+      patch: { key: "agent:main:acp:child", inheritedToolPolicyVersion: null },
+    });
+    expectPatchError(result, "inheritedToolPolicyVersion cannot be cleared once set");
   });
 
   test("sets inheritedToolDeny for ACP sessions", async () => {
@@ -1372,6 +1412,13 @@ describe("gateway sessions patch", () => {
       patch: { key: MAIN_SESSION_KEY, inheritedToolDeny: ["exec"] },
     });
     expectPatchError(result, "inheritedToolDeny is only supported");
+  });
+
+  test("rejects inheritedToolPolicyVersion on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, inheritedToolPolicyVersion: 1 },
+    });
+    expectPatchError(result, "inheritedToolPolicyVersion is only supported");
   });
 
   test("rejects inheritedToolAllow on non-subagent sessions", async () => {

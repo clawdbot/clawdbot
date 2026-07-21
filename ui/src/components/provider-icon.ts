@@ -4,6 +4,7 @@
 // shared styles live under .provider-brand-icon in styles/components.css.
 import { html } from "lit";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
 
 const PROVIDER_ICON_NAMES = new Set([
   "abacus",
@@ -120,7 +121,7 @@ export function renderProviderBrandIcon(provider: string, options?: { className?
   const surfaceClass = options?.className ? ` ${options.className}` : "";
   const icon = resolveProviderIconName(provider);
   if (!icon) {
-    const letter = (provider.trim().charAt(0) || "?").toUpperCase();
+    const letter = takeGraphemes(provider.trim().toUpperCase(), 1) || "?";
     return html`
       <span
         class="provider-brand-icon provider-brand-icon--fallback${surfaceClass}"

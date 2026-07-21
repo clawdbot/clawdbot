@@ -21,10 +21,13 @@ import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
+export type AmbientEnvTriggerPolicy = "allow" | "suppress";
+
 type ChannelPresenceOptions = {
   channelIds?: readonly string[];
   discovery?: PluginDiscoveryResult;
   includePersistedAuthState?: boolean;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   persistedAuthStateProbe?: {
     listChannelIds: () => readonly string[];
     hasState: (params: {
@@ -172,20 +175,22 @@ export function listPotentialConfiguredChannelPresenceSignals(
     }
   }
 
-  for (const [key, value] of Object.entries(env)) {
-    if (!hasNonEmptyString(value)) {
-      continue;
-    }
-    for (const [prefix, channelId] of channelEnvPrefixes) {
-      if (key.startsWith(prefix)) {
-        configuredChannelIds.add(channelId);
-        addSignal(channelId, "env");
+  if (options.ambientEnvTriggers !== "suppress") {
+    for (const [key, value] of Object.entries(env)) {
+      if (!hasNonEmptyString(value)) {
+        continue;
       }
-    }
-    for (const { channelId, envVars } of officialExternalChannelEnvVars) {
-      if (envVars.includes(key)) {
-        configuredChannelIds.add(channelId);
-        addSignal(channelId, "env");
+      for (const [prefix, channelId] of channelEnvPrefixes) {
+        if (key.startsWith(prefix)) {
+          configuredChannelIds.add(channelId);
+          addSignal(channelId, "env");
+        }
+      }
+      for (const { channelId, envVars } of officialExternalChannelEnvVars) {
+        if (envVars.includes(key)) {
+          configuredChannelIds.add(channelId);
+          addSignal(channelId, "env");
+        }
       }
     }
   }

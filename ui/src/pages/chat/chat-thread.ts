@@ -45,7 +45,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
-import { getOrCreateSessionCacheValue } from "./session-cache.ts";
+import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import type { PlanStatus } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
@@ -100,6 +100,7 @@ type StreamRunRenderItem = {
 
 const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
+const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
@@ -111,6 +112,7 @@ export function resetChatThreadState(paneId?: string): void {
   chatItemsByPane.clear();
   resetWorkingProgress();
   expandedToolCardsBySession.clear();
+  expandedUserMessagesBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
 }
@@ -2077,6 +2079,19 @@ export function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>):
 
 export function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
   return getOrCreateSessionCacheValue(expandedToolCardsBySession, sessionKey, () => new Map());
+}
+
+export function getExpandedUserMessages(sessionKey: string): Map<string, boolean> {
+  for (const [cachedKey, state] of expandedUserMessagesBySession) {
+    if (areUiSessionKeysEquivalent(cachedKey, sessionKey)) {
+      if (cachedKey !== sessionKey) {
+        expandedUserMessagesBySession.delete(cachedKey);
+        setSessionCacheValue(expandedUserMessagesBySession, sessionKey, state);
+      }
+      return state;
+    }
+  }
+  return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
 function getInitializedToolCards(sessionKey: string): Set<string> {

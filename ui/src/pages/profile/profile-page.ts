@@ -310,14 +310,16 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.identityLoading = true;
     this.identityError = null;
     try {
-      const result = await client.request<UsersSelfResult>("users.self", {});
+      const result = await client.request<Partial<UsersSelfResult> | null>("users.self", {});
       if (requestId !== this.identityRequestId) {
         return;
       }
-      this.ownProfile = result.profile;
-      this.displayName = hasUnsavedDisplayName
-        ? displayNameDraft
-        : (result.profile.displayName ?? "");
+      const profile = result?.profile;
+      if (!profile) {
+        return;
+      }
+      this.ownProfile = profile;
+      this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
     } catch (error) {
       if (requestId === this.identityRequestId) {
         this.identityError = toIdentityErrorMessage(error);
@@ -436,14 +438,22 @@ export class ProfilePage extends OpenClawLightDomElement {
       return nothing;
     }
     if (!this.ownProfile) {
+      // users.self is the idempotent gateway-owned profile ensure path. Retrying
+      // keeps profile ids and authenticated email linkage authoritative server-side.
+      const emptyState = this.identityLoading
+        ? t("profilePage.identity.loading")
+        : this.identityError
+          ? this.identityError
+          : html`<div class="profile-identity-empty">
+              <span>${t("profilePage.identity.notSet")}</span>
+              <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
+                ${t("profilePage.identity.setIdentity")}
+              </button>
+            </div>`;
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(
-            this.identityLoading
-              ? t("profilePage.identity.loading")
-              : (this.identityError ?? t("profilePage.identity.profileUnavailable")),
-          ),
+          renderSettingsEmpty(emptyState),
         )}
       </div>`;
     }

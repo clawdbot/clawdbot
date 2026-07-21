@@ -15,60 +15,6 @@
   padding: var(--space-3) var(--space-4) 0;
 }
 
-/* ---------- hub tabs ---------- */
-
-/* Hub tab strips (plugins + sessions hubs) are page-level navigation, not
-   filters: quiet text tabs on a hairline track with an accent indicator, so
-   they read differently from the segmented filter pills inside the pages.
-   Track/indicator come from wa-tab-group's shadow machinery. */
-wa-tab-group.hub-tabs {
-  --track-color: color-mix(in srgb, var(--border) 60%, transparent);
-  --indicator-color: var(--accent);
-}
-
-wa-tab-group.hub-tabs::part(body) {
-  display: none;
-}
-
-wa-tab-group.hub-tabs::part(tabs) {
-  gap: var(--space-2);
-}
-
-wa-tab.hub-tab {
-  font-size: var(--control-ui-text-sm);
-  font-weight: 550;
-  color: var(--muted);
-  transition: color var(--duration-normal) var(--ease-out);
-}
-
-/* Neutralize wa-tab's stock 1em padding; keep a slim nav-tab hit area. */
-wa-tab.hub-tab::part(base) {
-  padding: var(--space-1) var(--space-2) var(--space-2);
-  gap: 6px;
-  font: inherit;
-  color: inherit;
-}
-
-wa-tab.hub-tab:hover {
-  color: var(--text);
-}
-
-wa-tab.hub-tab[active] {
-  color: var(--text-strong);
-}
-
-wa-tab.hub-tab:focus-visible {
-  outline: none;
-  border-radius: var(--radius-sm);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-/* Web Awesome also draws its stock focus ring on the inner base part;
-   without this reset both rings render at once. */
-wa-tab.hub-tab:focus-visible::part(base) {
-  outline: none;
-}
-
 /* ---------- toolbar ---------- */
 
 .plugins-toolbar {

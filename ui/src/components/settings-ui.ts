@@ -151,8 +151,23 @@ export function renderSettingsToggleRow(props: {
   description?: unknown;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  /** Runs synchronously during direct activation for effects gated on user activation. */
+  onAct?: (checked: boolean) => void;
   disabled?: boolean;
 }): TemplateResult {
+  const notifySwitchActivation = (event: MouseEvent | KeyboardEvent) => {
+    const fromInput = event.composedPath().some((node) => node instanceof HTMLInputElement);
+    if (
+      !fromInput ||
+      (event instanceof KeyboardEvent && event.key !== "ArrowLeft" && event.key !== "ArrowRight")
+    ) {
+      return;
+    }
+    const checked = (event.currentTarget as HTMLElement & { checked: boolean }).checked;
+    if (checked !== props.checked) {
+      props.onAct?.(checked);
+    }
+  };
   return html`
     <div
       class="settings-row settings-row--toggle"
@@ -161,7 +176,9 @@ export function renderSettingsToggleRow(props: {
         if (props.disabled || (target instanceof Element && target.closest("wa-switch") !== null)) {
           return;
         }
-        props.onChange(!props.checked);
+        const checked = !props.checked;
+        props.onAct?.(checked);
+        props.onChange(checked);
       }}
     >
       <div class="settings-row__text">
@@ -176,6 +193,8 @@ export function renderSettingsToggleRow(props: {
           size="s"
           .checked=${props.checked}
           ?disabled=${props.disabled ?? false}
+          @click=${notifySwitchActivation}
+          @keydown=${notifySwitchActivation}
           @change=${(event: Event) => {
             props.onChange((event.currentTarget as HTMLElement & { checked: boolean }).checked);
           }}

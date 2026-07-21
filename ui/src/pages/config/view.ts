@@ -35,6 +35,7 @@ import {
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
@@ -70,6 +71,7 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
 
 type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   selectedDeviceId: string;
   loading: boolean;
   error: string | null;
@@ -947,6 +949,24 @@ function renderSettingsMediaDeviceField(options: {
       : []),
   ];
   const refreshLabel = `${t("common.refresh")}: ${options.title}`;
+  let accessRequested = false;
+  const requestAccess = () => {
+    if (accessRequested || !state.permissionRequired) {
+      return;
+    }
+    accessRequested = true;
+    options.onRefresh?.();
+  };
+  const requestAccessFromPointer = (event: PointerEvent) => {
+    if (event.button === 0) {
+      requestAccess();
+    }
+  };
+  const requestAccessFromKeyboard = (event: KeyboardEvent) => {
+    if (["Enter", " ", "ArrowDown", "ArrowUp", "F4"].includes(event.key)) {
+      requestAccess();
+    }
+  };
   const note = state.error
     ? html`<span role="alert">${state.error}</span>`
     : !state.loading && state.devices.length === 0
@@ -957,11 +977,13 @@ function renderSettingsMediaDeviceField(options: {
     description: note,
     control: html`
       <select
-        class="settings-select"
+        class="settings-select settings-select--media-device"
         data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
         data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
         aria-label=${options.title}
         .value=${selectedDeviceId}
+        @pointerdown=${requestAccessFromPointer}
+        @keydown=${requestAccessFromKeyboard}
         @change=${(event: Event) =>
           options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
       >
@@ -1130,6 +1152,11 @@ function renderLobsterPetSection(props: ConfigProps) {
             : t("quickSettings.appearance.lobsterSoundsOff"),
           checked: lobsterPetSounds,
           onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+          onAct: (enabled) => {
+            if (enabled) {
+              previewLobsterChirp();
+            }
+          },
         })}
         ${renderSettingsRow({
           title: t("quickSettings.appearance.lobsterdex"),
@@ -1143,6 +1170,7 @@ function renderLobsterPetSection(props: ConfigProps) {
               ${LOBSTER_PET_PALETTES.map((palette) => {
                 const entry = getLobsterdexEntries().get(palette.id);
                 const seen = entry !== undefined;
+                const shinySeen = entry?.shinySeenAt != null;
                 const title = !seen
                   ? "?"
                   : entry.firstSeenAt !== null
@@ -1157,9 +1185,12 @@ function renderLobsterPetSection(props: ConfigProps) {
                       ? ""
                       : "lobsterdex__mini--unseen"}"
                     style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
-                    title=${title}
+                    title=${shinySeen ? `${title} ✦` : title}
                   >
                     ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                    ${shinySeen
+                      ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
+                      : nothing}
                   </span>
                 `;
               })}

@@ -1,10 +1,10 @@
 // Isolated agent test harness builds filesystem and config fixtures for cron agent tests.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-env.js";
 import type { CronJob } from "./types.js";
 
 /** Runs a test callback with an isolated OpenClaw home for cron tests. */

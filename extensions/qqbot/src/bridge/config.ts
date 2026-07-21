@@ -1,7 +1,7 @@
 // Qqbot helper module supports config behavior.
-import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { coerceSecretRef, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { getPlatformAdapter } from "../engine/adapter/index.js";
 import {
@@ -135,8 +135,17 @@ export function resolveQQBotAccount(
     secretSource = "config";
   } else if (accountConfig.clientSecretFile) {
     try {
-      clientSecret = fs.readFileSync(accountConfig.clientSecretFile, "utf8").trim();
-      secretSource = "file";
+      const fileSecret = tryReadSecretFileSync(
+        accountConfig.clientSecretFile,
+        "QQ Bot client secret",
+        // Existing clientSecretFile paths may be symlinks or hardlinks. Keep
+        // that contract while gaining the shared credential size limit.
+        { rejectHardlinks: false },
+      );
+      if (fileSecret) {
+        clientSecret = fileSecret;
+        secretSource = "file";
+      }
     } catch {
       secretSource = "none";
     }

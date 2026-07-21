@@ -142,8 +142,6 @@ type MonitorMattermostOpts = {
   webSocketFactory?: MattermostWebSocketFactory;
 };
 
-type MediaKind = "image" | "audio" | "video" | "document" | "unknown";
-
 type MattermostReaction = {
   user_id?: string;
   post_id?: string;
@@ -586,7 +584,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
     mediaMaxBytes,
     saveRemoteMedia: (params) => core.channel.media.saveRemoteMedia(params),
-    mediaKindFromMime: (contentType) => core.media.mediaKindFromMime(contentType) as MediaKind,
+    mediaKindFromMime: (contentType) => core.media.mediaKindFromMime(contentType),
   });
 
   const runModelPickerCommand = async (params: {

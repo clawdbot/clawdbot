@@ -44,7 +44,6 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
 const QA_RUNTIME_LIVE_TEST = "extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts";
 const QA_RUNTIME_ARTIFACT = "dist/extensions/qa-lab/runtime-api.js";
-const ZAI_LIVE_TEST_FILE = "src/agents/zai.live.test.ts";
 
 /** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
@@ -260,13 +259,12 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
     case "native-live-src-agents":
       return files.filter(
         (file) =>
-          file !== ZAI_LIVE_TEST_FILE &&
-          (file.startsWith("src/agents/") ||
-            file.startsWith("src/llm/") ||
-            file.startsWith("src/skills/")),
+          file.startsWith("src/agents/") ||
+          file.startsWith("src/llm/") ||
+          file.startsWith("src/skills/"),
       );
     case "native-live-src-agents-zai-coding":
-      return files.filter((file) => file === ZAI_LIVE_TEST_FILE);
+      return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":
       return files.filter(
         (file) => file.startsWith("src/gateway/") || file.startsWith("src/system-agent/"),

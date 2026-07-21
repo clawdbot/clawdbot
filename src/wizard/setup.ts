@@ -33,6 +33,7 @@ import {
   writeWizardConfigFile,
 } from "./setup.shared.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
+import { resolveSetupWorkspaceSelection } from "./setup.workspace.js";
 
 type SetupFlowChoice = WizardFlow | "import" | "keep-model" | `import:${string}`;
 
@@ -53,15 +54,17 @@ async function offerLiveModelVerification(params: {
   runtime: RuntimeEnv;
   workspaceDir: string;
   writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+  required?: boolean;
 }): Promise<{ config: OpenClawConfig; verified: boolean }> {
-  const shouldTest = await params.prompter.confirm({
-    message: t("wizard.setup.testAiAccess"),
-    initialValue: true,
-  });
-  if (!shouldTest) {
-    return { config: params.config, verified: false };
+  if (!params.required) {
+    const shouldTest = await params.prompter.confirm({
+      message: t("wizard.setup.testAiAccess"),
+      initialValue: true,
+    });
+    if (!shouldTest) {
+      return { config: params.config, verified: false };
+    }
   }
-
   const { verifySetupInferenceConfig } = await import("../system-agent/setup-inference.js");
   const verify = async (candidate: SetupModelAuthCandidate) => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
@@ -106,14 +109,16 @@ async function offerLiveModelVerification(params: {
     if (result.authProfiles) {
       candidate.authProfiles = result.authProfiles;
     }
-    const action = await params.prompter.select({
-      message: t("wizard.setup.testAiFailureChoice"),
-      options: [
-        { value: "fix", label: t("wizard.setup.testAiFix") },
-        { value: "continue", label: t("wizard.setup.testAiContinue") },
-      ],
-    });
-    if (action === "continue") {
+    if (
+      !params.required &&
+      (await params.prompter.select({
+        message: t("wizard.setup.testAiFailureChoice"),
+        options: [
+          { value: "fix", label: t("wizard.setup.testAiFix") },
+          { value: "continue", label: t("wizard.setup.testAiContinue") },
+        ],
+      })) === "continue"
+    ) {
       return { config: params.config, verified: false };
     }
 
@@ -559,11 +564,22 @@ async function runSetupWizardOnce(
           initialValue: baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
         }));
 
-  const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
+  const requestedWorkspaceDir = resolveUserPath(
+    workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE,
+  );
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
+    baseConfig,
+    requestedWorkspaceDir,
+    prompter,
+  });
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
+    baseConfig,
+    requestedWorkspaceDir,
+    { allowWorkspaceChange },
+  );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
@@ -602,11 +618,12 @@ async function runSetupWizardOnce(
   });
 
   let liveModelVerified = false;
+  // keepExistingModelConfig is latched before auth setup, so this distinguishes
+  // a route supplied by the import from one configured normally after the import.
   if (
     opts.nonInteractive !== true &&
-    opts.authChoice !== "skip" &&
-    !usedImportFlow &&
-    hasConfiguredDefaultModel(nextConfig)
+    hasConfiguredDefaultModel(nextConfig) &&
+    ((usedImportFlow && keepExistingModelConfig) || opts.authChoice !== "skip")
   ) {
     const verification = await offerLiveModelVerification({
       config: nextConfig,
@@ -616,6 +633,7 @@ async function runSetupWizardOnce(
       workspaceDir,
       writeConfig: async (config) =>
         await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
+      required: usedImportFlow && keepExistingModelConfig,
     });
     nextConfig = verification.config;
     liveModelVerified = verification.verified;

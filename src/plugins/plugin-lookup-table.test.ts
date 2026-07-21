@@ -265,6 +265,50 @@ describe("loadPluginLookUpTable", () => {
     expect(table.startup.pluginIds).toEqual(["telegram"]);
   });
 
+  it("excludes ambient-only channels from the suppressed gateway startup plan", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const index = createIndex(plugins);
+    const manifestRegistry: PluginManifestRegistry = { plugins, diagnostics: [] };
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { ambientEnvTriggers?: string },
+      ) => (options?.ambientEnvTriggers === "suppress" ? [] : ["telegram"]),
+    );
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+    const config = { plugins: { slots: { memory: "none" } } } as OpenClawConfig;
+    const env = { TELEGRAM_FAKE_TEST_TRIGGER: "configured" } as NodeJS.ProcessEnv;
+
+    expect(loadPluginLookUpTable({ config, env, index }).startup.pluginIds).toEqual(["telegram"]);
+    expect(
+      loadPluginLookUpTable({
+        config,
+        env,
+        index,
+        ambientEnvTriggers: "suppress",
+      }).startup.pluginIds,
+    ).toStrictEqual([]);
+    expect(
+      loadPluginLookUpTable({
+        config: {
+          ...config,
+          channels: { telegram: { enabled: true } },
+        } as OpenClawConfig,
+        env,
+        index,
+        ambientEnvTriggers: "suppress",
+      }).startup.pluginIds,
+    ).toEqual(["telegram"]);
+  });
+
   it("scopes metadata manifest reconstruction for restrictive startup allowlists", async () => {
     const plugins = [
       createManifestRecord({

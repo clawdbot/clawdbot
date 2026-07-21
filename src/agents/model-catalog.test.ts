@@ -36,6 +36,7 @@ async function build(params: {
   config?: OpenClawConfig;
   entries?: ModelCatalogEntry[];
   readOnly?: boolean;
+  includeProviderPluginAugmentation?: boolean;
 }) {
   return await buildPreparedModelCatalogSnapshot({
     agentDir: "/tmp/model-catalog-test",
@@ -44,6 +45,9 @@ async function build(params: {
     metadataSnapshot,
     modelRegistry: registry(params.entries ?? []),
     readOnly: params.readOnly ?? true,
+    ...(params.includeProviderPluginAugmentation !== undefined
+      ? { includeProviderPluginAugmentation: params.includeProviderPluginAugmentation }
+      : {}),
   });
 }
 
@@ -169,6 +173,31 @@ describe("prepared model catalog builder", () => {
         readOnly: true,
       }),
     ).rejects.toBe(projectionError);
+  });
+
+  it("keeps static publication off provider runtime catalog augmentation", async () => {
+    const snapshot = await build({
+      config: {
+        plugins: { enabled: false },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      },
+      entries: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+      readOnly: false,
+      includeProviderPluginAugmentation: false,
+    });
+
+    expect(snapshot.entries).toEqual([
+      expect.objectContaining({ id: "gpt-5.5", provider: "openai" }),
+    ]);
+    expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
   });
 
   it("uses the lifecycle auth snapshot for provider catalog augmentation", async () => {

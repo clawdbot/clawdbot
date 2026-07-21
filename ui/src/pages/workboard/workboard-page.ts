@@ -3,7 +3,11 @@ import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import {
+  hasOperatorAdminAccess,
+  hasOperatorApprovalsAccess,
+  hasOperatorWriteAccess,
+} from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
@@ -268,6 +272,7 @@ class WorkboardPage extends OpenClawLightDomElement {
         client: gateway.client,
         connected: gateway.connected,
         canWrite: hasOperatorWriteAccess(auth),
+        canGrant: hasOperatorApprovalsAccess(auth),
         canModelOverride: hasOperatorAdminAccess(auth),
         pluginEnabled,
         pluginEnablementError:

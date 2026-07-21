@@ -1,5 +1,6 @@
 // `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
 import { getRuntimeConfig } from "../config/config.js";
+import type { PluginRecord } from "../plugins/registry.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
@@ -9,6 +10,13 @@ export type PluginsListOptions = {
   enabled?: boolean;
   verbose?: boolean;
 };
+
+function toPluginListJsonRecord(plugin: PluginRecord): Omit<PluginRecord, "agentHarnessIds"> {
+  // Snapshot listing never imports plugin runtimes, so it cannot observe harness registrations.
+  // Omit the field instead of serializing the registry-compatible empty placeholder.
+  const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
+  return record;
+}
 
 async function loadHumanListModules() {
   const [sourceDisplay, table, themeModule, commandFormat, listFormat] = await Promise.all([
@@ -50,7 +58,7 @@ export async function runPluginsListCommand(
         source: report.registrySource,
         diagnostics: report.registryDiagnostics,
       },
-      plugins: list,
+      plugins: list.map(toPluginListJsonRecord),
       diagnostics: report.diagnostics,
     };
     writeRuntimeJson(runtime, payload);

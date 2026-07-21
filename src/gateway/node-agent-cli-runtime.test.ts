@@ -32,6 +32,7 @@ describe("invokeNodeClaudeCliRun", () => {
     mocks.get.mockReturnValue({
       connId: "conn-1",
       nodeId: "node-1",
+      pairingGeneration: "generation-1",
       commands: ["agent.cli.claude.run.v1"],
     });
   });
@@ -75,5 +76,11 @@ describe("invokeNodeClaudeCliRun", () => {
     ).resolves.toEqual({ ok: true });
     expect(mocks.resolveNodeCommandAllowlist).toHaveBeenCalledOnce();
     expect(mocks.invoke).toHaveBeenCalledOnce();
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedConnId: "conn-1",
+        expectedPairingGeneration: "generation-1",
+      }),
+    );
   });
 });

@@ -177,6 +177,7 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
         return buildStaticCatalog();
       }

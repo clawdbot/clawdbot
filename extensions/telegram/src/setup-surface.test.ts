@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
-import { promptTelegramAllowFromForAccount } from "./setup-core.js";
+import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
   ensureTelegramDefaultGroupMentionGate,
@@ -10,6 +10,13 @@ import {
   telegramSetupDmPolicy,
 } from "./setup-surface.helpers.js";
 import { telegramSetupWizard } from "./setup-surface.js";
+
+describe("Telegram setup promotion contract", () => {
+  it("exposes webhookSecret without widening named-account promotion", () => {
+    expect(telegramSetupAdapter.singleAccountKeysToMove).toEqual(["streaming", "webhookSecret"]);
+    expect(telegramSetupAdapter.namedAccountPromotionKeys).toEqual(["botToken", "tokenFile"]);
+  });
+});
 
 describe("ensureTelegramDefaultGroupMentionGate", () => {
   it('adds groups["*"].requireMention=true for fresh setups', () => {

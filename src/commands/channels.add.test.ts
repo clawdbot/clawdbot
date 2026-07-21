@@ -5,6 +5,7 @@ import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginPackageChannelCliOption } from "../plugins/manifest.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -110,6 +111,27 @@ vi.mock("./onboard-channels.js", async () => {
 });
 
 const runtime = createTestRuntime();
+
+function createSetupOptionCatalogEntry(
+  id: string,
+  label: string,
+  cliAddOptions: readonly PluginPackageChannelCliOption[],
+): ChannelPluginCatalogEntry {
+  return {
+    id,
+    pluginId: id,
+    origin: "global",
+    channel: { id, label, cliAddOptions },
+    meta: {
+      id,
+      label,
+      selectionLabel: label,
+      docsPath: `/channels/${id}`,
+      blurb: `${label} test channel.`,
+    },
+    install: { npmSpec: `@openclaw/${id}` },
+  };
+}
 
 type MockCallSource = {
   mock: {
@@ -350,6 +372,12 @@ type SignalAfterAccountConfigWritten = NonNullable<
 >;
 type ApplyAccountConfigParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["setup"]>["applyAccountConfig"]>
+>[0];
+type ResolveAccountIdParams = Parameters<
+  NonNullable<NonNullable<ChannelPlugin["setup"]>["resolveAccountId"]>
+>[0];
+type PrepareAccountConfigInputParams = Parameters<
+  NonNullable<NonNullable<ChannelPlugin["setup"]>["prepareAccountConfigInput"]>
 >[0];
 
 function createSignalPlugin(
@@ -604,7 +632,16 @@ describe("channelsAddCommand", () => {
               id: "nextcloud-talk",
               label: "Nextcloud Talk",
             }),
-            setup: { applyAccountConfig },
+            setup: {
+              resolveAccountId: ({ accountId }: ResolveAccountIdParams) => accountId ?? "default",
+              prepareAccountConfigInput: ({ input }: PrepareAccountConfigInputParams) => ({
+                ...input,
+                baseUrl: input.baseUrl ?? input.url,
+                secret: input.secret ?? input.token ?? input.password,
+                secretFile: input.secretFile ?? input.tokenFile,
+              }),
+              applyAccountConfig,
+            },
           },
           source: "test",
         },
@@ -1047,6 +1084,15 @@ describe("channelsAddCommand", () => {
       ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
       setup: { applyAccountConfig },
     };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createSetupOptionCatalogEntry("matrix", "Matrix", [
+        {
+          flags: "--initial-sync-limit <n>",
+          description: "Matrix initial sync limit",
+          valueType: "int",
+        },
+      ]),
+    ]);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", plugin, source: "test" }]));
 
@@ -1063,6 +1109,100 @@ describe("channelsAddCommand", () => {
 
     expect(applyAccountConfig).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("coerces list-valued channel setup options from delimited strings", async () => {
+    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        tlon: {
+          enabled: true,
+          groupChannels: input.groupChannels,
+          dmAllowlist: input.dmAllowlist,
+        },
+      },
+    }));
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "tlon", label: "Tlon" }),
+      setup: { applyAccountConfig },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createSetupOptionCatalogEntry("tlon", "Tlon", [
+        {
+          flags: "--group-channels <list>",
+          description: "Tlon group channels",
+          valueType: "list",
+        },
+        {
+          flags: "--dm-allowlist <list>",
+          description: "Tlon DM allowlist",
+          valueType: "list",
+        },
+      ]),
+    ]);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "tlon", plugin, source: "test" }]));
+
+    await channelsAddCommand(
+      {
+        channel: "tlon",
+        groupChannels: "chat/~host/general, chat/~host/random",
+        dmAllowlist: "~zod;~nec",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(writtenChannel("tlon")).toEqual({
+      enabled: true,
+      groupChannels: ["chat/~host/general", "chat/~host/random"],
+      dmAllowlist: ["~zod", "~nec"],
+    });
+  });
+
+  it("does not apply another channel's coercion to a shared flag", async () => {
+    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        matrix: {
+          enabled: true,
+          sharedValue: requireRecord(input, "shared input").sharedValue,
+        },
+      },
+    }));
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createSetupOptionCatalogEntry("matrix", "Matrix", [
+        { flags: "--shared-value <value>", description: "Matrix shared value" },
+      ]),
+      createSetupOptionCatalogEntry("tlon", "Tlon", [
+        {
+          flags: "--shared-value <value>",
+          description: "Tlon shared values",
+          valueType: "list",
+        },
+      ]),
+    ]);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+            setup: { applyAccountConfig },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "matrix", sharedValue: "one,two" }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel("matrix").sharedValue).toBe("one,two");
   });
 
   it("falls back from untrusted workspace catalog shadows when adding by alias", async () => {

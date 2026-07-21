@@ -18,6 +18,10 @@ import {
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../infra/agent-events.js";
+import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -33,6 +37,7 @@ import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
+  ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
@@ -42,6 +47,7 @@ import {
   EMBEDDED_RUN_WAITERS,
   getActiveEmbeddedRunCount,
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
+  setActiveEmbeddedRunLifecycleGeneration,
   type ActiveEmbeddedRunSnapshot,
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -835,6 +841,22 @@ export function setActiveEmbeddedRun(
   sessionKey?: string,
   sessionFile?: string,
 ) {
+  const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
+  const incomingLifecycleGeneration = setActiveEmbeddedRunLifecycleGeneration(
+    handle,
+    currentLifecycleGeneration,
+  );
+  // The immutable handle generation rejects delayed stale registration even
+  // when rotation left no replacement owner in the session slot.
+  if (!isAgentEventLifecycleGenerationCurrent(incomingLifecycleGeneration)) {
+    try {
+      handle.abort("restart");
+    } catch (error) {
+      diag.warn(`stale run registration abort failed: sessionId=${sessionId} err=${String(error)}`);
+      throw error;
+    }
+    return;
+  }
   const previousHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   const wasActive = previousHandle !== undefined;
   if (previousHandle) {
@@ -845,6 +867,7 @@ export function setActiveEmbeddedRun(
   if (handle.runId) {
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);
   }
+  clearActiveRunSessionKeys(sessionId);
   setActiveRunSessionKey(sessionKey, sessionId);
   clearActiveRunSessionFiles(sessionId);
   setActiveRunSessionFile(sessionFile, sessionId);
@@ -874,8 +897,14 @@ export function updateActiveEmbeddedRunSnapshot(
 export function updateActiveEmbeddedRunSessionFile(
   sessionId: string,
   sessionFile: string | undefined,
+  lifecycleGeneration: string,
 ): void {
-  if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (
+    handle === undefined ||
+    ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle) !== lifecycleGeneration ||
+    !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
+  ) {
     return;
   }
   clearActiveRunSessionFiles(sessionId);

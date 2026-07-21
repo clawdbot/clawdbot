@@ -127,6 +127,10 @@ class Tooltip extends OpenClawLitElement {
       line-height: 1.35;
       text-align: center;
       overflow-wrap: anywhere;
+      white-space: normal;
+    }
+
+    .tooltip-content {
       white-space: pre-line;
     }
   `;
@@ -215,9 +219,16 @@ class Tooltip extends OpenClawLitElement {
     if (!tooltip) {
       return;
     }
-    tooltip.anchor = this.triggerElement;
     tooltip.showDelay = 0;
     tooltip.hideDelay = 0;
+    const trigger = this.triggerElement;
+    // WaTooltip's initial `for` watcher clears a directly assigned anchor.
+    // Reapply it after that update or an open tooltip has no popup geometry.
+    void tooltip.updateComplete.then(() => {
+      if (this.webAwesomeTooltip === tooltip && this.triggerElement === trigger) {
+        tooltip.anchor = trigger;
+      }
+    });
   }
 
   private readonly handlePointerEnter = (event: PointerEvent) => {
@@ -396,9 +407,10 @@ class Tooltip extends OpenClawLitElement {
   }
 
   override render() {
+    const tooltipContent = html`<span class="tooltip-content">${this.content}</span>`;
     return html`
       <slot @slotchange=${() => this.attachTrigger()}></slot>
-      <wa-tooltip id=${this.tooltipId} trigger="manual">${this.content}</wa-tooltip>
+      <wa-tooltip id=${this.tooltipId} trigger="manual">${tooltipContent}</wa-tooltip>
     `;
   }
 }

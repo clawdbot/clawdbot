@@ -6,14 +6,14 @@ import type { ApiRegistry } from "@openclaw/ai";
  * backend but sanitizes unsupported thinking payload options for simple models.
  */
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
-import type { Api, Model, ModelThinkingLevel } from "../llm/types.js";
+import type { StreamFn } from "@openclaw/llm-core";
 import {
   sanitizeGoogleThinkingPayload,
-  streamWithPayloadPatch,
   type GoogleThinkingInputLevel,
-} from "../plugin-sdk/provider-stream-shared.js";
+} from "../llm/providers/stream-wrappers/google-thinking-payload.js";
+import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
+import type { Api, Model, ModelThinkingLevel } from "../llm/types.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
-import type { StreamFn } from "./runtime/index.js";
 
 /** Custom API id for the Google simple-completion stream adapter. */
 const GOOGLE_SIMPLE_COMPLETION_API: Api = "openclaw-google-generative-ai-simple";

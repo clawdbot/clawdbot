@@ -1,4 +1,5 @@
 // Control UI chat module implements user message content behavior.
+import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { getChatAttachmentPreviewUrl } from "./attachment-payload-store.ts";
 
@@ -9,7 +10,7 @@ type UserChatMessageContentBlock = {
   source?: unknown;
   attachment?: {
     url: string;
-    kind: "audio" | "document";
+    kind: Extract<MediaKind, "audio" | "document">;
     label: string;
     mimeType?: string;
   };

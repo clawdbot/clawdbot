@@ -58,8 +58,16 @@ export function createAgentLifecycleTerminalBackstop(params: {
       return;
     }
     const phase = readStringValue(evt.data.phase);
-    if (phase === "start" && typeof evt.data.startedAt === "number") {
-      startedAt = evt.data.startedAt;
+    if (phase === "start") {
+      if (typeof evt.data.startedAt === "number") {
+        startedAt = evt.data.startedAt;
+      }
+      // A same-candidate retry replaces deferred terminal state from the
+      // preceding attempt; retaining it would abort a recovered run.
+      deferredError = undefined;
+      for (const key of DEFERRED_TERMINAL_METADATA_KEYS) {
+        delete deferredTerminalMetadata[key];
+      }
     }
     if (phase === "finishing") {
       deferredError = readStringValue(evt.data.error) ?? deferredError;

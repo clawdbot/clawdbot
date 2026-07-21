@@ -18,6 +18,7 @@ does not attest per-agent credential stores such as `auth-profiles.json`.
 
 Policy checks configured channels, MCP servers, model providers, network SSRF
 posture, ingress/channel access, Gateway exposure and node command posture,
+authored message-routing probes,
 agent workspace access, sandbox posture, data-handling posture, secret
 provider/auth profile posture, and governed tool metadata (`TOOLS.md`). Use it
 when a workspace needs a durable, checkable statement such as "Telegram must
@@ -67,6 +68,23 @@ example covering every supported section:
     "privateNetwork": {
       "allow": false,
     },
+  },
+  "routing": {
+    "requireBindings": true,
+    "requireConfiguredChannels": true,
+    "probes": [
+      {
+        "id": "family-dm",
+        "route": {
+          "channel": "imessage",
+          "peer": { "kind": "direct", "id": "+15555550123" },
+        },
+        "expect": {
+          "agentId": "family",
+          "matchedBy": ["binding.peer"],
+        },
+      },
+    ],
   },
   "ingress": {
     "session": {
@@ -183,6 +201,11 @@ Cross-cutting notes not obvious from the rule tables below:
   setting). It does not inspect logs, telemetry exports, transcripts, or
   memory files, and a clean result does not prove that no personal data or
   secrets exist in them.
+- Routing probes reuse OpenClaw's runtime binding resolver. Routing evidence
+  records only the probe id, resolved agent, match kind, and redacted binding
+  metadata. It never records peer, account, guild, team, or role identifiers.
+  Adding a routing section intentionally changes the policy and attestation
+  hashes; policies without routing keep their existing evidence shape.
 
 ### Policy rule reference
 
@@ -309,6 +332,27 @@ Every scope present in `policy.jsonc` must be valid and enforceable.
 | Policy field                   | Observed state                      | Use when                                                           |
 | ------------------------------ | ----------------------------------- | ------------------------------------------------------------------ |
 | `network.privateNetwork.allow` | Private-network SSRF escape hatches | Set to `false` to require private-network access to stay disabled. |
+
+#### Message routing
+
+| Policy field                        | Observed state                                      | Use when                                                               |
+| ----------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- |
+| `routing.requireBindings`           | Channel route bindings, excluding ACP bindings      | Require at least one message-routing binding.                          |
+| `routing.requireConfiguredChannels` | Binding channel ids and configured `channels.*` ids | Detect stale or misspelled binding channel ids.                        |
+| `routing.probes[].route`            | The public OpenClaw route resolver                  | Describe a representative inbound route without sending a message.     |
+| `routing.probes[].expect.agentId`   | Resolved agent id                                   | Require the route to reach the reviewed agent.                         |
+| `routing.probes[].expect.matchedBy` | Resolver match kind                                 | Require peer, account, channel, or other reviewed binding specificity. |
+
+Probe ids must be unique. A route supports `channel`, optional `accountId`,
+`peer`, `parentPeer`, `guildId`, `teamId`, and `memberRoleIds`. Peer kinds are
+`direct`, `group`, and `channel`. `matchedBy` may contain one or more runtime
+match kinds, including `binding.peer`, `binding.account`, `binding.channel`,
+or `default`.
+
+Routing checks are conformance checks only. They do not change startup,
+message delivery, binding precedence, or fallback behavior. Findings require
+operator review because automatically changing a binding could redirect
+private messages.
 
 #### Ingress and channel access
 
@@ -498,6 +542,10 @@ organization-authored policy; the checked policy may add stricter values or
 extra rules. A top-level checked rule can satisfy a scoped baseline rule when
 it is equally or more restrictive. Scope names do not need to match between
 files; comparison is keyed by selector (`agentIds`/`channelIds`) and field.
+For routing probes, every baseline probe id must remain with the same route
+and expected agent. A checked policy may add probes or narrow `matchedBy`, but
+removing a probe, changing its route or agent, or widening its accepted match
+kinds is weaker.
 
 Clean compare (`--json`):
 
@@ -760,6 +808,10 @@ the interval.
 | `policy/models-denied-provider`                          | A configured model provider or model ref uses a denied provider.                  |
 | `policy/models-unapproved-provider`                      | A configured model provider or model ref is outside the allowlist.                |
 | `policy/network-private-access-enabled`                  | A private-network SSRF escape hatch is enabled when policy denies it.             |
+| `policy/routing-bindings-required`                       | Policy requires a channel route binding, but none is configured.                  |
+| `policy/routing-binding-channel-unconfigured`            | A route binding names a channel absent from `channels.*`.                         |
+| `policy/routing-agent-mismatch`                          | An authored route resolves to a different agent.                                  |
+| `policy/routing-match-kind-mismatch`                     | An authored route matches at an unexpected binding specificity.                   |
 | `policy/ingress-dm-policy-unapproved`                    | A channel DM policy is outside the policy allowlist.                              |
 | `policy/ingress-dm-scope-unapproved`                     | `session.dmScope` does not match the policy-required DM isolation scope.          |
 | `policy/ingress-open-groups-denied`                      | A channel group policy is `open` while policy denies open group ingress.          |

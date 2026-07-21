@@ -1,3 +1,4 @@
+import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -203,9 +204,13 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
-  hasOpenPullRequest: (key: string) => boolean;
-  captureOpenPullRequestEpoch: (key: string) => symbol;
-  setOpenPullRequest: (key: string, hasOpenPullRequest: boolean, epoch?: symbol) => void;
+  pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
+  capturePullRequestEpoch: (key: string) => symbol;
+  setPullRequestSummary: (
+    key: string,
+    summary: SessionCatalogPullRequestSummary | undefined,
+    epoch?: symbol,
+  ) => void;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
   reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
@@ -733,8 +738,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     { token: symbol; previous: string | null | undefined }
   >();
   const swarmActivity = new SwarmActivityTracker();
-  const openPullRequestSessionKeys = new Set<string>();
-  const openPullRequestEpochs = new Map<string, symbol>();
+  const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
+  const pullRequestEpochs = new Map<string, symbol>();
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
   let hasForegroundListOptions = false;
@@ -777,34 +782,43 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const hasOpenPullRequest = (key: string): boolean => openPullRequestSessionKeys.has(key.trim());
+  const pullRequestSummary = (key: string): SessionCatalogPullRequestSummary | undefined =>
+    pullRequestSummaries.get(key.trim());
 
-  const captureOpenPullRequestEpoch = (key: string): symbol => {
+  const capturePullRequestEpoch = (key: string): symbol => {
     const normalizedKey = key.trim();
     const epoch = Symbol(normalizedKey);
-    openPullRequestEpochs.set(normalizedKey, epoch);
+    pullRequestEpochs.set(normalizedKey, epoch);
     return epoch;
   };
 
-  const retireOpenPullRequest = (key: string) => {
+  const retirePullRequestSummary = (key: string) => {
     const normalizedKey = key.trim();
-    openPullRequestEpochs.delete(normalizedKey);
-    openPullRequestSessionKeys.delete(normalizedKey);
+    pullRequestEpochs.delete(normalizedKey);
+    pullRequestSummaries.delete(normalizedKey);
   };
 
-  const setOpenPullRequest = (key: string, open: boolean, epoch?: symbol) => {
+  const setPullRequestSummary = (
+    key: string,
+    summary: SessionCatalogPullRequestSummary | undefined,
+    epoch?: symbol,
+  ) => {
     const normalizedKey = key.trim();
-    if (
-      !normalizedKey ||
-      (epoch !== undefined && openPullRequestEpochs.get(normalizedKey) !== epoch) ||
-      openPullRequestSessionKeys.has(normalizedKey) === open
-    ) {
+    if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
       return;
     }
-    if (open) {
-      openPullRequestSessionKeys.add(normalizedKey);
+    const previous = pullRequestSummaries.get(normalizedKey);
+    const unchanged =
+      previous?.state === summary?.state &&
+      previous?.numbers.length === summary?.numbers.length &&
+      previous?.numbers.every((number, index) => number === summary?.numbers[index]);
+    if (unchanged || (!previous && !summary)) {
+      return;
+    }
+    if (summary) {
+      pullRequestSummaries.set(normalizedKey, summary);
     } else {
-      openPullRequestSessionKeys.delete(normalizedKey);
+      pullRequestSummaries.delete(normalizedKey);
     }
     publish({ ...state });
   };
@@ -1314,7 +1328,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             row: base.row ? result?.sessions.find((row) => row.key === base.row?.key) : undefined,
           };
     if (reconciled.deletedKey) {
-      retireOpenPullRequest(reconciled.deletedKey);
+      retirePullRequestSummary(reconciled.deletedKey);
     }
     if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
       publish({
@@ -1357,7 +1371,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!confirmsSessionDeletion(response)) {
         return { deleted: false };
       }
-      retireOpenPullRequest(key);
+      retirePullRequestSummary(key);
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refreshReplacement(options.agentId);
@@ -1406,7 +1420,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
     if (deleted.length > 0 && isCurrentConnection(scope)) {
       for (const key of deleted) {
-        retireOpenPullRequest(key);
+        retirePullRequestSummary(key);
       }
       publish({
         ...state,
@@ -1656,18 +1670,18 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connectionClient = next.client;
     connectionConnected = next.connected;
     if (connectionChanged) {
-      const hadOpenPullRequests = openPullRequestSessionKeys.size > 0;
+      const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       connectionEpoch += 1;
       invalidateGroupsLoad();
       swarmActivity.clear();
       inFlight = null;
       queuedRefresh = null;
       rollbackPendingModelPatches();
-      openPullRequestSessionKeys.clear();
-      openPullRequestEpochs.clear();
+      pullRequestSummaries.clear();
+      pullRequestEpochs.clear();
       // A connected client replacement needs its own invalidation publish;
       // disconnects publish the cleared state in the branch immediately below.
-      if (hadOpenPullRequests && next.connected && next.client) {
+      if (hadPullRequestSummaries && next.connected && next.client) {
         publish({ ...state });
       }
     }
@@ -1743,7 +1757,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return;
       }
       if (reconciled.deletedKey) {
-        retireOpenPullRequest(reconciled.deletedKey);
+        retirePullRequestSummary(reconciled.deletedKey);
         // Preserve remote-deletion navigation before the canonical refresh
         // clears transient event state.
         publish({
@@ -1776,9 +1790,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create,
     patch,
     setModelOverride,
-    hasOpenPullRequest,
-    captureOpenPullRequestEpoch,
-    setOpenPullRequest,
+    pullRequestSummary,
+    capturePullRequestEpoch,
+    setPullRequestSummary,
     delete: remove,
     deleteMany: removeMany,
     reset,
@@ -1818,8 +1832,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       subscribedClient = null;
       pendingModelPatches.clear();
       swarmActivity.clear();
-      openPullRequestSessionKeys.clear();
-      openPullRequestEpochs.clear();
+      pullRequestSummaries.clear();
+      pullRequestEpochs.clear();
       stopGateway();
       stopEvents();
       createdListeners.clear();

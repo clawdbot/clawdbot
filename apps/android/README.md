@@ -87,19 +87,20 @@ MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
 The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
 Standalone release APK verification also requires that key's public certificate SHA-256 fingerprint to match `Config/ReleaseSigning.json`.
 
-Generate raw Google Play screenshots:
+Generate phone and Wear OS Google Play screenshots:
 
 ```bash
 pnpm android:screenshots
 ```
 
-The screenshot script defaults to a retained `OpenClaw_Screenshots_API36` AVD
-created from Android's no-cutout Pixel 2 profile. It creates the AVD when
-missing, boots it headlessly, waits for Android to finish booting, disables
+The screenshot script captures both form factors with retained
+`OpenClaw_Screenshots_API36` (Pixel 2) and
+`OpenClaw_Wear_Screenshots_API34` (Wear OS Large Round) AVDs. It creates a
+missing AVD, boots it headlessly, waits for Android to finish booting, disables
 animations, captures the screenshots, then shuts down the emulator it started.
-The API 36 Google APIs system image must be installed in the local Android SDK.
-Use `ANDROID_SCREENSHOT_AVD` or `--avd` to select another AVD, or `--device` to
-explicitly use a connected emulator.
+Install the API 36 Google APIs and API 34 Wear OS system images in the local
+Android SDK. Use `--form-factor phone|wear` with `--avd` or `--device` to
+explicitly capture one form factor from another emulator.
 
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
@@ -124,8 +125,8 @@ Google Play API commands, or Play Console mutation commands.
 
 The release lane uploads the phone and Wear bundles in one atomic Google Play
 edit. It publishes the phone bundle to `GOOGLE_PLAY_TRACK` and maps the Wear
-bundle to the corresponding form-factor track (`wear:qa` for the default
-internal channel, otherwise `wear:<track>`).
+bundle to the corresponding form-factor track (`wear:<track>`), so the default
+internal channel publishes to `internal` and `wear:internal`.
 
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 

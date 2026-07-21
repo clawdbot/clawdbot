@@ -2,6 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { listExplicitlyDisabledChannelIdsForConfig } from "../../../channels/config-presence.js";
+import type { AmbientEnvTriggerPolicy } from "../../../channels/config-presence.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import {
@@ -43,6 +44,7 @@ type ChannelPluginBlockerHit = {
 
 type ScanConfiguredChannelPluginBlockerOptions = {
   manifestRecords?: readonly PluginManifestRecord[];
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 };
 
 /** Find configured channel ids whose backing plugins cannot activate. */
@@ -64,12 +66,16 @@ export function scanConfiguredChannelPluginBlockers(
       env,
       includeDisabled: true,
     }).plugins;
-  const packageEnvTriggers = listPackageEnvConfiguredChannelTriggers(manifestRecords, env);
+  const packageEnvTriggers =
+    options.ambientEnvTriggers === "suppress"
+      ? new Map<string, Map<string, Set<string>>>()
+      : listPackageEnvConfiguredChannelTriggers(manifestRecords, env);
   const policyEntries = resolveConfiguredChannelPresencePolicy({
     config: cfg,
     activationSourceConfig,
     env,
     includePersistedAuthState: false,
+    ambientEnvTriggers: options.ambientEnvTriggers,
     manifestRecords,
   });
   // A package env match identifies one owner. Do not widen the same ambient env signal to

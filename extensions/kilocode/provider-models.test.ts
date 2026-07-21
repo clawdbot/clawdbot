@@ -135,6 +135,7 @@ async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: ()
 
   try {
     await runAssertions();
+    return release;
   } finally {
     vi.unstubAllEnvs();
     fetchWithSsrFGuardMock.mockReset();
@@ -221,11 +222,17 @@ describe("discoverKilocodeModels (fetch path)", () => {
   });
 
   it("falls back to static catalog on HTTP error", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
-    await withFetchPathTest(mockFetch, async () => {
+    const response = new Response("temporary failure", { status: 500 });
+    const cancelSpy = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const mockFetch = vi.fn().mockResolvedValue(response);
+
+    const release = await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
     });
+
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("falls back to static catalog for malformed successful model list payloads", async () => {
