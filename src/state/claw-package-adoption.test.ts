@@ -10,7 +10,10 @@ import {
 } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
 import { markClawPackageIndependentlyOwned } from "./claw-package-adoption.js";
-import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
+import {
+  acquireClawPackageLifecycleLease,
+  withClawPackageLifecycleLease,
+} from "./claw-package-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -235,6 +238,23 @@ describe("Claw package independent adoption", () => {
       ),
     ).toThrow("being changed by another OpenClaw lifecycle");
     directLease?.release();
+  });
+
+  it("releases a completed direct lifecycle before the next owner starts", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-completed-lease-") };
+    const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
+
+    await withClawPackageLifecycleLease(
+      artifact,
+      async () => {
+        markClawPackageIndependentlyOwned({ ...artifact, version: "1.0.0" }, { env });
+      },
+      { env, required: true },
+    );
+
+    const nextLease = acquireClawPackageLifecycleLease(artifact, { env, required: true });
+    expect(nextLease).not.toBeNull();
+    nextLease?.release();
   });
 
   it("fails open only for optional direct leases when lifecycle state is unavailable", () => {
