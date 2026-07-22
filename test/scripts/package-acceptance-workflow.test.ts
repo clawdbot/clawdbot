@@ -650,11 +650,22 @@ describe("package acceptance workflow", () => {
     const continuationDispatch = orchestration.indexOf(
       "dispatch_workflow plugin-release-continue.yml",
     );
+    const pluginSetupGuard = orchestration.indexOf(
+      'if [[ "${plugin_ecosystem_setup_ready}" == "true" ]]; then',
+    );
+    const pluginNpmArgs = orchestration.indexOf("npm_args=()", pluginSetupGuard);
+    const pluginNpmDispatch = orchestration.indexOf(
+      'plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml',
+      pluginNpmArgs,
+    );
     const prereleaseCoreStart = orchestration.indexOf(
       'if ! is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then',
     );
 
     expect(prereleaseCoreStart).toBeGreaterThan(-1);
+    expect(pluginSetupGuard).toBeGreaterThan(prereleaseCoreStart);
+    expect(pluginNpmArgs).toBeGreaterThan(pluginSetupGuard);
+    expect(pluginNpmDispatch).toBeGreaterThan(pluginNpmArgs);
     expect(prereleaseCoreStart).toBeLessThan(pluginNpmWait);
     expect(continuationDispatch).toBeGreaterThan(prereleaseCoreStart);
     expect(continuationDispatch).toBeLessThan(pluginNpmWait);
