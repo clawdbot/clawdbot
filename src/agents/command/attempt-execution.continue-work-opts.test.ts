@@ -253,6 +253,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     await runEmbeddedAttempt(makeContinuationEnabledConfig());
 
     clearSessionStoreCacheForTest();
+    closeOpenClawAgentDatabasesForTest();
     const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
     expect(persisted?.continuationChainCount).toBe(1);
