@@ -24,6 +24,36 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
+  it("allows explicitly configured plugins to use only their scoped channel ingress queue", () => {
+    const runtime = createPluginRuntime();
+    const pluginRegistry = createTestRegistry(runtime);
+    const configured = createPluginRecord({
+      id: "configured-ingress-owner",
+      name: "Configured Ingress Owner",
+      source: "/explicit/plugins/configured-ingress-owner/index.js",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    const workspace = createPluginRecord({
+      id: "workspace-ingress-owner",
+      name: "Workspace Ingress Owner",
+      source: "/workspace/.openclaw/plugins/workspace-ingress-owner/index.js",
+      origin: "workspace",
+      enabled: true,
+      configSchema: false,
+    });
+
+    const configuredApi = pluginRegistry.createApi(configured, { config: {} as OpenClawConfig });
+    const queue = configuredApi.runtime.state.openChannelIngressQueue({ accountId: "test" });
+    expect(queue).toBeDefined();
+
+    const workspaceApi = pluginRegistry.createApi(workspace, { config: {} as OpenClawConfig });
+    expect(() => workspaceApi.runtime.state.openChannelIngressQueue({ accountId: "test" })).toThrow(
+      "only available to bundled, trusted, or explicitly configured plugins",
+    );
+  });
+
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
     const pluginRegistry = createTestRegistry(createPluginRuntime());

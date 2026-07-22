@@ -472,6 +472,20 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               );
             }
           };
+          const assertPluginIngressQueueAllowed = () => {
+            const record =
+              pluginRuntimeRecordById.get(pluginId) ??
+              registry.plugins.find((entry) => entry.id === pluginId);
+            if (
+              record?.origin !== "bundled" &&
+              record?.origin !== "config" &&
+              record?.trustedOfficialInstall !== true
+            ) {
+              throw new Error(
+                "openChannelIngressQueue is only available to bundled, trusted, or explicitly configured plugins.",
+              );
+            }
+          };
           return {
             ...baseState,
             openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
@@ -485,14 +499,16 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
-              options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+              options?: Omit<
+                Parameters<typeof createChannelIngressQueue>[0],
+                "channelId" | "stateDir"
+              >,
             ) => {
-              assertPluginStateAllowed();
-              const stateDir = options?.stateDir ?? baseState.resolveStateDir();
+              assertPluginIngressQueueAllowed();
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
                 ...options,
                 channelId: pluginId,
-                stateDir,
+                stateDir: baseState.resolveStateDir(),
               });
             },
           } satisfies PluginRuntime["state"];

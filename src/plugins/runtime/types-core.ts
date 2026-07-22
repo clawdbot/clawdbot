@@ -420,7 +420,7 @@ export type PluginRuntimeCore = {
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
-      options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
+      options?: Omit<CreateChannelIngressQueueOptions, "channelId" | "stateDir">,
     ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
       TPayload,
       TMetadata,
