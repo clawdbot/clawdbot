@@ -645,6 +645,8 @@ export const zh_CN: TranslationMap = {
     openWorkboardCard: "打开 Workboard 卡片",
     dashboardAvailable: "仪表板可用",
     approvalNeeded: "需要审批",
+    queuedMessage: "{count} 条消息已加入发送队列",
+    queuedMessages: "{count} 条消息已加入发送队列",
     noSessions: "未找到会话。",
     noActiveSessions: "没有活动会话。",
     noArchivedSessions: "没有已归档会话。",
@@ -2952,6 +2954,7 @@ export const zh_CN: TranslationMap = {
     eventStale: "过期会话",
   },
   connection: {
+    queuedCount: "{count} 条已排队",
     reconnecting: "正在重新连接…",
     retryNow: "立即重试",
     access: {
@@ -4096,6 +4099,7 @@ export const zh_CN: TranslationMap = {
       placeholderWithAttachments: "添加消息或继续粘贴图片...",
       placeholderDisconnected: "连接到 Gateway 后开始聊天...",
       offlineHint: "离线 — 消息将排队，连接恢复后发送。",
+      offlineQueuedHint: "离线 — {count} 条消息已排队；连接恢复后将发送。",
       preparingModel: "正在准备模型...",
       responding: "{name} 正在回复...",
       sendingMessage: "正在发送消息...",

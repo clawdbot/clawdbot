@@ -670,6 +670,8 @@ export const ko: TranslationMap = {
     openWorkboardCard: "Workboard 카드 열기",
     dashboardAvailable: "대시보드 사용 가능",
     approvalNeeded: "승인 필요",
+    queuedMessage: "보낼 메시지 {count}개가 대기 중입니다",
+    queuedMessages: "보낼 메시지 {count}개가 대기 중입니다",
     noSessions: "세션을 찾을 수 없습니다.",
     noActiveSessions: "활성 스레드가 없습니다.",
     noArchivedSessions: "보관된 세션이 없습니다.",
@@ -3012,6 +3014,7 @@ export const ko: TranslationMap = {
     eventStale: "오래된 세션",
   },
   connection: {
+    queuedCount: "{count}개 대기 중",
     reconnecting: "다시 연결 중…",
     retryNow: "지금 다시 시도",
     access: {
@@ -4182,6 +4185,7 @@ export const ko: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "오프라인 — 메시지는 대기열에 저장되며 연결이 복구되면 전송됩니다.",
+      offlineQueuedHint: "오프라인 — {count}개 대기 중; 연결이 복구되면 메시지가 전송됩니다.",
       preparingModel: "모델 준비 중...",
       responding: "{name}이(가) 응답하는 중...",
       sendingMessage: "메시지 전송 중...",
