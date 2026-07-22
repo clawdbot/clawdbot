@@ -683,6 +683,8 @@ export const ja_JP: TranslationMap = {
     openWorkboardCard: "Workboardカードを開く",
     dashboardAvailable: "ダッシュボードが利用可能",
     approvalNeeded: "承認が必要",
+    queuedMessage: "送信待ちのメッセージが{count}件あります",
+    queuedMessages: "送信待ちのメッセージが{count}件あります",
     noSessions: "セッションが見つかりません。",
     noActiveSessions: "アクティブなスレッドはありません。",
     noArchivedSessions: "アーカイブされたセッションはありません。",
@@ -3046,6 +3048,7 @@ export const ja_JP: TranslationMap = {
     eventStale: "古いセッション",
   },
   connection: {
+    queuedCount: "{count}件が待機中",
     reconnecting: "再接続中…",
     retryNow: "今すぐ再試行",
     access: {
@@ -4226,6 +4229,8 @@ export const ja_JP: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "オフライン — メッセージはキューに入り、接続が回復したときに送信されます。",
+      offlineQueuedHint:
+        "オフライン — {count}件が送信待ちです。接続が復旧するとメッセージが送信されます。",
       preparingModel: "モデルを準備中...",
       responding: "{name}が応答中...",
       sendingMessage: "メッセージを送信中...",

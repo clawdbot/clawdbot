@@ -677,6 +677,8 @@ export const ru: TranslationMap = {
     openWorkboardCard: "Открыть карточку Workboard",
     dashboardAvailable: "Панель доступна",
     approvalNeeded: "Требуется подтверждение",
+    queuedMessage: "{count} сообщение ожидает отправки",
+    queuedMessages: "{count} сообщений ожидают отправки",
     noSessions: "Сеансы не найдены.",
     noActiveSessions: "Нет активных тредов.",
     noArchivedSessions: "Нет архивных сессий.",
@@ -3051,6 +3053,7 @@ export const ru: TranslationMap = {
     eventStale: "Устаревший сеанс",
   },
   connection: {
+    queuedCount: "В очереди: {count}",
     reconnecting: "Повторное подключение…",
     retryNow: "Повторить сейчас",
     access: {
@@ -4239,6 +4242,8 @@ export const ru: TranslationMap = {
       placeholderDisconnected: "Подключитесь к шлюзу, чтобы начать общение...",
       offlineHint:
         "Не в сети — сообщения будут поставлены в очередь и отправлены при восстановлении соединения.",
+      offlineQueuedHint:
+        "Нет подключения — в очереди: {count}; сообщения будут отправлены после восстановления подключения.",
       preparingModel: "Подготовка модели...",
       responding: "{name} отвечает...",
       sendingMessage: "Отправка сообщения...",
