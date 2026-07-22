@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta, setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
+import { coerceMcpToolInputToSchema } from "./mcp-tool-input-coercion.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -428,7 +429,10 @@ export async function materializeBundleMcpToolsForRun(params: {
     reservedToolNames,
     createExecute: (tool) => async (toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
-      const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
+      // Rescue model backends that emit numeric args as strings (#107648): coerce
+      // string -> number only where this tool's inputSchema says number/integer.
+      const coercedInput = coerceMcpToolInputToSchema(input, tool.inputSchema);
+      const result = await params.runtime.callTool(tool.serverName, tool.toolName, coercedInput);
       const agentResult = toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
@@ -446,7 +450,7 @@ export async function materializeBundleMcpToolsForRun(params: {
           toolName: tool.toolName,
           uiResourceUri: tool.uiResourceUri,
           toolCallId,
-          toolInput: input,
+          toolInput: coercedInput,
           toolResult: result,
           ...(allowedAppToolNames ? { allowedAppToolNames } : {}),
         });
