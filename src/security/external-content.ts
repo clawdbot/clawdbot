@@ -314,6 +314,7 @@ type WrapExternalContentOptions = {
   sender?: string;
   /** Subject line (for emails) */
   subject?: string;
+  taskName?: string;
   /** Whether to include detailed security warning */
   includeWarning?: boolean;
 };
@@ -335,7 +336,7 @@ type WrapExternalContentOptions = {
  * ```
  */
 export function wrapExternalContent(content: string, options: WrapExternalContentOptions): string {
-  const { source, sender, subject, includeWarning = true } = options;
+  const { source, sender, subject, taskName, includeWarning = true } = options;
 
   const sanitized = sanitizeExternalContentText(content);
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
@@ -343,6 +344,9 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   const sanitizeMetadataValue = (value: string) =>
     sanitizeExternalContentText(value).replace(/[\r\n]+/g, " ");
 
+  if (taskName) {
+    metadataLines.push(`Task: ${sanitizeMetadataValue(taskName)}`);
+  }
   if (sender) {
     metadataLines.push(`From: ${sanitizeMetadataValue(sender)}`);
   }
@@ -383,13 +387,11 @@ export function buildSafeExternalPrompt(params: {
     source,
     sender,
     subject,
+    taskName: jobName,
     includeWarning: true,
   });
 
   const contextLines: string[] = [];
-  if (jobName) {
-    contextLines.push(`Task: ${jobName}`);
-  }
   if (jobId) {
     contextLines.push(`Job ID: ${jobId}`);
   }
