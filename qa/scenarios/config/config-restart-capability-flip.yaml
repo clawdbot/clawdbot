@@ -50,7 +50,7 @@ flow:
         - set: originalToolsDeny
           value:
             expr: "originalTools ? (Object.prototype.hasOwnProperty.call(originalTools, 'deny') ? structuredClone(originalTools.deny) : undefined) : undefined"
-        - set: originalImageGenerationModelPrimary
+        - set: originalImageMediaModelPrimary
           value:
             expr: "original.config.agents?.defaults?.mediaModels?.image?.primary ?? null"
         - set: denied
@@ -108,7 +108,7 @@ flow:
                           mediaModels:
                             image:
                               primary:
-                                ref: originalImageGenerationModelPrimary
+                                ref: originalImageMediaModelPrimary
                     sessionKey:
                       ref: sessionKey
                     note:
