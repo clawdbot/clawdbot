@@ -682,6 +682,8 @@ export const de: TranslationMap = {
     openWorkboardCard: "Workboard-Karte öffnen",
     dashboardAvailable: "Dashboard verfügbar",
     approvalNeeded: "Freigabe erforderlich",
+    queuedMessage: "{count} Nachricht zum Senden in der Warteschlange",
+    queuedMessages: "{count} Nachrichten zum Senden in der Warteschlange",
     noSessions: "Keine Sitzungen gefunden.",
     noActiveSessions: "Keine aktiven Threads.",
     noArchivedSessions: "Keine archivierten Sitzungen.",
@@ -3069,6 +3071,7 @@ export const de: TranslationMap = {
     eventStale: "Veraltete Sitzung",
   },
   connection: {
+    queuedCount: "{count} in der Warteschlange",
     reconnecting: "Verbindung wird wiederhergestellt…",
     retryNow: "Jetzt erneut versuchen",
     access: {
@@ -4259,6 +4262,8 @@ export const de: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Offline – Nachrichten werden in die Warteschlange gestellt und gesendet, sobald die Verbindung wiederhergestellt ist.",
+      offlineQueuedHint:
+        "Offline — {count} in der Warteschlange; Nachrichten werden gesendet, sobald die Verbindung wiederhergestellt ist.",
       preparingModel: "Modell wird vorbereitet...",
       responding: "{name} antwortet...",
       sendingMessage: "Nachricht wird gesendet...",

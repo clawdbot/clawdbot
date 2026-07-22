@@ -675,6 +675,8 @@ export const vi: TranslationMap = {
     openWorkboardCard: "Mở thẻ Workboard",
     dashboardAvailable: "Bảng điều khiển khả dụng",
     approvalNeeded: "Cần phê duyệt",
+    queuedMessage: "{count} tin nhắn đang chờ gửi",
+    queuedMessages: "{count} tin nhắn đang chờ gửi",
     noSessions: "Không tìm thấy phiên nào.",
     noActiveSessions: "Không có luồng đang hoạt động.",
     noArchivedSessions: "Không có phiên đã lưu trữ.",
@@ -3034,6 +3036,7 @@ export const vi: TranslationMap = {
     eventStale: "Phiên đã cũ",
   },
   connection: {
+    queuedCount: "{count} đang chờ",
     reconnecting: "Đang kết nối lại…",
     retryNow: "Thử lại ngay",
     access: {
@@ -4206,6 +4209,8 @@ export const vi: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "Ngoại tuyến — tin nhắn sẽ được xếp hàng và gửi khi kết nối trở lại.",
+      offlineQueuedHint:
+        "Ngoại tuyến — {count} tin nhắn đang chờ; tin nhắn sẽ được gửi khi kết nối được khôi phục.",
       preparingModel: "Đang chuẩn bị mô hình...",
       responding: "{name} đang phản hồi...",
       sendingMessage: "Đang gửi tin nhắn...",
