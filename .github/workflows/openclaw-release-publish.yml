@@ -2323,12 +2323,12 @@ jobs:
             fi
           fi
 
-          npm_args=()
-          while IFS=$'\t' read -r key value; do
-            npm_args+=(-f "${key}=${value}")
-          done < <(jq -r '.pluginNpm.inputs | to_entries[] | [.key, .value] | @tsv' "${clawhub_plan_path}")
-
           if [[ "${plugin_ecosystem_setup_ready}" == "true" ]]; then
+            npm_args=()
+            while IFS=$'\t' read -r key value; do
+              npm_args+=(-f "${key}=${value}")
+            done < <(jq -r '.pluginNpm.inputs | to_entries[] | [.key, .value] | @tsv' "${clawhub_plan_path}")
+
             if ! plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"; then
               ecosystem_failed=1
               echo "::warning::Plugin npm dispatch failed; prerelease ecosystem repair is required."
