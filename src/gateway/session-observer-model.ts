@@ -23,7 +23,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import type {
+  SessionEventSubscriberRegistry,
+  SessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
 
 const HEADLINE_MAX_CHARS = 120;
 const ASSESSMENT_MAX_CHARS = 320;
@@ -42,7 +45,7 @@ export type SessionObserverState = SessionActivityNoteState & {
   sessionId?: string;
   runId: string;
   agentId: string;
-  utilityModelRef: string;
+  utilityModelRef?: string;
   startedAt: number;
   lastActivityAt: number;
   lastRunAt: number;
@@ -161,7 +164,7 @@ export function createDormantSessionObserverRun(
     sessionId: state.sessionId,
     runId: state.runId,
     agentId: state.agentId,
-    utilityModelRef: state.utilityModelRef,
+    ...(state.utilityModelRef ? { utilityModelRef: state.utilityModelRef } : {}),
     startedAt: state.startedAt,
     lastPersistedAt: state.lastPersistedAt,
     revision: state.revision,
@@ -175,6 +178,7 @@ export function createDormantSessionObserverRun(
 export type SessionObserverDeps = {
   getConfig: () => OpenClawConfig;
   subscribers: SessionMessageSubscriberRegistry;
+  sessionEventSubscribers?: SessionEventSubscriberRegistry;
   broadcastToConnIds: (
     event: string,
     payload: unknown,
