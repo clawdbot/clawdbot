@@ -20,7 +20,7 @@ import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import {
-  createParams,
+  createParams as createBaseParams,
   createResumeHarness,
   createStartedThreadHarness,
   extractGenerationFromThreadRequest,
@@ -33,6 +33,14 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+
+function createParams(...args: Parameters<typeof createBaseParams>) {
+  const params = createBaseParams(...args);
+  params.disableTools = false;
+  params.toolsAllow = ["*"];
+  params.config = { tools: { web: { search: { enabled: false } } } };
+  return params;
+}
 
 setupRunAttemptTestHooks();
 
@@ -174,7 +182,12 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    params.config = { tools: { loopDetection: { enabled: true } } } as never;
+    params.config = {
+      tools: {
+        loopDetection: { enabled: true },
+        web: { search: { enabled: false } },
+      },
+    } as never;
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: {
@@ -640,7 +653,6 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       cwd: workspaceDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
     });
     const harness = createResumeHarness();
 
@@ -752,7 +764,6 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       cwd: workspaceDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
       nativeHookRelayGeneration: "generation-from-failed-resume",
     });
     const harness = createStartedThreadHarness(async (method) => {
