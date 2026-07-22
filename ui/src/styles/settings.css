@@ -459,8 +459,33 @@ select.settings-select {
    here (the shrink-to-fit control resolves 100% circularly); the fixed width
    shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret {
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
+.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation {
   width: 340px;
+}
+
+.settings-phone-presentation {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-phone-presentation > .settings-input,
+.settings-phone-presentation > .settings-secret {
+  width: 100%;
+}
+
+.settings-phone-presentation__value {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-row--stacked .settings-row__control > .settings-phone-presentation {
+  flex: 1 1 auto;
+  width: 100%;
 }
 
 /* Number inputs hold short values (ports, counts, limits); the shared 340px

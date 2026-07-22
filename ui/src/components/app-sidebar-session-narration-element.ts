@@ -1,4 +1,5 @@
 import { state } from "lit/decorators.js";
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { AppSidebarMenusElement } from "./app-sidebar-menus.ts";
 import type {
@@ -10,6 +11,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 /** Gateway subscription and reactive narration state for the session-list renderer. */
 export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusElement {
   @state() protected sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
+  @state() protected sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
   // Lazy: the controller pulls core token-suppression modules that must stay
   // out of the startup chunk (QA smoke startup-JS budget). It loads on the
@@ -71,9 +73,14 @@ export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusE
       if (!this.isConnected) {
         return;
       }
-      this.narration = new module.SidebarSessionNarrationController((lines) => {
-        this.sidebarNarrationLines = lines;
-      });
+      this.narration = new module.SidebarSessionNarrationController(
+        (lines) => {
+          this.sidebarNarrationLines = lines;
+        },
+        (digests) => {
+          this.sidebarObserverDigests = digests;
+        },
+      );
       this.narration.sync(this.narrationSyncInput());
     });
   }

@@ -35,7 +35,12 @@ import {
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
-import type { CronJob, CronPayload } from "../cron/types.js";
+import type {
+  CronJob,
+  CronPayload,
+  CronRunErrorClassification,
+  CronTriggerFailureCode,
+} from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -90,6 +95,16 @@ export type GatewayCronState = {
   reconcileStreamWatchers?: () => Promise<void>;
   stopStreamWatchers?: () => Promise<void>;
 };
+
+function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorClassification {
+  if (code === "timeout") {
+    return { kind: "reason", reason: "timeout" };
+  }
+  if (code === "runtime_unavailable") {
+    return { kind: "reason", reason: "server_error" };
+  }
+  return { kind: "permanent" };
+}
 
 function formatOnExitRunSummary(exit: CronExitResult): string {
   const lines = [
@@ -810,6 +825,7 @@ export function buildGatewayCronService(params: {
         return {
           status: "error",
           error: `cron script payload failed (${execution.code}): ${execution.error}`,
+          errorClassification: classifyCronScriptFailure(execution.code),
         };
       }
       if (execution.nextCheck && !job.pacing) {

@@ -556,7 +556,11 @@ function redactTranscriptStructuredValue(
     }
     if (
       location === "assistant-content-block" &&
+      // These transports use the same validated v1 phase signature for pre-tool commentary;
+      // stripping it would resurface narration after reload or session resume.
       (isOpenAIResponsesRoute(currentAssistantRoute) ||
+        isOpenAICompletionsRoute(currentAssistantRoute) ||
+        isAnthropicReasoningRoute(currentAssistantRoute) ||
         isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "text" &&
       key === "textSignature" &&

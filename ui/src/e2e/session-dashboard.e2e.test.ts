@@ -22,6 +22,10 @@ const cardboardProofDir = path.resolve(
   process.cwd(),
   ".artifacts/control-ui-e2e/workboard-cardboard",
 );
+const pluginWidgetsProofDir = path.resolve(
+  process.cwd(),
+  ".artifacts/control-ui-e2e/workboard-plugin-widgets",
+);
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -96,6 +100,39 @@ const pinnedMcpAppBoardSnapshot = {
       grantState: "pending",
       revision: 1,
       instanceId: "instance-pinned-app",
+    },
+  ],
+};
+const pluginWidgetBoardSnapshot = {
+  sessionKey,
+  revision: 1,
+  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+  widgets: [
+    {
+      name: "workboard-card",
+      tabId: "main",
+      title: "Priority card",
+      contentKind: "plugin",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-widget-ready" },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    },
+    {
+      name: "workboard-summary",
+      tabId: "main",
+      title: "Platform summary",
+      contentKind: "plugin",
+      pluginKind: "workboard:mini",
+      props: { boardId: "platform", limit: 2 },
+      sizeW: 6,
+      sizeH: 4,
+      position: 1,
+      grantState: "none",
+      revision: 1,
     },
   ],
 };
@@ -383,6 +420,127 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
     await context.close();
+  });
+
+  it("renders and updates active Workboard plugin widgets", async () => {
+    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    if (recordProof) {
+      await mkdir(pluginWidgetsProofDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      viewport: { height: 900, width: 1280 },
+      ...(recordProof
+        ? { recordVideo: { dir: pluginWidgetsProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const readyCard = {
+      id: "card-widget-ready",
+      title: "Rebase plugin widget kinds",
+      status: "ready",
+      priority: "high",
+      labels: ["dashboard"],
+      position: 1,
+      createdAt: 1,
+      updatedAt: 2,
+      agentId: "main",
+      metadata: { automation: { boardId: "platform" } },
+    };
+    const runningCard = { ...readyCard, status: "running", updatedAt: 3 };
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      controlUiWidgetKinds: [
+        { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+        { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
+      ],
+      featureMethods: [
+        "board.get",
+        "chat.metadata",
+        "chat.startup",
+        "workboard.cards.list",
+        "workboard.cards.move",
+      ],
+      methodResponses: {
+        "board.get": pluginWidgetBoardSnapshot,
+        "workboard.cards.list": {
+          cards: [
+            readyCard,
+            {
+              ...readyCard,
+              id: "card-widget-running",
+              title: "Already running",
+              status: "running",
+              position: 2,
+            },
+          ],
+          statuses: ["ready", "running", "done"],
+        },
+        "workboard.cards.move": { card: runningCard },
+      },
+    });
+    await showDashboard(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
+      const miniWidget = page.locator('[data-test-id="workboard-mini-widget"]');
+      await cardWidget.waitFor();
+      await miniWidget.waitFor();
+      await expect.poll(() => cardWidget.textContent()).toContain("Rebase plugin widget kinds");
+      await expect.poll(() => miniWidget.textContent()).toContain("Already running");
+      expect(await miniWidget.getByRole("link", { name: "Open board" }).getAttribute("href")).toBe(
+        "/workboard?board=platform",
+      );
+      if (recordProof) {
+        await page.screenshot({
+          path: path.join(pluginWidgetsProofDir, "01-plugin-widgets-ready.png"),
+        });
+      }
+
+      await cardWidget.getByRole("combobox").selectOption("running");
+      const moveRequest = await gateway.waitForRequest("workboard.cards.move");
+      expect(moveRequest.params).toEqual({
+        id: "card-widget-ready",
+        status: "running",
+        position: 3,
+      });
+      await expect.poll(() => cardWidget.textContent()).toContain("Running");
+      await gateway.setMethodResponse("workboard.cards.list", {
+        cards: [
+          runningCard,
+          {
+            ...readyCard,
+            id: "card-widget-running",
+            title: "Already running",
+            status: "running",
+            position: 2,
+          },
+        ],
+        statuses: ["ready", "running", "done"],
+      });
+      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+        epoch: "plugin-widget-e2e",
+        revision: 2,
+      });
+      await expect
+        .poll(async () =>
+          (await miniWidget.locator('[title="Running"]').textContent())
+            ?.replace(/\s+/gu, " ")
+            .trim(),
+        )
+        .toBe("2 Running");
+      if (recordProof) {
+        await page.screenshot({
+          path: path.join(pluginWidgetsProofDir, "02-plugin-widgets-running.png"),
+        });
+      }
+    } finally {
+      const video = page.video();
+      await context.close();
+      if (recordProof && video) {
+        await video.saveAs(path.join(pluginWidgetsProofDir, "workboard-plugin-widgets.webm"));
+      }
+    }
   });
 
   it("links a dispatched Workboard card and its live session dashboard in both directions", async () => {

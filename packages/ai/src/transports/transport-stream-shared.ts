@@ -35,18 +35,6 @@ type TransportOutputShape = {
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
-/**
- * Encodes an assistant text-block phase signature (v1). Channels and the
- * embedded handler read this to route commentary/narration out of the final
- * reply. Shared so every provider transport tags phases identically.
- */
-export function encodeAssistantTextSignatureV1(
-  id: string,
-  phase?: "commentary" | "final_answer",
-): string {
-  return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
-}
-
 export function sanitizeTransportPayloadText(text: string): string {
   if (typeof text !== "string") {
     return "";

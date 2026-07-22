@@ -44,6 +44,8 @@ function cloneWidget(widget: BoardWidget): BoardWidget {
     contentKind: widget.contentKind,
     ...(widget.presentation !== undefined ? { presentation: widget.presentation } : {}),
     ...(widget.heightMode !== undefined ? { heightMode: widget.heightMode } : {}),
+    ...(widget.pluginKind !== undefined ? { pluginKind: widget.pluginKind } : {}),
+    ...(widget.props !== undefined ? { props: structuredClone(widget.props) } : {}),
     sizeW: widget.sizeW,
     sizeH: widget.sizeH,
     position: widget.position,

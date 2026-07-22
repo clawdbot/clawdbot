@@ -1,9 +1,11 @@
 // Tests for the experimental grouped Claws CLI.
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { persistClawInstallRecord } from "../claws/provenance.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const mocks = vi.hoisted(() => {
   const logs: string[] = [];
@@ -19,7 +21,13 @@ const mocks = vi.hoisted(() => {
       throw new Error(`__exit__:${code}`);
     }),
   };
-  return { logs, errors, runtime, loadConfig: vi.fn<() => Record<string, unknown>>(() => ({})) };
+  return {
+    logs,
+    errors,
+    runtime,
+    loadConfig: vi.fn<() => Record<string, unknown>>(() => ({})),
+    applyClawAddPlan: vi.fn(),
+  };
 });
 
 vi.mock("../runtime.js", async () => ({
@@ -35,19 +43,25 @@ vi.mock("../config/config.js", async () => ({
   loadConfig: mocks.loadConfig,
 }));
 
+vi.mock("../claws/add.js", async () => ({
+  ...(await vi.importActual<typeof import("../claws/add.js")>("../claws/add.js")),
+  applyClawAddPlan: mocks.applyClawAddPlan,
+}));
+
 const { registerClawsCli } = await import("./claws-cli.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const minimalManifest = { schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } };
 
 async function writeManifest(value: unknown = minimalManifest): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "openclaw-claws-cli-"));
+  const dir = tempDirs.make("openclaw-claws-cli-");
   const path = join(dir, "openclaw.claw.json");
   await writeFile(path, JSON.stringify(value), "utf8");
   return path;
 }
 
 async function writePackage(): Promise<{ root: string; workspace: string }> {
-  const root = await mkdtemp(join(tmpdir(), "openclaw-claws-cli-package-"));
+  const root = tempDirs.make("openclaw-claws-cli-package-");
   await mkdir(join(root, "workspace"));
   await writeFile(join(root, "workspace", "AGENTS.md"), "# Demo\n", "utf8");
   await writeFile(
@@ -98,6 +112,24 @@ describe("claws cli", () => {
     mocks.runtime.exit.mockClear();
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({});
+    mocks.applyClawAddPlan.mockReset();
+    mocks.applyClawAddPlan.mockImplementation(async (plan) => ({
+      schemaVersion: "openclaw.clawAddResult.v1",
+      stability: "experimental",
+      dryRun: false,
+      mutationAllowed: true,
+      planIntegrity: plan.planIntegrity,
+      status: "complete",
+      claw: plan.claw,
+      agent: plan.agent,
+      workspaceCreated: true,
+      configCommitted: true,
+      installRecord: { agentId: plan.agent.finalId },
+    }));
+  });
+
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
   });
 
   it("does not register without the process opt-in", () => {
@@ -200,16 +232,235 @@ describe("claws cli", () => {
     expect(mocks.logs).toContain("Capability escalations (2):");
     expect(mocks.logs.some((line) => line.startsWith("  ! agent:demo-agent"))).toBe(true);
     expect(mocks.logs.some((line) => line.startsWith("  ! mcpServer:docs"))).toBe(true);
-    expect(
-      mocks.logs.some(
-        (line) =>
-          line.includes('"name":"API_TOKEN"') && line.includes('"reference":"GITHUB_TOKEN"'),
-      ),
-    ).toBe(true);
+    expect(mocks.logs.some((line) => line.includes('"env":["API_TOKEN"]'))).toBe(true);
     expect(mocks.logs).toContain("The plan integrity binds every capability line above.");
   });
 
-  it("fails closed when add is invoked without dry-run", async () => {
+  it("applies a minimal Claw only after explicit consent", async () => {
+    const manifestPath = await writeManifest();
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    mocks.logs.length = 0;
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+
+    expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ planIntegrity: plan.planIntegrity }),
+      { consentPlanIntegrity: plan.planIntegrity },
+    );
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawAddResult.v1",
+      stability: "experimental",
+      status: "complete",
+      agent: { finalId: "demo-agent", workspace },
+    });
+  });
+
+  it("resumes consented add with the matching in-flight workspace on disk", async () => {
+    const manifestPath = await writeManifest();
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
+
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    persistClawInstallRecord(plan, { status: "workspace_ready", nowMs: 1 });
+    await mkdir(workspace);
+    await writeFile(join(workspace, "leftover.txt"), "keep", "utf8");
+    mocks.logs.length = 0;
+    mocks.runtime.exit.mockClear();
+    mocks.applyClawAddPlan.mockClear();
+    mocks.loadConfig.mockReturnValue({});
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+
+    expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ planIntegrity: plan.planIntegrity, blockers: [] }),
+      { consentPlanIntegrity: plan.planIntegrity },
+    );
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("resumes when config committed before the workspace-ready phase advanced", async () => {
+    const manifestPath = await writeManifest();
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
+
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    persistClawInstallRecord(plan, { status: "workspace_ready", nowMs: 1 });
+    await mkdir(workspace);
+    mocks.logs.length = 0;
+    mocks.runtime.exit.mockClear();
+    mocks.applyClawAddPlan.mockClear();
+    mocks.loadConfig.mockReturnValue({ agents: { list: [plan.agent.config] } });
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+
+    expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ planIntegrity: plan.planIntegrity, blockers: [] }),
+      { consentPlanIntegrity: plan.planIntegrity },
+    );
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not claim an on-disk workspace for a partial record without workspace ownership", async () => {
+    const manifestPath = await writeManifest();
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
+
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    persistClawInstallRecord(plan, { status: "partial", nowMs: 1 });
+    await mkdir(workspace);
+    mocks.logs.length = 0;
+    mocks.runtime.exit.mockClear();
+    mocks.applyClawAddPlan.mockClear();
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      blockers: [expect.objectContaining({ code: "workspace_collision" })],
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("preserves a real agent collision while an add is still pending", async () => {
+    const manifestPath = await writeManifest();
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
+
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    persistClawInstallRecord(plan, { status: "pending", nowMs: 1 });
+    mocks.logs.length = 0;
+    mocks.runtime.exit.mockClear();
+    mocks.applyClawAddPlan.mockClear();
+    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "demo-agent", workspace }] } });
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      blockers: expect.arrayContaining([expect.objectContaining({ code: "agent_id_collision" })]),
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("does not resume through another agent's configured workspace", async () => {
+    const manifestPath = await writeManifest();
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
+
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    persistClawInstallRecord(plan, { status: "workspace_ready", nowMs: 1 });
+    mocks.logs.length = 0;
+    mocks.runtime.exit.mockClear();
+    mocks.applyClawAddPlan.mockClear();
+    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "other-agent", workspace }] } });
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      blockers: [expect.objectContaining({ code: "workspace_collision" })],
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
+  });
+
+  it("requires the exact dry-run plan identity with explicit consent", async () => {
+    const manifestPath = await writeManifest();
+
+    await runCli(["claws", "add", manifestPath, "--yes", "--json"]);
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      error: { code: "plan_integrity_required" },
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
+
+    mocks.logs.length = 0;
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      "sha256:stale",
+      "--json",
+    ]);
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      status: "failed",
+      error: { code: "plan_integrity_mismatch" },
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when add is invoked without dry-run or consent", async () => {
     const path = await writeManifest();
 
     await runCli(["claws", "add", path, "--json"]);
@@ -217,7 +468,7 @@ describe("claws cli", () => {
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
       stability: "experimental",
       ok: false,
-      error: { code: "dry_run_required" },
+      error: { code: "consent_required" },
     });
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   });

@@ -162,8 +162,9 @@ export const en = {
       option: "{name} — {reason} (detected: {app})",
       optionThirdParty:
         "{name} — {reason} (detected: {app}) — third-party ClawHub skill; installs its publisher's code",
-      scanning:
-        "Scanning installed apps — names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations)…",
+      scanDisclosure:
+        "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+      scanning: "Scanning installed apps…",
       select: "Install recommended plugins and skills",
       skillTrust: "Trust and install the ClawHub skill {name}?",
       skipped: "App recommendations skipped: {reason}",

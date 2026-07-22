@@ -15,7 +15,17 @@ export const signalChannelConfigUiHints = {
   account: {
     label: "Signal Account",
     help: "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
+    presentation: "phone-number",
   },
+  allowFrom: { presentation: "phone-number" },
+  defaultTo: { presentation: "phone-number" },
+  groupAllowFrom: { presentation: "phone-number" },
+  reactionAllowlist: { presentation: "phone-number" },
+  "accounts.*.account": { presentation: "phone-number" },
+  "accounts.*.allowFrom.*": { presentation: "phone-number" },
+  "accounts.*.defaultTo": { presentation: "phone-number" },
+  "accounts.*.groupAllowFrom.*": { presentation: "phone-number" },
+  "accounts.*.reactionAllowlist.*": { presentation: "phone-number" },
   configPath: {
     label: "Signal CLI Config Path",
     help: "Optional directory passed to signal-cli via --config when the service needs a non-default signal-cli data path.",

@@ -504,6 +504,49 @@ describe("CronService failure alerts", () => {
     await store.cleanup();
   });
 
+  it("does not reclassify permanent local script errors in failure alerts", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "cron script failed after a tool side effect: request timed out",
+      errorClassification: { kind: "permanent" as const },
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "permanent script alert",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "ping" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(alertCallArg(sendCronFailureAlert).text).toBe(
+      'Cron job "permanent script alert" failed 1 times\n' +
+        "Last error: cron script failed after a tool side effect: request timed out",
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("keeps skipped alert text unchanged when the skip reason looks classifiable", async () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn(async () => undefined);

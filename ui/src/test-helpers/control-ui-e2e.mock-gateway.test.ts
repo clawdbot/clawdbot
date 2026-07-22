@@ -183,6 +183,17 @@ describe("mock gateway stateful sessions", () => {
             event: "session.tool",
             payload: { data: { name: "exec" }, sessionKey, stream: "tool" },
           },
+          {
+            event: "session.observer",
+            payload: {
+              headline: "Rerunning focused tests",
+              health: "grinding",
+              revision: 1,
+              runId: "mock-observer-run",
+              sessionKey,
+              updatedAt: 1_000,
+            },
+          },
         ],
       },
     });
@@ -220,6 +231,13 @@ describe("mock gateway stateful sessions", () => {
       sessionKey,
       stream: "tool",
       data: { name: "exec" },
+    });
+
+    await waitForMockCycle();
+    expect(frames.find((frame) => frame.event === "session.observer")?.payload).toMatchObject({
+      headline: "Rerunning focused tests",
+      runId: "mock-observer-run",
+      sessionKey,
     });
 
     // Second assistant cycle must repeat: the replayed snapshot carries

@@ -13,7 +13,10 @@ import {
   recordPairedNodeConnection,
 } from "../../../infra/node-pairing.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
-import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
+import {
+  listControlUiPluginTabs,
+  listControlUiPluginWidgetKinds,
+} from "../../control-ui-plugin-tabs.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
@@ -77,6 +80,7 @@ export async function sendGatewayHello(
   const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
+  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(helloOkAuthScopes);
   const helloOk = {
     type: "hello-ok",
     protocol: PROTOCOL_VERSION,
@@ -95,6 +99,7 @@ export async function sendGatewayHello(
     },
     snapshot,
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
+    ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
     auth: {
       role,

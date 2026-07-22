@@ -1215,7 +1215,7 @@ extension OpenClawChatViewModel {
         case .awaitingConfirmation:
             .confirming
         case .failed:
-            .failed(reason: command.lastError)
+            .failed(reason: OpenClawChatSQLiteTranscriptCache.outboxDisplayError(command.lastError))
         }
     }
 

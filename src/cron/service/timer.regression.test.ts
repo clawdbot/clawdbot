@@ -3679,6 +3679,70 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("does not retry permanent script failures with timeout-looking text", () => {
+    const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
+    const endedAt = startedAt + 500;
+    const job = createIsolatedRegressionJob({
+      id: "permanent-script-failure",
+      name: "permanent-script-failure",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "script", script: "throw new Error('request timed out')" },
+      state: { runningAtMs: startedAt },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-permanent-script-failure.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      jobs: [job],
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "cron script failed after a tool side effect: request timed out",
+      errorClassification: { kind: "permanent" },
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.lastErrorReason).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.enabled).toBe(false);
+  });
+
+  it("retries explicitly classified script timeouts", () => {
+    const startedAt = Date.parse("2026-07-21T12:00:00.000Z");
+    const endedAt = startedAt + 500;
+    const job = createIsolatedRegressionJob({
+      id: "transient-script-timeout",
+      name: "transient-script-timeout",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "script", script: "while (true) {}" },
+      state: { runningAtMs: startedAt },
+    });
+    const state = createRunningCronServiceState({
+      storePath: "/tmp/cron-transient-script-timeout.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      jobs: [job],
+    });
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "cron script payload failed (timeout): wall-clock timeout exceeded",
+      errorClassification: { kind: "reason", reason: "timeout" },
+      executionStarted: true,
+      startedAt,
+      endedAt,
+    });
+
+    expect(job.state.lastErrorReason).toBe("timeout");
+    expect(job.state.nextRunAtMs).toBe(endedAt + 30_000);
+    expect(job.enabled).toBe(true);
+  });
+
   it("force run preserves 'every' anchor while recording manual lastRunAtMs", () => {
     const nowMs = Date.now();
     const everyMs = 24 * 60 * 60 * 1_000;

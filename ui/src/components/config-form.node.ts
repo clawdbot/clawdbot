@@ -1,9 +1,10 @@
 // Control UI view renders config form screen content.
+import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../api/types.ts";
 import { icons } from "../components/icons.ts";
 import "../components/tooltip.ts";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import {
   hasConfigSearchCriteria as hasSearchCriteria,
@@ -494,6 +495,11 @@ function renderTextInput(params: {
       ? jsonValue(value)
       : (value ?? "");
   const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
+  const isPhonePresentation = hint?.presentation === "phone-number";
+  const phonePresentation =
+    isPhonePresentation && !effectiveRedacted && typeof value === "string"
+      ? formatInternationalPhoneNumberForDisplay(value, i18n.getLocale())
+      : undefined;
 
   const inputControl = html`
     <input
@@ -541,8 +547,19 @@ function renderTextInput(params: {
         disabled,
         onToggleSensitivePath: params.onToggleSensitivePath,
       });
+  const wrappedInput = wrapSensitiveControl(inputControl, revealToggle);
+  const presentedInput = isPhonePresentation
+    ? html`
+        <span class="settings-phone-presentation">
+          ${wrappedInput}
+          ${phonePresentation
+            ? html`<span class="settings-phone-presentation__value">${phonePresentation}</span>`
+            : nothing}
+        </span>
+      `
+    : wrappedInput;
   const control = html`
-    ${wrapSensitiveControl(inputControl, revealToggle)}
+    ${presentedInput}
     ${schema.default !== undefined
       ? html`
           <openclaw-tooltip .content=${t("configForm.resetToDefault")}>

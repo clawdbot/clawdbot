@@ -71,6 +71,7 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "../internal/shared.js";
+import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -85,7 +86,6 @@ import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
-  encodeAssistantTextSignatureV1,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -696,25 +696,6 @@ function mapStopReason(reason: string | undefined): string {
       return "stop";
     default:
       throw new Error(`Unhandled stop reason: ${String(reason)}`);
-  }
-}
-
-function tagPendingCommentaryText(content: TransportContentBlock[]): void {
-  let commentaryTextIndex = content.filter(
-    (block) => block.type === "text" && block.textSignature !== undefined,
-  ).length;
-  for (const block of content) {
-    if (
-      block.type === "text" &&
-      block.text.trim().length > 0 &&
-      block.textSignature === undefined
-    ) {
-      block.textSignature = encodeAssistantTextSignatureV1(
-        `commentary-${commentaryTextIndex}`,
-        "commentary",
-      );
-      commentaryTextIndex += 1;
-    }
   }
 }
 

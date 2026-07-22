@@ -589,14 +589,15 @@ Supported evidence entries:
 
 Each field hint can include:
 
-| Field         | Type       | What it means                           |
-| ------------- | ---------- | --------------------------------------- |
-| `label`       | `string`   | User-facing field label.                |
-| `help`        | `string`   | Short helper text.                      |
-| `tags`        | `string[]` | Optional UI tags.                       |
-| `advanced`    | `boolean`  | Marks the field as advanced.            |
-| `sensitive`   | `boolean`  | Marks the field as secret or sensitive. |
-| `placeholder` | `string`   | Placeholder text for form inputs.       |
+| Field          | Type             | What it means                                                                                                     |
+| -------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `label`        | `string`         | User-facing field label.                                                                                          |
+| `help`         | `string`         | Short helper text.                                                                                                |
+| `tags`         | `string[]`       | Optional UI tags.                                                                                                 |
+| `advanced`     | `boolean`        | Marks the field as advanced.                                                                                      |
+| `sensitive`    | `boolean`        | Marks the field as secret or sensitive.                                                                           |
+| `placeholder`  | `string`         | Placeholder text for form inputs.                                                                                 |
+| `presentation` | `"phone-number"` | Display-only localized phone formatting for parseable international (`+...`) values; raw values remain unchanged. |
 
 ## contracts reference
 
@@ -776,7 +777,7 @@ For a channel plugin, `configSchema` and `channelConfigs` describe different pat
 - `configSchema` validates `plugins.entries.<plugin-id>.config`
 - `channelConfigs.<channel-id>.schema` validates `channels.<channel-id>`
 
-Non-bundled plugins that declare `channels[]` should also declare matching `channelConfigs` entries. Without them, OpenClaw can still load the plugin, but cold-path config schema, setup, and Control UI surfaces cannot know the channel-owned option shape until plugin runtime executes.
+Non-bundled plugins that declare `channels[]` should also declare matching `channelConfigs` entries. Without them, OpenClaw can still load the plugin, but cold-path config schema, setup, and Control UI surfaces cannot know the channel-owned option shape or display-only UI hints until plugin runtime executes.
 
 `channelConfigs.<channel-id>.commands.nativeCommandsAutoEnabled` and `nativeSkillsAutoEnabled` can declare static `auto` defaults for command config checks that run before channel runtime loads. Bundled channels can also publish the same defaults through `package.json#openclaw.channel.commands` alongside their other package-owned channel catalog metadata.
 
@@ -811,14 +812,14 @@ Non-bundled plugins that declare `channels[]` should also declare matching `chan
 
 Each channel entry can include:
 
-| Field         | Type                     | What it means                                                                             |
-| ------------- | ------------------------ | ----------------------------------------------------------------------------------------- |
-| `schema`      | `object`                 | JSON Schema for `channels.<id>`. Required for each declared channel config entry.         |
-| `uiHints`     | `Record<string, object>` | Optional UI labels/placeholders/sensitive hints for that channel config section.          |
-| `label`       | `string`                 | Channel label merged into picker and inspect surfaces when runtime metadata is not ready. |
-| `description` | `string`                 | Short channel description for inspect and catalog surfaces.                               |
-| `commands`    | `object`                 | Static native command and native skill auto-defaults for pre-runtime config checks.       |
-| `preferOver`  | `string[]`               | Legacy or lower-priority plugin ids this channel should outrank in selection surfaces.    |
+| Field         | Type                     | What it means                                                                                                    |
+| ------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `schema`      | `object`                 | JSON Schema for `channels.<id>`. Required for each declared channel config entry.                                |
+| `uiHints`     | `Record<string, object>` | Optional labels, placeholders, sensitivity, and display-only presentation hints for that channel config section. |
+| `label`       | `string`                 | Channel label merged into picker and inspect surfaces when runtime metadata is not ready.                        |
+| `description` | `string`                 | Short channel description for inspect and catalog surfaces.                                                      |
+| `commands`    | `object`                 | Static native command and native skill auto-defaults for pre-runtime config checks.                              |
+| `preferOver`  | `string[]`               | Legacy or lower-priority plugin ids this channel should outrank in selection surfaces.                           |
 
 ### Replacing another channel plugin
 

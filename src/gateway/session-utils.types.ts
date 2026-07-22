@@ -82,7 +82,10 @@ export type GatewaySessionRow = {
   unread?: boolean;
   lastReadAt?: number;
   agentStatus?: SessionEntry["agentStatus"];
-  observerDigest?: Pick<SessionObserverDigest, "headline" | "health" | "updatedAt" | "revision">;
+  observerDigest?: Pick<
+    SessionObserverDigest,
+    "runId" | "headline" | "health" | "updatedAt" | "revision"
+  >;
   /** Last real user/channel interaction; background work does not advance it. */
   lastInteractionAt?: number;
   lastActivityAt?: number;

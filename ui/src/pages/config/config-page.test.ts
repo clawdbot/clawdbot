@@ -4,12 +4,14 @@ import type { ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import * as chatModels from "../chat/models.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
 import { configSectionKeysForPage } from "./config-sections.ts";
@@ -271,6 +273,75 @@ describe("ConfigPage system info", () => {
     await secondLoad;
     expect(state.systemInfo).toBe(current);
     page.remove();
+  });
+});
+
+describe("ConfigPage session observer models", () => {
+  it("lets a replacement Gateway load while the stale client is still pending", async () => {
+    const first = deferred<ModelCatalogEntry[]>();
+    const second = deferred<ModelCatalogEntry[]>();
+    vi.spyOn(chatModels, "loadModels")
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const firstClient = {} as GatewayBrowserClient;
+    const secondClient = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client: firstClient, connected: true },
+    } as unknown as ApplicationGateway;
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsClient: GatewayBrowserClient | null;
+      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+    };
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = { gateway } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
+
+    const firstLoad = state.ensureSessionObserverModels(firstClient);
+    (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
+      client: secondClient,
+      connected: true,
+    } as ApplicationGatewaySnapshot;
+    const secondLoad = state.ensureSessionObserverModels(secondClient);
+    const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
+    second.resolve(currentModels);
+    await secondLoad;
+    expect(state.sessionObserverModels).toEqual(currentModels);
+    expect(state.sessionObserverModelsClient).toBe(secondClient);
+
+    first.resolve([{ id: "stale", name: "Stale", provider: "old" }]);
+    await firstLoad;
+    expect(state.sessionObserverModels).toEqual(currentModels);
+    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks a failed client unavailable without polling it again", async () => {
+    vi.spyOn(chatModels, "loadModels").mockRejectedValue(new Error("catalog unavailable"));
+    const client = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client, connected: true },
+    } as unknown as ApplicationGateway;
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsUnavailable: boolean;
+      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+    };
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = { gateway } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
+
+    await state.ensureSessionObserverModels(client);
+    await state.ensureSessionObserverModels(client);
+
+    expect(state.sessionObserverModels).toEqual([]);
+    expect(state.sessionObserverModelsUnavailable).toBe(true);
+    expect(chatModels.loadModels).toHaveBeenCalledOnce();
   });
 });
 

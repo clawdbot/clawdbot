@@ -28,6 +28,12 @@ import {
   withFirstStreamEventTimeout,
 } from "../internal/runtime.js";
 import { stripSystemPromptCacheBoundary } from "../internal/shared.js";
+import {
+  clearPendingCommentaryText,
+  rememberPendingCommentaryTags,
+  tagPendingCommentaryText,
+  type PendingCommentaryTags,
+} from "../utils/assistant-text-phase.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
@@ -388,6 +394,7 @@ async function processOpenAICompletionsStream(
   let isFlushingPendingPostToolCallDeltas = false;
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
+  const provisionalCommentaryTags: PendingCommentaryTags = new Map();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let sawStopFinishReason = false;
@@ -496,6 +503,10 @@ async function processOpenAICompletionsStream(
       currentBlock = null;
       flushPendingPostToolCallDeltas();
     }
+    rememberPendingCommentaryTags(
+      provisionalCommentaryTags,
+      tagPendingCommentaryText(output.content),
+    );
     const block: ToolCallBlock = {
       type: "toolCall",
       // DSML has no provider call id. A response-local counter would alias a
@@ -708,6 +719,10 @@ async function processOpenAICompletionsStream(
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
       sawNativeToolCallDelta = true;
       flushReasoningTagTextPartitionerAtEnd();
+      rememberPendingCommentaryTags(
+        provisionalCommentaryTags,
+        tagPendingCommentaryText(output.content),
+      );
       for (const toolCall of choiceDelta.tool_calls) {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
         let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
@@ -805,6 +820,12 @@ async function processOpenAICompletionsStream(
   }
   if (hasToolCalls && output.stopReason !== "toolUse") {
     output.content = output.content.filter((block) => block.type !== "toolCall");
+  }
+  if (output.stopReason !== "toolUse") {
+    clearPendingCommentaryText(provisionalCommentaryTags);
+  }
+  if (output.stopReason === "toolUse") {
+    tagPendingCommentaryText(output.content);
   }
 }
 

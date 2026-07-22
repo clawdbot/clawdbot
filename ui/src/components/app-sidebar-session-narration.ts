@@ -1,4 +1,5 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -129,8 +130,14 @@ export class SidebarSessionNarrationController {
   private runIds = new Map<string, string>();
   private throttles = new Map<string, ThrottledLine>();
   private lines = new Map<string, string>();
+  private observerDigests = new Map<string, SessionObserverDigest>();
 
-  constructor(private readonly onLinesChanged: (lines: ReadonlyMap<string, string>) => void) {}
+  constructor(
+    private readonly onLinesChanged: (lines: ReadonlyMap<string, string>) => void,
+    private readonly onObserverDigestsChanged: (
+      digests: ReadonlyMap<string, SessionObserverDigest>,
+    ) => void = () => undefined,
+  ) {}
 
   sync(input: SidebarNarrationSyncInput): void {
     const previousOpenSessionKey = this.openSessionKey;
@@ -207,6 +214,10 @@ export class SidebarSessionNarrationController {
     }
     if (event.event === "chat") {
       this.handleChatEvent(event.payload);
+      return;
+    }
+    if (event.event === "session.observer") {
+      this.handleObserverEvent(event.payload);
       return;
     }
     if (event.event === "agent" || event.event === "session.tool") {
@@ -359,6 +370,9 @@ export class SidebarSessionNarrationController {
       return;
     }
     this.observeRun(key, record.runId);
+    if (this.observerDigests.has(key)) {
+      return;
+    }
     const message = record.message as Record<string, unknown> | undefined;
     if (message && typeof message.role === "string" && message.role !== "assistant") {
       return;
@@ -522,6 +536,9 @@ export class SidebarSessionNarrationController {
       return;
     }
     this.observeRun(key, record.runId);
+    if (this.observerDigests.has(key)) {
+      return;
+    }
     const data = record.data as Record<string, unknown> | undefined;
     if (record.stream === "tool") {
       const name = typeof data?.name === "string" ? data.name.trim() : "";
@@ -568,6 +585,38 @@ export class SidebarSessionNarrationController {
     }
     // consumed === 0 with a bare delta: same mid-run-join hazard as the chat
     // path — suppress until a cumulative snapshot aligns the stream.
+  }
+
+  private handleObserverEvent(payload: unknown): void {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const record = payload as Record<string, unknown>;
+    const key = this.matchingDesiredKey(record.sessionKey, record.agentId);
+    const runId = typeof record.runId === "string" ? record.runId.trim() : "";
+    if (
+      !key ||
+      !runId ||
+      typeof record.headline !== "string" ||
+      typeof record.health !== "string" ||
+      typeof record.updatedAt !== "number" ||
+      typeof record.revision !== "number"
+    ) {
+      return;
+    }
+    this.observeRun(key, runId);
+    const digest = { ...record, runId } as unknown as SessionObserverDigest;
+    const previous = this.observerDigests.get(key);
+    if (
+      previous &&
+      (previous.revision > digest.revision ||
+        (previous.revision === digest.revision && previous.updatedAt >= digest.updatedAt))
+    ) {
+      return;
+    }
+    this.clearNarration(key);
+    this.observerDigests.set(key, digest);
+    this.onObserverDigestsChanged(new Map(this.observerDigests));
   }
 
   private observeRun(key: string, runIdValue: unknown): void {
@@ -640,11 +689,18 @@ export class SidebarSessionNarrationController {
   }
 
   private clearLine(key: string): void {
+    this.clearNarration(key);
+    this.runIds.delete(key);
+    if (this.observerDigests.delete(key)) {
+      this.onObserverDigestsChanged(new Map(this.observerDigests));
+    }
+  }
+
+  private clearNarration(key: string): void {
     this.internalRuntimeBlockDepth.delete(key);
     this.internalRuntimeDelimiterTails.delete(key);
     this.consumedStreamLength.delete(key);
     this.visibleText.delete(key);
-    this.runIds.delete(key);
     const throttle = this.throttles.get(key);
     if (throttle?.timer) {
       globalThis.clearTimeout(throttle.timer);
@@ -670,6 +726,10 @@ export class SidebarSessionNarrationController {
     if (this.lines.size > 0) {
       this.lines.clear();
       this.onLinesChanged(new Map());
+    }
+    if (this.observerDigests.size > 0) {
+      this.observerDigests.clear();
+      this.onObserverDigestsChanged(new Map());
     }
   }
 }

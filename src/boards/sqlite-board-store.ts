@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   BoardOp,
@@ -11,7 +11,7 @@ import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
-import { OPENCLAW_AGENT_BOARD_SCHEMA_SQL } from "../state/openclaw-agent-board-schema.js";
+import { ensureOpenClawAgentBoardSchemaInTransaction } from "../state/openclaw-agent-board-schema.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -32,9 +32,11 @@ import {
   type BoardWidgetMcpAppDocument,
 } from "./board-store.js";
 import {
+  createBoardWidgetContentFields,
   effectiveGrantState,
   parseDescriptor,
   parseManifest,
+  parsePluginContent,
   rowToTab,
   rowToWidget,
   serializeManifest,
@@ -56,12 +58,13 @@ type StoredBoard = {
 };
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
+const presentBoardDatabases = new WeakSet<DatabaseSync>();
 
 // Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
 // no board tables until the first write. Reads must treat that as "no boards",
 // not "no such table".
 function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolean {
-  if (ensuredBoardDatabases.has(database.db)) {
+  if (ensuredBoardDatabases.has(database.db) || presentBoardDatabases.has(database.db)) {
     return true;
   }
   const row = database.db // sqlite-allow-raw: catalog probe before Kysely table access.
@@ -70,7 +73,7 @@ function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolea
   if (!row) {
     return false;
   }
-  ensuredBoardDatabases.add(database.db);
+  presentBoardDatabases.add(database.db);
   return true;
 }
 
@@ -83,7 +86,7 @@ function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   }
   runSqliteImmediateTransactionSync(
     database.db,
-    () => database.db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL), // sqlite-allow-raw: one-time DDL bootstrap before Kysely access.
+    () => ensureOpenClawAgentBoardSchemaInTransaction(database.db),
     {
       databaseLabel: database.path,
       operationLabel: "board.ensure-schema",
@@ -91,6 +94,7 @@ function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   );
   // Additive-surface rule: fold this into the next natural schema bump, then delete this lazy ensure.
   ensuredBoardDatabases.add(database.db);
+  presentBoardDatabases.add(database.db);
 }
 
 type SqliteBoardStoreOptions = {
@@ -280,55 +284,6 @@ function deleteRemovedTabs(
   }
 }
 
-function contentFields(
-  params: BoardWidgetMaterializedPutParams,
-  // Effective frame options come from the materialized widget, not the raw put
-  // params: re-pins that omit them must keep the inherited persisted values.
-  frame: Pick<BoardWidget, "presentation" | "heightMode">,
-  revision: number,
-  grantState: BoardWidget["grantState"],
-  viewGeneration: string,
-  now: number,
-) {
-  const manifest = serializeManifest(
-    params.declared,
-    grantState,
-    params.content.kind === "mcp-app"
-      ? { interactive: params.content.interactive, instanceId: viewGeneration }
-      : undefined,
-    frame,
-  );
-  if (params.content.kind === "html") {
-    const sha256 = createHash("sha256").update(params.content.html).digest("hex");
-    return {
-      content_kind: "html",
-      html: Buffer.from(params.content.html, "utf8"),
-      descriptor_json: null,
-      sha256,
-      view_generation: viewGeneration,
-      revision,
-      manifest,
-      grant_state: grantState,
-      granted_sha: grantState === "granted" ? sha256 : null,
-      updated_at: now,
-    };
-  }
-  const descriptorJson = JSON.stringify(params.content.descriptor);
-  const sha256 = createHash("sha256").update(descriptorJson).digest("hex");
-  return {
-    content_kind: "mcp-app",
-    html: null,
-    descriptor_json: descriptorJson,
-    sha256,
-    view_generation: null,
-    revision,
-    manifest,
-    grant_state: grantState,
-    granted_sha: grantState === "granted" ? sha256 : null,
-    updated_at: now,
-  };
-}
-
 function hasSession(database: BoardDatabaseHandle, sessionKey: string): boolean {
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
   return Boolean(
@@ -467,10 +422,15 @@ export class SqliteBoardStore implements BoardStore {
         const grantScopeMatches = existing
           ? existing.content_kind === "html"
             ? canonicalParams.content.kind === "html"
-            : existing.descriptor_json !== null &&
-              canonicalParams.content.kind === "mcp-app" &&
-              parseDescriptor(existing.descriptor_json).serverName ===
-                canonicalParams.content.descriptor.serverName
+            : existing.content_kind === "mcp-app"
+              ? existing.descriptor_json !== null &&
+                canonicalParams.content.kind === "mcp-app" &&
+                parseDescriptor(existing.descriptor_json).serverName ===
+                  canonicalParams.content.descriptor.serverName
+              : existing.descriptor_json !== null &&
+                canonicalParams.content.kind === "plugin" &&
+                parsePluginContent(existing.descriptor_json).pluginKind ===
+                  canonicalParams.content.pluginKind
           : true;
         const next = createBoardWidgetPutSnapshot(previous.snapshot, canonicalParams, {
           grantScopeMatches,
@@ -481,7 +441,7 @@ export class SqliteBoardStore implements BoardStore {
         const now = Date.now();
         upsertTabs(transactionDatabase, previous, next);
         const db = getNodeSqliteKysely<BoardDatabase>(transactionDatabase.db);
-        const fields = contentFields(
+        const fields = createBoardWidgetContentFields(
           canonicalParams,
           { presentation: widget.presentation, heightMode: widget.heightMode },
           widget.revision,

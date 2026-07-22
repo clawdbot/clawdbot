@@ -152,6 +152,9 @@
       "@openclaw/normalization-core/number-coercion": [
         "./packages/normalization-core/src/number-coercion.ts"
       ],
+      "@openclaw/normalization-core/phone-presentation": [
+        "./packages/normalization-core/src/phone-presentation.ts"
+      ],
       "@openclaw/normalization-core/record-coerce": [
         "./packages/normalization-core/src/record-coerce.ts"
       ],

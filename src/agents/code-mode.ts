@@ -86,6 +86,12 @@ const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 const MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS = 4;
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 const CODE_MODE_WORKER_WATCHDOG_GRACE_MS = 2_000;
+const DEFAULT_HEADLESS_WALL_CLOCK_MS = 30_000;
+// Cron script payloads persist caps of 900 seconds and 200 tool calls.
+// The shared executor must not silently lower those accepted job limits.
+const MAX_HEADLESS_WALL_CLOCK_MS = 900_000;
+const DEFAULT_HEADLESS_TOOL_CALLS = 5;
+const MAX_HEADLESS_TOOL_CALLS = 200;
 
 type CodeModeLanguage = "javascript" | "typescript";
 
@@ -1317,8 +1323,16 @@ export async function runCodeModeScriptHeadless(params: {
   signal?: AbortSignal;
 }): Promise<CodeModeHeadlessResult> {
   const config = resolveCodeModeHeadlessConfig(params.ctx, params.overrides);
-  const wallClockMs = clampNumber(readPositiveInteger(params.wallClockMs, 30_000), 1, 300_000);
-  const maxToolCalls = clampNumber(readPositiveInteger(params.maxToolCalls, 5), 1, 128);
+  const wallClockMs = clampNumber(
+    readPositiveInteger(params.wallClockMs, DEFAULT_HEADLESS_WALL_CLOCK_MS),
+    1,
+    MAX_HEADLESS_WALL_CLOCK_MS,
+  );
+  const maxToolCalls = clampNumber(
+    readPositiveInteger(params.maxToolCalls, DEFAULT_HEADLESS_TOOL_CALLS),
+    1,
+    MAX_HEADLESS_TOOL_CALLS,
+  );
   const deadline = Date.now() + wallClockMs;
   const abortScope = createHeadlessAbortScope(params.signal, wallClockMs);
   const output: unknown[] = [];

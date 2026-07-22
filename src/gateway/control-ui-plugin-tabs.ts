@@ -24,6 +24,12 @@ type ControlUiPluginTab = {
   requiresGatewayAuth?: boolean;
 };
 
+type ControlUiPluginWidgetKind = {
+  pluginId: string;
+  kind: string;
+  label: string;
+};
+
 function findControlUiTabGatewayRoute(
   registry: PluginRegistry,
   tab: ControlUiPluginTab,
@@ -111,6 +117,35 @@ export function listControlUiPluginTabs(
       ? [{ ...tab, requiresGatewayAuth: true }]
       : [tab];
   });
+}
+
+/** Lists active plugins' trusted widget kinds visible to the presented scopes. */
+export function listControlUiPluginWidgetKinds(
+  scopes: readonly string[],
+): ControlUiPluginWidgetKind[] {
+  const entries = getActivePluginRegistry()?.controlUiDescriptors ?? [];
+  return entries
+    .flatMap((entry) => {
+      const descriptor = entry.descriptor;
+      if (descriptor.surface !== "widget") {
+        return [];
+      }
+      const visible = (descriptor.requiredScopes ?? []).every(
+        (scope) => authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
+      );
+      return visible
+        ? [
+            {
+              pluginId: entry.pluginId,
+              kind: `${entry.pluginId}:${descriptor.id}`,
+              label: descriptor.label,
+            },
+          ]
+        : [];
+    })
+    .toSorted(
+      (left, right) => left.label.localeCompare(right.label) || left.kind.localeCompare(right.kind),
+    );
 }
 
 /** Builds least-privilege grants only for visible tabs backed by same-plugin gateway routes. */

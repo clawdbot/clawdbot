@@ -142,7 +142,10 @@ export type PluginUiMetadata = {
   description?: string;
   configUiHints?: Record<
     string,
-    Pick<ConfigUiHint, "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder">
+    Pick<
+      ConfigUiHint,
+      "label" | "help" | "tags" | "advanced" | "sensitive" | "placeholder" | "presentation"
+    >
   >;
   configSchema?: JsonSchemaNode;
 };

@@ -1,3 +1,5 @@
+import type { ConfigUiPresentation } from "../shared/config-ui-hints-types.js";
+
 /** UI hint metadata for plugin config schema fields. */
 export type PluginConfigUiHint = {
   label?: string;
@@ -6,6 +8,7 @@ export type PluginConfigUiHint = {
   advanced?: boolean;
   sensitive?: boolean;
   placeholder?: string;
+  presentation?: ConfigUiPresentation;
 };
 
 /** Top-level plugin manifest format. */

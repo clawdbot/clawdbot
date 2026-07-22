@@ -1,6 +1,5 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
 import pMap, { pMapSkip } from "p-map";
-import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { CronConfig } from "../../config/types.cron.js";
@@ -35,6 +34,7 @@ import {
   normalizeCronRunDiagnostics,
   summarizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import {
@@ -50,6 +50,7 @@ import type {
   CronFailureNotificationDelivery,
   CronJob,
   CronNextCheckProposal,
+  CronRunErrorClassification,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -556,15 +557,26 @@ function resolveRetryConfig() {
 function resolveTransientCronRetryDecision(params: {
   cronConfig?: CronConfig;
   error: string | undefined;
+  errorClassification?: CronRunErrorClassification;
   lastErrorReason?: string;
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
   const retryConfig = resolveRetryConfig();
+  if (params.errorClassification?.kind === "permanent") {
+    return {
+      retryable: false,
+      consecutiveErrors: params.consecutiveErrors ?? 0,
+      reason: "permanent error",
+    };
+  }
   const retryHint = resolveCronExecutionRetryHint({
     error: params.error,
     retryOn: retryConfig.retryOn,
-    classifiedReason: params.lastErrorReason,
+    classifiedReason:
+      params.errorClassification?.kind === "reason"
+        ? params.errorClassification.reason
+        : params.lastErrorReason,
     executionStarted: params.executionStarted,
   });
   const consecutiveErrors = params.consecutiveErrors ?? 0;
@@ -792,7 +804,7 @@ export function applyJobResult(
   job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
     result.status === "error" && typeof result.error === "string"
-      ? (resolveFailoverReasonFromError(result.error, result.provider) ?? undefined)
+      ? resolveCronRunErrorReason(result.error, result.provider, result.errorClassification)
       : undefined;
   if (result.status === "error") {
     state.deps.log.warn(
@@ -839,7 +851,7 @@ export function applyJobResult(
       alertConfig,
       status: "error",
       error: result.error,
-      provider: result.provider,
+      errorReason: job.state.lastErrorReason,
       consecutiveCount: job.state.consecutiveErrors,
       ...(opts?.replayFailureAlertAtMs !== undefined
         ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
@@ -854,7 +866,6 @@ export function applyJobResult(
         alertConfig,
         status: "skipped",
         error: result.error,
-        provider: result.provider,
         consecutiveCount: job.state.consecutiveSkipped,
         ...(opts?.replayFailureAlertAtMs !== undefined
           ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
@@ -916,6 +927,7 @@ export function applyJobResult(
         const retryDecision = resolveTransientCronRetryDecision({
           cronConfig: state.deps.cronConfig,
           error: result.error,
+          errorClassification: result.errorClassification,
           lastErrorReason: job.state.lastErrorReason,
           executionStarted: result.executionStarted,
           consecutiveErrors: job.state.consecutiveErrors,
@@ -964,6 +976,7 @@ export function applyJobResult(
       const retryDecision = resolveTransientCronRetryDecision({
         cronConfig: state.deps.cronConfig,
         error: result.error,
+        errorClassification: result.errorClassification,
         lastErrorReason: job.state.lastErrorReason,
         executionStarted: result.executionStarted,
         consecutiveErrors: job.state.consecutiveErrors,
@@ -2850,6 +2863,7 @@ async function executeDetachedCronJob(
   return {
     status: res.status,
     error: res.error,
+    errorClassification: res.errorClassification,
     executionStarted: res.executionStarted,
     // Forward the post-run delivery failure recorded on an otherwise
     // successful run so the service can persist it as `lastDeliveryError` and
@@ -2972,6 +2986,7 @@ function emitJobFinished(
     taskRunId: result.taskRunId,
     job,
     event,
+    errorClassification: result.errorClassification,
     ...(result.scriptStateChanged === true ? { scriptResult: result } : {}),
     ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
   });

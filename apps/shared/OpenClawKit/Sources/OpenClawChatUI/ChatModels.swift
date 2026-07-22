@@ -582,6 +582,7 @@ public struct OpenClawChatSessionBranch: Codable, Sendable, Equatable, Identifia
         self.leafEntryId
     }
 
+    // periphery:ignore - package tests construct branch fixtures; app consumers decode them.
     public init(
         leafEntryId: String,
         headline: String,
@@ -600,6 +601,7 @@ public struct OpenClawChatSessionBranch: Codable, Sendable, Equatable, Identifia
 public struct OpenClawChatSessionBranchesResponse: Codable, Sendable {
     public let branches: [OpenClawChatSessionBranch]
 
+    // periphery:ignore - package tests construct branch fixtures; app consumers decode them.
     public init(branches: [OpenClawChatSessionBranch]) {
         self.branches = branches
     }

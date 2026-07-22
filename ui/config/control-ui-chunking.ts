@@ -51,7 +51,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (
+    moduleIdIncludesPackage(id, "zod") ||
+    moduleIdIncludesPackage(id, "json5") ||
+    moduleIdIncludesPackage(id, "libphonenumber-js")
+  ) {
     return "config-runtime";
   }
 

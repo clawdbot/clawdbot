@@ -25,7 +25,13 @@ import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
-import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "../types.js";
+import type {
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronPayload,
+  CronRunErrorClassification,
+} from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
@@ -1021,15 +1027,19 @@ function emitCronRunFinished(
   evt: CronEvent & { action: "finished" },
   tracker?: ManualRunTerminalTracker,
   taskRunId?: string,
-  triggerEval?: CronTriggerEvalOutcome,
-  scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown },
+  details?: {
+    triggerEval?: CronTriggerEvalOutcome;
+    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
+    errorClassification?: CronRunErrorClassification;
+  },
 ): void {
   tryFinishCronTaskRun(state, {
     taskRunId,
     job: evt.job,
     event: evt,
-    ...(scriptResult ? { scriptResult } : {}),
-    ...(triggerEval ? { triggerEval } : {}),
+    errorClassification: details?.errorClassification,
+    ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
+    ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
   });
   emit(state, evt);
   if (tracker) {
@@ -1602,6 +1612,9 @@ async function finishPreparedManualRun(
         },
         tracker,
         taskRunId,
+        {
+          errorClassification: triggerSkipped ? undefined : coreResult.errorClassification,
+        },
       );
     };
     if (!triggerSkipped) {
@@ -1701,8 +1714,11 @@ async function finishPreparedManualRun(
           },
           prepared.terminalTracker,
           taskRunId,
-          coreResult.triggerEval,
-          coreResult,
+          {
+            triggerEval: coreResult.triggerEval,
+            scriptResult: coreResult,
+            errorClassification: coreResult.errorClassification,
+          },
         );
       }
 

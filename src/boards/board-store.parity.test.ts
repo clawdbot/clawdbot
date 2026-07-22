@@ -178,6 +178,54 @@ describe.each([
     expect(store.getSnapshot("agent:main:board").widgets[1]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
   });
 
+  it("round-trips plugin kinds and props without serving document bytes", () => {
+    const store = createStore();
+    const put = store.putWidget({
+      sessionKey: "agent:main:board",
+      name: "work-item",
+      content: {
+        kind: "plugin",
+        pluginKind: "workboard:card",
+        props: { cardId: "card-123", compact: true },
+      },
+    });
+
+    expect(put.widgets[0]).toMatchObject({
+      name: "work-item",
+      contentKind: "plugin",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-123", compact: true },
+      grantState: "none",
+    });
+    expect(put.widgets[0]).not.toHaveProperty("instanceId");
+    expect(store.getSnapshot("agent:main:board").widgets[0]).toEqual(put.widgets[0]);
+    expect(store.readWidgetHtml("agent:main:board", "work-item")).toBeUndefined();
+    expect(store.readWidgetMcpApp("agent:main:board", "work-item")).toBeUndefined();
+  });
+
+  it("rejects oversized plugin props and capability declarations", () => {
+    const store = createStore();
+    expect(() =>
+      store.putWidget({
+        sessionKey: "agent:main:board",
+        name: "too-large",
+        content: {
+          kind: "plugin",
+          pluginKind: "workboard:mini",
+          props: { value: "x".repeat(8 * 1024) },
+        },
+      }),
+    ).toThrow("props exceed 8192 UTF-8 bytes");
+    expect(() =>
+      store.putWidget({
+        sessionKey: "agent:main:board",
+        name: "declared",
+        content: { kind: "plugin", pluginKind: "workboard:card" },
+        declared: { tools: ["workboard.cards.move"] },
+      }),
+    ).toThrow("do not accept sandbox capability declarations");
+  });
+
   it("preserves grants only for unchanged bytes with equal or narrower declarations", () => {
     const store = createStore();
     const first = store.putWidget({
@@ -529,6 +577,79 @@ describe("SqliteBoardStore persistence", () => {
         )
         .get(),
     ).toEqual({ name: "idx_agent_board_widgets_tab_position" });
+  });
+
+  it("upgrades the unreleased v13 board constraint before storing plugin widgets", () => {
+    const stateDir = tempDirs.make("openclaw-board-plugin-kind-schema-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:board";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    store.putWidget({
+      sessionKey,
+      name: "existing",
+      content: { kind: "html", html: "preserved" },
+    });
+
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const schema = opened.db
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'board_widgets'")
+      .get() as { sql: string };
+    const legacySchema = schema.sql
+      .replace(
+        "content_kind IN ('html', 'mcp-app', 'plugin')",
+        "content_kind IN ('html', 'mcp-app')",
+      )
+      .replace(
+        /\s+OR\s+\(content_kind = 'plugin' AND html IS NULL AND descriptor_json IS NOT NULL AND view_generation IS NULL\)/u,
+        "",
+      );
+    const legacyCreateSql = legacySchema.replace(
+      /^CREATE TABLE board_widgets/u,
+      "CREATE TABLE board_widgets_legacy",
+    );
+    opened.db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN IMMEDIATE;
+      ${legacyCreateSql};
+      INSERT INTO board_widgets_legacy SELECT * FROM board_widgets;
+      DROP TABLE board_widgets;
+      ALTER TABLE board_widgets_legacy RENAME TO board_widgets;
+      CREATE INDEX idx_agent_board_widgets_tab_position
+        ON board_widgets(session_key, tab_id, position);
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+    closeOpenClawAgentDatabasesForTest();
+
+    const upgradedStore = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    expect(upgradedStore.getSnapshot(sessionKey).widgets).toEqual([
+      expect.objectContaining({ name: "existing", contentKind: "html" }),
+    ]);
+    upgradedStore.putWidget({
+      sessionKey,
+      name: "plugin",
+      content: { kind: "plugin", pluginKind: "workboard:card", props: { cardId: "123" } },
+    });
+
+    expect(upgradedStore.readWidgetHtml(sessionKey, "existing")?.html).toBe("preserved");
+    expect(upgradedStore.getSnapshot(sessionKey).widgets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "existing", contentKind: "html" }),
+        expect.objectContaining({
+          name: "plugin",
+          contentKind: "plugin",
+          pluginKind: "workboard:card",
+          props: { cardId: "123" },
+        }),
+      ]),
+    );
   });
 
   it("does not create an unregistered agent database during widget byte lookup", () => {

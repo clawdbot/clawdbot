@@ -149,7 +149,7 @@ export type ClawWorkspaceSourceSnapshot = {
   digest: string;
 };
 
-export type ClawSourceSnapshot = {
+type ClawSourceSnapshot = {
   workspaceSources: ClawWorkspaceSourceSnapshot[];
 };
 

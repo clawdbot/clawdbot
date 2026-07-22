@@ -440,6 +440,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/phone-presentation",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "phone-presentation.ts",
+        ),
+      },
+      {
         find: "@openclaw/normalization-core/record-coerce",
         replacement: path.join(
           repoRoot,

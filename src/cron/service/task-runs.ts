@@ -28,7 +28,7 @@ import {
   resolveCronTaskRecordTimestamp,
 } from "../task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "../task-run-event-codec.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { CronJob, CronRunErrorClassification, CronRunStatus } from "../types.js";
 import { normalizeCronRunErrorText, timeoutErrorMessage } from "./execution-errors.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
@@ -293,11 +293,16 @@ export function tryFinishCronTaskRun(
     taskRunId?: string;
     job?: CronJob;
     event: CronEvent & { action: "finished" };
+    errorClassification?: CronRunErrorClassification;
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
   },
 ): void {
-  const entry = cronRunLogEntryFromEvent(result.event, state.deps.nowMs());
+  const entry = cronRunLogEntryFromEvent(
+    result.event,
+    state.deps.nowMs(),
+    result.errorClassification,
+  );
   const startedAt = entry.runAtMs ?? entry.ts;
   const candidateRunId =
     result.taskRunId ?? createCronTaskRunId(entry.jobId, startedAt, entry.runId);

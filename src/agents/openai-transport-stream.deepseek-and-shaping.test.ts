@@ -91,7 +91,11 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "before  after" },
+      {
+        type: "text",
+        text: "before  after",
+        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      },
       {
         type: "toolCall",
         id: "call_native_1",
@@ -130,7 +134,11 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "I'll check" },
+      {
+        type: "text",
+        text: "I'll check",
+        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      },
       {
         type: "toolCall",
         id: "call_native_1",
@@ -178,7 +186,11 @@ describe("openai transport stream", () => {
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
       },
-      { type: "text", text: " visible" },
+      {
+        type: "text",
+        text: " visible",
+        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
@@ -214,7 +226,11 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "before " },
+      {
+        type: "text",
+        text: "before ",
+        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      },
       {
         type: "toolCall",
         id: "call_native_1",
@@ -222,7 +238,11 @@ describe("openai transport stream", () => {
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
       },
-      { type: "text", text: " after" },
+      {
+        type: "text",
+        text: " after",
+        textSignature: '{"v":1,"id":"commentary-1","phase":"commentary"}',
+      },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });

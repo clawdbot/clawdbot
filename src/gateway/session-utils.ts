@@ -2238,6 +2238,7 @@ export function buildGatewaySessionRow(params: {
     agentStatus,
     observerDigest: observerDigest
       ? {
+          runId: observerDigest.runId,
           headline: observerDigest.headline,
           health: observerDigest.health,
           updatedAt: observerDigest.updatedAt,

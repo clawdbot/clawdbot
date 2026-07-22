@@ -544,6 +544,27 @@ describe("redactTranscriptMessage", () => {
     },
   );
 
+  it.each([
+    ["openai-completions", "openrouter", "deepseek/deepseek-v4-flash"],
+    ["anthropic-messages", "anthropic", "claude-sonnet-4-6"],
+  ])("preserves commentary phase signatures for %s", (api, provider, model) => {
+    const textSignature = JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" });
+    const msg = {
+      role: "assistant",
+      api,
+      provider,
+      model,
+      content: [{ type: "text", text: "I will check.", textSignature }],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = expectDefined(
+      (msgContent(result) as Array<{ textSignature: string }>)[0],
+      "commentary text block",
+    );
+    expect(block.textSignature).toBe(textSignature);
+  });
+
   it("preserves Anthropic redacted_thinking data while redacting siblings", () => {
     const msg = {
       role: "assistant",

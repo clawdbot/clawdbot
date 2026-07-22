@@ -264,6 +264,7 @@ describe("gateway session utils", () => {
     });
 
     expect(row.observerDigest).toEqual({
+      runId: observerDigest.runId,
       headline: observerDigest.headline,
       health: observerDigest.health,
       updatedAt: observerDigest.updatedAt,

@@ -65,6 +65,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
       displaySubtitle: display?.subtitle,
       sidebarLiveActivity: this.sidebarLiveActivity,
       narrationLine: this.sidebarNarrationLines.get(session.key),
+      observerDigest: this.sidebarObserverDigests.get(session.key) ?? null,
     });
     const pullRequestState = session.worktreeId
       ? this.sessionPullRequestIndicatorState(session.key, session.worktreeId)

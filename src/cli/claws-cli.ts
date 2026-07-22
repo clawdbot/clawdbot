@@ -9,6 +9,8 @@ export type ClawsInspectOptions = {
 
 export type ClawsAddOptions = {
   dryRun?: boolean;
+  yes?: boolean;
+  planIntegrity?: string;
   json?: boolean;
   agentId?: string;
   workspace?: string;
@@ -35,6 +37,8 @@ export function registerClawsCli(program: Command) {
     .description("Preview adding one new agent and workspace from a Claw")
     .argument("<source>", "Path to a Claw package directory or grouped manifest")
     .option("--dry-run", "Preview all actions without mutating state", false)
+    .option("--yes", "Confirm creation of the new agent and workspace", false)
+    .option("--plan-integrity <digest>", "Bind consent to an exact dry-run plan")
     .option("--agent-id <id>", "Override the requested id with an unused local agent id")
     .option("--workspace <path>", "Override the derived new workspace path")
     .option("--json", "Print JSON", false)

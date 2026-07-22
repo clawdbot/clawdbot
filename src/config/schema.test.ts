@@ -127,6 +127,41 @@ describe("config schema", () => {
     expect(res.uiHints["nodeHost.mcp.servers.*.env.*"]?.sensitive).toBe(true);
     expect(res.uiHints["nodeHost.mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
+    const phonePresentationPaths = [
+      "channels.sms.fromNumber",
+      "channels.sms.defaultTo",
+      "channels.sms.allowFrom",
+      "channels.sms.accounts.*.fromNumber",
+      "channels.sms.accounts.*.defaultTo",
+      "channels.sms.accounts.*.allowFrom.*",
+      "channels.signal.account",
+      "channels.signal.allowFrom",
+      "channels.signal.defaultTo",
+      "channels.signal.groupAllowFrom",
+      "channels.signal.reactionAllowlist",
+      "channels.signal.accounts.*.account",
+      "channels.signal.accounts.*.allowFrom.*",
+      "channels.signal.accounts.*.defaultTo",
+      "channels.signal.accounts.*.groupAllowFrom.*",
+      "channels.signal.accounts.*.reactionAllowlist.*",
+      "channels.whatsapp.allowFrom",
+      "channels.whatsapp.defaultTo",
+      "channels.whatsapp.groupAllowFrom",
+      "channels.whatsapp.accounts.*.allowFrom.*",
+      "channels.whatsapp.accounts.*.defaultTo",
+      "channels.whatsapp.accounts.*.groupAllowFrom.*",
+      "channels.imessage.allowFrom",
+      "channels.imessage.defaultTo",
+      "channels.imessage.groupAllowFrom",
+      "channels.imessage.accounts.*.allowFrom.*",
+      "channels.imessage.accounts.*.defaultTo",
+      "channels.imessage.accounts.*.groupAllowFrom.*",
+    ];
+    for (const path of phonePresentationPaths) {
+      expect(res.uiHints[path]?.presentation, path).toBe("phone-number");
+    }
+    expect(res.uiHints["channels.sms.authToken"]?.presentation).toBeUndefined();
+    expect(res.uiHints["channels.signal.configPath"]?.presentation).toBeUndefined();
     expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
       expect.arrayContaining(["security", "network", "storage"]),
     );

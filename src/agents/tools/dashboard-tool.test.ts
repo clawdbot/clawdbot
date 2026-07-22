@@ -48,6 +48,7 @@ describe("dashboard tool", () => {
             "tab_update",
             "tab_delete",
             "tabs_reorder",
+            "widget_put",
             "widget_move",
             "widget_resize",
             "widget_remove",
@@ -58,6 +59,14 @@ describe("dashboard tool", () => {
       },
     });
     expect(Value.Check(tool.parameters, { action: "widget_move", name: "status" })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        action: "widget_put",
+        name: "work-item",
+        pluginKind: "workboard:card",
+        props: { cardId: "card-123" },
+      }),
+    ).toBe(true);
     expect(Value.Check(tool.parameters, { action: "unknown" })).toBe(false);
   });
 
@@ -120,6 +129,39 @@ describe("dashboard tool", () => {
     });
     await tool.execute("mutate", { action, ...args });
     expect(harness.calls).toEqual([["board.update", { sessionKey: "agent:main:main", ops: [op] }]]);
+  });
+
+  it("creates a plugin widget through board.widget.put", async () => {
+    const harness = recorder();
+    const tool = createDashboardTool({
+      agentSessionKey: "agent:main:main",
+      callGateway: harness.callGateway,
+    });
+    await tool.execute("put", {
+      action: "widget_put",
+      name: "work-item",
+      title: "Work item",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-123" },
+      tabId: "main",
+      size: "sm",
+    });
+    expect(harness.calls).toEqual([
+      [
+        "board.widget.put",
+        {
+          sessionKey: "agent:main:main",
+          name: "work-item",
+          title: "Work item",
+          content: {
+            kind: "plugin",
+            pluginKind: "workboard:card",
+            props: { cardId: "card-123" },
+          },
+          placement: { tabId: "main", size: "sm" },
+        },
+      ],
+    ]);
   });
 
   it.each([

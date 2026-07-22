@@ -106,7 +106,7 @@ overrides:
   hono: 4.12.25
   "@hono/node-server": 1.19.14
   axios: 1.18.0
-  fast-uri: 3.1.3
+  fast-uri: 3.1.4
   follow-redirects: 1.16.0
   defu: 6.1.5
   fast-xml-parser: 5.7.0

@@ -1,6 +1,13 @@
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { stableStringify } from "../agents/stable-stringify.js";
+import {
+  applyClawAddPlan,
+  CLAW_ADD_RESULT_SCHEMA_VERSION,
+  ClawAddMutationError,
+} from "../claws/add.js";
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
+import { readClawInstallRecord } from "../claws/provenance.js";
 import { readClawManifestFile } from "../claws/reader.js";
 import {
   CLAW_INSPECT_RESULT_SCHEMA_VERSION,
@@ -54,18 +61,44 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   }
 }
 
+function matchingResumeRecord(plan: ClawAddPlan, opts: ClawsAddOptions) {
+  if (opts.dryRun || !opts.yes || !opts.planIntegrity) {
+    return undefined;
+  }
+  const record = readClawInstallRecord(plan.agent.finalId);
+  if (
+    !record ||
+    record.status === "complete" ||
+    record.planIntegrity !== opts.planIntegrity ||
+    record.workspace !== plan.agent.workspace ||
+    record.claw.kind !== plan.claw.kind ||
+    record.claw.name !== plan.claw.name ||
+    record.claw.version !== plan.claw.version ||
+    record.claw.integrity !== plan.claw.integrity
+  ) {
+    return undefined;
+  }
+  return record;
+}
+
 function failNonDryRun(opts: ClawsAddOptions, runtime: RuntimeEnv): boolean {
   if (opts.dryRun) {
     return false;
   }
-  const message =
-    "Claw add is dry-run only in this OpenClaw build; pass --dry-run to preview lifecycle actions.";
+  const consented = opts.yes && opts.planIntegrity;
+  if (consented) {
+    return false;
+  }
+  const code = opts.yes ? "plan_integrity_required" : "consent_required";
+  const message = opts.yes
+    ? "Claw add consent must include --plan-integrity from the exact dry-run plan."
+    : "Claw add requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to create the new agent and workspace.";
   if (opts.json) {
     writeRuntimeJson(runtime, {
       schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
       stability: CLAW_OUTPUT_STABILITY,
       ok: false,
-      error: { code: "dry_run_required", message },
+      error: { code, message },
     });
   } else {
     runtime.error(message);
@@ -143,37 +176,124 @@ export async function runClawsAddCommand(
 
   const config = getRuntimeConfig();
   const existingAgentIds = listAgentIds(config);
+  const existingWorkspacePaths = existingAgentIds.map((agentId) =>
+    resolveAgentWorkspaceDir(config, agentId),
+  );
   const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(
     resolveCronJobsStorePath(config.cron?.store),
   );
-  const plan = await buildClawAddPlan({
+  const basePlanContext = {
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts.workspace ? { workspace: opts.workspace } : {}),
+    existingAgentIds,
+    existingWorkspacePaths,
+    existingMcpServerNames: Object.keys(config.mcp?.servers ?? {}),
+    existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
+  };
+  let plan = await buildClawAddPlan({
     manifest: result.manifest,
     source: result.source,
-    snapshot: result.snapshot,
     diagnostics: result.diagnostics,
-    context: {
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
-      ...(opts.workspace ? { workspace: opts.workspace } : {}),
-      existingAgentIds,
-      existingWorkspacePaths: existingAgentIds.map((agentId) =>
-        resolveAgentWorkspaceDir(config, agentId),
-      ),
-      existingMcpServerNames: Object.keys(config.mcp?.servers ?? {}),
-      existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
-    },
+    context: basePlanContext,
   });
+  const resumeRecord = matchingResumeRecord(plan, opts);
+  if (resumeRecord && plan.blockers.length > 0) {
+    const canResumeWorkspace =
+      resumeRecord.status === "workspace_ready" || resumeRecord.status === "config_committed";
+    const committedAgent = config.agents?.list?.find(
+      (agent) => stableStringify(agent) === stableStringify(plan.agent.config),
+    );
+    const canResumeAgent =
+      resumeRecord.status === "config_committed" ||
+      (resumeRecord.status === "workspace_ready" && committedAgent !== undefined);
+    plan = await buildClawAddPlan({
+      manifest: result.manifest,
+      source: result.source,
+      diagnostics: result.diagnostics,
+      context: {
+        ...basePlanContext,
+        existingAgentIds: canResumeAgent
+          ? existingAgentIds.filter((agentId) => agentId !== resumeRecord.agentId)
+          : existingAgentIds,
+        existingWorkspacePaths: canResumeWorkspace
+          ? existingAgentIds
+              .filter((agentId) => agentId !== resumeRecord.agentId)
+              .map((agentId) => resolveAgentWorkspaceDir(config, agentId))
+          : existingWorkspacePaths,
+        ...(canResumeWorkspace ? { resumableWorkspace: resumeRecord.workspace } : {}),
+      },
+    });
+  }
 
-  if (opts.json) {
-    writeRuntimeJson(runtime, plan);
-  } else {
-    logExperimentalWarning(runtime);
-    runtime.log(`Claw add plan: ${plan.claw.name}@${plan.claw.version}`);
-    logClawAddPlanSummary(plan, runtime);
-    if (plan.blockers.length > 0) {
+  if (plan.blockers.length > 0) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, plan);
+    } else {
+      logExperimentalWarning(runtime);
+      logClawAddPlanSummary(plan, runtime);
       runtime.error(formatDiagnostics(plan.blockers));
     }
+    runtime.exit(1);
+    return;
   }
-  if (plan.blockers.length > 0) {
+
+  if (opts.dryRun) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, plan);
+    } else {
+      logExperimentalWarning(runtime);
+      runtime.log(`Claw add plan: ${plan.claw.name}@${plan.claw.version}`);
+      logClawAddPlanSummary(plan, runtime);
+    }
+    return;
+  }
+
+  if (opts.planIntegrity !== plan.planIntegrity) {
+    const message = "The consented Claw plan no longer matches; run add --dry-run again.";
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
+        stability: CLAW_OUTPUT_STABILITY,
+        status: "failed",
+        planIntegrity: plan.planIntegrity,
+        error: { code: "plan_integrity_mismatch", message },
+      });
+    } else {
+      runtime.error(message);
+    }
+    runtime.exit(1);
+    return;
+  }
+
+  let addResult;
+  try {
+    addResult = await applyClawAddPlan(plan, { consentPlanIntegrity: opts.planIntegrity });
+  } catch (error) {
+    const code = error instanceof ClawAddMutationError ? error.code : "add_failed";
+    const message = (error as Error).message;
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
+        stability: CLAW_OUTPUT_STABILITY,
+        status: "failed",
+        error: { code, message },
+      });
+    } else {
+      runtime.error(message);
+    }
+    runtime.exit(1);
+    return;
+  }
+
+  if (opts.json) {
+    writeRuntimeJson(runtime, addResult);
+  } else {
+    logExperimentalWarning(runtime);
+    runtime.log(`Added agent: ${addResult.agent.finalId}`);
+    runtime.log(`Workspace: ${addResult.agent.workspace}`);
+    runtime.log(`Status: ${addResult.status}`);
+  }
+  if (addResult.status !== "complete") {
     runtime.exit(1);
   }
 }

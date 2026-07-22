@@ -1,13 +1,14 @@
 // Tests for the grouped Claw manifest and read-only add plan.
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
-import type { ClawManifest, ClawSourceIdentity, ClawSourceSnapshot } from "./types.js";
+import type { ClawManifest, ClawSourceIdentity } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const baseManifest = {
   schemaVersion: 1,
@@ -36,7 +37,7 @@ const baseManifest = {
     github: {
       command: "npx",
       args: ["--yes", "@acme/github-mcp@3.4.1"],
-      env: { API_TOKEN: "${GITHUB_TOKEN}" },
+      env: { GITHUB_TOKEN: "${GITHUB_TOKEN}" },
       toolFilter: { include: ["issues_list"], exclude: ["repository_delete"] },
       timeout: 30,
     },
@@ -61,16 +62,8 @@ function requireManifest(value: unknown = baseManifest): ClawManifest {
   return result.manifest;
 }
 
-function snapshotDigest(value: string | Buffer): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
-}
-
-async function createPlanSource(): Promise<{
-  source: ClawSourceIdentity;
-  snapshot: ClawSourceSnapshot;
-  workspace: string;
-}> {
-  const root = await mkdtemp(join(tmpdir(), "openclaw-claw-plan-"));
+async function createPlanSource(): Promise<{ source: ClawSourceIdentity; workspace: string }> {
+  const root = tempDirs.make("openclaw-claw-plan-");
   await mkdir(join(root, "workspace", "reference"), { recursive: true });
   await writeFile(join(root, "workspace", "AGENTS.md"), "# Agent\n", "utf8");
   await writeFile(join(root, "workspace", "reference", "policy.md"), "Policy\n", "utf8");
@@ -84,22 +77,6 @@ async function createPlanSource(): Promise<{
       integrityKind: "development-snapshot",
       integrity: "sha256:test",
       byteLength: 0,
-    },
-    snapshot: {
-      workspaceSources: [
-        {
-          sourcePath: "workspace/AGENTS.md",
-          realPath: join(root, "workspace", "AGENTS.md"),
-          byteLength: Buffer.byteLength("# Agent\n"),
-          digest: snapshotDigest("# Agent\n"),
-        },
-        {
-          sourcePath: "workspace/reference/policy.md",
-          realPath: join(root, "workspace", "reference", "policy.md"),
-          byteLength: Buffer.byteLength("Policy\n"),
-          digest: snapshotDigest("Policy\n"),
-        },
-      ],
     },
     workspace: join(root, "new-workspace"),
   };
@@ -294,7 +271,7 @@ describe("parseClawManifest", () => {
 
 describe("readClawManifestFile", () => {
   it("takes published identity from package.json", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-package-"));
+    const root = tempDirs.make("openclaw-claw-package-");
     await writeFile(
       join(root, "package.json"),
       JSON.stringify({
@@ -327,7 +304,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("synthesizes explicit development identity for a standalone manifest", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-development-"));
+    const root = tempDirs.make("openclaw-claw-development-");
     const path = join(root, "demo.claw.json");
     await writeFile(
       path,
@@ -349,7 +326,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("rejects workspace sources through an intermediate symlink", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-reader-symlink-"));
+    const root = tempDirs.make("openclaw-claw-reader-symlink-");
     await mkdir(join(root, "workspace"));
     await writeFile(join(root, "workspace", "AGENTS.md"), "# Agent\n", "utf8");
     await symlink(
@@ -377,7 +354,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("rejects a workspace source over the per-file byte limit", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-reader-file-limit-"));
+    const root = tempDirs.make("openclaw-claw-reader-file-limit-");
     await writeFile(join(root, "large.md"), Buffer.alloc(1024 * 1024 + 1));
     const manifestPath = join(root, "demo.claw.json");
     await writeFile(
@@ -399,7 +376,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("rejects aggregate workspace bytes before reading source contents", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-reader-aggregate-limit-"));
+    const root = tempDirs.make("openclaw-claw-reader-aggregate-limit-");
     const files = [];
     for (let index = 0; index < 5; index += 1) {
       const source = `large-${index}.md`;
@@ -426,7 +403,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("rejects package manifests that escape the package root", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "openclaw-claw-escape-"));
+    const parent = tempDirs.make("openclaw-claw-escape-");
     const root = join(parent, "package");
     await mkdir(root);
     await writeFile(
@@ -455,11 +432,10 @@ describe("readClawManifestFile", () => {
 
 describe("buildClawAddPlan", () => {
   it("plans one new agent, workspace, packages, MCP servers, and agent-pinned cron jobs", async () => {
-    const { source, snapshot, workspace } = await createPlanSource();
+    const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
-      snapshot,
       context: { workspace },
     });
 
@@ -494,9 +470,6 @@ describe("buildClawAddPlan", () => {
         expect.objectContaining({ kind: "cronJob", id: "weekday-triage" }),
       ]),
     );
-    expect(
-      plan.capabilityChanges.find((change) => change.kind === "mcpServer")?.effect.env,
-    ).toEqual([{ name: "API_TOKEN", reference: "GITHUB_TOKEN" }]);
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
         kind: "workspaceFile",
@@ -514,11 +487,10 @@ describe("buildClawAddPlan", () => {
   });
 
   it("blocks agent, configured workspace, MCP, and cron collisions", async () => {
-    const { source, snapshot, workspace } = await createPlanSource();
+    const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
-      snapshot,
       context: {
         workspace,
         existingAgentIds: ["github-triage"],
@@ -539,12 +511,33 @@ describe("buildClawAddPlan", () => {
     expect(plan.summary.blockedActions).toBe(8);
   });
 
-  it("uses an explicit unused agent id for every derived action", async () => {
-    const { source, snapshot, workspace } = await createPlanSource();
+  it("canonicalizes a missing workspace through an existing aliased parent", async () => {
+    const { source } = await createPlanSource();
+    const root = tempDirs.make("openclaw-claw-workspace-alias-");
+    const canonicalParent = join(root, "canonical");
+    const aliasParent = join(root, "alias");
+    await mkdir(canonicalParent);
+    await symlink(canonicalParent, aliasParent, process.platform === "win32" ? "junction" : "dir");
+    const canonicalWorkspace = join(await realpath(canonicalParent), "new-workspace");
+
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
-      snapshot,
+      context: {
+        workspace: join(aliasParent, "new-workspace"),
+        existingWorkspacePaths: [canonicalWorkspace],
+      },
+    });
+
+    expect(plan.agent.workspace).toBe(canonicalWorkspace);
+    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "workspace_collision" }));
+  });
+
+  it("uses an explicit unused agent id for every derived action", async () => {
+    const { source, workspace } = await createPlanSource();
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
       context: { agentId: "triage-two", workspace },
     });
 
@@ -555,8 +548,13 @@ describe("buildClawAddPlan", () => {
     );
   });
 
-  it("blocks workspace sources missing from the validated snapshot", async () => {
-    const { source, snapshot, workspace } = await createPlanSource();
+  it("rejects workspace sources through symlinked parents", async () => {
+    const { source, workspace } = await createPlanSource();
+    await symlink(
+      join(source.packageRoot, "workspace"),
+      join(source.packageRoot, "workspace-link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const plan = await buildClawAddPlan({
       manifest: requireManifest({
         schemaVersion: 1,
@@ -566,12 +564,11 @@ describe("buildClawAddPlan", () => {
         },
       }),
       source,
-      snapshot,
       context: { workspace },
     });
 
     expect(plan.blockers).toContainEqual(
-      expect.objectContaining({ code: "workspace_source_invalid" }),
+      expect.objectContaining({ code: "workspace_source_unsafe" }),
     );
     const workspaceAction = plan.actions.find(
       (action) => action.kind === "workspaceFile" && action.id === "AGENTS.md",
@@ -580,20 +577,37 @@ describe("buildClawAddPlan", () => {
     expect(workspaceAction).not.toHaveProperty("digest");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "canonicalizes workspace identity through symlinked parents",
+    async () => {
+      const { source } = await createPlanSource();
+      const realParent = join(source.packageRoot, "real-parent");
+      const aliasParent = join(source.packageRoot, "alias-parent");
+      await mkdir(realParent, { recursive: true });
+      await symlink(realParent, aliasParent, "dir");
+
+      const plan = await buildClawAddPlan({
+        manifest: requireManifest({ schemaVersion: 1, agent: { id: "canonical-agent" } }),
+        source,
+        context: { workspace: join(aliasParent, "workspace-canonical-agent") },
+      });
+
+      const canonicalWorkspace = join(realParent, "workspace-canonical-agent");
+      expect(plan.agent.workspace).toBe(canonicalWorkspace);
+      expect(plan.agent.config.workspace).toBe(canonicalWorkspace);
+      expect(plan.actions.find((action) => action.kind === "workspace")?.target).toBe(
+        canonicalWorkspace,
+      );
+    },
+  );
+
   it("blocks aggregate workspace bytes before hashing sources", async () => {
     const { source, workspace } = await createPlanSource();
     const files = [];
-    const workspaceSources = [];
     for (let index = 0; index < 5; index += 1) {
       const sourcePath = `workspace/large-${index}.md`;
       await writeFile(join(source.packageRoot, sourcePath), Buffer.alloc(1024 * 1024, index));
       files.push({ source: sourcePath, path: `large-${index}.md` });
-      workspaceSources.push({
-        sourcePath,
-        realPath: join(source.packageRoot, sourcePath),
-        byteLength: 1024 * 1024,
-        digest: snapshotDigest(Buffer.alloc(1024 * 1024, index)),
-      });
     }
     const plan = await buildClawAddPlan({
       manifest: requireManifest({
@@ -602,7 +616,6 @@ describe("buildClawAddPlan", () => {
         workspace: { files },
       }),
       source,
-      snapshot: { workspaceSources },
       context: { workspace },
     });
 
@@ -612,67 +625,24 @@ describe("buildClawAddPlan", () => {
     const workspaceFileActions = plan.actions.filter((action) => action.kind === "workspaceFile");
     expect(workspaceFileActions).toHaveLength(5);
     expect(workspaceFileActions.every((action) => action.blocked)).toBe(true);
-    expect(workspaceFileActions.every((action) => action.blocked)).toBe(true);
-  });
-
-  it("uses the validated snapshot after source files change", async () => {
-    const { source, snapshot, workspace } = await createPlanSource();
-    const agentsSnapshot = snapshot.workspaceSources.find(
-      (entry) => entry.sourcePath === "workspace/AGENTS.md",
-    );
-    await writeFile(join(source.packageRoot, "workspace", "AGENTS.md"), "# Changed\n", "utf8");
-
-    const plan = await buildClawAddPlan({
-      manifest: requireManifest(),
-      source,
-      snapshot,
-      context: { workspace },
-    });
-
-    expect(
-      plan.actions.find((action) => action.kind === "workspaceFile" && action.id === "AGENTS.md")
-        ?.digest,
-    ).toBe(agentsSnapshot?.digest);
-    expect(agentsSnapshot?.digest).toBe(snapshotDigest("# Agent\n"));
-  });
-
-  it("blocks when workspace absence cannot be proven", async () => {
-    const { source, snapshot } = await createPlanSource();
-    const workspace = join(source.packageRoot, "x".repeat(300));
-    const plan = await buildClawAddPlan({
-      manifest: requireManifest(),
-      source,
-      snapshot,
-      context: { workspace },
-    });
-
-    expect(plan.blockers).toContainEqual(
-      expect.objectContaining({ code: "workspace_probe_failed" }),
-    );
-    expect(plan.actions.find((action) => action.kind === "workspace")).toMatchObject({
-      blocked: true,
-      details: { expectedState: "unknown" },
-    });
+    expect(workspaceFileActions.every((action) => !Object.hasOwn(action, "digest"))).toBe(true);
   });
 
   it("binds plan integrity to the source and planned mutations", async () => {
-    const { source, snapshot, workspace } = await createPlanSource();
+    const { source, workspace } = await createPlanSource();
     const first = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
-      snapshot,
       context: { workspace },
     });
     const repeated = await buildClawAddPlan({
       manifest: requireManifest(),
       source,
-      snapshot,
       context: { workspace },
     });
     const changed = await buildClawAddPlan({
       manifest: requireManifest(),
       source: { ...source, integrity: "sha256:changed" },
-      snapshot,
       context: { workspace },
     });
     const changedCapability = await buildClawAddPlan({
@@ -681,7 +651,6 @@ describe("buildClawAddPlan", () => {
         agent: { ...baseManifest.agent, tools: { allow: ["read", "exec"] } },
       }),
       source,
-      snapshot,
       context: { workspace },
     });
 

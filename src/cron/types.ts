@@ -196,6 +196,11 @@ export type CronRunDiagnostics = {
   entries: CronRunDiagnostic[];
 };
 
+/** Explicit execution-error disposition used consistently by retry, history, and alerts. */
+export type CronRunErrorClassification =
+  | { kind: "reason"; reason: FailoverReason }
+  | { kind: "permanent" };
+
 /** Execution result persisted on cron state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
   status: CronRunStatus;
@@ -204,6 +209,7 @@ export type CronRunOutcome = {
   executionStarted?: boolean;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
+  errorClassification?: CronRunErrorClassification;
   summary?: string;
   sessionId?: string;
   sessionKey?: string;

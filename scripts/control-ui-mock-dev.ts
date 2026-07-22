@@ -42,6 +42,8 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 const ATTENTION_FIXTURE_EXPIRES_AT = Date.parse("2099-01-01T00:00:00.000Z");
 const NARRATION_DEMO_SESSION_KEY = "agent:main:sidebar-narration-demo";
 const NARRATION_DEMO_RUN_ID = "mock-sidebar-narration-run";
+const OBSERVER_DEMO_SESSION_KEY = "agent:main:session-observer-demo";
+const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
@@ -1063,6 +1065,19 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
       childSessions: ["agent:main:lisbon-trip"],
     }),
+    sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
+      activeRunIds: [OBSERVER_DEMO_RUN_ID],
+      hasActiveRun: true,
+      observerDigest: {
+        headline: "Third run of the same vitest file - two assertions still failing",
+        health: "grinding",
+        revision: 1,
+        runId: OBSERVER_DEMO_RUN_ID,
+        updatedAt: baseTime - 2_000,
+      },
+      startedAt: baseTime - 4_000,
+      status: "running",
+    }),
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
       hasActiveRun: true,
       startedAt: baseTime - 45_000,
@@ -1085,6 +1100,15 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     }),
     sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
       execCwd: "/Users/peter/Work/openclaw",
+      lastReadAt: baseTime - 120_000,
+      observerDigest: {
+        headline: "Done: fixed the flaky retry-window test",
+        health: "done",
+        revision: 1,
+        runId: "mock-idle-final-run",
+        updatedAt: baseTime - 40_000,
+      },
+      unread: true,
     }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
@@ -1195,6 +1219,10 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         cpuCount: 16,
         memoryTotalBytes: 68_719_476_736,
         memoryFreeBytes: 34_359_738_368,
+        defaultAgentUtilityModel: {
+          status: "auto",
+          model: "anthropic/claude-haiku-4-5",
+        },
       },
       "fs.listDir": {
         cases: [
@@ -1676,6 +1704,39 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     repeatingSessionEvents: {
       intervalMs: 3_000,
       events: [
+        {
+          event: "session.observer",
+          payload: {
+            headline: "Reading the failing test",
+            health: "on-track",
+            revision: 2,
+            runId: OBSERVER_DEMO_RUN_ID,
+            sessionKey: OBSERVER_DEMO_SESSION_KEY,
+            updatedAt: baseTime + 1_000,
+          },
+        },
+        {
+          event: "session.observer",
+          payload: {
+            headline: "Third run of the same vitest file - two assertions still failing",
+            health: "grinding",
+            revision: 3,
+            runId: OBSERVER_DEMO_RUN_ID,
+            sessionKey: OBSERVER_DEMO_SESSION_KEY,
+            updatedAt: baseTime + 4_000,
+          },
+        },
+        {
+          event: "session.observer",
+          payload: {
+            headline: "Same failure five runs in a row - it may be circling",
+            health: "stuck",
+            revision: 4,
+            runId: OBSERVER_DEMO_RUN_ID,
+            sessionKey: OBSERVER_DEMO_SESSION_KEY,
+            updatedAt: baseTime + 7_000,
+          },
+        },
         {
           event: "agent",
           payload: {

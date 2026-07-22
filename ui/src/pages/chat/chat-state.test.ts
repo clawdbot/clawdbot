@@ -50,6 +50,92 @@ afterEach(() => {
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("rejects a run-less observer digest during an identified active run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: "run-1",
+      observerDigest: projectedDigest,
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.observer",
+      payload: {
+        sessionKey: projectedDigest.sessionKey,
+        revision: 2,
+        updatedAt: 2_000,
+        headline: "Run-less live status",
+        health: "stuck",
+      },
+    });
+
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the row-active observer run when attaching mid-run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "r1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: null,
+      observerDigest: projectedDigest,
+      sessionsResult: {
+        sessions: [
+          {
+            key: projectedDigest.sessionKey,
+            hasActiveRun: true,
+            activeRunIds: ["r1"],
+          },
+        ],
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+    const observerEvent = (runId?: string) =>
+      ({
+        type: "event" as const,
+        event: "session.observer",
+        payload: {
+          sessionKey: projectedDigest.sessionKey,
+          ...(runId ? { runId } : {}),
+          revision: 2,
+          updatedAt: 2_000,
+          headline: `Live status ${runId ?? "without run"}`,
+          health: "grinding",
+        },
+      }) satisfies Parameters<typeof handlePageGatewayEvent>[1];
+
+    handlePageGatewayEvent(state, observerEvent());
+    handlePageGatewayEvent(state, observerEvent("r2"));
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    handlePageGatewayEvent(state, observerEvent("r1"));
+    expect(state.observerDigest?.headline).toBe("Live status r1");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("tracks waiting approval only for the selected session until resolution", () => {
     const state = {
       sessionKey: "agent:main:current",

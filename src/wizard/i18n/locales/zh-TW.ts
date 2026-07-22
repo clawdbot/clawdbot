@@ -161,8 +161,9 @@ export const zh_TW = {
       option: "{name} — {reason}（偵測到：{app}）",
       optionThirdParty:
         "{name} — {reason}（偵測到：{app}）— 第三方 ClawHub 技能；將安裝其發佈者的程式碼",
-      scanning:
-        "正在掃描已安裝的應用程式 — 應用程式名稱會透過你設定的模型與 ClawHub 搜尋進行比對（可透過 wizard.appRecommendations 停用）…",
+      scanDisclosure:
+        "應用程式名稱會使用你設定的模型和 ClawHub 搜尋進行比對（可透過 wizard.appRecommendations 停用）。",
+      scanning: "正在掃描已安裝的應用程式…",
       select: "安裝推薦的插件和技能",
       skillTrust: "信任並安裝 ClawHub 技能 {name}？",
       skipped: "已略過應用程式推薦：{reason}",

@@ -32,6 +32,12 @@ import type {
   Tool,
   ToolCall,
 } from "../types.js";
+import {
+  clearPendingCommentaryText,
+  rememberPendingCommentaryTags,
+  tagPendingCommentaryText,
+  type PendingCommentaryTags,
+} from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -177,6 +183,7 @@ export const streamOpenAICompletions: StreamFunction<
       stopReason: "stop",
       timestamp: Date.now(),
     };
+    const provisionalCommentaryTags: PendingCommentaryTags = new Map();
 
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
@@ -498,11 +505,15 @@ export const streamOpenAICompletions: StreamFunction<
             appendPartitionedContent(refusalText, Boolean(foundReasoningField));
           }
 
-          if (choiceDelta.tool_calls) {
+          if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
             flushPartitionedContent();
             // The tool-call lane is also a reasoning boundary; seal the thought
             // before toolcall_start so thinking_end never trails the action.
             sealNativeReasoningBeforeText();
+            rememberPendingCommentaryTags(
+              provisionalCommentaryTags,
+              tagPendingCommentaryText(output.content),
+            );
             for (const toolCall of choiceDelta.tool_calls) {
               const block = ensureToolCallBlock(toolCall);
               if (!block.id && toolCall.id) {
@@ -578,6 +589,12 @@ export const streamOpenAICompletions: StreamFunction<
       }
       if (hasToolCalls && output.stopReason !== "toolUse") {
         output.content = output.content.filter((block) => block.type !== "toolCall");
+      }
+      if (output.stopReason !== "toolUse") {
+        clearPendingCommentaryText(provisionalCommentaryTags);
+      }
+      if (output.stopReason === "toolUse") {
+        tagPendingCommentaryText(output.content);
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });

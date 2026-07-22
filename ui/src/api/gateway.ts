@@ -124,6 +124,7 @@ function isTrustedRetryEndpoint(url: string): boolean {
 }
 
 export type GatewayControlUiPluginTab = NonNullable<HelloOk["controlUiTabs"]>[number];
+export type GatewayControlUiPluginWidgetKind = NonNullable<HelloOk["controlUiWidgetKinds"]>[number];
 export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | "policy"> & {
   server?: Partial<HelloOk["server"]>;
   features?: Partial<HelloOk["features"]>;

@@ -14,7 +14,11 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
-While you watch a running session, the Gateway can use that agent's utility model to produce a compact status digest for session status surfaces. The latest digest stays with the session after the run becomes idle. Session observation is enabled by default; set `gateway.controlUi.sessionObserver: false` to disable it gateway-wide, or set `agents.defaults.utilityModel: ""` to disable utility-model tasks for agents that do not override that setting.
+While you watch a running session, the Gateway can use that agent's utility model to produce a compact status digest. Chat shows it as a one-line status pill that expands into a card with the assessment, plan progress, pull requests, and elapsed time. The card can expand once when a run becomes stuck or needs input; the `/btw` side chat takes priority over the expanded card.
+
+After the first digest arrives, it owns that run's sidebar subtitle instead of heuristic live activity. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
+
+Session observation is enabled by default. In **Settings > Appearance > Sidebar**, you can turn it off gateway-wide, inspect the resolved small model and its provenance, or choose automatic routing, disable utility tasks, or select an explicit `agents.defaults.utilityModel`. The equivalent config controls are `gateway.controlUi.sessionObserver: false` and `agents.defaults.utilityModel: ""`.
 
 ## Quick open (local)
 

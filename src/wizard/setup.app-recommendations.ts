@@ -126,8 +126,8 @@ export async function setupAppRecommendations(params: {
   const platform = params.platform ?? process.platform;
   // Product decision: default-on "magical" scan with a kill switch, not
   // consent-first. App labels/bundle ids go to the user's configured model and
-  // ClawHub search; the scanning progress line and the results note disclose
-  // this, and wizard.appRecommendations=false disables the step entirely.
+  // ClawHub search; a static disclosure stays in scrollback before app names
+  // leave the machine, while results repeat it. The config flag disables the step.
   if (
     params.config.wizard?.appRecommendations === false ||
     platform !== "darwin" ||
@@ -189,6 +189,14 @@ export async function setupAppRecommendations(params: {
     appLabels = [...new Set(stored.matches.map((match) => match.appLabel))];
     recordResult = commitStoredResult;
   } else {
+    const scanDisclosure = t("wizard.appRecommendations.scanDisclosure");
+    // Gateway wizards must show the disclosure on the client before app names
+    // leave the machine; CLI plain output preserves the same ordering locally.
+    if (params.prompter.plain) {
+      await params.prompter.plain(scanDisclosure);
+    } else {
+      params.runtime.log(scanDisclosure);
+    }
     const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
     let result: SetupAppRecommendationsResult;
     try {

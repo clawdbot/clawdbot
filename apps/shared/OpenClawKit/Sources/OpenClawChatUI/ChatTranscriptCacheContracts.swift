@@ -393,6 +393,7 @@ extension OpenClawChatCommandOutbox {
         false
     }
 
+    // periphery:ignore - protocol-typed callers require this forwarding convenience overload.
     public func markCommandRetriedIfPresent(
         id: String,
         expectation: OpenClawChatOutboxRetryExpectation,

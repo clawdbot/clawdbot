@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "agent": {
+    "id": "internal-triage",
+    "name": "Internal Triage",
+    "description": "Triages internal work without changing operator runtime settings.",
+    "identity": {
+      "name": "Triage"
+    },
+    "tools": {
+      "deny": ["exec", "browser"]
+    },
+    "humanDelay": {
+      "mode": "natural"
+    }
+  }
+}

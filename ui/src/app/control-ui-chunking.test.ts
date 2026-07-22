@@ -23,6 +23,11 @@ describe("Control UI build chunking", () => {
     expect(controlUiStableChunkName("/tmp/openclaw-pnpm-node-modules/json5/dist/index.js")).toBe(
       "config-runtime",
     );
+    expect(
+      controlUiStableChunkName(
+        "/tmp/openclaw-pnpm-node-modules/libphonenumber-js/max/exports/parsePhoneNumber.js",
+      ),
+    ).toBe("config-runtime");
     expect(controlUiStableChunkName("/repo/ui/src/components/config-form.shared.ts")).toBe(
       "control-ui-shared",
     );
