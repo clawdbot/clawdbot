@@ -8,10 +8,35 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
+import {
+  resolveGatewaySessionStoreTargetWithStore,
+  resolveSessionStoreKey,
+} from "./session-utils.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+test("legacy main rows in the default agent store resolve to that database", () => {
+  const cfg = {
+    session: { mainKey: "work" },
+    agents: { list: [{ id: "ops", default: true }, { id: "worker" }] },
+  } as OpenClawConfig;
+
+  expect(
+    resolveSessionStoreKey({
+      cfg,
+      sessionKey: "agent:main:work",
+      storeAgentId: "ops",
+    }),
+  ).toBe("agent:ops:work");
+  expect(
+    resolveSessionStoreKey({
+      cfg,
+      sessionKey: "agent:main:work",
+      storeAgentId: "worker",
+    }),
+  ).toBe("agent:main:work");
+});
 
 test("gateway keeps an observed deleted-main store reachable for a non-main default", async () => {
   const stateDir = tempDirs.make("openclaw-gateway-legacy-main-");

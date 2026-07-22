@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { readLegacySessionStoreTarget } from "./legacy-store-readonly.js";
@@ -15,6 +17,7 @@ import { resolveAllAgentSessionStoreCandidateTargetsSync } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
 const LEGACY_AGENT_ID = "main";
+const MAX_MIGRATION_RETRIES = 1;
 
 export type LegacyMainSessionClaim = {
   agentId: string;
@@ -71,6 +74,32 @@ export type LegacyMainSessionKeyMigrationResult = {
 
 type LoadedClaim = { claim: LegacyMainSessionClaim; entry: SessionEntry };
 type UnresolvedOutcome = Extract<LegacyMainSessionKeyMigrationOutcome, { resolved: false }>;
+
+function comparableEntry(entry: SessionEntry): Omit<SessionEntry, "sessionFile"> {
+  const { sessionFile: _sessionFile, ...metadata } = entry;
+  return metadata;
+}
+
+function transcriptFingerprint(record: LoadedClaim): { count: number; lastDigest: string } {
+  const events = loadSqliteTranscriptEventsSync({
+    agentId: record.claim.agentId,
+    sessionId: record.entry.sessionId,
+    storePath: record.claim.storePath,
+  });
+  return {
+    count: events.length,
+    lastDigest: createHash("sha256")
+      .update(JSON.stringify(events.at(-1) ?? null))
+      .digest("hex"),
+  };
+}
+
+function recordsAreIdentical(left: LoadedClaim, right: LoadedClaim): boolean {
+  return (
+    isDeepStrictEqual(comparableEntry(left.entry), comparableEntry(right.entry)) &&
+    isDeepStrictEqual(transcriptFingerprint(left), transcriptFingerprint(right))
+  );
+}
 
 function resolveTarget(cfg: OpenClawConfig) {
   const roster = cfg.agents?.list ?? [];
@@ -175,6 +204,7 @@ async function removeAliases(params: {
 }
 
 async function migrateSource(params: {
+  attempt?: number;
   base: OutcomeBase;
   defaultAgentId: string;
   legacyKeys: string[];
@@ -194,7 +224,16 @@ async function migrateSource(params: {
   if (aliases.length === 0) {
     return { ...params.base, kind: "not-needed", resolved: true, reason: "no-legacy-rows" };
   }
-  if (new Set(aliases.map((alias) => alias.claim.sessionId)).size > 1) {
+  const source = aliases.toSorted(
+    (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
+  )[0]!;
+  let aliasesAgree: boolean;
+  try {
+    aliasesAgree = aliases.every((alias) => recordsAreIdentical(source, alias));
+  } catch (error) {
+    return unreadable({ ...params, error });
+  }
+  if (!aliasesAgree) {
     return {
       ...params.base,
       kind: "aliases-disagree",
@@ -202,9 +241,6 @@ async function migrateSource(params: {
       aliases: aliases.map((alias) => alias.claim),
     };
   }
-  const source = aliases.toSorted(
-    (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
-  )[0]!;
   let canonical: ReturnType<typeof loadExactSqliteSessionEntry>;
   try {
     canonical = loadExactSqliteSessionEntry({
@@ -222,7 +258,14 @@ async function migrateSource(params: {
       sessionKey: params.base.canonicalKey,
       storePath: params.base.targetStorePath,
     };
-    if (canonical.entry.sessionId !== source.entry.sessionId) {
+    const canonicalRecord = { claim: canonicalClaim, entry: canonical.entry };
+    let identical: boolean;
+    try {
+      identical = recordsAreIdentical(canonicalRecord, source);
+    } catch (error) {
+      return unreadable({ ...params, error });
+    }
+    if (!identical) {
       return {
         ...params.base,
         kind: "canonical-exists-different",
@@ -244,7 +287,15 @@ async function migrateSource(params: {
   }
 
   try {
-    if (params.sourceStorePath === params.base.targetStorePath) {
+    const sourceTarget = resolveSqliteTargetFromSessionStorePath(params.sourceStorePath, {
+      agentId: params.sourceAgentId,
+    });
+    const targetTarget = resolveSqliteTargetFromSessionStorePath(params.base.targetStorePath, {
+      agentId: params.defaultAgentId,
+    });
+    const samePhysicalStore =
+      sourceTarget.path === targetTarget.path && sourceTarget.agentId === targetTarget.agentId;
+    if (samePhysicalStore) {
       const result = await migrateSqliteSessionEntryKeys({
         agentId: params.defaultAgentId,
         storePath: params.base.targetStorePath,
@@ -252,7 +303,13 @@ async function migrateSource(params: {
         legacyKeys: params.legacyKeys,
       });
       if (result.status !== "migrated") {
-        return await migrateSource(params);
+        if ((params.attempt ?? 0) >= MAX_MIGRATION_RETRIES) {
+          return unreadable({
+            ...params,
+            error: `legacy main-session migration did not converge (${result.status}) from ${sourceTarget.path} to ${targetTarget.path}`,
+          });
+        }
+        return await migrateSource({ ...params, attempt: (params.attempt ?? 0) + 1 });
       }
     } else {
       const transcript = loadSqliteTranscriptEventsSync({
@@ -269,9 +326,58 @@ async function migrateSource(params: {
         readTranscriptEvents: (append) => transcript.forEach(append),
       });
       if (!imported.imported) {
-        return await migrateSource(params);
+        if ((params.attempt ?? 0) >= MAX_MIGRATION_RETRIES) {
+          return unreadable({
+            ...params,
+            error: `legacy main-session import did not converge from ${sourceTarget.path} to ${targetTarget.path}`,
+          });
+        }
+        return await migrateSource({ ...params, attempt: (params.attempt ?? 0) + 1 });
       }
-      const cleanupError = await removeAliases({ aliases, source });
+      const importedCanonical = loadExactSqliteSessionEntry({
+        agentId: params.defaultAgentId,
+        sessionKey: params.base.canonicalKey,
+        storePath: params.base.targetStorePath,
+      });
+      const currentAliases = loadClaims({
+        agentId: params.sourceAgentId,
+        legacyKeys: params.legacyKeys,
+        storePath: params.sourceStorePath,
+      });
+      const currentSource = currentAliases.find(
+        (alias) => alias.claim.sessionKey === source.claim.sessionKey,
+      );
+      const importedRecord = importedCanonical
+        ? {
+            claim: {
+              agentId: params.defaultAgentId,
+              sessionId: importedCanonical.entry.sessionId,
+              sessionKey: params.base.canonicalKey,
+              storePath: params.base.targetStorePath,
+            },
+            entry: importedCanonical.entry,
+          }
+        : undefined;
+      if (
+        !importedRecord ||
+        !currentSource ||
+        currentAliases.length !== aliases.length ||
+        !currentAliases.every((alias) => recordsAreIdentical(importedRecord, alias))
+      ) {
+        return {
+          ...params.base,
+          kind: "canonical-exists-different",
+          resolved: false,
+          canonical: importedRecord?.claim ?? {
+            agentId: params.defaultAgentId,
+            sessionId: source.entry.sessionId,
+            sessionKey: params.base.canonicalKey,
+            storePath: params.base.targetStorePath,
+          },
+          aliases: currentAliases.map((alias) => alias.claim),
+        };
+      }
+      const cleanupError = await removeAliases({ aliases: currentAliases, source: currentSource });
       if (cleanupError) {
         return unreadable({ ...params, error: cleanupError });
       }
