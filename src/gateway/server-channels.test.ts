@@ -1493,6 +1493,45 @@ describe("server-channels auto restart", () => {
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
+  it("hides unlisted timed-out reload stops from runtime snapshots", async () => {
+    let accountIds = [DEFAULT_ACCOUNT_ID];
+    const releaseFirstTask = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+          void releaseFirstTask.promise.then(resolve);
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    accountIds = ["account-b"];
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+      restartPending: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+
+    await manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected the listed replacement account to start",
+    );
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]).toBeUndefined();
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+  });
+
   it("does not restart when a timed-out recovery stop settles as terminal", async () => {
     const releaseFirstTask = createDeferred();
     const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
