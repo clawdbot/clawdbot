@@ -16,6 +16,14 @@ import type {
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
+export type ChannelsPairingAccount =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingAccount;
+export type ChannelsPairingApproveResult =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingApproveResult;
+export type ChannelsPairingListResult =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingListResult;
+export type ChannelsPairingRequest =
+  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -484,6 +492,7 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  createdBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatorIdentity;
   spawnedBy?: string;
   /** Collector swarm group that owns this child session, when applicable. */
   swarmGroupId?: string;

@@ -92,6 +92,14 @@ function backfillLegacyManagedImageRoots(db: DatabaseSync): void {
 }
 
 export function ensureAdditiveStateColumns(db: DatabaseSync): void {
+  if (ensureColumn(db, "claw_package_refs", "updated_at_ms INTEGER NOT NULL DEFAULT 0")) {
+    db.exec("UPDATE claw_package_refs SET updated_at_ms = installed_at_ms;");
+  }
+  ensureColumn(
+    db,
+    "claw_package_refs",
+    "package_integrity TEXT NOT NULL DEFAULT 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
+  );
   const addedDiagnosticEventSequence = ensureColumn(
     db,
     "diagnostic_events",

@@ -2,7 +2,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CopilotClient, approveAll } from "@github/copilot-sdk";
+import { CopilotClient } from "@github/copilot-sdk";
+import type { SessionConfig } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it, vi } from "vitest";
@@ -12,9 +13,13 @@ import type { CopilotClientPool } from "./runtime.js";
 const liveToolState = vi.hoisted(() => ({
   calls: [] as string[],
   expectedText: "phase-1-green",
+  permissionRequests: 0,
   sentinelPrefix: "copilot-live-smoke:",
   toolName: "live_echo",
+  userInputRequests: 0,
 }));
+
+const LIVE_MODEL_PREFERENCES = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.6-luna"] as const;
 
 vi.mock("openclaw/plugin-sdk/agent-harness", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness")>();
@@ -66,22 +71,47 @@ const TOKEN =
   "";
 const describeLive = LIVE && TOKEN ? describe : describe.skip;
 
-function createApproveAllPool(): CopilotClientPool {
+function wrapLiveSessionConfig(config: SessionConfig): SessionConfig {
+  const onPermissionRequest = config.onPermissionRequest;
+  const onUserInputRequest = config.onUserInputRequest;
+  return {
+    ...config,
+    ...(onPermissionRequest
+      ? {
+          onPermissionRequest: async (...args: Parameters<typeof onPermissionRequest>) => {
+            liveToolState.permissionRequests += 1;
+            return onPermissionRequest(...args);
+          },
+        }
+      : {}),
+    ...(onUserInputRequest
+      ? {
+          onUserInputRequest: async (...args: Parameters<typeof onUserInputRequest>) => {
+            liveToolState.userInputRequests += 1;
+            return onUserInputRequest(...args);
+          },
+        }
+      : {}),
+  };
+}
+
+function createLivePool(): CopilotClientPool {
   const activeClients = new Set<CopilotClient>();
 
   return {
     async acquire(key, options) {
-      const client = new CopilotClient(options);
+      const { copilotHome, ...clientOptions } = options;
+      const client = new CopilotClient({ ...clientOptions, baseDirectory: copilotHome });
       activeClients.add(client);
       return {
         key,
         client: {
           createSession: (config: Parameters<CopilotClient["createSession"]>[0]) =>
-            client.createSession({ ...config, onPermissionRequest: approveAll }),
+            client.createSession(wrapLiveSessionConfig(config)),
           resumeSession: (
             sessionId: Parameters<CopilotClient["resumeSession"]>[0],
             config: Parameters<CopilotClient["resumeSession"]>[1],
-          ) => client.resumeSession(sessionId, { ...config, onPermissionRequest: approveAll }),
+          ) => client.resumeSession(sessionId, wrapLiveSessionConfig(config)),
           stop: () => client.stop(),
         } as unknown as CopilotClient,
       };
@@ -105,8 +135,32 @@ function createApproveAllPool(): CopilotClientPool {
   };
 }
 
+async function resolveLiveModelId(copilotHome: string): Promise<string> {
+  const client = new CopilotClient({ baseDirectory: copilotHome, gitHubToken: TOKEN });
+  try {
+    await client.start();
+    const available = (await client.listModels()).filter(
+      (model) => model.policy?.state !== "disabled",
+    );
+    for (const preferred of LIVE_MODEL_PREFERENCES) {
+      if (available.some((model) => model.id === preferred)) {
+        return preferred;
+      }
+    }
+    const fallback = available[0]?.id;
+    if (!fallback) {
+      throw new Error("Copilot live smoke found no enabled models");
+    }
+    return fallback;
+  } finally {
+    await client.stop();
+  }
+}
+
 function createAttemptParams(params: {
   copilotHome: string;
+  modelId: string;
+  onAgentEvent?: (event: unknown) => void | Promise<void>;
   onAssistantDelta: (payload: { text: string }) => void | Promise<void>;
   prompt: string;
 }): AgentHarnessAttemptParams {
@@ -128,10 +182,11 @@ function createAttemptParams(params: {
     messages: [{ content: params.prompt, role: "user", timestamp: now }],
     model: {
       api: "openai-responses",
-      id: "gpt-4.1",
+      id: params.modelId,
       provider: "github-copilot",
     },
-    modelId: "gpt-4.1",
+    modelId: params.modelId,
+    onAgentEvent: params.onAgentEvent,
     onAssistantDelta: params.onAssistantDelta,
     profileVersion,
     prompt: params.prompt,
@@ -145,71 +200,108 @@ function createAttemptParams(params: {
 }
 
 describeLive("copilot agent runtime live smoke", () => {
-  it("runs one turn on gpt-4.1 with one custom tool", async () => {
+  it("uses one custom tool, then resumes with an isolated finalization turn", async () => {
     liveToolState.calls.length = 0;
+    liveToolState.permissionRequests = 0;
+    liveToolState.userInputRequests = 0;
     const streamedTexts: string[] = [];
-    const prompt = `Use the ${liveToolState.toolName} tool exactly once with text '${liveToolState.expectedText}', then reply with exactly two short sentences totaling at least twelve words.`;
+    const finalEventTypes: string[] = [];
+    const prompt = `Use the ${liveToolState.toolName} tool exactly once with text '${liveToolState.expectedText}', then reply with one short sentence.`;
     const copilotHome = await mkdtemp(join(tmpdir(), "openclaw-copilot-live-"));
-    const harness = createCopilotAgentHarness({ pool: createApproveAllPool() });
-
-    expect(
-      harness.supports({
-        provider: "github-copilot",
-        modelId: "gpt-4.1",
-        requestedRuntime: "copilot",
-      }),
-    ).toEqual({ supported: true, priority: 100 });
+    const modelId = await resolveLiveModelId(copilotHome);
+    const harness = createCopilotAgentHarness({ pool: createLivePool() });
 
     try {
-      const result = await harness.runAttempt(
-        createAttemptParams({
-          copilotHome,
-          onAssistantDelta: ({ text }) => {
-            if (text.trim()) {
-              streamedTexts.push(text);
-            }
-          },
-          prompt,
+      expect(
+        harness.supports({
+          provider: "github-copilot",
+          modelId,
+          requestedRuntime: "copilot",
         }),
-      );
-      const assistantText = result.assistantTexts.join("\n").trim();
-      const hasAssistantText = result.assistantTexts.some((text) => text.trim().length > 0);
+      ).toEqual({ supported: true, priority: 100 });
+
+      const attempt = createAttemptParams({
+        copilotHome,
+        modelId,
+        onAssistantDelta: ({ text }) => {
+          if (text.trim()) {
+            streamedTexts.push(text);
+          }
+        },
+        prompt,
+      });
+      const settledResult = await harness.runAttempt(attempt);
       const matchingCalls = liveToolState.calls.filter(
         (text) => text === liveToolState.expectedText,
       );
-      const usage = result.attemptUsage;
+      expect(settledResult.promptError).toBeUndefined();
+      expect(settledResult.timedOut).toBe(false);
+      expect(matchingCalls).toHaveLength(1);
+      expect(
+        settledResult.toolMetas.some(
+          (toolMeta) =>
+            toolMeta.toolName === liveToolState.toolName &&
+            toolMeta.meta?.includes(liveToolState.sentinelPrefix),
+        ),
+      ).toBe(true);
+
+      const finalPrompt = "Reply with exactly COPILOT-SETTLED-FINALIZER-OK and nothing else.";
+      const finalResult = await harness.finalizeSettledTurn?.({
+        attempt: {
+          ...attempt,
+          onAgentEvent: (event: unknown) => {
+            const type = (event as { type?: unknown } | undefined)?.type;
+            if (typeof type === "string") {
+              finalEventTypes.push(type);
+            }
+          },
+          prompt: finalPrompt,
+          runId: `${attempt.runId}-finalize`,
+        },
+        settledAttempt: settledResult,
+      });
+      if (!finalResult) {
+        throw new Error("Copilot harness did not expose settled tool finalization");
+      }
+      const assistantText = finalResult.assistant.content
+        .map((block) => (block.type === "text" ? block.text : ""))
+        .join("\n")
+        .trim();
+      const finalCapabilityEvents = finalEventTypes.filter((type) =>
+        /(tool|permission|user.?input|subagent)/i.test(type),
+      );
 
       console.info(
         "[copilot-live-smoke] summary",
         JSON.stringify(
           {
             assistantText,
+            finalCapabilityEvents,
+            finalEventTypes,
+            modelId,
+            permissionRequests: liveToolState.permissionRequests,
             toolCalls: liveToolState.calls,
             streamedTexts,
-            toolMetas: result.toolMetas,
-            usage,
+            toolMetas: settledResult.toolMetas,
+            usage: finalResult.usage,
+            userInputRequests: liveToolState.userInputRequests,
           },
           null,
           2,
         ),
       );
 
-      expect(result.promptError).toBeUndefined();
-      expect(result.timedOut).toBe(false);
-      expect(matchingCalls.length).toBeGreaterThanOrEqual(1);
-      expect(hasAssistantText).toBe(true);
-      expect(assistantText.length).toBeGreaterThan(0);
-      expect((usage?.input ?? 0) + (usage?.output ?? 0)).toBeGreaterThan(0);
-      expect(
-        result.toolMetas.some(
-          (toolMeta) =>
-            toolMeta.toolName === liveToolState.toolName &&
-            toolMeta.meta?.includes(liveToolState.sentinelPrefix),
-        ),
-      ).toBe(true);
+      expect(assistantText).toBe("COPILOT-SETTLED-FINALIZER-OK");
+      expect(liveToolState.calls).toEqual([liveToolState.expectedText]);
+      expect(finalResult.assistant.stopReason).not.toBe("toolUse");
+      expect(finalResult.assistant.content.every((block) => block.type !== "toolCall")).toBe(true);
+      expect(finalResult).not.toHaveProperty("toolMetas");
+      expect(finalCapabilityEvents).toEqual([]);
+      expect(liveToolState.permissionRequests).toBe(0);
+      expect(liveToolState.userInputRequests).toBe(0);
     } finally {
       await harness.dispose?.();
       await rm(copilotHome, { recursive: true, force: true });
     }
-  }, 90_000);
+  }, 180_000);
 });

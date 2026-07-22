@@ -49,7 +49,7 @@ const {
   resolveDefaultAccountId: resolveDefaultGoogleChatAccountId,
 } = createAccountListHelpers("googlechat", {
   implicitDefaultAccount: {
-    channelKeys: ["serviceAccount", "serviceAccountRef", "serviceAccountFile"],
+    channelKeys: ["serviceAccount", "serviceAccountFile"],
     envVars: [ENV_SERVICE_ACCOUNT, ENV_SERVICE_ACCOUNT_FILE],
   },
 });
@@ -75,7 +75,6 @@ function mergeGoogleChatAccountConfig(
     enabled: _ignoredEnabled,
     dangerouslyAllowNameMatching: _ignoredDangerouslyAllowNameMatching,
     serviceAccount: _ignoredServiceAccount,
-    serviceAccountRef: _ignoredServiceAccountRef,
     serviceAccountFile: _ignoredServiceAccountFile,
     ...defaultAccountShared
   } = defaultAccountConfig;
@@ -137,12 +136,6 @@ function resolveCredentialsFromConfig(params: {
   if (isSecretRef(account.serviceAccount)) {
     throw new Error(
       `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccount.source}:${account.serviceAccount.provider}:${account.serviceAccount.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-    );
-  }
-
-  if (isSecretRef(account.serviceAccountRef)) {
-    throw new Error(
-      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccountRef.source}:${account.serviceAccountRef.provider}:${account.serviceAccountRef.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
     );
   }
 

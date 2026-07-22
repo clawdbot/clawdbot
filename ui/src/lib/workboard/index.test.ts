@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover workboard behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";

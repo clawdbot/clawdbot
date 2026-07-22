@@ -158,6 +158,9 @@
           }
         ]
       }
+    },
+    "discovery": {
+      "novita": "refreshable"
     }
   }
 }

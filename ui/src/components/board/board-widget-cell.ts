@@ -11,6 +11,7 @@ import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
+  BoardObserverContext,
   BoardViewWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
@@ -69,6 +70,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
   @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
+  @property({ attribute: false }) observer?: BoardObserverContext;
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
   @property({ type: Number }) positionInSet = 1;
@@ -252,7 +254,11 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       if (!renderer) {
         throw new Error(t("board.widget.frameResolverMissing"));
       }
-      return renderer({ sessions: this.sessions, sessionKey: this.sessionKey });
+      return renderer({
+        observer: this.observer,
+        sessions: this.sessions,
+        sessionKey: this.sessionKey,
+      });
     }
     if (widget.contentKind === "plugin") {
       if (this.pluginRendererError) {

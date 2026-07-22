@@ -1,7 +1,11 @@
 // Gateway session reset/delete service.
 // Rotates transcripts and coordinates lifecycle cleanup across runtimes/hooks.
 import { randomUUID } from "node:crypto";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  type SessionCreatorIdentity,
+} from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
@@ -908,6 +912,7 @@ export async function performGatewaySessionReset(params: {
   clearSpawnedCwd?: boolean;
   reason: "new" | "reset";
   commandSource: string;
+  createdBy?: SessionCreatorIdentity;
   assertCurrent?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }): Promise<
@@ -1190,6 +1195,7 @@ export async function performGatewaySessionReset(params: {
           });
           const nextEntry: SessionEntry = {
             sessionId: nextSessionId,
+            ...(params.createdBy ? { createdBy: { ...params.createdBy } } : {}),
             sessionFile,
             updatedAt: now,
             systemSent: false,

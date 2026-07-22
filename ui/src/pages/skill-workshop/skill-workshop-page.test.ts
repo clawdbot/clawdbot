@@ -67,6 +67,7 @@ function createContext(
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "research",

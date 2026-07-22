@@ -34,6 +34,11 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
+  return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
+    ?.store;
+}
+
 // Count jobs the store still marks in-flight (`state.runningAtMs` is a number).
 // The scheduler sets this while a run is active and clears it on completion, so a
 // leftover marker (gateway killed mid-run) makes `cron list` show the job as
@@ -108,7 +113,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   try {
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch (err) {
-    const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+    const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     return [
       legacyCronStoreFinding({
         message: `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
@@ -252,7 +257,7 @@ export async function maybeRepairLegacyCronStore(params: {
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+    const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     note(
       [
         `Unable to read cron job store at ${shortenHomePath(storePath)}.`,

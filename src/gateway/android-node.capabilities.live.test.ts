@@ -612,7 +612,7 @@ describeLive("android node capability integration (preconditioned)", () => {
     );
     expect(
       commandsToRun.length,
-      "node.describe advertised no non-interactive allowlisted commands (check gateway.nodes allowCommands/denyCommands)",
+      "node.describe advertised no non-interactive allowlisted commands (check gateway.nodes.commands allow/deny)",
     ).toBeGreaterThan(0);
 
     const missingProfiles = commandsToRun.filter((command) => !COMMAND_PROFILES[command]);
@@ -632,7 +632,7 @@ describeLive("android node capability integration (preconditioned)", () => {
           `Android node missing required non-interactive command(s): ${missingRequiredCommands.join(", ")}`,
           `runnable after policy filtering (${commandsToRun.length}/${ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS.length}): ${commandsToRun.join(", ")}`,
           `advertised by node.describe: ${commands.join(", ")}`,
-          "precondition: update the Android node, or fix gateway.nodes allowCommands/denyCommands before running this suite",
+          "precondition: update the Android node, or fix gateway.nodes.commands allow/deny before running this suite",
         ].join("\n"),
       );
     }

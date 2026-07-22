@@ -23,9 +23,11 @@ class OpenClawWorkboardMiniWidget extends WorkboardWidgetElement {
         </button>
       </div>`;
     }
-    const boardId = this.readStringProp("boardId") ?? "default";
+    // No boardId prop means every board: silently scoping to "default" hides
+    // cards created with an explicit board id and renders an all-zero widget.
+    const boardId = this.readStringProp("boardId");
     const limit = Math.min(10, this.readPositiveIntegerProp("limit", 5));
-    const cards = this.cards.filter((card) => cardBoardId(card) === boardId);
+    const cards = boardId ? this.cards.filter((card) => cardBoardId(card) === boardId) : this.cards;
     const topCards = cards
       .filter((card) => card.status === "ready" || card.status === "running")
       .toSorted(
@@ -35,11 +37,14 @@ class OpenClawWorkboardMiniWidget extends WorkboardWidgetElement {
           left.title.localeCompare(right.title),
       )
       .slice(0, limit);
-    const workboardPath = `${pathForRoute("workboard", this.context?.basePath ?? "")}?board=${encodeURIComponent(boardId)}`;
+    const workboardBase = pathForRoute("workboard", this.context?.basePath ?? "");
+    const workboardPath = boardId
+      ? `${workboardBase}?board=${encodeURIComponent(boardId)}`
+      : workboardBase;
     return html`
       <section class="workboard-widget-mini" data-test-id="workboard-mini-widget">
         <header>
-          <strong>${boardId}</strong>
+          <strong>${boardId ?? t("workboard.allBoards")}</strong>
           <a href=${workboardPath}>${t("workboard.widget.openBoard")}</a>
         </header>
         <div class="workboard-widget-mini__counts" aria-label=${t("workboard.widget.statusCounts")}>

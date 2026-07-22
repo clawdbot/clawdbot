@@ -139,7 +139,7 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
     /**
      * Per-channel outbound response prefix override.
      *
-     * When set, this takes precedence over the global `messages.responsePrefix`.
+     * Account values take precedence over the channel-level value.
      * Use `""` to explicitly disable a global prefix for this channel.
      * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
      */

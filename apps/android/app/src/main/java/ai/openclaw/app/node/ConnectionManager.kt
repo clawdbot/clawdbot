@@ -27,6 +27,7 @@ class ConnectionManager(
   private val photosAvailable: () -> Boolean,
   private val installedAppsSharingEnabled: () -> Boolean,
   private val voiceWakeAvailable: () -> Boolean,
+  private val mobileUiAvailable: () -> Boolean,
   private val inlineWidgetsAvailable: () -> Boolean,
   private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
@@ -148,6 +149,7 @@ class ConnectionManager(
       installedAppsSharingEnabled = installedAppsSharingEnabled(),
       debugBuild = BuildConfig.DEBUG,
       voiceWakeEnabled = prefs.voiceWakeEnabled.value && voiceWakeAvailable(),
+      mobileUiAvailable = mobileUiAvailable(),
     )
 
   /** Builds the gateway-advertised node.invoke command list from current permission and feature state. */

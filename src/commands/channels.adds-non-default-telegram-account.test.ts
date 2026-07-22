@@ -1,7 +1,7 @@
 // Channels account tests cover non-default Telegram account setup, status, removal, and binding behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPatchedAccountSetupAdapter } from "../channels/plugins/setup-helpers.js";
-import type { ChannelStatusIssue } from "../channels/plugins/types.core.js";
+import type { ChannelSetupInput, ChannelStatusIssue } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { createScopedChannelConfigAdapter } from "../plugin-sdk/channel-config-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -35,6 +35,8 @@ type ChannelSectionConfig = {
   account?: string;
   accounts?: Record<string, Record<string, unknown>>;
 };
+
+type SignalSetupInput = ChannelSetupInput & { signalNumber?: string };
 
 function formatChannelStatusJoined(channelAccounts: Record<string, unknown>) {
   return formatGatewayChannelsStatusLines({
@@ -125,7 +127,7 @@ function createScopedCommandTestPlugin(params: {
             token: input.token,
             botToken: input.botToken,
             appToken: input.appToken,
-            signalNumber: input.signalNumber,
+            signalNumber: (input as SignalSetupInput).signalNumber,
           }),
       }),
       ...(params.singleAccountKeysToMove

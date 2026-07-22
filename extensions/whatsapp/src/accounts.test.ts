@@ -74,7 +74,7 @@ describe("resolveWhatsAppAuthDir", () => {
         channels: {
           whatsapp: {
             sendReadReceipts: false,
-            messagePrefix: "[root]",
+            responsePrefix: "[root]",
             debounceMs: 100,
             accounts: {
               work: {

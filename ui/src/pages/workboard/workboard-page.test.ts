@@ -23,6 +23,7 @@ function contextWithWorkboard(workboard: WorkboardCapability): ApplicationContex
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
     connected: false,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,

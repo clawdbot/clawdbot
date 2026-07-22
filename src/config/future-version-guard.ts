@@ -19,7 +19,7 @@ export type FutureConfigActionBlock = {
 type FutureConfigGuardParams = {
   action: string;
   snapshot?: Pick<ConfigFileSnapshot, "config" | "sourceConfig"> | null;
-  config?: Pick<OpenClawConfig, "meta"> | null;
+  config?: OpenClawConfig | null;
   currentVersion?: string;
   env?: Record<string, string | undefined>;
 };
@@ -30,11 +30,21 @@ function allowOlderBinaryDestructiveActions(env: Record<string, string | undefin
 }
 
 function resolveTouchedVersion(params: FutureConfigGuardParams): string | null {
-  // Prefer raw source config metadata so migrations/defaults cannot hide a newer writer.
+  const readSourceVersion = (value: unknown): string | undefined => {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    const meta = (value as { meta?: unknown }).meta;
+    if (!meta || typeof meta !== "object") {
+      return undefined;
+    }
+    const version = (meta as { lastTouchedVersion?: unknown }).lastTouchedVersion;
+    return typeof version === "string" ? version.trim() || undefined : undefined;
+  };
   return (
-    params.snapshot?.sourceConfig?.meta?.lastTouchedVersion?.trim() ||
-    params.snapshot?.config?.meta?.lastTouchedVersion?.trim() ||
-    params.config?.meta?.lastTouchedVersion?.trim() ||
+    readSourceVersion(params.snapshot?.sourceConfig) ??
+    readSourceVersion(params.snapshot?.config) ??
+    readSourceVersion(params.config) ??
     null
   );
 }

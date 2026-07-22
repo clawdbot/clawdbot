@@ -28,7 +28,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
 } from "../agent-scope.js";
-import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
+import {
+  acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
+} from "../prepared-model-runtime.js";
 import {
   applyAgentRunSessionTargetIdentity,
   resolveAgentRunSessionTarget,
@@ -210,9 +213,10 @@ async function runEmbeddedAgentInternal(
       };
       // Configless direct hosts reuse one bounded idle generation. Gateway and explicitly
       // configured runs release dynamic workspaces so one-off paths cannot accumulate owners.
-      const preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(preparedInput, {
-        retainIdleRunOwner,
-      });
+      const preparedModelRuntimeLease =
+        params.preparedModelRuntimeMode === "isolated-read-only"
+          ? await acquireReadOnlyPreparedModelRuntime(preparedInput)
+          : await acquireAgentRunPreparedModelRuntime(preparedInput, { retainIdleRunOwner });
       const preparedModelRuntime = preparedModelRuntimeLease.snapshot;
       try {
         // A reload may complete while admission waits. The committed generation owns config,

@@ -1,6 +1,7 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { isVerbose } from "../global-state.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
@@ -24,6 +25,7 @@ import {
 } from "./io.audit.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { resolveModelIdNormalizationPolicies } from "./io.context.js";
+import { recordConfigWriteMetadata } from "./io.meta.js";
 import {
   collectEnvRefPaths,
   containsConfigIncludeDirective,
@@ -254,16 +256,16 @@ export async function writeConfigFileFromContext(
     gatewayModeAfter,
   });
 
-  const shouldLogInVitest = (name: string) => deps.env.VITEST !== "true" || deps.env[name] === "1";
+  const readTestLogFlag = (name: string) => isVitestRuntimeEnv(deps.env) && deps.env[name] === "1";
   const logConfigOverwrite = () => {
     if (
       !snapshot.exists ||
       options.skipOutputLogs ||
-      !shouldLogInVitest("OPENCLAW_TEST_CONFIG_OVERWRITE_LOG")
+      (isVitestRuntimeEnv(deps.env) && !readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG"))
     ) {
       return;
     }
-    const testLog = deps.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
+    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
     if (!isVerbose() && deps.env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !testLog) {
       return;
     }
@@ -277,14 +279,14 @@ export async function writeConfigFileFromContext(
     );
   };
   const logConfigWriteAnomalies = () => {
+    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
     if (
       suspiciousReasons.length === 0 ||
       options.skipOutputLogs ||
-      !shouldLogInVitest("OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG")
+      (isVitestRuntimeEnv(deps.env) && !testLog)
     ) {
       return;
     }
-    const testLog = deps.env.OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG === "1";
     const showMissingMeta =
       isVerbose() || deps.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1" || testLog;
     const visibleReasons = showMissingMeta
@@ -410,6 +412,11 @@ export async function writeConfigFileFromContext(
         );
       }
       throw error;
+    }
+    try {
+      recordConfigWriteMetadata(new Date().toISOString(), options.lastTouchedVersionOverride);
+    } catch (error) {
+      deps.logger.warn(`Config metadata state update failed: ${formatErrorMessage(error)}`);
     }
     logConfigOverwrite();
     logConfigWriteAnomalies();

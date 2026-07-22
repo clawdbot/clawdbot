@@ -303,7 +303,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   });
 
   it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
-    const coreConfig = { messages: { tts: { provider: "openai" } } } as CoreConfig;
+    const coreConfig = { tts: { provider: "openai" } } as CoreConfig;
     const fullConfig = {
       plugins: {
         entries: {

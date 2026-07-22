@@ -49,6 +49,28 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
   return evidence;
 }
 
+function trackMaxActiveFlowRuns() {
+  const run = runQaFlowSuite.getMockImplementation();
+  if (!run) {
+    throw new Error("expected default QA flow suite mock implementation");
+  }
+  let active = 0;
+  let maxActive = 0;
+  runQaFlowSuite.mockImplementation(async (params) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
+    try {
+      return await run(params);
+    } finally {
+      active -= 1;
+    }
+  });
+  return () => maxActive;
+}
+
 describe("qa suite runtime launcher", () => {
   beforeEach(() => {
     runQaFlowSuite.mockReset();
@@ -264,24 +286,7 @@ describe("qa suite runtime launcher", () => {
 
   it("runs distinct pluggable-driver channels within the global concurrency budget", async () => {
     const repoRoot = await makeTempRepo("qa-suite-pluggable-channel-concurrency-");
-    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
-    if (!defaultFlowImplementation) {
-      throw new Error("expected default QA flow suite mock implementation");
-    }
-    let activeChannels = 0;
-    let maxActiveChannels = 0;
-    runQaFlowSuite.mockImplementation(async (params) => {
-      activeChannels += 1;
-      maxActiveChannels = Math.max(maxActiveChannels, activeChannels);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1);
-      });
-      try {
-        return await defaultFlowImplementation(params);
-      } finally {
-        activeChannels -= 1;
-      }
-    });
+    const maxActive = trackMaxActiveFlowRuns();
 
     await runQaSuite({
       repoRoot,
@@ -293,7 +298,43 @@ describe("qa suite runtime launcher", () => {
       scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
     });
 
-    expect(maxActiveChannels).toBe(2);
+    expect(maxActive()).toBe(2);
+  });
+
+  it("runs isolated same-channel adapter instances at suite concurrency", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
+    const maxActive = trackMaxActiveFlowRuns();
+
+    const scenarioIds = [
+      "matrix-approval-channel-target-both",
+      "matrix-approval-deny-reaction",
+      "matrix-approval-exec-metadata-chunked",
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-approval-plugin-metadata-single-event",
+      "matrix-approval-thread-target",
+    ];
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [
+        {
+          id: "matrix",
+          isolatesInstances: true,
+          matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+          create: vi.fn(),
+        },
+      ],
+      concurrency: 6,
+      scenarioIds,
+    });
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(6);
+    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual(
+      scenarioIds.map((scenarioId) => [scenarioId]),
+    );
+    expect(maxActive()).toBe(6);
   });
 
   it("binds one portable channel scenario without an explicit channel override", async () => {
@@ -1087,7 +1128,13 @@ describe("qa suite runtime launcher", () => {
     const testFileBlocked = new Promise<void>((resolve) => {
       releaseTestFile = resolve;
     });
-    runQaFlowSuite.mockRejectedValueOnce(new Error("flow partition failed"));
+    runQaFlowSuite.mockRejectedValueOnce(
+      new Error("flow partition failed", {
+        cause: Object.assign(new Error("unrelated capacity failure"), {
+          code: "POOL_EXHAUSTED",
+        }),
+      }),
+    );
     runQaTestFileScenarios.mockImplementationOnce(
       async (params: {
         outputDir: string;
@@ -1129,6 +1176,48 @@ describe("qa suite runtime launcher", () => {
     releaseTestFile();
     await expect(runPromise).rejects.toThrow("flow partition failed");
     expect(rejected).toBe(true);
+  });
+
+  it("records unavailable channel credentials as blocked evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-credential-unavailable-");
+    const poolError = Object.assign(new Error("no WhatsApp credential is available"), {
+      code: "POOL_EXHAUSTED",
+    });
+    runQaFlowSuite.mockRejectedValueOnce(
+      new Error("failed to create QA transport live:whatsapp: credential acquire failed", {
+        cause: new Error("credential acquire timed out", { cause: poolError }),
+      }),
+    );
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/credential-unavailable",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [{ id: "whatsapp", matches: () => true, create: vi.fn() }],
+      scenarioIds: ["whatsapp-status-command", "control-ui-chat-flow-playwright"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(result.result.scenarios[0]).toMatchObject({
+      status: "fail",
+      details: expect.stringContaining("channel credential unavailable"),
+    });
+    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
+      entries?: Array<{
+        execution?: { channel?: { id?: string } };
+        result?: { status?: string };
+        test?: { id?: string };
+      }>;
+    };
+    const blocked = evidence.entries?.find((entry) => entry.test?.id === "whatsapp-status-command");
+    expect(blocked).toMatchObject({
+      execution: { channel: { id: "whatsapp" } },
+      result: { status: "blocked" },
+    });
   });
 
   it("shares ordinary flow scenarios and isolates flow scenarios with config patches", async () => {

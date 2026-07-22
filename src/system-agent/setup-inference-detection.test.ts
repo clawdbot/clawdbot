@@ -99,6 +99,43 @@ describe("isolated setup inference detection", () => {
     expect(performance.now() - pendingStartedAt).toBeLessThan(1_000);
   });
 
+  it("preserves ambient API keys when detection times out", async () => {
+    const { detectSetupInferenceIsolated } = await loadDetectionModule();
+
+    const detection = await detectSetupInferenceIsolated({
+      workerUrl: blockingWorkerUrl,
+      workerData: {
+        blockMs: 10_000,
+        detection: emptyDetection(),
+        partialDetection: emptyDetection(),
+      },
+      timeoutMs: 50,
+      fallbackEnv: {
+        OPENAI_API_KEY: "test-openai-key",
+        ANTHROPIC_API_KEY: "test-anthropic-key",
+      },
+    });
+
+    expect(detection.candidates).toEqual([
+      {
+        kind: "openai-api-key",
+        modelRef: "openai/gpt-5.6",
+        label: "OpenAI API key",
+        detail: "OPENAI_API_KEY set",
+        credentials: true,
+        recommended: false,
+      },
+      {
+        kind: "anthropic-api-key",
+        modelRef: "anthropic/claude-opus-4-8",
+        label: "Anthropic API key",
+        detail: "ANTHROPIC_API_KEY set",
+        credentials: true,
+        recommended: false,
+      },
+    ]);
+  });
+
   it("coalesces concurrent detections behind one bounded worker", async () => {
     const { detectSetupInferenceIsolated } = await loadDetectionModule();
     const fallback = vi.fn(async () => emptyDetection());

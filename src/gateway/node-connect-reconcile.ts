@@ -175,7 +175,7 @@ export async function reconcileNodePairingOnConnect(params: {
 
   // Approved commands reconcile against the pairing allowlist: an approved
   // dangerous surface awaiting arming (e.g. computer.act without an
-  // allowCommands entry) must not read as a pairing upgrade on every
+  // commands.allow entry) must not read as a pairing upgrade on every
   // reconnect. Invoke-time policy still gates every call on the runtime
   // allowlist, so keeping it effective here grants nothing by itself.
   const approvedCommands = resolveApprovedReconnectCommands({

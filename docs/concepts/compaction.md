@@ -100,7 +100,7 @@ When unset, compaction starts with the active session model. If summarization fa
 
 ### Identifier preservation
 
-Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). Override with `identifierPolicy: "off"` to disable, or `identifierPolicy: "custom"` plus `identifierInstructions` for custom guidance.
+Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). Override with `identifierPolicy: "off"` to disable. Custom guidance belongs in a compaction provider's `summarize()` implementation.
 
 ### Active transcript byte guard
 

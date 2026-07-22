@@ -10,7 +10,7 @@ read_when:
 
 Most skills configuration lives under `skills` in
 `~/.openclaw/openclaw.json`. Agent-specific visibility lives under
-`agents.defaults.skills` and `agents.list[].skills`.
+`agents.defaults.skills` and `agents.entries.*.skills`.
 
 ```json5
 {
@@ -48,7 +48,7 @@ Most skills configuration lives under `skills` in
 ```
 
 <Note>
-  For built-in image generation, use `agents.defaults.imageGenerationModel`
+  For built-in image generation, use `agents.defaults.mediaModels.image`
   plus the core `image_generate` tool instead of `skills.entries`. Skill
   entries are for custom or third-party skill workflows only.
 </Note>
@@ -317,11 +317,11 @@ different visible skill set per agent.
 
 <ParamField path="agents.defaults.skills" type="string[]">
   Shared baseline allowlist inherited by agents that omit
-  `agents.list[].skills`. Omit entirely to leave skills unrestricted by
+  `agents.entries.*.skills`. Omit entirely to leave skills unrestricted by
   default.
 </ParamField>
 
-<ParamField path="agents.list[].skills" type="string[]">
+<ParamField path="agents.entries.*.skills" type="string[]">
   Explicit final skill set for that agent. Explicit lists **replace**
   inherited defaults — they do not merge. Set to `[]` to expose no skills for
   that agent.

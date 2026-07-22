@@ -196,6 +196,13 @@ Every job carries exactly one payload kind, chosen by flag:
   Restrict which tools the job can use, for example `--tools exec,read`.
 </ParamField>
 
+New jobs that can run tools always store an explicit tool policy. Jobs created by an agent
+are capped to the tools available to that creating turn, and the agent cannot widen the
+stored list. Jobs created by an authenticated operator without `--tools` store an
+unrestricted `*` policy; `cron edit --clear-tools` restores that explicit unrestricted
+policy. Existing jobs that predate an explicit tool policy retain their current behavior
+until their tool policy is explicitly edited or the job is recreated.
+
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
 Model-selection precedence for isolated jobs, highest first:

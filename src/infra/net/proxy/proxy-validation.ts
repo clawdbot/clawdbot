@@ -126,24 +126,6 @@ function validateProxyUrl(value: string | undefined): string[] {
   return [];
 }
 
-function validateProxyEnabled(source: ProxyValidationConfigSource, enabled: boolean): string[] {
-  if (enabled || source === "override" || source === "missing" || source === "disabled") {
-    return [];
-  }
-  if (source === "env") {
-    return ["proxy validation requires proxy.enabled to be true for OPENCLAW_PROXY_URL"];
-  }
-  return ["proxy validation requires proxy.enabled to be true for configured proxy URLs"];
-}
-
-function validateResolvedProxy(
-  source: ProxyValidationConfigSource,
-  enabled: boolean,
-  value: string | undefined,
-): string[] {
-  return [...validateProxyUrl(value), ...validateProxyEnabled(source, enabled)];
-}
-
 /** Resolves validation config precedence: explicit override, config, then env. */
 function resolveProxyValidationConfig(
   options: ResolveProxyValidationConfigOptions,
@@ -159,7 +141,7 @@ function resolveProxyValidationConfig(
       proxyUrl: overrideUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "override",
-      errors: validateResolvedProxy("override", true, overrideUrl),
+      errors: validateProxyUrl(overrideUrl),
     };
   }
 
@@ -171,11 +153,14 @@ function resolveProxyValidationConfig(
       caFileOverride: options.proxyCaFileOverride,
     });
     return {
-      enabled: options.config?.enabled === true,
+      enabled: options.config?.enabled !== false,
       proxyUrl: configUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "config",
-      errors: validateResolvedProxy("config", options.config?.enabled === true, configUrl),
+      errors:
+        options.config?.enabled === false
+          ? ["proxy validation is disabled by proxy.enabled=false"]
+          : validateProxyUrl(configUrl),
     };
   }
 
@@ -187,11 +172,14 @@ function resolveProxyValidationConfig(
       caFileOverride: options.proxyCaFileOverride,
     });
     return {
-      enabled: options.config?.enabled === true,
+      enabled: options.config?.enabled !== false,
       proxyUrl: envUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "env",
-      errors: validateResolvedProxy("env", options.config?.enabled === true, envUrl),
+      errors:
+        options.config?.enabled === false
+          ? ["proxy validation is disabled by proxy.enabled=false"]
+          : validateProxyUrl(envUrl),
     };
   }
 
@@ -206,9 +194,7 @@ function resolveProxyValidationConfig(
   return {
     enabled: false,
     source: "disabled",
-    errors: [
-      "proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url",
-    ],
+    errors: ["proxy validation requires proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url"],
   };
 }
 
@@ -540,7 +526,7 @@ export async function runProxyValidation(
         config: {
           ...config,
           errors: [
-            "Proxy validation is disabled. Set proxy.enabled=true or pass --proxy-url to run validation.",
+            "Proxy validation is disabled. Configure proxy.proxyUrl, OPENCLAW_PROXY_URL, or pass --proxy-url to run validation.",
           ],
         },
         checks: [],

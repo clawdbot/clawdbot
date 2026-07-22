@@ -680,6 +680,245 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/html");
   });
 
+  it("allows exact marked outbound HTML bytes and rejects same-size replacements", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+        const original = Buffer.from("<!doctype html><h1>A</h1>", "utf8");
+        const replacement = Buffer.from("<!doctype html><h1>B</h1>", "utf8");
+        expect(replacement.length).toBe(original.length);
+        const saved = await saveMediaBuffer(
+          original,
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        await markTrustedGeneratedHtmlPath(saved.path, original);
+
+        const allowed = await loadWebMedia(saved.path, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        });
+        expect(allowed.buffer).toEqual(original);
+        expect(allowed.trustedGeneratedHtmlSource).toBe(true);
+
+        await fs.writeFile(saved.path, replacement);
+        await expectLoadWebMediaErrorCode(
+          loadWebMedia(saved.path, {
+            maxBytes: 1024 * 1024,
+            localRoots: "any",
+            readFile: async (filePath) => await fs.readFile(filePath),
+            hostReadCapability: true,
+          }),
+          "path-not-allowed",
+        );
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unmarked outbound HTML", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const saved = await saveMediaBuffer(
+          Buffer.from("<!doctype html><h1>untrusted</h1>", "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        await expectLoadWebMediaErrorCode(
+          loadWebMedia(saved.path, {
+            maxBytes: 1024 * 1024,
+            localRoots: "any",
+            readFile: async (filePath) => await fs.readFile(filePath),
+            hostReadCapability: true,
+          }),
+          "path-not-allowed",
+        );
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("requires a marker when outbound staging is nested under the trusted temp root", async () => {
+    const stateRoot = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "web-media-overlap-state-"),
+    );
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const saved = await saveMediaBuffer(
+          Buffer.from("<!doctype html><h1>unmarked overlap</h1>", "utf8"),
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        expect(path.resolve(saved.path)).toContain(path.resolve(resolvePreferredOpenClawTmpDir()));
+        await expectLoadWebMediaErrorCode(
+          loadWebMedia(saved.path, {
+            maxBytes: 1024 * 1024,
+            localRoots: "any",
+            readFile: async (filePath) => await fs.readFile(filePath),
+            hostReadCapability: true,
+          }),
+          "path-not-allowed",
+        );
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes markers whose staged file was removed", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath, pruneStaleTrustedGeneratedHtmlMarkers } =
+          await import("./web-media.js");
+        const html = Buffer.from("<!doctype html><h1>report</h1>", "utf8");
+        const saved = await saveMediaBuffer(
+          html,
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        await markTrustedGeneratedHtmlPath(saved.path, html);
+        await fs.rm(saved.path);
+        await pruneStaleTrustedGeneratedHtmlMarkers();
+        await fs.writeFile(saved.path, html);
+
+        await expectLoadWebMediaErrorCode(
+          loadWebMedia(saved.path, {
+            maxBytes: 1024 * 1024,
+            localRoots: "any",
+            readFile: async (filePath) => await fs.readFile(filePath),
+            hostReadCapability: true,
+          }),
+          "path-not-allowed",
+        );
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps markers when filesystem inspection fails transiently", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { saveMediaBuffer } = await import("./store.js");
+        const { markTrustedGeneratedHtmlPath, pruneStaleTrustedGeneratedHtmlMarkers } =
+          await import("./web-media.js");
+        const html = Buffer.from("<!doctype html><h1>report</h1>", "utf8");
+        const saved = await saveMediaBuffer(
+          html,
+          "text/html",
+          "outbound",
+          1024 * 1024,
+          "report.html",
+        );
+        await markTrustedGeneratedHtmlPath(saved.path, html);
+        const lstatSpy = vi
+          .spyOn(fs, "lstat")
+          .mockRejectedValueOnce(Object.assign(new Error("busy"), { code: "EMFILE" }));
+        try {
+          await pruneStaleTrustedGeneratedHtmlMarkers();
+        } finally {
+          lstatSpy.mockRestore();
+        }
+
+        const result = await loadWebMedia(saved.path, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        });
+        expect(result.buffer).toEqual(html);
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes more stale markers than one SQLite parameter batch", async () => {
+    const stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-state-"));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateRoot }, async () => {
+        const { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } =
+          await import("../infra/kysely-sync.js");
+        const { openOpenClawStateDatabase, runOpenClawStateWriteTransaction } =
+          await import("../state/openclaw-state-db.js");
+        const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
+        type ProvenanceDb = {
+          outbound_media_provenance: {
+            realpath: string;
+            kind: string;
+            version: number;
+            sha256: string;
+            size_bytes: number;
+            created_at_ms: number;
+          };
+        };
+        runOpenClawStateWriteTransaction(({ db }) => {
+          const kysely = getNodeSqliteKysely<ProvenanceDb>(db);
+          for (let index = 0; index < 1_001; index += 1) {
+            executeSqliteQuerySync(
+              db,
+              kysely.insertInto("outbound_media_provenance").values({
+                realpath: path.join(stateRoot, `missing-${index}.html`),
+                kind: "trusted-generated-html",
+                version: 1,
+                sha256: "0".repeat(64),
+                size_bytes: 1,
+                created_at_ms: 1,
+              }),
+            );
+          }
+        });
+
+        await pruneStaleTrustedGeneratedHtmlMarkers();
+
+        const { db } = openOpenClawStateDatabase();
+        const count = executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ProvenanceDb>(db)
+            .selectFrom("outbound_media_provenance")
+            .select(({ fn }) => fn.countAll<number>().as("count")),
+        );
+        expect(Number(count?.count)).toBe(0);
+      });
+    } finally {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to mark paths outside outbound staging", async () => {
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-marker-outside-"));
+    const outsideFile = path.join(outsideRoot, "report.html");
+    await fs.writeFile(outsideFile, "<!doctype html><h1>outside</h1>", "utf8");
+    try {
+      const { markTrustedGeneratedHtmlPath } = await import("./web-media.js");
+      await expect(
+        markTrustedGeneratedHtmlPath(outsideFile, await fs.readFile(outsideFile)),
+      ).rejects.toThrow(/outside outbound staging/i);
+    } finally {
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects host-read HTML files outside the trusted OpenClaw temp root", async () => {
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-host-html-"));
     const htmlFile = path.join(outsideRoot, "report.html");

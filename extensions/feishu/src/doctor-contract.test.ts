@@ -171,6 +171,31 @@ describe("feishu normalizeCompatibilityConfig streaming aliases", () => {
     expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
   });
 
+  it("strips unread legacy Feishu heartbeat fields at root and account scope", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: feishuConfig({
+        heartbeat: { visibility: "hidden", intervalMs: 1000 },
+        accounts: {
+          work: { heartbeat: { visibility: "visible" } },
+          empty: { heartbeat: {} },
+        },
+      }),
+    });
+
+    const feishu = result.config.channels?.feishu as unknown as Record<string, unknown>;
+    expect(feishu.heartbeat).toBeUndefined();
+    const work = (feishu.accounts as Record<string, Record<string, unknown>>).work;
+    expect(work?.heartbeat).toBeUndefined();
+    const empty = (feishu.accounts as Record<string, Record<string, unknown>>).empty;
+    expect(empty?.heartbeat).toBeUndefined();
+    expect(result.changes).toEqual([
+      "Removed channels.feishu.heartbeat (legacy Feishu fields were never read by runtime).",
+      "Removed channels.feishu.accounts.work.heartbeat (legacy Feishu fields were never read by runtime).",
+      "Removed channels.feishu.accounts.empty.heartbeat (legacy Feishu fields were never read by runtime).",
+    ]);
+    expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
+  });
+
   it("is idempotent: a second run reports no changes", () => {
     const first = normalizeCompatibilityConfig({
       cfg: feishuConfig({ streaming: true, blockStreaming: true }),

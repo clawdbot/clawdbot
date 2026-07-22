@@ -409,7 +409,6 @@ describe("sanitizeToolResult", () => {
 
   it("applies configured redact patterns to Control UI tool payloads", () => {
     vi.spyOn(loggingConfigModule, "readLoggingConfig").mockReturnValue({
-      redactSensitive: "off",
       redactPatterns: [String.raw`\bcustom-secret-[A-Za-z0-9]+\b`],
     });
 

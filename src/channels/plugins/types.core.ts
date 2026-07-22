@@ -95,59 +95,68 @@ export type ChannelMessageToolDiscovery = {
   mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
-/** Shared setup input bag used by CLI, onboarding, and setup adapters. */
-export type ChannelSetupInput = {
+type ChannelSetupEnvelope = {
   name?: string;
   token?: string;
-  privateKey?: string;
   tokenFile?: string;
-  secret?: string;
-  secretFile?: string;
-  botToken?: string;
-  appToken?: string;
-  userToken?: string;
-  signingSecret?: string;
-  identity?: "bot" | "user";
-  mode?: "socket" | "http" | "relay";
-  signalNumber?: string;
-  cliPath?: string;
-  dbPath?: string;
-  service?: "imessage" | "sms" | "auto";
-  region?: string;
-  authDir?: string;
-  httpUrl?: string;
-  httpHost?: string;
-  httpPort?: string;
-  webhookPath?: string;
-  webhookUrl?: string;
-  audienceType?: string;
-  audience?: string;
   useEnv?: boolean;
-  homeserver?: string;
-  dangerouslyAllowPrivateNetwork?: boolean;
-  /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
-  allowPrivateNetwork?: boolean;
-  proxy?: string;
-  userId?: string;
-  accessToken?: string;
-  password?: string;
-  deviceName?: string;
-  avatarUrl?: string;
-  initialSyncLimit?: number;
-  profile?: string;
-  ship?: string;
-  url?: string;
-  baseUrl?: string;
-  relayUrls?: string;
-  code?: string;
-  groupChannels?: string[];
-  dmAllowlist?: string[];
-  autoDiscoverChannels?: boolean;
-  workspace?: string;
   defaultTo?: string;
   allowFrom?: string[];
-  agentActivity?: boolean;
 };
+
+/**
+ * Compatibility fields with known published readers in the 2026-07-22 registry sweep.
+ * Each field is deleted as soon as no published plugin reads it; no version boundary is needed.
+ */
+type DeprecatedChannelSetupFields = {
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  privateKey?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  secret?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  botToken?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  appToken?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  signingSecret?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  mode?: "socket" | "http" | "relay";
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  cliPath?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  authDir?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  httpUrl?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  httpPort?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  webhookPath?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  webhookUrl?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  userId?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  accessToken?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  password?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  deviceName?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  url?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  baseUrl?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  code?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  groupChannels?: string[];
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  dmAllowlist?: string[];
+  /** @deprecated Declare this field in the owning plugin's setup input type. */
+  autoDiscoverChannels?: boolean;
+};
+
+/** Generic setup envelope used by CLI, onboarding, and channel-owned setup adapters. */
+export type ChannelSetupInput = ChannelSetupEnvelope & DeprecatedChannelSetupFields;
 
 export type ChannelStatusIssue = {
   channel: ChannelId;

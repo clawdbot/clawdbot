@@ -1,5 +1,9 @@
 // Line plugin module implements setup core behavior.
-import type { ChannelSetupAdapter, OpenClawConfig } from "openclaw/plugin-sdk/setup";
+import type {
+  ChannelSetupAdapter,
+  ChannelSetupInput,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup";
 import { hasLineCredentials, parseLineAllowFromId } from "./account-helpers.js";
 import {
@@ -9,6 +13,12 @@ import {
   resolveLineAccount,
   type LineConfig,
 } from "./setup-runtime-api.js";
+
+type LineSetupInput = ChannelSetupInput & {
+  channelAccessToken?: string;
+  channelSecret?: string;
+  secretFile?: string;
+};
 
 export function patchLineAccountConfig(params: {
   cfg: OpenClawConfig;
@@ -95,13 +105,7 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     ],
   }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const typedInput = input as {
-      useEnv?: boolean;
-      channelAccessToken?: string;
-      channelSecret?: string;
-      tokenFile?: string;
-      secretFile?: string;
-    };
+    const typedInput = input as LineSetupInput;
     const normalizedAccountId = normalizeAccountId(accountId);
     if (normalizedAccountId === DEFAULT_ACCOUNT_ID) {
       return patchLineAccountConfig({

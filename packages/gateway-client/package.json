@@ -13,6 +13,7 @@
     "url": "https://github.com/openclaw/openclaw/issues"
   },
   "license": "MIT",
+  "author": "OpenClaw Foundation (https://openclaw.org)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openclaw/openclaw.git",

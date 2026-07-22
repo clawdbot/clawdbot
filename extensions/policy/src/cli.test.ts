@@ -161,7 +161,7 @@ describe("policy commands", () => {
       configPath,
       JSON.stringify({
         plugins: { entries: { policy: { enabled: true, config: { enabled: true } } } },
-        agents: { list: [{ id: "main", default: true }, { id: "family" }] },
+        agents: { entries: { main: { default: true }, family: {} } },
         channels: { imessage: { enabled: false } },
         bindings: [],
       }),

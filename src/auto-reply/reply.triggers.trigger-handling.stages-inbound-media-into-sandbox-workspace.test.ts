@@ -1,6 +1,7 @@
 /** Tests trigger handling for staging inbound media into sandbox workspaces. */
 import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MEDIA_MAX_BYTES } from "../media/store.js";
 import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
@@ -172,7 +173,7 @@ describe("stageSandboxMedia", () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
       const fileName = "report.pdf";
-      const mediaPath = await writeInboundMedia(home, fileName, "pdf-bytes");
+      await writeInboundMedia(home, fileName, "pdf-bytes");
       const mediaUri = `media://inbound/${fileName}`;
       const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
       ctx.MediaType = "application/pdf";
@@ -187,12 +188,13 @@ describe("stageSandboxMedia", () => {
       });
 
       const stagedPath = `media/inbound/${fileName}`;
-      expect(result.staged.get(mediaUri)).toBe(stagedPath);
-      expect(result.staged.get(await fs.realpath(mediaPath))).toBe(stagedPath);
+      expect(result.staged.get(0)).toBe(stagedPath);
       expect(ctx.MediaPath).toBe(stagedPath);
       expect(sessionCtx.MediaPath).toBe(stagedPath);
       expect(ctx.MediaUrl).toBe(stagedPath);
       expect(sessionCtx.MediaUrl).toBe(stagedPath);
+      expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
+      expect(sessionCtx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
       await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("pdf-bytes");
     });
   });
@@ -225,12 +227,58 @@ describe("stageSandboxMedia", () => {
       expect(stagedRelativePath).toMatch(
         new RegExp(`^media/inbound/openclaw-staged-[0-9a-f-]+/${fileName}$`),
       );
-      expect(result.staged.get(mediaUri)).toBe(stagedPath);
+      expect(result.staged.get(0)).toBe(stagedPath);
       expect(sessionCtx.MediaPath).toBe(stagedPath);
       expect(ctx.MediaWorkspaceDir).toBe(dirname(stagedPath));
       expect(sessionCtx.MediaWorkspaceDir).toBeUndefined();
+      expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir });
+      expect(sessionCtx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir });
       await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-image-bytes");
       await expect(fs.readFile(existingProjectFile, "utf8")).resolves.toBe("project-file");
+
+      const blockedPath = join(home, "blocked-host.png");
+      await fs.writeFile(blockedPath, "blocked");
+      const { ctx: blockedCtx, sessionCtx: blockedSessionCtx } =
+        createSandboxMediaContexts(blockedPath);
+      blockedCtx.MediaWorkspaceDir = workspaceDir;
+      blockedSessionCtx.MediaWorkspaceDir = workspaceDir;
+      const blockedResult = await stageSandboxMedia({
+        ctx: blockedCtx,
+        sessionCtx: blockedSessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+      expect(blockedResult.staged).toEqual(new Map());
+      expect(blockedCtx.MediaWorkspaceDir).toBe(workspaceDir);
+      expect(blockedSessionCtx.MediaWorkspaceDir).toBe(workspaceDir);
+
+      const partialCtx = {
+        media: [
+          { path: mediaUri, contentType: "image/png" },
+          { path: blockedPath, contentType: "image/png" },
+        ],
+      };
+      const partialSessionCtx = {
+        media: [
+          { path: mediaUri, contentType: "image/png" },
+          { path: blockedPath, contentType: "image/png" },
+        ],
+      };
+      const partialResult = await stageSandboxMedia({
+        ctx: partialCtx,
+        sessionCtx: partialSessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+      expect([...partialResult.staged.keys()]).toEqual([0]);
+      expect(partialResult.staged.get(0)).toBe(partialCtx.media[0]?.path);
+      expect(partialCtx).not.toHaveProperty("MediaWorkspaceDir");
+      expect(partialCtx.media[0]).toMatchObject({ workspaceDir });
+      expect(partialCtx.media[1]).toMatchObject({ path: blockedPath, contentType: "image/png" });
+      expect(partialCtx.media[1]).not.toHaveProperty("workspaceDir");
+      expect(partialSessionCtx.media).toEqual(partialCtx.media);
     });
   });
 
@@ -306,6 +354,123 @@ describe("stageSandboxMedia", () => {
       }
     });
   });
+
+  it.each([
+    { name: "failed slot before staged slot", allowedIndex: 1, blockedIndex: 0 },
+    { name: "staged slot before failed slot", allowedIndex: 0, blockedIndex: 1 },
+  ])("updates facts positionally: $name", async ({ allowedIndex, blockedIndex }) => {
+    await withSandboxMediaTempHome("openclaw-staging-slots-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const allowedPath = await writeInboundMedia(home, "allowed.jpg", "allowed");
+      const blockedPath = join(home, "blocked.jpg");
+      await fs.writeFile(blockedPath, "blocked");
+      const allowedUrl = "https://cdn.example/allowed.jpg";
+      const media = [allowedPath, blockedPath].map((pathValue, index) => ({
+        path: pathValue,
+        url: index === 0 ? allowedUrl : undefined,
+        contentType: "image/jpeg",
+      }));
+      if (allowedIndex === 1) {
+        media.reverse();
+      }
+      const ctx = { media };
+      const sessionCtx = {
+        media: media.map((fact) => ({
+          path: fact.path,
+          url: fact.url,
+          contentType: fact.contentType,
+        })),
+      };
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = "media/inbound/allowed.jpg";
+      expect(result.staged).toEqual(new Map([[allowedIndex, stagedPath]]));
+      expect(ctx.media[allowedIndex]).toMatchObject({ path: stagedPath, workspaceDir: sandboxDir });
+      expect(ctx.media[allowedIndex]?.url).toBe(allowedUrl);
+      expect(ctx).toHaveProperty(`MediaUrls.${allowedIndex}`, allowedUrl);
+      expect(ctx.media[blockedIndex]).toMatchObject({ path: blockedPath });
+      expect(ctx.media[blockedIndex]).not.toHaveProperty("workspaceDir");
+      expect(sessionCtx.media).toEqual(ctx.media);
+    });
+  });
+
+  it.each([
+    {
+      name: "media URI path and physical-path URL",
+      source: "media-uri",
+      url: "physical-path",
+      rewritesUrl: true,
+    },
+    {
+      name: "physical path and media-URI URL",
+      source: "physical-path",
+      url: "media-uri",
+      rewritesUrl: true,
+    },
+    {
+      name: "physical path and file-URL URL",
+      source: "physical-path",
+      url: "file-url",
+      rewritesUrl: true,
+    },
+    {
+      name: "physical path and distinct remote URL",
+      source: "physical-path",
+      url: "remote-url",
+      rewritesUrl: false,
+    },
+  ] as const)(
+    "rewrites resolved local URL aliases: $name",
+    async ({ source, url, rewritesUrl }) => {
+      await withSandboxMediaTempHome("openclaw-staging-url-alias-", async (home) => {
+        const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+        const fileName = "alias.jpg";
+        const mediaPath = await writeInboundMedia(home, fileName, "alias-bytes");
+        const mediaUri = `media://inbound/${fileName}`;
+        const sourcePath = source === "media-uri" ? mediaUri : mediaPath;
+        const mediaUrl =
+          url === "media-uri"
+            ? mediaUri
+            : url === "file-url"
+              ? pathToFileURL(mediaPath).href
+              : url === "remote-url"
+                ? "https://cdn.example/alias.jpg"
+                : mediaPath;
+        const ctx = {
+          media: [{ path: sourcePath, url: mediaUrl, contentType: "image/jpeg" }],
+        };
+        const sessionCtx = {
+          media: [{ path: sourcePath, url: mediaUrl, contentType: "image/jpeg" }],
+        };
+
+        const result = await stageSandboxMedia({
+          ctx,
+          sessionCtx,
+          cfg,
+          sessionKey: "agent:main:main",
+          workspaceDir,
+        });
+
+        const stagedPath = `media/inbound/${fileName}`;
+        const expectedUrl = rewritesUrl ? stagedPath : mediaUrl;
+        expect(result.staged).toEqual(new Map([[0, stagedPath]]));
+        expect(ctx.media[0]).toMatchObject({
+          path: stagedPath,
+          url: expectedUrl,
+          workspaceDir: sandboxDir,
+        });
+        expect(ctx).toHaveProperty("MediaUrl", expectedUrl);
+        expect(sessionCtx.media).toEqual(ctx.media);
+      });
+    },
+  );
 
   it("blocks destination symlink escapes when staging into sandbox workspace", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {

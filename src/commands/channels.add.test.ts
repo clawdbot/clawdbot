@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -379,6 +380,10 @@ type ResolveAccountIdParams = Parameters<
 type PrepareAccountConfigInputParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["setup"]>["prepareAccountConfigInput"]>
 >[0];
+type SignalSetupInput = ChannelSetupInput & { signalNumber?: string };
+type NextcloudTalkSetupInput = ChannelSetupInput & { secretFile?: string };
+type MatrixSetupInput = ChannelSetupInput & { initialSyncLimit?: number };
+type PreparedChatSetupInput = ChannelSetupInput & { workspace?: string };
 
 function createSignalPlugin(
   afterAccountConfigWritten: SignalAfterAccountConfigWritten,
@@ -397,7 +402,7 @@ function createSignalPlugin(
             enabled: true,
             accounts: {
               [accountId]: {
-                account: input.signalNumber,
+                account: (input as SignalSetupInput).signalNumber,
               },
             },
           },
@@ -619,7 +624,7 @@ describe("channelsAddCommand", () => {
           enabled: true,
           baseUrl: input.baseUrl,
           botSecret: input.secret,
-          botSecretFile: input.secretFile,
+          botSecretFile: (input as NextcloudTalkSetupInput).secretFile,
         },
       },
     }));
@@ -638,7 +643,7 @@ describe("channelsAddCommand", () => {
                 ...input,
                 baseUrl: input.baseUrl ?? input.url,
                 secret: input.secret ?? input.token ?? input.password,
-                secretFile: input.secretFile ?? input.tokenFile,
+                secretFile: (input as NextcloudTalkSetupInput).secretFile ?? input.tokenFile,
               }),
               applyAccountConfig,
             },
@@ -777,7 +782,7 @@ describe("channelsAddCommand", () => {
           "prepared-chat": {
             enabled: true,
             token: input.token,
-            workspace: input.workspace,
+            workspace: (input as PreparedChatSetupInput).workspace,
           },
         },
       };
@@ -1076,7 +1081,7 @@ describe("channelsAddCommand", () => {
         ...cfg.channels,
         matrix: {
           enabled: true,
-          initialSyncLimit: input.initialSyncLimit,
+          initialSyncLimit: (input as MatrixSetupInput).initialSyncLimit,
         },
       },
     }));

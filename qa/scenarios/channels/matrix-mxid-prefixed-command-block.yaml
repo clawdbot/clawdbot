@@ -4,9 +4,9 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.native-commands
+      - channels.channel-native-commands
     secondary:
-      - channels.group-messages
+      - matrix.mention-gates
   execution:
     profiles: { "matrix:all": 44, "matrix:transport": 43 }
     kind: flow

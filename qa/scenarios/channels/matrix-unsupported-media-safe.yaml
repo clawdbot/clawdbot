@@ -6,7 +6,7 @@ scenario:
     primary:
       - channels.inbound-media-normalization
     secondary:
-      - runtime.delivery
+      - matrix.inbound-media-failure-handling
   execution:
     profiles: { "matrix:all": 56, "matrix:media": 5 }
     kind: flow

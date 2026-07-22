@@ -23,6 +23,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
 import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-context-pure.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
@@ -75,6 +76,10 @@ import {
   deriveContinuationDelegateChildSessionKey,
 } from "./subagent-continuation-ids.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
+import {
+  applySubagentLaunchAuthorization,
+  type SubagentLaunchAuthorization,
+} from "./subagent-launch-authorization.js";
 import {
   completeCollectorLaunchCleanup,
   listSwarmRunsForGroup,
@@ -272,16 +277,9 @@ export type SpawnSubagentResult = {
 
 export { splitModelRef } from "./subagent-spawn-plan.js";
 
-function hasRequestModelOverride(params: unknown): boolean {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return false;
-  }
-  const record = params as Record<string, unknown>;
-  return typeof record.provider === "string" || typeof record.model === "string";
-}
-
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
+  authorization?: SubagentLaunchAuthorization,
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
   // (sessions.patch / sessions.delete → admin, agent → write).  When each call
@@ -294,24 +292,33 @@ async function callSubagentGateway(
   // "agent" → write) keep their least-privilege scope so the gateway does not
   // treat the caller as owner. The params-aware resolver keeps spawn-metadata
   // sessions.patch calls on the admin tier.
+  const authorizedParams =
+    params.params != null && typeof params.params === "object" && !Array.isArray(params.params)
+      ? applySubagentLaunchAuthorization(params.params as Record<string, unknown>, authorization)
+      : params.params;
   const leastPrivilegeScopes = resolveLeastPrivilegeOperatorScopesForMethod(
     params.method,
-    params.params,
+    authorizedParams,
   );
+  const allowModelOverride = authorization !== undefined;
+  const hasInProcessGateway = subagentSpawnDeps.hasInProcessGatewayContext();
+  const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
   const scopes =
-    params.scopes ?? (leastPrivilegeScopes.includes(ADMIN_SCOPE) ? [ADMIN_SCOPE] : undefined);
+    params.scopes ??
+    (leastPrivilegeScopes.includes(ADMIN_SCOPE) || needsOutOfProcessModelOverrideAuth
+      ? [ADMIN_SCOPE]
+      : undefined);
   const request = {
     ...params,
+    params: authorizedParams,
     ...(scopes != null ? { scopes } : {}),
   };
   if (
-    subagentSpawnDeps.hasInProcessGatewayContext() &&
+    hasInProcessGateway &&
     request.params != null &&
     typeof request.params === "object" &&
     !Array.isArray(request.params)
   ) {
-    const agentModelOverride =
-      request.method === "agent" && hasRequestModelOverride(request.params);
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
     // Agent launches are host-owned even when the parent request came from CLI/HTTP.
@@ -322,8 +329,8 @@ async function callSubagentGateway(
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
+        ...(allowModelOverride ? { allowSyntheticModelOverride: true } : {}),
         ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
-        ...(agentModelOverride ? { allowSyntheticModelOverride: true } : {}),
         ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
@@ -874,7 +881,7 @@ async function waitForProvisionalSessionDeletion(
       return;
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
@@ -931,7 +938,7 @@ async function terminateAcceptedCollectorRun(params: {
       }
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }
@@ -1389,6 +1396,16 @@ export async function spawnSubagentDirect(
       };
     }
     const { resolvedModel, thinkingOverride } = plan;
+    const resolvedLaunchModel = splitModelRef(resolvedModel);
+    const launchAuthorization: SubagentLaunchAuthorization | undefined =
+      modelOverride?.trim() && resolvedLaunchModel.model
+        ? {
+            modelOverride: {
+              ...(resolvedLaunchModel.provider ? { provider: resolvedLaunchModel.provider } : {}),
+              model: resolvedLaunchModel.model,
+            },
+          }
+        : undefined;
     if (params.outputSchema) {
       const outputModelError = await resolveCollectorOutputModelError({
         cfg,
@@ -1710,24 +1727,33 @@ export async function spawnSubagentDirect(
         : {}),
       ...publicSpawnedMetadata,
     };
+    const childLaunch = {
+      request: childLaunchRequest,
+      ...(launchAuthorization ? { authorization: launchAuthorization } : {}),
+      timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
+    };
+    const queuedLaunch =
+      params.collect && swarmSchedulerGroupKey
+        ? {
+            ...childLaunch,
+            schedulerGroupKey: swarmSchedulerGroupKey,
+            maxConcurrent: swarmConfig.maxConcurrent,
+          }
+        : undefined;
     const launchChildRun = async () => {
       registerSubagentTraceparentHandoff({
         idempotencyKey: childIdem,
         sessionKey: childSessionKey,
         traceparent: params.traceparent,
       });
-      const childRunModelRef = subagentSpawnDeps.hasInProcessGatewayContext()
-        ? splitModelRef(resolvedModel)
-        : undefined;
-      return await callSubagentGateway({
-        method: "agent",
-        params: {
-          ...childLaunchRequest,
-          ...(childRunModelRef?.provider ? { provider: childRunModelRef.provider } : {}),
-          ...(childRunModelRef?.model ? { model: childRunModelRef.model } : {}),
+      return await callSubagentGateway(
+        {
+          method: "agent",
+          params: childLaunch.request,
+          timeoutMs: childLaunch.timeoutMs,
         },
-        timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-      });
+        childLaunch.authorization,
+      );
     };
 
     // "spawned"/"started" hooks mean an accepted Gateway run. Direct runs emit
@@ -1902,15 +1928,7 @@ export async function spawnSubagentDirect(
             : undefined,
           outputSchema: params.outputSchema,
           groupId: swarmGroupId,
-          queuedLaunch:
-            params.collect && swarmSchedulerGroupKey
-              ? {
-                  request: childLaunchRequest,
-                  timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
-                  schedulerGroupKey: swarmSchedulerGroupKey,
-                  maxConcurrent: swarmConfig.maxConcurrent,
-                }
-              : undefined,
+          queuedLaunch,
           queued: params.collect === true,
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
@@ -1991,10 +2009,7 @@ export async function spawnSubagentDirect(
             } catch {
               // The child is stopped; retry only the durable terminal write.
               await new Promise<void>((resolve) => {
-                const timer = setTimeout(
-                  resolve,
-                  process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000,
-                );
+                const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
                 timer.unref?.();
               });
             }

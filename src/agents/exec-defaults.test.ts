@@ -227,9 +227,7 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("keeps legacy security overrides ahead of higher-scope normalized mode", () => {
-    // Legacy security/ask overrides are still a shipped config shape. They win
-    // when scoped directly to the agent that is being resolved.
+  it("keeps agent mode overrides ahead of the global mode", () => {
     expect(
       resolveExecDefaults({
         cfg: {
@@ -244,8 +242,7 @@ describe("resolveExecDefaults", () => {
                 id: "agent-a",
                 tools: {
                   exec: {
-                    security: "full",
-                    ask: "off",
+                    mode: "full",
                   },
                 },
               },
@@ -262,7 +259,7 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("preserves mode-derived security for partial legacy agent overrides", () => {
+  it("derives security fields from an agent mode override", () => {
     expect(
       resolveExecDefaults({
         cfg: {
@@ -277,7 +274,7 @@ describe("resolveExecDefaults", () => {
                 id: "agent-a",
                 tools: {
                   exec: {
-                    ask: "off",
+                    mode: "allowlist",
                   },
                 },
               },
@@ -301,7 +298,7 @@ describe("resolveExecDefaults", () => {
           tools: {
             exec: {
               host: "node",
-              security: "deny",
+              mode: "deny",
               node: "build-mac",
             },
           },
@@ -314,8 +311,8 @@ describe("resolveExecDefaults", () => {
     expect(
       resolveNodeExecEligibility({
         cfg: {
-          gateway: { nodes: { denyCommands: [" system.run "] } },
-          tools: { exec: { host: "node", security: "full" } },
+          gateway: { nodes: { commands: { deny: [" system.run "] } } },
+          tools: { exec: { host: "node", mode: "full" } },
         },
       }),
     ).toEqual({ canExec: false });

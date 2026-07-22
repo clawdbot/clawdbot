@@ -26,9 +26,21 @@ function migrateLegacyConfigForTest(raw: unknown): {
   for (const migration of LEGACY_CONFIG_MIGRATIONS) {
     migration.apply(next, changes);
   }
-  return changes.length === 0
-    ? { config: null, changes }
-    : { config: next as OpenClawConfig, changes };
+  const visibleChanges = changes.filter(
+    (change) => change !== "Moved agents.list → keyed agents.entries.",
+  );
+  const agents = next.agents as Record<string, unknown> | undefined;
+  const entries = agents?.entries as Record<string, Record<string, unknown>> | undefined;
+  if (agents && entries) {
+    Object.defineProperty(agents, "list", {
+      configurable: true,
+      enumerable: false,
+      value: Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry)),
+    });
+  }
+  return visibleChanges.length === 0
+    ? { config: null, changes: visibleChanges }
+    : { config: next as OpenClawConfig, changes: visibleChanges };
 }
 
 function expectMigrationChangesToIncludeFragments(changes: string[], fragments: string[]): void {
@@ -37,6 +49,29 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
   );
   expect(unmatchedFragments).toStrictEqual([]);
 }
+
+describe("legacy session typing config migrate", () => {
+  it("moves session typingMode to agent defaults", () => {
+    const res = migrateLegacyConfigForTest({ session: { typingMode: "thinking" } });
+
+    expect(res.config?.agents?.defaults?.typingMode).toBe("thinking");
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain("Moved session.typingMode → agents.defaults.typingMode.");
+  });
+
+  it("preserves session typing precedence over an existing agent default", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: { defaults: { typingMode: "message" } },
+      session: { typingMode: "thinking" },
+    });
+
+    expect(res.config?.agents?.defaults?.typingMode).toBe("thinking");
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Moved session.typingMode → agents.defaults.typingMode (replaced the previously shadowed agent default).",
+    );
+  });
+});
 
 describe("compatibility binding repair migrate", () => {
   it("prunes bindings for missing agents when agents.list is valid", () => {
@@ -132,6 +167,55 @@ describe("legacy MCP server config migrate", () => {
       "Moved nodeHost.mcp.servers.example.disabled true → enabled false.",
     ]);
   });
+
+  it("moves MCP workingDirectory aliases to cwd with canonical values winning", () => {
+    const raw = {
+      mcp: {
+        servers: {
+          legacy: { command: "example-mcp", workingDirectory: "/legacy" },
+          canonical: { command: "example-mcp", cwd: "/canonical", workingDirectory: "/legacy" },
+        },
+      },
+      nodeHost: {
+        mcp: {
+          servers: {
+            legacy: { command: "example-mcp", workingDirectory: "/node-legacy" },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "mcp.servers",
+          message: expect.stringContaining("use camelCase spellings and cwd"),
+        }),
+        expect.objectContaining({
+          path: "nodeHost.mcp.servers",
+          message: expect.stringContaining("use camelCase spellings and cwd"),
+        }),
+      ]),
+    );
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.mcp?.servers).toEqual({
+      legacy: { command: "example-mcp", cwd: "/legacy" },
+      canonical: { command: "example-mcp", cwd: "/canonical" },
+    });
+    expect(res.config?.nodeHost?.mcp?.servers?.legacy).toEqual({
+      command: "example-mcp",
+      cwd: "/node-legacy",
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Canonicalized legacy aliases in mcp.servers.legacy.",
+        "Canonicalized legacy aliases in mcp.servers.canonical.",
+        "Canonicalized legacy aliases in nodeHost.mcp.servers.legacy.",
+      ]),
+    );
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
 });
 
 describe("legacy memory search config migrate", () => {
@@ -168,18 +252,18 @@ describe("legacy memory search config migrate", () => {
     });
 
     expect((res.config as Record<string, unknown> | undefined)?.memorySearch).toBeUndefined();
-    expect(res.config?.agents?.defaults?.memorySearch?.store).toEqual({
+    expect(res.config?.memory?.search?.store).toEqual({
       fts: { tokenizer: "trigram" },
       vector: { enabled: false },
     });
-    expect(res.config?.agents?.list?.[0]?.memorySearch?.store).toEqual({
+    expect(res.config?.agents?.list?.[0]?.memory?.search?.store).toEqual({
       vector: { enabled: true },
     });
     expect(res.changes).toContain(
-      "Removed agents.defaults.memorySearch.store.path; memory indexes now use each agent database.",
+      "Removed memory.search.store.path; memory indexes now use each agent database.",
     );
     expect(res.changes).toContain(
-      "Removed agents.list[0].memorySearch.store.path; memory indexes now use each agent database.",
+      "Removed agents.list[0].memory.search.store.path; memory indexes now use each agent database.",
     );
   });
 
@@ -922,7 +1006,7 @@ describe("legacy memory search config migrate", () => {
     );
   });
 
-  it("rewrites top-level legacy auto provider after moving memorySearch into agent defaults", () => {
+  it("rewrites top-level legacy auto provider after moving memorySearch into memory.search", () => {
     const raw = {
       memorySearch: {
         provider: "auto",
@@ -937,14 +1021,14 @@ describe("legacy memory search config migrate", () => {
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       provider: "openai",
       model: "text-embedding-3-small",
     });
     expect(res.config).not.toHaveProperty("memorySearch");
     expect(res.changes).toEqual([
-      "Moved memorySearch → agents.defaults.memorySearch.",
-      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
+      "Moved legacy memorySearch defaults → memory.search.",
+      'Moved memory.search.provider from legacy "auto" to "openai".',
     ]);
   });
 
@@ -974,18 +1058,23 @@ describe("legacy memory search config migrate", () => {
     };
 
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
-      "agents.defaults.memorySearch.provider",
+      "agents.defaults.memorySearch",
+      "agents.list",
+      "agents.list",
       "agents.list",
     ]);
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch?.provider).toBe("openai");
-    expect(res.config?.agents?.list?.[0]?.memorySearch?.provider).toBe("openai");
-    expect(res.config?.agents?.list?.[1]?.memorySearch?.provider).toBe("openai-compatible");
+    expect(res.config?.memory?.search?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[0]?.memory?.search?.provider).toBe("openai");
+    expect(res.config?.agents?.list?.[1]?.memory?.search?.provider).toBe("openai-compatible");
     expect(res.changes).toEqual([
-      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
-      'Moved agents.list.0.memorySearch.provider from legacy "auto" to "openai".',
+      "Moved legacy memorySearch defaults → memory.search.",
+      "Moved agents.list.0.memorySearch → agents.list.0.memory.search.",
+      "Moved agents.list.1.memorySearch → agents.list.1.memory.search.",
+      'Moved memory.search.provider from legacy "auto" to "openai".',
+      'Moved agents.list.0.memory.search.provider from legacy "auto" to "openai".',
     ]);
   });
 });
@@ -1082,6 +1171,7 @@ describe("legacy agent system prompt override config migrate", () => {
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
       "agents.defaults.systemPromptOverride",
       "agents.list",
+      "agents.list",
     ]);
 
     const res = migrateLegacyConfigForTest(raw);
@@ -1121,7 +1211,7 @@ describe("profile configured tool section migrate", () => {
     expect(res.config).toBeNull();
     expect(res.changes).toEqual([]);
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("tools");
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents.list");
   });
 
   it("does not add missing grants to an unrelated allowlist", () => {
@@ -1274,7 +1364,7 @@ describe("profile configured tool section migrate", () => {
 
     expect(res.config).toBeNull();
     expect(res.changes).toEqual([]);
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).not.toContain("agents.list");
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents.list");
   });
 
   it("does not report inherited top-level profile provider allowlists as fixable", () => {
@@ -1423,9 +1513,11 @@ describe("legacy agent model timeout migrate", () => {
     expect(defaultSubagents.model).toEqual({
       primary: "openai/gpt-5.4",
     });
-    expect(defaults.imageGenerationModel).toEqual({
-      primary: "openrouter/openai/gpt-5.4-image-2",
-      timeoutMs: 180_000,
+    expect(defaults.mediaModels).toEqual({
+      image: {
+        primary: "openrouter/openai/gpt-5.4-image-2",
+        timeoutMs: 180_000,
+      },
     });
     expect(defaults.pdfModel).toEqual({
       primary: "openai/gpt-5.5",
@@ -1442,6 +1534,7 @@ describe("legacy agent model timeout migrate", () => {
       "Removed agents.defaults.subagents.model.timeoutMs; agent model config only selects models.",
       "Removed agents.list.0.model.timeoutMs; agent model config only selects models.",
       "Removed agents.list.0.subagents.model.timeoutMs; agent model config only selects models.",
+      "Moved agents.defaults.imageGenerationModel → agents.defaults.mediaModels.image.",
     ]);
   });
 });
@@ -1583,7 +1676,9 @@ describe("legacy thread binding spawn migrate", () => {
       },
     });
 
-    expect(res.config?.channels?.discord?.threadBindings).toEqual({
+    expect(
+      (res.config?.channels?.discord as { threadBindings?: unknown } | undefined)?.threadBindings,
+    ).toEqual({
       enabled: true,
       spawnSessions: true,
     });
@@ -1609,7 +1704,8 @@ describe("legacy thread binding spawn migrate", () => {
     });
 
     expect(
-      res.config?.channels?.discord?.accounts?.work?.threadBindings as Record<string, unknown>,
+      (res.config?.channels?.discord?.accounts?.work as { threadBindings?: unknown } | undefined)
+        ?.threadBindings as Record<string, unknown>,
     ).toEqual({
       spawnSessions: false,
     });
@@ -1717,7 +1813,7 @@ describe("legacy migrate audio transcription", () => {
     expect(res.config).toBeNull();
   });
 
-  it("does not rewrite removed routing.transcribeAudio migrations when new config exists", () => {
+  it("consolidates existing per-capability media config without reviving removed routing keys", () => {
     const res = migrateLegacyConfigForTest({
       routing: {
         transcribeAudio: {
@@ -1733,8 +1829,12 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toStrictEqual([]);
-    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([
+      "Consolidated tools.media image/audio/video model settings into capability-tagged tools.media.models entries.",
+    ]);
+    expect(res.config?.tools?.media).toEqual({
+      models: [{ command: "existing", type: "cli", capabilities: ["audio"] }],
+    });
   });
 
   it("drops invalid audio.transcription payloads", () => {
@@ -1749,7 +1849,7 @@ describe("legacy migrate audio transcription", () => {
     expect(findLegacyConfigIssues(raw)).toEqual([
       {
         path: "audio.transcription",
-        message: "Use tools.media.audio.models instead.",
+        message: "Use a capability-tagged tools.media.models entry instead.",
       },
     ]);
     const res = migrateLegacyConfigForTest(raw);
@@ -1772,16 +1872,62 @@ describe("legacy migrate audio transcription", () => {
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["audio.transcription"]);
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.audio.models."]);
+    expect(res.changes).toStrictEqual(["Moved audio.transcription → tools.media.models."]);
     expect(res.config).not.toHaveProperty("audio");
-    expect(res.config?.tools?.media?.audio?.models).toEqual([
+    expect(res.config?.tools?.media?.models).toEqual([
       {
         type: "cli",
         command: "whisper-cli",
         args: ["--model", "small", "{{MediaPath}}", "--input={{MediaPath}}"],
         timeoutSeconds: 30,
+        capabilities: ["audio"],
       },
     ]);
+    expect(res.config?.tools?.media?.audio).toEqual({
+      enabled: true,
+      preferredModel: "cli:whisper-cli",
+    });
+  });
+
+  it("keeps audio.transcription when the shared list only has unrelated capabilities", () => {
+    const res = migrateLegacyConfigForTest({
+      audio: { transcription: { command: ["whisper-cli", "{input}"] } },
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "vision", capabilities: ["image"] }],
+        },
+      },
+    });
+
+    expect(res.config?.tools?.media?.models).toEqual([
+      { provider: "openai", model: "vision", capabilities: ["image"] },
+      {
+        type: "cli",
+        command: "whisper-cli",
+        args: ["{{MediaPath}}"],
+        capabilities: ["audio"],
+      },
+    ]);
+  });
+
+  it("keeps audio.transcription when the legacy audio list has only incompatible models", () => {
+    const res = migrateLegacyConfigForTest({
+      audio: { transcription: { command: ["whisper-cli", "{input}"] } },
+      tools: {
+        media: {
+          audio: {
+            models: [{ provider: "openai", model: "vision", capabilities: ["image"] }],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.tools?.media?.models).toContainEqual({
+      type: "cli",
+      command: "whisper-cli",
+      args: ["{{MediaPath}}"],
+      capabilities: ["audio"],
+    });
   });
 });
 
@@ -2537,20 +2683,18 @@ describe("legacy bundled provider discovery migrate", () => {
     expect(res.changes).toContain("Rewrote plugins.slots openai-codex references to openai.");
   });
 
-  it("sets compat mode for existing restrictive plugin allowlists", () => {
+  it("leaves restrictive plugin allowlists for the machine-state migration", () => {
     const res = migrateLegacyConfigForTest({
       plugins: {
         allow: ["telegram"],
       },
     });
 
-    expect(res.config?.plugins?.bundledDiscovery).toBe("compat");
-    expect(res.changes).toStrictEqual([
-      'Set plugins.bundledDiscovery="compat" to preserve legacy bundled provider discovery for this restrictive plugins.allow config.',
-    ]);
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
   });
 
-  it("does not override explicit bundled discovery mode", () => {
+  it("strips explicit bundled discovery mode after machine-state capture", () => {
     const res = migrateLegacyConfigForTest({
       plugins: {
         allow: ["telegram"],
@@ -2558,8 +2702,10 @@ describe("legacy bundled provider discovery migrate", () => {
       },
     });
 
-    expect(res.config).toBeNull();
-    expect(res.changes).toStrictEqual([]);
+    expect(res.config).toEqual({ plugins: { allow: ["telegram"] } });
+    expect(res.changes).toStrictEqual([
+      "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+    ]);
   });
 });
 
@@ -2955,7 +3101,7 @@ describe("legacy model compat migrate", () => {
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("agents");
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "xai/grok-imagine-image-quality",
       fallbacks: ["xai/grok-imagine-image"],
     });
@@ -3048,15 +3194,15 @@ describe("legacy model compat migrate", () => {
     });
 
     expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-haiku-4-5");
-    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "github-copilot/claude-sonnet-4.6",
       fallbacks: ["github-copilot/gpt-5.4-mini"],
     });
-    expect(res.config?.agents?.defaults?.musicGenerationModel).toBe(
+    expect(res.config?.agents?.defaults?.mediaModels?.music).toBe(
       "vercel-ai-gateway/anthropic/claude-opus-4-6",
     );
     expect(res.config?.agents?.defaults?.pdfModel).toBe("anthropic/claude-sonnet-4-6");
-    expect(res.config?.agents?.defaults?.videoGenerationModel).toBe("anthropic/claude-opus-4-10");
+    expect(res.config?.agents?.defaults?.mediaModels?.video).toBe("anthropic/claude-opus-4-10");
     expect(res.config?.agents?.defaults?.model).toEqual({
       primary: "anthropic/claude-opus-4-7@anthropic:work",
       fallbacks: [
@@ -4135,15 +4281,15 @@ describe("legacy flat memory search field migrate", () => {
     );
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       enabled: true,
       query: { maxResults: 5 },
     });
     expect(res.changes).toEqual(
       expect.arrayContaining([
-        "Moved agents.defaults.memorySearch.chunkSize → agents.defaults.memorySearch.chunking.tokens.",
-        "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-        "Moved agents.defaults.memorySearch.maxResults → agents.defaults.memorySearch.query.maxResults.",
+        "Moved memory.search.chunkSize → memory.search.chunking.tokens.",
+        "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
+        "Moved memory.search.maxResults → memory.search.query.maxResults.",
         "Removed retired runtime tuning knobs; built-in defaults now apply.",
       ]),
     );
@@ -4168,16 +4314,16 @@ describe("legacy flat memory search field migrate", () => {
     });
 
     expect(res.config).not.toHaveProperty("memorySearch");
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       enabled: true,
       query: { maxResults: 9 },
     });
     expect(res.changes).toEqual(
       expect.arrayContaining([
-        "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-        "Removed agents.defaults.memorySearch.chunkSize (agents.defaults.memorySearch.chunking.tokens already set).",
-        "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-        "Removed agents.defaults.memorySearch.maxResults (agents.defaults.memorySearch.query.maxResults already set).",
+        "Moved legacy memorySearch defaults → memory.search.",
+        "Removed memory.search.chunkSize (memory.search.chunking.tokens already set).",
+        "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
+        "Removed memory.search.maxResults (memory.search.query.maxResults already set).",
         "Removed retired runtime tuning knobs; built-in defaults now apply.",
       ]),
     );
@@ -4193,8 +4339,8 @@ describe("legacy flat memory search field migrate", () => {
       },
     });
 
-    expect(res.config?.agents?.list?.[0]?.memorySearch).toBeUndefined();
-    expect(res.config?.agents?.list?.[1]?.memorySearch).toEqual({
+    expect(res.config?.agents?.list?.[0]?.memory?.search).toBeUndefined();
+    expect(res.config?.agents?.list?.[1]?.memory?.search).toEqual({
       query: { maxResults: 10 },
     });
     expect(res.changes).toContain(
@@ -4214,9 +4360,11 @@ describe("legacy flat memory search field migrate", () => {
       },
     };
 
-    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "" })]);
+    expect(findLegacyConfigIssues(raw)).toEqual([
+      expect.objectContaining({ path: "agents.defaults.memorySearch" }),
+    ]);
     const res = migrateLegacyConfigForTest(raw);
-    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+    expect(res.config?.memory?.search).toEqual({
       query: { maxResults: 5 },
     });
     expect(res.changes).toContain(

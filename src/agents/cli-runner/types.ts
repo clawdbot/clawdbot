@@ -12,13 +12,15 @@ import type { FastMode } from "../../auto-reply/thinking.shared.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
-import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { ImageContent } from "../../llm/types.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -147,6 +149,8 @@ export type RunCliAgentParams = {
   bootstrapContextRunKind?: BootstrapContextRunKind;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in the current prompt. */
+  media?: MediaFact[];
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   messageProvider?: string;
@@ -179,11 +183,11 @@ export type RunCliAgentParams = {
   bashElevated?: ExecElevatedDefaults;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
-  /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
+  /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
   /** Exact native surface plus host-isolated MCP permissions for a selectable CLI backend. */
   cliToolAvailability?: {
-    native: [];
+    native: string[];
     mcp: string[];
   };
   disableTools?: boolean;
@@ -216,10 +220,17 @@ export type RunCliAgentParams = {
 };
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
+export type CliSecretInput = SpawnSecretInput & {
+  /** Process-local non-secret generation used only to invalidate a warm child. */
+  fingerprint: string;
+};
+
 type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Private child-only credential transport; never serialized into env or public plugin state. */
+  secretInput?: CliSecretInput;
   /** Gateway-owned capture fence for this prepared bundle-MCP client. */
   mcpClientGrantCapture?: {
     activate: (captureKey: string) => void;

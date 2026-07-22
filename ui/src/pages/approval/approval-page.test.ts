@@ -75,6 +75,7 @@ function createGateway(client: GatewayBrowserClient, connected = true) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     connected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",

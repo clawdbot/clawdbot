@@ -1820,6 +1820,30 @@ describe("openclaw agent database", () => {
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("wal");
   });
 
+  it("lazy-ensures the additive session creator column without a version bump", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = database.path;
+    const schemaVersion = readSqliteNumberPragma(database.db, "user_version");
+    closeOpenClawAgentDatabasesForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    try {
+      legacy.exec("ALTER TABLE session_entries DROP COLUMN created_by_json;");
+    } finally {
+      legacy.close();
+    }
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const columns = reopened.db.prepare("PRAGMA table_info(session_entries)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.map((column) => column.name)).toContain("created_by_json");
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(schemaVersion);
+  });
+
   it("backfills per-entry status while migrating a v6 agent database", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

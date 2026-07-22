@@ -372,6 +372,9 @@ export async function buildDiscordMessageProcessContext(params: {
       commandBody: preflightAudioTranscript ?? baseText,
       inboundHistory,
     },
+    sessionTranscript: {
+      historyLimit: shouldIncludeChannelHistory ? historyLimit : 0,
+    },
     access: {
       mentions: {
         canDetectMention: ctx.canDetectMention,

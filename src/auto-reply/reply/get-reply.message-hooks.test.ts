@@ -86,15 +86,16 @@ function buildConfiguredAudioCfg() {
   return withFastReplyConfig({
     tools: {
       media: {
+        models: [
+          {
+            type: "cli",
+            command: "/usr/local/bin/stt-transcribe",
+            args: ["{{MediaPath}}"],
+            capabilities: ["audio"],
+          },
+        ],
         audio: {
           enabled: true,
-          models: [
-            {
-              type: "cli",
-              command: "/usr/local/bin/stt-transcribe",
-              args: ["{{MediaPath}}"],
-            },
-          ],
         },
       },
     },
@@ -608,7 +609,10 @@ describe("getReplyFromConfig message hooks", () => {
       params.sessionCtx.MediaPaths = [stagedPath];
       params.sessionCtx.MediaUrl = stagedPath;
       params.sessionCtx.MediaUrls = [stagedPath];
-      return { staged: new Map([[remotePath, stagedPath]]) };
+      const stagedFact = { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" };
+      params.ctx.media = [stagedFact];
+      params.sessionCtx.media = [stagedFact];
+      return { staged: new Map([[0, stagedPath]]) };
     });
     mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
       order.push("understand");

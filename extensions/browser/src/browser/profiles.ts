@@ -5,7 +5,6 @@ import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
  * Validates profile names and allocates CDP ports/colors for newly persisted
  * browser profiles.
  */
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 
 /**
  * CDP port allocation for browser profiles.
@@ -86,41 +85,4 @@ export function getUsedPorts(
     }
   }
   return used;
-}
-
-/** Default browser profile color palette. */
-const PROFILE_COLORS = [
-  "#FF4500", // Orange-red (openclaw default)
-  "#0066CC", // Blue
-  "#00AA00", // Green
-  "#9933FF", // Purple
-  "#FF6699", // Pink
-  "#00CCCC", // Cyan
-  "#FF9900", // Orange
-  "#6666FF", // Indigo
-  "#CC3366", // Magenta
-  "#339966", // Teal
-];
-
-/** Allocate the first unused profile color, cycling when all are used. */
-export function allocateColor(usedColors: Set<string>): string {
-  // Find first unused color from palette
-  for (const color of PROFILE_COLORS) {
-    if (!usedColors.has(color.toUpperCase())) {
-      return color;
-    }
-  }
-  // All colors used, cycle based on count
-  const index = usedColors.size % PROFILE_COLORS.length;
-  return expectDefined(PROFILE_COLORS[index], "cycled browser color palette index");
-}
-
-/** Extract currently used profile colors from profile config. */
-export function getUsedColors(
-  profiles: Record<string, { color: string }> | undefined,
-): Set<string> {
-  if (!profiles) {
-    return new Set();
-  }
-  return new Set(Object.values(profiles).map((p) => p.color.toUpperCase()));
 }

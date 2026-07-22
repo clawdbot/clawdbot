@@ -578,7 +578,7 @@ export async function runSubagentAnnounceFlow(params: {
       silentAnnounce: params.silentAnnounce,
       wakeOnReturn: params.wakeOnReturn,
       traceparent: params.traceparent,
-      readSessionEntry: readSessionEntryByKey,
+      loadEntry: readSessionEntryByKey,
       invalidateSessionEntry,
     });
     findings = continuation.findings;

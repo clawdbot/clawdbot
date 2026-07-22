@@ -87,6 +87,7 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
+import { isSubagentAnnounceCompletionHandoff } from "../subagent-announce-handoff.js";
 import type { ContinueWorkRequest } from "../tools/continue-work-tool.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -529,6 +530,13 @@ export async function runAgentAttempt(params: {
           ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
           : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
+  // A completion handoff relays frozen child output; letting it act with the
+  // requester's tools would turn child text into a new privileged instruction.
+  const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
+    inputProvenance: params.opts.inputProvenance,
+    internalEvents: params.opts.internalEvents,
+  });
+  const disableTools = params.opts.modelRun === true || isSubagentAnnounceHandoff;
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
@@ -816,6 +824,7 @@ export async function runAgentAttempt(params: {
               // accompany every CLI process. Native dedupe requires a runtime receipt.
               images: params.opts.images,
               imageOrder: params.opts.imageOrder,
+              media: params.opts.media,
               skillsSnapshot: params.skillsSnapshot,
               messageChannel: params.messageChannel,
               streamParams: params.opts.streamParams,
@@ -843,6 +852,8 @@ export async function runAgentAttempt(params: {
               oneShotCliRun: params.opts.oneShotCliRun,
               userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
               suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+              disableTools,
+              allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
               ...(mutableCliSessionStore && !forkCliSessionOnResume
                 ? {
                     onBeforeFreshCliSessionRetry: async (retry) => {
@@ -1065,6 +1076,7 @@ export async function runAgentAttempt(params: {
     // removes the persisted CLI turn before the embedded prompt is submitted.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
+    media: params.opts.media,
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
@@ -1109,7 +1121,8 @@ export async function runAgentAttempt(params: {
     oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
-    disableTools: params.opts.modelRun === true,
+    disableTools,
+    allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     deferTerminalLifecycleEnd: params.deferTerminalLifecycle,
@@ -1251,12 +1264,12 @@ async function scheduleSpawnInitContinueWorkWake(params: {
     { resolveLiveContinuationRuntimeConfig },
     { loadContinuationChainState, persistContinuationChainState },
     { scheduleContinuationWorkBatch },
-    { resolveSessionStoreEntry, updateSessionStore },
+    { patchSessionEntry, resolveSessionEntryFromStore },
   ] = await Promise.all([
     import("../../auto-reply/continuation/config.js"),
     import("../../auto-reply/continuation/state.js"),
     import("../../auto-reply/continuation/lazy.runtime.js"),
-    import("../../config/sessions/store.js"),
+    import("../../config/sessions/session-accessor.js"),
   ]);
 
   const continuationConfig = resolveLiveContinuationRuntimeConfig(params.cfg);
@@ -1309,27 +1322,30 @@ async function scheduleSpawnInitContinueWorkWake(params: {
     tokens: result.chainState.accumulatedChainTokens,
     ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
   });
-  if (params.storePath && params.sessionStore) {
-    await updateSessionStore(params.storePath, (store) => {
-      const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
-      if (!resolved.existing) {
-        return undefined;
-      }
-      const updated = {
-        ...resolved.existing,
+  if (params.storePath) {
+    const updated = await patchSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      () => ({
         continuationChainCount: result.chainState.currentChainCount,
         continuationChainStartedAt: result.chainState.chainStartedAt,
         continuationChainTokens: result.chainState.accumulatedChainTokens,
         ...(result.chainState.chainId ? { continuationChainId: result.chainState.chainId } : {}),
-      };
-      store[resolved.normalizedKey] = updated;
-      params.sessionStore![resolved.normalizedKey] = updated;
+      }),
+      { preserveActivity: true, requireWriteSuccess: true },
+    );
+    if (!updated) {
+      throw new Error(`session entry was not found: ${params.sessionKey}`);
+    }
+    if (params.sessionStore) {
+      const resolved = resolveSessionEntryFromStore({
+        store: params.sessionStore,
+        sessionKey: params.sessionKey,
+      });
+      params.sessionStore[resolved.normalizedKey] = updated;
       for (const legacyKey of resolved.legacyKeys) {
-        delete store[legacyKey];
-        delete params.sessionStore![legacyKey];
+        delete params.sessionStore[legacyKey];
       }
-      return updated;
-    });
+    }
   }
 }
 

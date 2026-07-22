@@ -7539,6 +7539,16 @@
       "translated": "回覆"
     },
     {
+      "id": "native.android.6c07db7bdc4b43a4",
+      "source": "Rewind to here",
+      "translated": "倒回此處"
+    },
+    {
+      "id": "native.android.c824bdc38278a218",
+      "source": "Fork from here",
+      "translated": "從此處分叉"
+    },
+    {
       "id": "native.android.319b4a29df279bb3",
       "source": "Select text",
       "translated": "選取文字"
@@ -7639,14 +7649,19 @@
       "translated": "已傳送 — 正在確認送達…"
     },
     {
-      "id": "native.android.15d71d54c0ce946b",
-      "source": "Failed",
-      "translated": "失敗"
+      "id": "native.android.ac5949efe3cfe48c",
+      "source": "Session branch changed; review and retry this message.",
+      "translated": "工作階段分支已變更；請檢閱並重試此訊息。"
     },
     {
       "id": "native.android.6f734a7527ae9c5a",
       "source": "Failed — $it",
       "translated": "失敗 — $it"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "失敗"
     },
     {
       "id": "native.android.552a4d6f5110e6a3",
@@ -7997,6 +8012,31 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "停止"
+    },
+    {
+      "id": "native.android.be42506226307680",
+      "source": "Switch branch",
+      "translated": "切換分支"
+    },
+    {
+      "id": "native.android.39ea147abba2af8a",
+      "source": "Untitled branch",
+      "translated": "未命名分支"
+    },
+    {
+      "id": "native.android.4e2cbf557e2e3cd6",
+      "source": "Current branch",
+      "translated": "目前分支"
+    },
+    {
+      "id": "native.android.d79a4188788ccf49",
+      "source": "Messages: $count",
+      "translated": "訊息：$count"
+    },
+    {
+      "id": "native.android.76e548dffafc9de9",
+      "source": "$count · $updated",
+      "translated": "$count · $updated"
     },
     {
       "id": "native.android.2cb3ec7379426dfe",
@@ -21979,6 +22019,21 @@
       "translated": "位置"
     },
     {
+      "id": "native.apple.c105a651c5f972b6",
+      "source": "Privacy",
+      "translated": "隱私權"
+    },
+    {
+      "id": "native.apple.b98013fb799d4f3c",
+      "source": "Active computer detection",
+      "translated": "使用中電腦偵測"
+    },
+    {
+      "id": "native.apple.870e09824984a9b2",
+      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "分享此 Mac 的閒置時間，讓 OpenClaw 能識別您最近使用的 Mac 並路由節點警示。絕不傳送按鍵、指標位置、應用程式名稱或視窗標題。需要「輔助使用」權限。"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "設定"
@@ -22074,6 +22129,11 @@
       "translated": "重新整理"
     },
     {
+      "id": "native.apple.326e187a6656d8d9",
+      "source": "Check",
+      "translated": "檢查"
+    },
+    {
       "id": "native.apple.7b62187659c9925f",
       "source": "Grant",
       "translated": "授予"
@@ -22094,9 +22154,14 @@
       "translated": "要求存取權限"
     },
     {
-      "id": "native.apple.4a4c10ca63e99590",
-      "source": "Control other apps (e.g. Terminal) for automation actions",
-      "translated": "控制其他 App（例如 Terminal）以執行自動化動作"
+      "id": "native.apple.5a5689d96828c424",
+      "source": "Status unavailable",
+      "translated": "狀態無法使用"
+    },
+    {
+      "id": "native.apple.2d263648f3916394",
+      "source": "Control Terminal for automation actions; other apps request access separately",
+      "translated": "控制 Terminal 以執行自動化動作；其他應用程式須另行請求存取權"
     },
     {
       "id": "native.apple.5f7eb4234f63c4ad",
@@ -22114,14 +22179,14 @@
       "translated": "擷取螢幕以提供情境或螢幕截圖"
     },
     {
-      "id": "native.apple.b004145c37a470f8",
-      "source": "Allow Voice Wake and audio capture",
-      "translated": "允許 Voice Wake 和音訊擷取"
+      "id": "native.apple.45119f87d3069501",
+      "source": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation",
+      "translated": "允許語音喚醒、按住通話、Talk Mode 及 Quick Chat 聽寫"
     },
     {
-      "id": "native.apple.7c8b825829b3924d",
-      "source": "Transcribe Voice Wake trigger phrases on-device",
-      "translated": "在裝置上轉錄 Voice Wake 觸發詞組"
+      "id": "native.apple.33f1e220cc7d69e1",
+      "source": "Use Apple Speech; passive Voice Wake stays on-device",
+      "translated": "使用 Apple Speech；被動語音喚醒保持在裝置端"
     },
     {
       "id": "native.apple.37880f3b7ae6c259",
@@ -22754,14 +22819,14 @@
       "translated": "OpenClaw 會使用區域網路，透過 LAN、Tailnet 或 SSH 連線到您的遠端 OpenClaw Gateway。"
     },
     {
-      "id": "native.apple.5db9a976fd1c7fcb",
-      "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
-      "translated": "OpenClaw 需要麥克風，用於 Voice Wake 測試和代理程式音訊擷取。"
+      "id": "native.apple.0fdd4a93f90c6f95",
+      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenClaw 使用麥克風進行語音喚醒、按住通話、Talk Mode、Quick Chat 聽寫及代理程式音訊擷取。"
     },
     {
-      "id": "native.apple.b7aba524ef867e7f",
-      "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
-      "translated": "OpenClaw 會使用語音辨識來偵測您的 Voice Wake 觸發詞。"
+      "id": "native.apple.44701896858c9029",
+      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenClaw 使用 Apple Speech 進行語音喚醒、按住通話、Talk Mode 及 Quick Chat 聽寫。語音喚醒保持在裝置端。"
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
@@ -23624,9 +23689,14 @@
       "translated": "啟用 Voice Wake"
     },
     {
-      "id": "native.apple.e992b45cdbccdd10",
-      "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
-      "translated": "在執行語音指令前聆聽喚醒詞。辨識完全在裝置端執行。"
+      "id": "native.apple.e2811fb1981c52f9",
+      "source": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.",
+      "translated": "在執行語音指令前先聆聽喚醒詞。喚醒詞辨識保持在此 Mac 上。"
+    },
+    {
+      "id": "native.apple.8e55ed92eb632efa",
+      "source": "On-device recognition is unavailable for the selected language on this Mac.",
+      "translated": "此 Mac 上所選語言無法使用裝置端辨識。"
     },
     {
       "id": "native.apple.475eb587a8accd92",
@@ -23787,6 +23857,11 @@
       "id": "native.apple.d57fd5213daf2a6e",
       "source": "\\(self.friendlyName(for: current)) (System)",
       "translated": "\\(self.friendlyName(for: current))（系統）"
+    },
+    {
+      "id": "native.apple.2565d77dbe6ce76b",
+      "source": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.",
+      "translated": "語音喚醒需要所選語言的裝置端辨識功能。按住通話和通話模式仍可使用。"
     },
     {
       "id": "native.apple.79db41c7b941a50f",

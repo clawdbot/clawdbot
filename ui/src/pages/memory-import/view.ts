@@ -6,6 +6,7 @@ import type {
   MigrationsMemoryPlanResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import type { GatewayAgentRow } from "../../../../src/shared/session-types.js";
+import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
@@ -19,6 +20,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import "../../styles/memory-import.css";
 
 type MemoryCollection = {
@@ -383,22 +385,19 @@ function renderIntroSection(props: MemoryImportViewProps) {
       ${renderSettingsRow({
         title: t("memoryImport.agent"),
         control: html`
-          <select
-            class="settings-select"
+          <openclaw-agent-select
+            class="agent-select--settings"
             name="memory-import-agent"
+            .options=${props.agents.map((agent) => ({
+              value: agent.id,
+              label: normalizeAgentLabel(agent),
+              agent,
+            }))}
             .value=${props.selectedAgentId ?? ""}
-            ?disabled=${busy}
-            @change=${(event: Event) =>
-              props.onSelectAgent((event.currentTarget as HTMLSelectElement).value)}
-          >
-            ${props.agents.map(
-              (agent) => html`
-                <option value=${agent.id} ?selected=${agent.id === props.selectedAgentId}>
-                  ${agent.identity?.name ?? agent.name ?? agent.id}
-                </option>
-              `,
-            )}
-          </select>
+            .accessibleLabel=${t("memoryImport.agent")}
+            .disabled=${busy}
+            .onSelect=${props.onSelectAgent}
+          ></openclaw-agent-select>
         `,
       })}
       ${renderSettingsToggleRow({

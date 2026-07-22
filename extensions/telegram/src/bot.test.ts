@@ -480,7 +480,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          envelopeTimezone: "utc",
+          userTimezone: "UTC",
         },
       },
       channels: {
@@ -2890,7 +2890,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
-          envelopeTimezone: "utc",
+          userTimezone: "UTC",
         },
       },
       channels: {

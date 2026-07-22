@@ -148,7 +148,7 @@ function normalizeElevenLabsProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.elevenlabs.apiKey",
+      path: "tts.providers.elevenlabs.apiKey",
     }),
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_ELEVENLABS_VOICE_ID,

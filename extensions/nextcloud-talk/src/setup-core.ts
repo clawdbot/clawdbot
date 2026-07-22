@@ -28,6 +28,8 @@ type NextcloudSetupInput = ChannelSetupInput & {
   baseUrl?: string;
   secret?: string;
   secretFile?: string;
+  url?: string;
+  password?: string;
 };
 type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
 
@@ -209,12 +211,18 @@ export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
 export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove: ["rooms"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
-  prepareAccountConfigInput: ({ input }) => ({
-    ...input,
-    baseUrl: input.baseUrl ?? readOptionalString(input.url),
-    secret: input.secret ?? readOptionalString(input.token) ?? readOptionalString(input.password),
-    secretFile: input.secretFile ?? readOptionalString(input.tokenFile),
-  }),
+  prepareAccountConfigInput: ({ input }) => {
+    const setupInput = input as NextcloudSetupInput;
+    return {
+      ...setupInput,
+      baseUrl: setupInput.baseUrl ?? readOptionalString(setupInput.url),
+      secret:
+        setupInput.secret ??
+        readOptionalString(setupInput.token) ??
+        readOptionalString(setupInput.password),
+      secretFile: setupInput.secretFile ?? readOptionalString(setupInput.tokenFile),
+    };
+  },
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({
       cfg,

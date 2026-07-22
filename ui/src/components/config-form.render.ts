@@ -6,6 +6,7 @@ import { SECTION_META } from "./config-form.meta.ts";
 import { renderNode } from "./config-form.node.ts";
 import { matchesConfigSectionSearch, parseConfigSearchQuery } from "./config-form.search.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { splitConfigSchemaByTier } from "./config-form.tiers.ts";
 import { renderSettingsEmpty, renderSettingsPage } from "./settings-ui.ts";
 
 type ConfigFormProps = {
@@ -18,6 +19,10 @@ type ConfigFormProps = {
   searchQuery?: string;
   activeSection?: string | null;
   activeSubsection?: string | null;
+  showAdvanced?: boolean;
+  expandedAdvancedSections?: ReadonlySet<string>;
+  forceAdvancedSection?: string | null;
+  onAdvancedSectionToggle?: (section: string, expanded: boolean) => void;
   /** Inline actions rendered next to the active section heading (e.g. env peek). */
   sectionActions?: TemplateResult;
   /** Composite pages render custom rows above the form; an empty schema
@@ -130,36 +135,78 @@ export function renderConfigForm(props: ConfigFormProps) {
     node: JsonSchema;
     nodeValue: unknown;
     path: Array<string | number>;
-  }) => html`
-    <section class="settings-section" id=${params.id}>
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">${params.label}</h2>
-        ${props.sectionActions
-          ? html`<div class="settings-section__actions">${props.sectionActions}</div>`
+  }) => {
+    const split = splitConfigSchemaByTier({
+      schema: params.node,
+      path: params.path.map(String),
+      hints: props.uiHints,
+    });
+    const sectionKey = params.path.join(".");
+    const advancedOpen =
+      props.showAdvanced === true ||
+      props.forceAdvancedSection === params.path[0] ||
+      Boolean(searchQuery) ||
+      props.expandedAdvancedSections?.has(sectionKey) === true;
+    const advancedOpenControlled =
+      props.showAdvanced === true ||
+      props.forceAdvancedSection === params.path[0] ||
+      Boolean(searchQuery);
+    const renderTier = (node: JsonSchema) =>
+      renderNode({
+        schema: node,
+        value: params.nodeValue,
+        path: params.path,
+        hints: props.uiHints,
+        rawAvailable: props.rawAvailable ?? true,
+        unsupported,
+        disabled: props.disabled ?? false,
+        showLabel: false,
+        searchCriteria,
+        revealSensitive: props.revealSensitive ?? false,
+        isSensitivePathRevealed: props.isSensitivePathRevealed,
+        onToggleSensitivePath: props.onToggleSensitivePath,
+        onPatch: props.onPatch,
+      });
+    return html`
+      <section class="settings-section" id=${params.id}>
+        <div class="settings-section__header">
+          <h2 class="settings-section__heading">${params.label}</h2>
+          ${props.sectionActions
+            ? html`<div class="settings-section__actions">${props.sectionActions}</div>`
+            : nothing}
+        </div>
+        ${params.description
+          ? html`<p class="settings-section__desc">${params.description}</p>`
           : nothing}
-      </div>
-      ${params.description
-        ? html`<p class="settings-section__desc">${params.description}</p>`
-        : nothing}
-      <div class="settings-group">
-        ${renderNode({
-          schema: params.node,
-          value: params.nodeValue,
-          path: params.path,
-          hints: props.uiHints,
-          rawAvailable: props.rawAvailable ?? true,
-          unsupported,
-          disabled: props.disabled ?? false,
-          showLabel: false,
-          searchCriteria,
-          revealSensitive: props.revealSensitive ?? false,
-          isSensitivePathRevealed: props.isSensitivePathRevealed,
-          onToggleSensitivePath: props.onToggleSensitivePath,
-          onPatch: props.onPatch,
-        })}
-      </div>
-    </section>
-  `;
+        ${split.common
+          ? html`<div class="settings-group">${renderTier(split.common)}</div>`
+          : nothing}
+        ${split.advanced && split.advancedLeafCount > 0
+          ? html`
+              <details
+                class="config-advanced-fields"
+                ?open=${advancedOpen}
+                @toggle=${(event: Event) => {
+                  if (advancedOpenControlled) {
+                    (event.currentTarget as HTMLDetailsElement).open = advancedOpen;
+                    return;
+                  }
+                  const details = event.currentTarget as HTMLDetailsElement;
+                  props.onAdvancedSectionToggle?.(sectionKey, details.open);
+                }}
+              >
+                <summary class="config-advanced-fields__summary">
+                  ${t("configForm.advancedCount", { count: String(split.advancedLeafCount) })}
+                </summary>
+                <div class="settings-group config-advanced-fields__content">
+                  ${renderTier(split.advanced)}
+                </div>
+              </details>
+            `
+          : nothing}
+      </section>
+    `;
+  };
 
   return renderSettingsPage(
     subsectionContext

@@ -291,19 +291,17 @@ have logged in, OpenClaw can use it for embeddings without a separate API key.
 
 ### Config
 
-Set `memorySearch.provider` explicitly to use GitHub Copilot embeddings. If a
+Set `memory.search.provider` explicitly to use GitHub Copilot embeddings. If a
 GitHub token is available, OpenClaw discovers available embedding models from
 the Copilot API and picks the best one automatically.
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "github-copilot",
-        // Optional: override the auto-discovered model
-        model: "text-embedding-3-small",
-      },
+  memory: {
+    search: {
+      provider: "github-copilot",
+      // Optional: override the auto-discovered model
+      model: "text-embedding-3-small",
     },
   },
 }

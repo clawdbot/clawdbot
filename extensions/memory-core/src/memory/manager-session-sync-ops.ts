@@ -179,7 +179,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
 
   protected async runSessionStartupCatchup(): Promise<string[]> {
     const dirtyFiles = await this.markSessionStartupCatchupDirtyFiles();
-    if (dirtyFiles.length === 0 || this.closed) {
+    if ((dirtyFiles.length === 0 && !this.sessionsFullRetryDirty) || this.closed) {
       return dirtyFiles;
     }
     void this.sync({ reason: "session-startup-catchup" }).catch((err: unknown) => {

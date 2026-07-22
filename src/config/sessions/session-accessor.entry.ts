@@ -163,10 +163,9 @@ export function resolveSessionEntryCandidateTarget(
     env: scope.env,
   });
   const store = Object.fromEntries(
-    listSessionEntries({ agentId: scope.agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntriesReadOnly({ agentId: scope.agentId, storePath }).map(
+      ({ sessionKey, entry }) => [sessionKey, entry],
+    ),
   );
   for (const candidateKey of uniqueStrings(scope.candidateKeys.map((key) => key.trim()))) {
     if (!candidateKey) {

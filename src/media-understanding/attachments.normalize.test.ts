@@ -28,6 +28,18 @@ describe("normalizeAttachmentPath", () => {
 });
 
 describe("normalizeAttachments", () => {
+  it("preserves original fact indexes when empty slots are not materializable", () => {
+    expect(
+      normalizeAttachments({
+        media: [
+          {},
+          { path: "/tmp/voice.ogg", contentType: "audio/ogg" },
+          { url: "https://example.test/photo.jpg", contentType: "image/jpeg" },
+        ],
+      }).map((attachment) => attachment.index),
+    ).toEqual([1, 2]);
+  });
+
   it("prefers ordered facts over conflicting legacy projections", () => {
     expect(
       normalizeAttachments({

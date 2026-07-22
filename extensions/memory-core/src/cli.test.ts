@@ -132,7 +132,7 @@ afterAll(async () => {
 });
 
 describe("memory cli", () => {
-  const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
+  const inactiveMemorySecretDiagnostic = "memory.search.remote.apiKey inactive"; // pragma: allowlist secret
 
   function firstMockCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
     const call = mock.mock.calls[0];
@@ -515,14 +515,16 @@ describe("memory cli", () => {
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
     const config = {
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
-            },
+      memory: {
+        search: {
+          remote: {
+            apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
           },
         },
+      },
+
+      agents: {
+        defaults: {},
       },
     };
     getRuntimeConfig.mockReturnValue(config);
@@ -542,10 +544,7 @@ describe("memory cli", () => {
     expect(secretRefsCall.config).toBe(config);
     expect(secretRefsCall.commandName).toBe("memory status");
     expect(secretRefsCall.targetIds).toStrictEqual(
-      new Set([
-        "agents.defaults.memorySearch.remote.apiKey",
-        "agents.list[].memorySearch.remote.apiKey",
-      ]),
+      new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]),
     );
   });
 

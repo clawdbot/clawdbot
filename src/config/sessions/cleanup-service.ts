@@ -241,6 +241,10 @@ function retireMainScopeDirectSessionEntries(params: {
 }): number {
   let retired = 0;
   for (const [key, entry] of Object.entries(params.store)) {
+    // Scope repair cannot retire a user-shelved archive; deletion stays explicit.
+    if (entry.archivedAt !== undefined) {
+      continue;
+    }
     if (
       isMainScopeStaleDirectSessionKey({
         cfg: params.cfg,
@@ -280,12 +284,14 @@ function pruneMissingTranscriptEntries(params: {
 }): number {
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
-    // `--fix-missing` is explicit repair for ordinary rows, but it cannot
-    // release a harness ownership lock. Header-only supervised transcripts are
-    // valid while their first native turn is still pending.
-    if (entry?.modelSelectionLocked === true && shouldPreserveMaintenanceEntry({ key, entry })) {
+    // `--fix-missing` cannot release harness ownership or delete a user-shelved archive.
+    if (
+      (entry?.modelSelectionLocked === true || entry?.archivedAt !== undefined) &&
+      shouldPreserveMaintenanceEntry({ key, entry })
+    ) {
       continue;
     }
+    // Header-only supervised transcripts are valid while their first native turn is pending.
     if (parseAgentSessionKey(key) && entry.sessionId === key && !entry.sessionFile) {
       continue;
     }

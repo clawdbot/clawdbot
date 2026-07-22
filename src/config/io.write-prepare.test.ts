@@ -254,9 +254,8 @@ describe("config io write prepare", () => {
             },
           },
         },
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3-pro-preview",
               fallbacks: ["google/gemini-3-pro-preview"],
@@ -270,7 +269,7 @@ describe("config io write prepare", () => {
               },
             },
           },
-        ],
+        },
       },
       gateway: { port: 18789 },
     };
@@ -299,9 +298,8 @@ describe("config io write prepare", () => {
             },
           },
         },
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             model: {
               primary: "google/gemini-3.1-pro-preview",
               fallbacks: ["google/gemini-3.1-pro-preview"],
@@ -315,7 +313,7 @@ describe("config io write prepare", () => {
               },
             },
           },
-        ],
+        },
       },
       gateway: { port: 18789 },
     };
@@ -347,14 +345,14 @@ describe("config io write prepare", () => {
         alias: "Gemini",
       },
     });
-    expect(persisted.agents?.list?.[0]?.model).toEqual({
+    expect(persisted.agents?.entries?.ops?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview"],
     });
-    expect(persisted.agents?.list?.[0]?.utilityModel).toBe("google/gemini-3.1-pro-preview");
-    expect(persisted.agents?.list?.[0]?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
-    expect(persisted.agents?.list?.[0]?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
-    expect(persisted.agents?.list?.[0]?.models).toEqual({
+    expect(persisted.agents?.entries?.ops?.utilityModel).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.entries?.ops?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.entries?.ops?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.entries?.ops?.models).toEqual({
       "google/gemini-3.1-pro-preview": {
         alias: "Ops Gemini",
       },
@@ -865,27 +863,11 @@ describe("config io write prepare", () => {
     const changedPaths = new Set<string>();
     collectChangedPaths(
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                env: { OPENAI_API_KEY: "sk-secret" },
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { env: { API_KEY: "secret" } } } } },
         gateway: { port: 18789 },
       },
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                env: { OPENAI_API_KEY: "sk-secret" },
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { env: { API_KEY: "secret" } } } } },
         gateway: {
           port: 18789,
           auth: { mode: "token" },
@@ -897,29 +879,21 @@ describe("config io write prepare", () => {
 
     const restored = restoreEnvRefsFromMap(
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                env: { OPENAI_API_KEY: "sk-secret" },
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { env: { API_KEY: "secret" } } } } },
         gateway: {
           port: 18789,
           auth: { mode: "token" },
         },
       },
       "",
-      new Map([["agents.defaults.cliBackends.codex.env.OPENAI_API_KEY", "${OPENAI_API_KEY}"]]),
+      new Map([["plugins.entries.acme.config.env.API_KEY", "${ACME_API_KEY}"]]),
       changedPaths,
     ) as {
-      agents: { defaults: { cliBackends: { codex: { env: { OPENAI_API_KEY: string } } } } };
+      plugins: { entries: { acme: { config: { env: { API_KEY: string } } } } };
       gateway: { port: number; auth: { mode: string } };
     };
 
-    expect(restored.agents.defaults.cliBackends.codex.env.OPENAI_API_KEY).toBe("${OPENAI_API_KEY}");
+    expect(restored.plugins.entries.acme.config.env.API_KEY).toBe("${ACME_API_KEY}");
     expect(restored.gateway).toEqual({
       port: 18789,
       auth: { mode: "token" },
@@ -930,25 +904,11 @@ describe("config io write prepare", () => {
     const changedPaths = new Set<string>();
     collectChangedPaths(
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                args: ["${DISCORD_USER_ID}", "123"],
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { args: ["${USER_ID}", "123"] } } } },
       },
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                args: ["${DISCORD_USER_ID}", "123", "456"],
-              },
-            },
-          },
+        plugins: {
+          entries: { acme: { config: { args: ["${USER_ID}", "123", "456"] } } },
         },
       },
       "",
@@ -957,28 +917,16 @@ describe("config io write prepare", () => {
 
     const restored = restoreEnvRefsFromMap(
       {
-        agents: {
-          defaults: {
-            cliBackends: {
-              codex: {
-                args: ["999", "123", "456"],
-              },
-            },
-          },
-        },
+        plugins: { entries: { acme: { config: { args: ["999", "123", "456"] } } } },
       },
       "",
-      new Map([["agents.defaults.cliBackends.codex.args[0]", "${DISCORD_USER_ID}"]]),
+      new Map([["plugins.entries.acme.config.args[0]", "${USER_ID}"]]),
       changedPaths,
     ) as {
-      agents: { defaults: { cliBackends: { codex: { args: string[] } } } };
+      plugins: { entries: { acme: { config: { args: string[] } } } };
     };
 
-    expect(restored.agents.defaults.cliBackends.codex.args).toEqual([
-      "${DISCORD_USER_ID}",
-      "123",
-      "456",
-    ]);
+    expect(restored.plugins.entries.acme.config.args).toEqual(["${USER_ID}", "123", "456"]);
   });
 
   it("does not overwrite identity-restored env refs with positional map entries", () => {

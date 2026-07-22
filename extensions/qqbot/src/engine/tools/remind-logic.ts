@@ -209,6 +209,8 @@ function buildOnceJob(params: RemindParams, atMs: number, to: string, accountId:
       payload: {
         kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
+        // The scheduled turn only renders reminder text; delivery is host-owned.
+        toolsAllow: [],
       },
       delivery: {
         mode: "announce" as const,
@@ -235,6 +237,8 @@ function buildCronJob(params: RemindParams, to: string, accountId: string) {
       payload: {
         kind: "agentTurn" as const,
         message: buildReminderPrompt(content),
+        // The scheduled turn only renders reminder text; delivery is host-owned.
+        toolsAllow: [],
       },
       delivery: {
         mode: "announce" as const,

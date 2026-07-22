@@ -193,7 +193,7 @@ function buildPreparedCliRunContext(params: {
         output: "jsonl" as const,
         input: "stdin" as const,
         modelArg: "--model",
-        sessionArg: "--session-id",
+        sessionArgs: ["--session-id", "{sessionId}"],
         sessionMode: "always" as const,
         systemPromptFileArg: "--append-system-prompt-file",
         systemPromptWhen: "first" as const,
@@ -517,14 +517,22 @@ describe("runCliAgent spawn path", () => {
         ],
         forkArg: "--fork-session",
         liveSession: "claude-stdio",
+        env: { ANTHROPIC_API_KEY: "configured-backend-key" },
+        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         systemPromptWhen: "always",
       },
+      preparedEnv: { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3" },
       resolveExecutionArgs: (execution) => {
         toolAvailability = execution.toolAvailability;
         return [...execution.baseArgs];
       },
       cliToolAvailability: { native: [], mcp: ["mcp__openclaw__message"] },
     });
+    context.preparedBackend.secretInput = {
+      fd: 3,
+      fingerprint: "selected-node-token-fingerprint",
+      createData: () => Buffer.from("selected-node-token"),
+    };
     context.openClawHistoryPrompt = "gateway transcript reseed";
     context.claudeSkillsPluginArgs = ["--plugin-dir", "/tmp/gateway-skills"];
     context.params.forkCliSessionOnResume = true;
@@ -546,7 +554,13 @@ describe("runCliAgent spawn path", () => {
         stdin: "current turn",
         argv: expect.arrayContaining(["--resume", "source-node-session", "--fork-session"]),
         systemPrompt: "You are a helpful assistant.",
+        env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
+        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
       }),
+    );
+    expect(invokeNode.mock.calls[0]?.[0].env).not.toHaveProperty("ANTHROPIC_API_KEY");
+    expect(invokeNode.mock.calls[0]?.[0].env).not.toHaveProperty(
+      "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
     );
     const argv = invokeNode.mock.calls[0]?.[0].argv ?? [];
     expect(argv).not.toContain("--mcp-config");
@@ -591,6 +605,7 @@ describe("runCliAgent spawn path", () => {
         resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
         forkArg: "--fork-session",
         liveSession: "claude-stdio",
+        env: { ANTHROPIC_API_KEY: "gateway-backend-key" },
         systemPromptWhen: "always",
       },
     });
@@ -598,6 +613,8 @@ describe("runCliAgent spawn path", () => {
     await expect(executePreparedCliRun(context, undefined)).rejects.toThrow(
       /truncated the Claude CLI stream before the terminal result/,
     );
+    expect(invokeNode.mock.calls[0]?.[0].env).toBeUndefined();
+    expect(invokeNode.mock.calls[0]?.[0].clearEnv).toBeUndefined();
   });
 
   it("cancels a node-placed Claude process when the run aborts", async () => {
@@ -869,7 +886,7 @@ describe("runCliAgent spawn path", () => {
       output: "jsonl" as const,
       input: "stdin" as const,
       modelArg: "--model",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
       systemPromptArg: "--append-system-prompt",
       systemPromptWhen: "first" as const,
       serialize: true,
@@ -1083,7 +1100,7 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
-  it("captures only representable Claude prompt, system, and assistant content when opted in", async () => {
+  it("captures only representable Claude prompt and assistant content when opted in", async () => {
     const prompt = "Explain the trace";
     const stdout =
       [
@@ -1133,13 +1150,7 @@ describe("runCliAgent spawn path", () => {
               otel: {
                 enabled: true,
                 traces: true,
-                captureContent: {
-                  enabled: true,
-                  inputMessages: true,
-                  outputMessages: true,
-                  systemPrompt: true,
-                  toolDefinitions: true,
-                },
+                captureContent: true,
               },
             },
           },
@@ -1152,7 +1163,6 @@ describe("runCliAgent spawn path", () => {
       );
       expect(completed?.privateData.modelContent).toEqual({
         inputMessages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-        systemPrompt: "You are a helpful assistant.",
         outputMessages: [
           {
             role: "assistant",
@@ -2124,12 +2134,7 @@ describe("runCliAgent spawn path", () => {
               otel: {
                 enabled: true,
                 traces: true,
-                captureContent: {
-                  enabled: true,
-                  inputMessages: true,
-                  outputMessages: true,
-                  systemPrompt: true,
-                },
+                captureContent: true,
               },
             },
           },
@@ -3343,7 +3348,7 @@ describe("runCliAgent spawn path", () => {
       args: ["-p", "--output-format", "stream-json"],
       output: "jsonl",
       input: "stdin",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
       systemPromptArg: "--append-system-prompt",
       systemPromptFileArg: "--append-system-prompt-file",
     };
@@ -3384,7 +3389,7 @@ describe("runCliAgent spawn path", () => {
       args: ["-p"],
       output: "jsonl",
       input: "stdin",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
       systemPromptArg: "--append-system-prompt",
       systemPromptFileArg: "--append-system-prompt-file",
     };
@@ -5861,6 +5866,34 @@ ${JSON.stringify({
       env?: Record<string, string | undefined>;
     };
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
+  });
+
+  it("keeps selected Claude auth authoritative over ambient and configured credentials", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV", '["ANTHROPIC_API_KEY"]');
+    vi.stubEnv("ANTHROPIC_API_KEY", "ambient-api-key");
+    mockSuccessfulClaudeJsonlRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        runId: "run-claude-selected-auth-authority",
+        preparedEnv: {
+          CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth-token",
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+        },
+        backend: {
+          env: { ANTHROPIC_API_KEY: "configured-api-key" },
+          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        },
+      }),
+    );
+
+    const input = mockCallArg(supervisorSpawnMock) as {
+      env?: Record<string, string | undefined>;
+    };
+    expect(input.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("selected-oauth-token");
   });
 
   it("clears claude-cli provider-routing, auth, telemetry, compaction, and host-managed env", async () => {

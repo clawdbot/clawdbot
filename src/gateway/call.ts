@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -667,7 +668,7 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
 } {
   const hasEnvHandshakeTimeout =
     Boolean(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) ||
-    Boolean(process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+    Boolean(isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
   const resolvedHandshakeTimeoutMs = hasEnvHandshakeTimeout
     ? resolvePreauthHandshakeTimeoutMs()
     : undefined;

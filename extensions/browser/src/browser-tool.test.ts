@@ -1400,7 +1400,11 @@ describe("browser tool snapshot maxChars", () => {
   it("defangs vision MEDIA-looking text and does not attach media", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+        },
+      },
     } as never);
     browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce({
       ok: true,
@@ -1439,7 +1443,11 @@ describe("browser tool snapshot maxChars", () => {
   it("defangs vision failure fallback text", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+        },
+      },
     } as never);
     browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce({
       ok: true,
@@ -1478,7 +1486,11 @@ describe("browser tool snapshot maxChars", () => {
   it("preserves screenshot image sanitization on vision failure fallback", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
-      tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
+      tools: {
+        media: {
+          models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+        },
+      },
       agents: { defaults: { imageMaxDimensionPx: 1600 } },
     } as never);
     browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce({

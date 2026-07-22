@@ -1,7 +1,7 @@
 /** Polls watched adopted sessions for direct upstream human activity. */
 import { createHash } from "node:crypto";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -30,7 +30,7 @@ const log = createSubsystemLogger("sessions/upstream-monitor");
 type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   providers?: readonly SessionCatalogProvider[];
   now?: () => number;
-  loadEntry?: typeof loadSessionEntry;
+  loadEntry?: typeof loadSessionEntryReadOnly;
   isRunActive?: typeof isEmbeddedAgentRunActive;
   loadOwnRecentUserTexts?: (params: {
     entry: SessionEntry;
@@ -115,7 +115,7 @@ async function probeProvenanceUnchanged(
   probe: SessionUpstreamProbe,
   options: SessionUpstreamMonitorOptions,
 ): Promise<boolean> {
-  const entry = (options.loadEntry ?? loadSessionEntry)({
+  const entry = (options.loadEntry ?? loadSessionEntryReadOnly)({
     sessionKey: probe.sessionKey,
     agentId: probe.agentId,
     clone: false,
@@ -166,7 +166,7 @@ async function runSessionUpstreamMonitorTick(
       } satisfies Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
       // One corrupt session store must not reject the whole tick; skip that link only.
       try {
-        const entry = (options.loadEntry ?? loadSessionEntry)({
+        const entry = (options.loadEntry ?? loadSessionEntryReadOnly)({
           sessionKey: probe.sessionKey,
           agentId: probe.agentId,
           clone: false,

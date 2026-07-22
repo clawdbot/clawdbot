@@ -34,8 +34,10 @@ export type ResolvedAgentConfig = {
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
   experimental?: AgentDefaultsConfig["experimental"];
   skills?: AgentEntry["skills"];
-  memorySearch?: AgentEntry["memorySearch"];
+  memory?: AgentEntry["memory"];
   humanDelay?: AgentEntry["humanDelay"];
+  typingMode?: AgentEntry["typingMode"];
+  typingIntervalSeconds?: AgentEntry["typingIntervalSeconds"];
   tts?: AgentEntry["tts"];
   contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
@@ -66,6 +68,10 @@ function stripNullBytes(s: string): string {
 
 /** Lists valid configured agent entries from config. */
 export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
+  const entries = cfg.agents?.entries;
+  if (entries && typeof entries === "object") {
+    return Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry));
+  }
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) {
     return [];
@@ -137,7 +143,7 @@ export function resolveAgentConfig(
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
-    fastModeDefault: entry.fastModeDefault,
+    fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
     contextTokens: entry.contextTokens ?? agentDefaults?.contextTokens,
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
@@ -147,8 +153,10 @@ export function resolveAgentConfig(
         ? { ...agentDefaults?.experimental, ...entry.experimental }
         : agentDefaults?.experimental,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
-    memorySearch: entry.memorySearch,
+    memory: entry.memory,
     humanDelay: entry.humanDelay,
+    typingMode: entry.typingMode ?? agentDefaults?.typingMode,
+    typingIntervalSeconds: entry.typingIntervalSeconds ?? agentDefaults?.typingIntervalSeconds,
     tts: entry.tts,
     contextLimits:
       typeof entry.contextLimits === "object" && entry.contextLimits

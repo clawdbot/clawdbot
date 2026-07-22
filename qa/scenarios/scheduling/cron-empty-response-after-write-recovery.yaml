@@ -1,0 +1,145 @@
+title: Cron empty-response recovery after a side-effecting write
+
+scenario:
+  id: cron-empty-response-after-write-recovery
+  surface: cron
+  coverage:
+    primary: [runtime.empty-response-recovery]
+    secondary: [scheduling.cron, channels.qa-channel]
+  regressionRefs:
+    - openclaw/openclaw#108738
+  objective: Verify resolved announce delivery gets one safe finalization after a settled write.
+  successCriteria:
+    - The cron run completes successfully.
+    - The model plans the write exactly once and receives one tool-free continuation.
+    - The qa-channel receives exactly one final marker.
+  codeRefs:
+    - src/cron/isolated-agent/run-executor.ts
+    - src/agents/embedded-agent-runner/run/terminal-resolution.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    summary: Force one resolved announce cron through settled-tool finalization.
+    config:
+      channelId: qa-room
+      promptSnippet: Empty response after write recovery QA check
+      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      expectedMarker: CRON-EMPTY-WRITE-RECOVERED-OK
+
+flow:
+  steps:
+    - name: creates and forces the isolated announce job
+      actions:
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: scheduledFor
+          value:
+            expr: "new Date(Date.now() + 10 * 60 * 1000).toISOString()"
+        - call: env.gateway.call
+          saveAs: response
+          args:
+            - cron.add
+            - name:
+                expr: "`qa-empty-write-${randomUUID()}`"
+              enabled: true
+              schedule:
+                kind: at
+                at:
+                  ref: scheduledFor
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message: "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt with the text side effect completed once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`."
+              delivery:
+                mode: announce
+                channel: qa-channel
+                to:
+                  expr: "`channel:${config.channelId}`"
+        - set: jobId
+          value:
+            expr: response.id
+        - set: runStartedAt
+          value:
+            expr: "Date.now()"
+        - call: env.gateway.call
+          saveAs: runResponse
+          args:
+            - cron.run
+            - id:
+                ref: jobId
+              mode: force
+            - timeoutMs: 30000
+        - assert:
+            expr: "runResponse?.ok === true && runResponse?.ran !== false"
+            message:
+              expr: "`expected cron.run to enqueue one run, got ${JSON.stringify(runResponse)}`"
+
+    - name: observes successful cron completion
+      actions:
+        - call: waitForCronRunCompletion
+          saveAs: completedRun
+          args:
+            - callGateway:
+                expr: "env.gateway.call.bind(env.gateway)"
+              jobId:
+                ref: jobId
+              afterTs:
+                ref: runStartedAt
+              timeoutMs:
+                expr: "liveTurnTimeoutMs(env, 45000)"
+        - assert:
+            expr: "completedRun?.status === 'ok'"
+            message:
+              expr: "`expected cron run ok, got ${JSON.stringify(completedRun)}`"
+
+    - name: observes safe finalization and delivery
+      actions:
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+        - set: writeRequests
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'write')"
+        - set: continuationRequests
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.allInputText ?? '').includes(config.retryNeedle))"
+        - assert:
+            expr: "writeRequests.length === 1"
+            message:
+              expr: "`expected one write plan, saw ${String(writeRequests.length)}`"
+        - assert:
+            expr: "continuationRequests.length === 1"
+            message:
+              expr: "`expected one settled-tool continuation, saw ${String(continuationRequests.length)}`"
+        - assert:
+            expr: "continuationRequests.every((request) => !Array.isArray(request.body?.tools) || request.body.tools.length === 0)"
+            message: settled-tool continuation exposed a model tool surface
+        - call: sleep
+          args:
+            - 2000
+        - set: outboundMessages
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound')"
+        - set: conversationMessages
+          value:
+            expr: "outboundMessages.filter((message) => message.conversation.id === config.channelId)"
+        - assert:
+            expr: "conversationMessages.length === 1"
+            message:
+              expr: "`expected exactly one qa-channel delivery, saw ${String(conversationMessages.length)}; cron=${JSON.stringify(completedRun)} outbounds=${JSON.stringify(outboundMessages)}`"
+        - set: reply
+          value:
+            expr: "conversationMessages[0]"
+        - assert:
+            expr: "Boolean(reply)"
+            message:
+              expr: "`expected qa-channel delivery; cron=${JSON.stringify(completedRun)} outbounds=${JSON.stringify(outboundMessages)}`"
+        - assert:
+            expr: "reply.text.trim() === config.expectedMarker"
+            message:
+              expr: "`qa-channel reply did not exactly match the recovery marker: ${reply.text}`"
+      detailsExpr: "`${reply.text}; requests=${String(scenarioRequests.length)} writes=${String(writeRequests.length)} continuations=${String(continuationRequests.length)}`"

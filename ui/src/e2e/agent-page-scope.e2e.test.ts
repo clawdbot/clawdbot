@@ -129,12 +129,21 @@ describeControlUiE2e("Control UI agent page scope", () => {
       await sidebar.getByRole("link", { name: "Usage" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
       await waitForRequest(gateway, "sessions.usage", (params) => params.agentId === "writer");
-      const pageScope = page.locator(".agent-scope-control__select");
-      await expect.poll(() => pageScope.inputValue()).toBe("writer");
+      const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
+      await expect
+        .poll(() =>
+          pageScope.evaluate((picker) => (picker as HTMLElement & { value: string }).value),
+        )
+        .toBe("writer");
       await screenshot(page, "01-writer-usage.png");
 
+      const scopeTrigger = pageScope.locator(".agent-select__trigger");
       const usageRequestsBeforeAll = (await gateway.getRequests("sessions.usage")).length;
-      await pageScope.selectOption("");
+      await scopeTrigger.click();
+      await pageScope
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "All agents" })
+        .evaluate((item) => (item as HTMLElement).click());
       await expect
         .poll(async () => {
           const requests = await gateway.getRequests("sessions.usage");

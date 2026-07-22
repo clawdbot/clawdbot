@@ -55,10 +55,7 @@ export async function prepareSubagentContinuationAccounting(params: {
   requesterSessionKey: string;
   task: string;
   cfg: { session?: { store?: unknown } };
-  readSessionEntry: (
-    sessionKey: string,
-    options?: { refresh?: boolean },
-  ) => ChainTokenEntry | undefined;
+  loadEntry: (sessionKey: string, options?: { refresh?: boolean }) => ChainTokenEntry | undefined;
   invalidateSessionEntry: (sessionKey: string) => void;
 }): Promise<{
   isContinuationChainDelegate: boolean;
@@ -76,14 +73,14 @@ export async function prepareSubagentContinuationAccounting(params: {
   let parentChainTokensToFold = 0;
 
   if (params.enabled && isContinuationChainDelegate) {
-    let childEntry = params.readSessionEntry(params.childSessionKey);
+    let childEntry = params.loadEntry(params.childSessionKey);
     const hasTokenData =
       typeof childEntry?.inputTokens === "number" || typeof childEntry?.outputTokens === "number";
     if (!hasTokenData) {
       await new Promise((resolve) => {
         setTimeout(resolve, 150);
       });
-      childEntry = params.readSessionEntry(params.childSessionKey, { refresh: true });
+      childEntry = params.loadEntry(params.childSessionKey, { refresh: true });
       if (
         typeof childEntry?.inputTokens !== "number" &&
         typeof childEntry?.outputTokens !== "number"
@@ -165,7 +162,7 @@ export async function prepareSubagentContinuationAccounting(params: {
 
   let fallbackChildContinuationChainId: string | undefined;
   const buildChildContinuationSpawnState = (count: number) => {
-    const childEntry = params.readSessionEntry(params.childSessionKey);
+    const childEntry = params.loadEntry(params.childSessionKey);
     return {
       count,
       startedAt: childEntry?.continuationChainStartedAt ?? Date.now(),

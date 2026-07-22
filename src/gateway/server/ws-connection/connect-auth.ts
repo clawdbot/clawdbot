@@ -252,11 +252,7 @@ export async function authenticateGatewayConnect(
       authOk,
       authMethod,
     });
-    const preserveInsecureLocalControlUiScopes =
-      isControlUi &&
-      controlUiAuthPolicy.allowInsecureAuthConfigured &&
-      isLocalClient &&
-      (authMethod === "token" || authMethod === "password");
+    const preserveInsecureLocalControlUiScopes = false;
     const decision = evaluateMissingDeviceIdentity({
       hasDeviceIdentity: Boolean(device),
       role,
@@ -294,7 +290,7 @@ export async function authenticateGatewayConnect(
       const errorMessage =
         "control ui requires device identity (use HTTPS or localhost secure context)";
       markHandshakeFailure("control-ui-insecure-auth", {
-        insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
+        insecureAuthConfigured: false,
       });
       sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
         details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },

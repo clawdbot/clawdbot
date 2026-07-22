@@ -1,6 +1,7 @@
 // Cron service job tests cover job creation, updates, and runtime scheduling.
 import { describe, expect, it } from "vitest";
 import {
+  applyDeclarativeJobSpec,
   applyJobPatch,
   computeJobNextRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
@@ -479,7 +480,7 @@ describe("applyJobPatch", () => {
     }
   });
 
-  it("clears agentTurn payload.toolsAllow when patch requests null", () => {
+  it("stores an explicit wildcard when a patch clears agentTurn payload.toolsAllow", () => {
     const job = createIsolatedAgentTurnJob("job-tools-clear", {
       mode: "announce",
       channel: "telegram",
@@ -501,7 +502,7 @@ describe("applyJobPatch", () => {
 
     expect(job.payload.kind).toBe("agentTurn");
     if (job.payload.kind === "agentTurn") {
-      expect(job.payload.toolsAllow).toBeUndefined();
+      expect(job.payload.toolsAllow).toEqual(["*"]);
       expect(job.payload.toolsAllowIsDefault).toBeUndefined();
     }
   });
@@ -832,6 +833,143 @@ function createMockState(
     },
   } as unknown as CronServiceState;
 }
+
+describe("cron tool authority defaults", () => {
+  const now = Date.parse("2026-07-21T12:00:00.000Z");
+
+  it("stores an explicit wildcard for newly created tool-runtime jobs", () => {
+    const agentTurn = createJob(createMockState(now), {
+      name: "agent turn",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "work" },
+    });
+    const triggeredEvent = createJob(createMockState(now, { scriptPayloadsEnabled: true }), {
+      name: "triggered event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "wake" },
+      trigger: { script: "return true" },
+    });
+
+    expect(agentTurn.payload.toolsAllow).toEqual(["*"]);
+    expect(triggeredEvent.payload.toolsAllow).toEqual(["*"]);
+  });
+
+  it("preserves explicit empty caps and leaves transport-only jobs capless", () => {
+    const noTools = createJob(createMockState(now), {
+      name: "no tools",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "render", toolsAllow: [] },
+    });
+    const transportOnly = createJob(createMockState(now), {
+      name: "transport only",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "wake" },
+    });
+
+    expect(noTools.payload.toolsAllow).toEqual([]);
+    expect(transportOnly.payload.toolsAllow).toBeUndefined();
+  });
+
+  it("preserves legacy and explicit state during declarative convergence", () => {
+    const base = {
+      id: "declared-job",
+      name: "declared job",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every" as const, everyMs: 60_000, anchorMs: now },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      delivery: { mode: "none" as const },
+      state: {},
+    };
+    const input = {
+      name: "declared job",
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "now" as const,
+      payload: { kind: "agentTurn" as const, message: "updated" },
+      delivery: { mode: "none" as const },
+    };
+    const legacy: CronJob = {
+      ...base,
+      payload: { kind: "agentTurn", message: "legacy" },
+    };
+    const explicit: CronJob = {
+      ...base,
+      id: "explicit-job",
+      payload: {
+        kind: "agentTurn",
+        message: "explicit",
+        toolsAllow: ["read", "cron"],
+        toolsAllowIsDefault: true,
+      },
+    };
+
+    applyDeclarativeJobSpec(legacy, input, {
+      enabledExplicit: true,
+      nowMs: now,
+    });
+    applyDeclarativeJobSpec(explicit, input, {
+      enabledExplicit: true,
+      nowMs: now,
+    });
+
+    expect(legacy.payload.toolsAllow).toBeUndefined();
+    expect(explicit.payload).toMatchObject({
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    });
+  });
+
+  it("adopts explicit authority when a declaration becomes tool-bearing", () => {
+    const job: CronJob = {
+      id: "declared-trigger",
+      name: "declared trigger",
+      enabled: true,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "wake" },
+      state: {},
+    };
+
+    applyDeclarativeJobSpec(
+      job,
+      {
+        name: "declared trigger",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "wake" },
+        trigger: { script: "return true" },
+      },
+      {
+        enabledExplicit: true,
+        nowMs: now,
+        cronConfig: { triggers: { enabled: true } },
+      },
+    );
+
+    expect(job.payload.toolsAllow).toEqual(["*"]);
+  });
+});
 
 describe("script payload validation", () => {
   const now = Date.parse("2026-07-18T12:00:00.000Z");

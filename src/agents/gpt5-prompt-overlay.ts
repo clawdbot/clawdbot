@@ -92,7 +92,6 @@ export function resolveGpt5PromptOverlayMode(
   const canUseOpenAiPluginFallback =
     !providerId || OPENAI_FAMILY_GPT5_PROMPT_OVERLAY_PROVIDERS.has(providerId);
   return (
-    normalizeGpt5PromptOverlayMode(config?.agents?.defaults?.promptOverlays?.gpt5?.personality) ??
     (canUseOpenAiPluginFallback
       ? normalizeGpt5PromptOverlayMode(config?.plugins?.entries?.openai?.config?.personality)
       : undefined) ??

@@ -542,7 +542,6 @@ export async function applyMediaUnderstanding(params: {
   processingMode?: "audio-only";
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
-  const mediaWorkspaceDir = ctx.MediaWorkspaceDir ?? params.workspaceDir;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
   const originalUserText =
     commandCandidates
@@ -558,7 +557,7 @@ export async function applyMediaUnderstanding(params: {
       workspaceDir: params.workspaceDir,
     }),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    workspaceDir: mediaWorkspaceDir,
+    workspaceDir: params.workspaceDir,
   });
 
   try {

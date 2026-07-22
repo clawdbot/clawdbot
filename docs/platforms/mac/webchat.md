@@ -19,9 +19,12 @@ The anchored compact chat panel from the menu bar keeps the compact single-colum
 ## Multiple Gateway windows
 
 Open **Settings → Gateways** to add or remove reusable Gateway profiles. Each
-profile contains a `ws://` or `wss://` endpoint and its optional token or
-password; credentials are stored in the macOS Keychain. Removing a profile
-also closes its open windows and shuts down its secondary connection.
+profile contains a private-network `ws://` or secure `wss://` endpoint and its
+optional token or password; credentials are stored in the macOS Keychain.
+Secure profiles maintain their own system-trust-gated first-use certificate pin
+and do not inherit `gateway.remote.tlsFingerprint` from the primary Gateway.
+Removing a profile also closes its open windows and shuts down its secondary
+connection.
 
 Choose **File → New Gateway Window…** or press Cmd-N, then select one of those
 saved profiles. The picker remembers the most recently used profile. Every
@@ -61,7 +64,7 @@ After a reply finishes, choose **Paste to &lt;app&gt;** to copy its visible assi
 Disable the feature entirely with **Settings → General → Quick Chat**; the same section hosts the shortcut recorder.
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
-- **Remote mode**: forwards the Gateway control port over SSH and uses that tunnel as the data plane.
+- **Remote mode**: uses the configured direct `ws://`/`wss://` route or the app-managed SSH tunnel as the data plane.
 
 ## Launch and debugging
 

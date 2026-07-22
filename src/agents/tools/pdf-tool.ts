@@ -371,7 +371,7 @@ export function createPdfTool(options?: {
 
   const maxBytesMbDefault = (
     options?.config?.agents?.defaults as Record<string, unknown> | undefined
-  )?.pdfMaxBytesMb;
+  )?.pdfMaxMb;
   const maxPagesDefault = (options?.config?.agents?.defaults as Record<string, unknown> | undefined)
     ?.pdfMaxPages;
   const configuredMaxBytesMb =

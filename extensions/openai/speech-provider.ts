@@ -137,7 +137,7 @@ function normalizeOpenAIProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.openai.apiKey",
+      path: "tts.providers.openai.apiKey",
     }),
     baseUrl,
     model: trimToUndefined(raw?.model) ?? "gpt-4o-mini-tts",
@@ -190,37 +190,6 @@ function resolveGeneratedAudioMaxBytes(req: {
     return Math.floor(configured * 1024 * 1024);
   }
   return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
-}
-
-function renderOpenAITtsPersonaInstructions(req: {
-  label?: string;
-  prompt?: {
-    profile?: string;
-    scene?: string;
-    sampleContext?: string;
-    style?: string;
-    accent?: string;
-    pacing?: string;
-    constraints?: string[];
-  };
-}): string | undefined {
-  const prompt = req.prompt;
-  if (!prompt) {
-    return undefined;
-  }
-  const lines = [
-    req.label ? `Persona: ${req.label}` : undefined,
-    prompt.profile ? `Profile: ${prompt.profile}` : undefined,
-    prompt.scene ? `Scene: ${prompt.scene}` : undefined,
-    prompt.style ? `Style: ${prompt.style}` : undefined,
-    prompt.accent ? `Accent: ${prompt.accent}` : undefined,
-    prompt.pacing ? `Pacing: ${prompt.pacing}` : undefined,
-    prompt.sampleContext ? `Sample context: ${prompt.sampleContext}` : undefined,
-    ...(prompt.constraints ?? []).map((constraint) => `Constraint: ${constraint}`),
-  ]
-    .map((line) => trimToUndefined(line))
-    .filter((line): line is string => Boolean(line));
-  return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
 function isCustomOpenAITtsBaseUrl(baseUrl: string | undefined): boolean {
@@ -327,23 +296,6 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     listVoices: async () => OPENAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) =>
       Boolean(resolveOpenAISpeechApiKey(readOpenAIProviderConfig(providerConfig))),
-    prepareSynthesis: (ctx) => {
-      const config = readOpenAIProviderConfig(ctx.providerConfig);
-      if (config.instructions) {
-        return undefined;
-      }
-      const instructions = renderOpenAITtsPersonaInstructions({
-        label: ctx.persona?.label ?? ctx.persona?.id,
-        prompt: ctx.persona?.prompt,
-      });
-      return instructions
-        ? {
-            providerConfig: {
-              instructions,
-            },
-          }
-        : undefined;
-    },
     synthesize: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
       const overrides = readOpenAIOverrides(req.providerOverrides, config.baseUrl);

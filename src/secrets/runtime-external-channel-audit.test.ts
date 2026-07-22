@@ -107,8 +107,7 @@ function createGoogleChatSecretContractApi() {
       targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
       configFile: "openclaw.json",
       pathPattern: "channels.googlechat.accounts.*.serviceAccount",
-      refPathPattern: "channels.googlechat.accounts.*.serviceAccountRef",
-      secretShape: "sibling_ref",
+      secretShape: "secret_input",
       expectedResolvedValue: "string-or-object",
       includeInPlan: true,
       includeInConfigure: true,
@@ -120,8 +119,7 @@ function createGoogleChatSecretContractApi() {
       targetType: "channels.googlechat.serviceAccount",
       configFile: "openclaw.json",
       pathPattern: "channels.googlechat.serviceAccount",
-      refPathPattern: "channels.googlechat.serviceAccountRef",
-      secretShape: "sibling_ref",
+      secretShape: "secret_input",
       expectedResolvedValue: "string-or-object",
       includeInPlan: true,
       includeInConfigure: true,
@@ -145,7 +143,7 @@ function createGoogleChatSecretContractApi() {
       return;
     }
     const collect = (target: Record<string, unknown>, pathKey: string, active: boolean) => {
-      const refValue = target.serviceAccountRef;
+      const refValue = target.serviceAccount;
       if (!refValue) {
         return;
       }
@@ -280,14 +278,14 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             },
           },
           googlechat: {
-            serviceAccountRef: ref("GOOGLECHAT_SERVICE_ACCOUNT"),
+            serviceAccount: ref("GOOGLECHAT_SERVICE_ACCOUNT"),
             accounts: {
               inherited: {
                 enabled: true,
               },
               work: {
                 enabled: true,
-                serviceAccountRef: ref("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
+                serviceAccount: ref("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
               },
             },
           },
@@ -461,11 +459,11 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
         },
         googlechat: {
           enabled: false,
-          serviceAccountRef: inactiveExecRef("GOOGLECHAT_DISABLED_SERVICE_ACCOUNT"),
+          serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_SERVICE_ACCOUNT"),
           accounts: {
             disabled: {
               enabled: false,
-              serviceAccountRef: inactiveExecRef("GOOGLECHAT_DISABLED_ACCOUNT_SERVICE_ACCOUNT"),
+              serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_ACCOUNT_SERVICE_ACCOUNT"),
             },
           },
         },

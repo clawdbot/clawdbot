@@ -11,7 +11,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
@@ -681,7 +681,7 @@ export async function sessionsTailCommand(
 
   const selections: TailSelection[] = [];
   for (const target of targets) {
-    for (const { sessionKey, entry } of listSessionEntries({
+    for (const { sessionKey, entry } of listSessionEntriesReadOnly({
       agentId: target.agentId,
       storePath: target.storePath,
     })) {

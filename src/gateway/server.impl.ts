@@ -1322,7 +1322,7 @@ export async function startGatewayServer(
     sessionMessageSubscribers,
     listRegisteredNodePluginToolCommands: () => pluginRegistry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
-    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,
+    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
     onPairingInvalidated: ({ nodeId, connId }) => {
       upsertPresence(nodeId, { reason: "disconnect" });
       broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
@@ -1614,8 +1614,8 @@ export async function startGatewayServer(
           removeChatRun,
           agentRunSeq,
           nodeSendToSession,
-          ...(typeof cfgAtStart.media?.ttlHours === "number"
-            ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
+          ...(typeof cfgAtStart.attachments?.ttlHours === "number"
+            ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.attachments.ttlHours) }
             : {}),
           skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
           getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
@@ -1638,22 +1638,24 @@ export async function startGatewayServer(
           import("./server-runtime-startup-services.js"),
         ]),
       );
-    const runtimeSubscriptions = await startupTrace.measure("runtime.subscriptions", () =>
-      startGatewayEventSubscriptions({
-        log,
-        broadcast,
-        broadcastToConnIds,
-        nodeSendToSession,
-        agentRunSeq,
-        chatRunState,
-        toolEventRecipients,
-        sessionEventSubscribers,
-        sessionMessageSubscribers,
-        chatAbortControllers,
-        restartRecoveryCandidates,
-      }),
+    const { sessionObserver, ...runtimeSubscriptionUnsubs } = await startupTrace.measure(
+      "runtime.subscriptions",
+      () =>
+        startGatewayEventSubscriptions({
+          log,
+          broadcast,
+          broadcastToConnIds,
+          nodeSendToSession,
+          agentRunSeq,
+          chatRunState,
+          toolEventRecipients,
+          sessionEventSubscribers,
+          sessionMessageSubscribers,
+          chatAbortControllers,
+          restartRecoveryCandidates,
+        }),
     );
-    Object.assign(runtimeState, runtimeSubscriptions);
+    Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
     const runtimeServices = await startupTrace.measure("runtime.services", () =>
       startGatewayRuntimeServices({
@@ -1988,6 +1990,7 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          sessionObserver,
           getMcpAppSandboxPort,
           ensureSandboxHostPort,
           resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
@@ -2057,6 +2060,7 @@ export async function startGatewayServer(
           unsubscribeAllSessionEvents: (connId: string) => {
             sessionEventSubscribers.unsubscribe(connId);
             sessionMessageSubscribers.unsubscribeAll(connId);
+            sessionObserver.removeConnection(connId);
           },
           getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
           registerToolEventRecipient: toolEventRecipients.add,

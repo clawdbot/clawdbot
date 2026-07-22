@@ -7,6 +7,7 @@ import {
   parseConfigSearchQuery,
 } from "../../components/config-form.search.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
+import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
 import {
   AI_AGENTS_SECTION_KEYS,
@@ -288,24 +289,35 @@ export function findSettingsSearchBlocks(params: {
   const value = params.value ?? {};
   for (const [key, sectionSchema] of Object.entries(schema.properties)) {
     const meta = SECTION_META[key];
-    const matchesSection = matchesConfigSectionSearch({
-      key,
+    const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,
-      value: value[key],
+      path: [key],
       hints: params.uiHints,
-      query: params.query,
-      label: meta?.label,
-      description: meta?.description,
-      textMatcher: settingsSearchTextMatches,
     });
-    if (!matchesSection) {
+    const matchesTier = (tierSchema: JsonSchema | null) =>
+      Boolean(
+        tierSchema &&
+        matchesConfigSectionSearch({
+          key,
+          schema: tierSchema,
+          value: value[key],
+          hints: params.uiHints,
+          query: params.query,
+          label: meta?.label,
+          description: meta?.description,
+          textMatcher: settingsSearchTextMatches,
+        }),
+      );
+    const matchesCommon = matchesTier(tierSplit.common);
+    const matchesAdvanced = matchesTier(tierSplit.advanced);
+    if (!matchesCommon && !matchesAdvanced) {
       continue;
     }
     const encodedKey = encodeURIComponent(key);
     matches.push({
       routeId: routeForConfigSection(key),
       label: meta?.label ?? sectionSchema.title ?? key,
-      search: `?section=${encodedKey}`,
+      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}`,
       hash: `#config-section-${encodedKey}`,
     });
   }

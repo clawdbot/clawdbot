@@ -137,6 +137,7 @@ vi.mock("../config/sessions/paths.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntries: statusSummaryMocks.listSessionEntries,
+  listSessionEntriesReadOnly: statusSummaryMocks.listSessionEntries,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({

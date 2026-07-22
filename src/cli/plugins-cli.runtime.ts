@@ -743,7 +743,7 @@ export async function runPluginMarketplaceEntriesCommand(
 ): Promise<void> {
   const catalog = await import("../plugins/official-external-plugin-catalog.js");
   const cfg = getRuntimeConfig();
-  const result = await catalog.loadConfiguredHostedOfficialExternalPluginCatalogEntries(cfg, {
+  const result = await catalog.loadConfiguredHostedOfficialExternalPluginCatalogEntries({
     ...(opts.feedProfile ? { feedProfile: opts.feedProfile } : {}),
     ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
     ...(opts.offline ? { offline: true } : {}),
@@ -753,9 +753,7 @@ export async function runPluginMarketplaceEntriesCommand(
   });
   const entries: MarketplaceEntryPayload[] = result.entries.map((entry) => {
     const id = catalog.resolveOfficialExternalPluginId(entry);
-    const install =
-      catalog.resolveOfficialExternalPluginInstall(entry, { catalogConfig: cfg.marketplaces }) ??
-      undefined;
+    const install = catalog.resolveOfficialExternalPluginInstall(entry) ?? undefined;
     const payload: MarketplaceEntryPayload = {
       label: catalog.resolveOfficialExternalPluginLabel(entry),
     };
@@ -829,7 +827,7 @@ export async function runPluginMarketplaceRefreshCommand(
     await import("../plugins/official-external-plugin-catalog.js");
   const cfg = getRuntimeConfig();
   const expectedSha256 = normalizeMarketplaceExpectedSha256(opts.expectedSha256);
-  const result = await loadConfiguredHostedOfficialExternalPluginCatalogEntries(cfg, {
+  const result = await loadConfiguredHostedOfficialExternalPluginCatalogEntries({
     ...(opts.feedProfile ? { feedProfile: opts.feedProfile } : {}),
     ...(opts.feedUrl ? { feedUrl: opts.feedUrl } : {}),
     ...(expectedSha256 ? { expectedSha256 } : {}),

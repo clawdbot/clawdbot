@@ -27,18 +27,11 @@ type ResolvedCommitmentsConfig = {
   };
 };
 
-function positiveInt(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : fallback;
-}
-
 /** Resolves commitment extraction config with conservative defaults. */
-export function resolveCommitmentsConfig(cfg?: OpenClawConfig): ResolvedCommitmentsConfig {
-  const raw = cfg?.commitments;
+export function resolveCommitmentsConfig(_cfg?: OpenClawConfig): ResolvedCommitmentsConfig {
   return {
-    enabled: raw?.enabled === true,
-    maxPerDay: positiveInt(raw?.maxPerDay, DEFAULT_COMMITMENT_MAX_PER_DAY),
+    enabled: false,
+    maxPerDay: DEFAULT_COMMITMENT_MAX_PER_DAY,
     extraction: {
       debounceMs: DEFAULT_COMMITMENT_EXTRACTION_DEBOUNCE_MS,
       batchMaxItems: DEFAULT_COMMITMENT_BATCH_MAX_ITEMS,

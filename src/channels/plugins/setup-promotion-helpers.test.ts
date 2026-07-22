@@ -24,39 +24,14 @@ import {
 } from "./setup-promotion-helpers.js";
 
 const legacyCommonKeys = [
-  "appToken",
-  "account",
-  "signalNumber",
-  "authDir",
-  "cliPath",
-  "dbPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "webhookSecret",
-  "service",
-  "region",
-  "homeserver",
-  "userId",
   "accessToken",
+  "appToken",
+  "httpUrl",
   "password",
-  "deviceName",
-  "url",
-  "code",
+  "userId",
+  "webhookSecret",
 ] as const;
-const legacySetupOnlyKeys = [
-  "deviceId",
-  "avatarUrl",
-  "initialSyncLimit",
-  "encryption",
-  "allowlistOnly",
-  "threadReplies",
-  "startupVerification",
-  "startupVerificationCooldownHours",
-  "autoJoin",
-  "autoJoinAllowlist",
-  "rooms",
-] as const;
+const legacySetupOnlyKeys = ["rooms"] as const;
 
 function valuesFor(keys: readonly string[]): Record<string, string> {
   return Object.fromEntries(keys.map((key) => [key, `value:${key}`]));
@@ -101,7 +76,7 @@ describe("setup promotion helpers", () => {
     expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
   });
 
-  it("restores the exact former common tier when no declarations resolve", () => {
+  it("retains the published-reader common tier when no declarations resolve", () => {
     expect(
       resolveSingleAccountKeysToMove({
         channelKey: "demo",
@@ -113,7 +88,7 @@ describe("setup promotion helpers", () => {
     ).toEqual(legacyCommonKeys);
   });
 
-  it("adds the exact former setup-only tier on direct setup paths", () => {
+  it("adds the published-reader setup-only tier on direct setup paths", () => {
     expect(
       resolveSingleAccountKeysToMove({
         channelKey: "demo",

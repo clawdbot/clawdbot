@@ -1,57 +1,39 @@
 // Memory Host SDK module implements memory schema behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
+import {
+  dropDisabledMemoryChunkFts,
+  dropMemoryPathFtsTriggers,
+  ensureMemoryPathFtsSchema,
+  ensureMemoryPathFtsTriggers,
+  MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  rebuildMemoryChunkFts,
+} from "./memory-schema-fts.js";
+import {
+  assertLegacyMemoryRowsCopied,
+  ensureLegacyMemoryMigrationIndexes,
+} from "./memory-schema-migration.js";
 import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
+
+export {
+  dropMemoryPathFtsTriggers,
+  ensureMemoryPathFtsTriggers,
+  MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_SOURCES_TABLE,
+  MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
+} from "./memory-schema-fts.js";
 
 // SQLite schema setup for builtin memory index, embedding cache, and FTS.
 
 export const MEMORY_INDEX_META_TABLE = "memory_index_meta";
-export const MEMORY_INDEX_SOURCES_TABLE = "memory_index_sources";
-export const MEMORY_INDEX_CHUNKS_TABLE = "memory_index_chunks";
 export const MEMORY_EMBEDDING_CACHE_TABLE = "memory_embedding_cache";
 export const MEMORY_INDEX_STATE_TABLE = "memory_index_state";
-export const MEMORY_INDEX_FTS_TABLE = "memory_index_chunks_fts";
-export const MEMORY_INDEX_PATHS_FTS_TABLE = "memory_index_paths_fts";
 export const MEMORY_INDEX_VECTOR_TABLE = "memory_index_chunks_vec";
-
-/** Optional canonical triggers owned by the derived path FTS index. */
-export const MEMORY_PATH_FTS_TRIGGER_DEFINITIONS = [
-  {
-    name: "memory_index_paths_fts_after_insert",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_insert
-      AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
-      BEGIN
-        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-        VALUES (NEW.id, NEW.path, NEW.source);
-      END;
-    `,
-  },
-  {
-    name: "memory_index_paths_fts_after_update",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_update
-      AFTER UPDATE OF id, path, source ON ${MEMORY_INDEX_SOURCES_TABLE}
-      BEGIN
-        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-        WHERE rowid = OLD.id;
-        INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-        VALUES (NEW.id, NEW.path, NEW.source);
-      END;
-    `,
-  },
-  {
-    name: "memory_index_paths_fts_after_delete",
-    sql: `
-      CREATE TRIGGER IF NOT EXISTS main.memory_index_paths_fts_after_delete
-      AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
-      BEGIN
-        DELETE FROM ${MEMORY_INDEX_PATHS_FTS_TABLE}
-        WHERE rowid = OLD.id;
-      END;
-    `,
-  },
-] as const;
 
 const LEGACY_MEMORY_INDEX_TRIGGERS = [
   "memory_files_revision_after_insert",
@@ -242,13 +224,6 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   return row?.found === 1;
 }
 
-function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
-  const row = db.prepare(query).get() as { missing?: unknown } | undefined;
-  if (Number(row?.missing ?? 0) > 0) {
-    throw new Error(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
-  }
-}
-
 /** Upgrade canonical memory sources to stable integer identities. */
 export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
   if (!tableExists(db, MEMORY_INDEX_SOURCES_TABLE)) {
@@ -359,63 +334,167 @@ function copyLegacyMemoryIndexRows(
   schema: string,
   preservedEmbeddingCacheTable?: string,
 ): void {
+  ensureLegacyMemoryMigrationIndexes(db, schema);
+  // Canonical-owned chunk sets stay intact; any extra legacy identity invalidates
+  // the source for rebuild. Chunkless sources import only when metadata matches.
+  // Keep invalidated rows for deleted-file cleanup; snapshot before inserts.
   db.exec(`
-    INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
-    SELECT key, value FROM ${schema}.meta;
-
-    INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
-    SELECT path, source, hash, mtime, size
-    FROM ${schema}.files;
-
-    INSERT OR IGNORE INTO main.${MEMORY_INDEX_CHUNKS_TABLE} (
-      id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+    CREATE TEMP TABLE legacy_import_chunk_excluded_sources AS
+    SELECT DISTINCT owned.path, owned.source,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM ${schema}.chunks AS legacy_chunk
+        WHERE legacy_chunk.path = owned.path AND legacy_chunk.source IS owned.source
+          AND NOT EXISTS (
+            SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical_chunk
+            WHERE canonical_chunk.id = legacy_chunk.id
+              AND canonical_chunk.path IS legacy_chunk.path AND canonical_chunk.source IS legacy_chunk.source
+          )
+      ) THEN 1 ELSE 0 END AS force_reindex
+    FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS owned
+    WHERE EXISTS (
+      SELECT 1 FROM ${schema}.files AS legacy_file
+      WHERE legacy_file.path = owned.path AND legacy_file.source IS owned.source
     )
-    SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-    FROM ${schema}.chunks;
+    UNION ALL
+    SELECT canonical.path, canonical.source, 1 AS force_reindex
+    FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
+    JOIN ${schema}.files AS legacy
+      ON legacy.path = canonical.path AND legacy.source IS canonical.source
+    WHERE (
+      canonical.hash IS NOT legacy.hash
+      OR canonical.mtime IS NOT legacy.mtime
+      OR canonical.size IS NOT legacy.size
+    )
+      AND NOT EXISTS (
+        SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
+        WHERE chunk.path = canonical.path AND chunk.source IS canonical.source
+      );
+
+    CREATE TEMP TABLE legacy_import_dirty_sources AS
+    SELECT legacy.path, legacy.source
+    FROM ${schema}.files AS legacy
+    WHERE NOT EXISTS (
+      SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
+      WHERE canonical.path = legacy.path AND canonical.source IS legacy.source
+    )
+    UNION
+    SELECT legacy.path, legacy.source
+    FROM ${schema}.chunks AS legacy
+    WHERE EXISTS (
+      SELECT 1 FROM ${schema}.files AS owner
+      WHERE owner.path = legacy.path AND owner.source IS legacy.source
+    )
+      AND NOT EXISTS (
+        SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+        WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
+        WHERE canonical.id = legacy.id
+      )
+    UNION
+    SELECT excluded.path, excluded.source
+    FROM temp.legacy_import_chunk_excluded_sources AS excluded
+    WHERE excluded.force_reindex = 1;
   `);
-  assertLegacyRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.meta AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_META_TABLE} AS canonical
-       WHERE canonical.key = legacy.key AND canonical.value IS legacy.value
-     )`,
-    "meta",
-  );
-  assertLegacyRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.files AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
-       WHERE canonical.path = legacy.path
-         AND canonical.source IS legacy.source
-         AND canonical.hash IS legacy.hash
-         AND canonical.mtime IS legacy.mtime
-         AND canonical.size IS legacy.size
-     )`,
-    "files",
-  );
-  assertLegacyRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.chunks AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
-       WHERE canonical.id = legacy.id
-         AND canonical.path IS legacy.path
-         AND canonical.source IS legacy.source
-         AND canonical.start_line IS legacy.start_line
-         AND canonical.end_line IS legacy.end_line
-         AND canonical.hash IS legacy.hash
-         AND canonical.model IS legacy.model
-         AND canonical.text IS legacy.text
-         AND canonical.embedding IS legacy.embedding
-         AND canonical.updated_at IS legacy.updated_at
-     )`,
-    "chunks",
-  );
+  try {
+    db.exec(`
+      INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
+      SELECT key, value FROM ${schema}.meta;
+
+      INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
+      SELECT path, source, hash, mtime, size
+      FROM ${schema}.files;
+
+      INSERT OR IGNORE INTO main.${MEMORY_INDEX_CHUNKS_TABLE} (
+        id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+      )
+      -- Chunks are derived from source rows. Shipped cleanup could leave an
+      -- ownerless legacy chunk, which must not become permanently searchable.
+      SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+      FROM ${schema}.chunks AS legacy
+      WHERE EXISTS (
+        SELECT 1 FROM ${schema}.files AS owner
+        WHERE owner.path = legacy.path AND owner.source IS legacy.source
+      )
+        AND NOT EXISTS (
+          SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+          WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
+        );
+
+      -- Content hashes are SHA-256 hex, so an empty hash cannot match a file.
+      -- Imported sources or chunks may be absent from runtime-owned vector
+      -- indexes, while excluded sources need a canonical rebuild. Retaining the
+      -- dirty source lets sync rebuild every derived row or clean up a deleted file.
+      UPDATE main.${MEMORY_INDEX_SOURCES_TABLE}
+      SET hash = ''
+      WHERE EXISTS (
+        SELECT 1 FROM temp.legacy_import_dirty_sources AS dirty
+        WHERE dirty.path = main.${MEMORY_INDEX_SOURCES_TABLE}.path
+          AND dirty.source IS main.${MEMORY_INDEX_SOURCES_TABLE}.source
+      );
+    `);
+    assertLegacyMemoryRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.meta AS legacy
+       WHERE NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_INDEX_META_TABLE} AS canonical
+         WHERE canonical.key = legacy.key
+       )`,
+      "meta",
+    );
+    assertLegacyMemoryRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.files AS legacy
+       WHERE NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
+         WHERE canonical.path = legacy.path
+           AND canonical.source IS legacy.source
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+         WHERE excluded.force_reindex = 1
+           AND excluded.path = legacy.path
+           AND excluded.source IS legacy.source
+       )`,
+      "files",
+    );
+    assertLegacyMemoryRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.chunks AS legacy
+       WHERE EXISTS (
+         SELECT 1 FROM ${schema}.files AS owner
+         WHERE owner.path = legacy.path AND owner.source IS legacy.source
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
+         WHERE canonical.id = legacy.id
+           AND canonical.path IS legacy.path
+           AND canonical.source IS legacy.source
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+         WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
+       )`,
+      "chunks",
+    );
+    // Repair derived orphans only after authoritative copy assertions pass;
+    // otherwise a synthetic owner could mask an uncopyable legacy source row.
+    db.exec(`
+      INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
+      SELECT DISTINCT orphan.path, orphan.source, '', 0, 0 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS orphan
+      WHERE NOT EXISTS (
+        SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS owner
+        WHERE owner.path = orphan.path AND owner.source IS orphan.source
+      );
+    `);
+  } finally {
+    db.exec("DROP TABLE temp.legacy_import_dirty_sources");
+    db.exec("DROP TABLE temp.legacy_import_chunk_excluded_sources");
+  }
   if (
     preservedEmbeddingCacheTable !== "embedding_cache" &&
     hasLegacyEmbeddingCacheTable(db, schema)
@@ -437,7 +516,7 @@ function copyLegacyMemoryIndexRows(
       SELECT provider, model, provider_key, hash, embedding, dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
-    assertLegacyRowsCopied(
+    assertLegacyMemoryRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
        FROM ${schema}.embedding_cache AS legacy
@@ -447,9 +526,6 @@ function copyLegacyMemoryIndexRows(
            AND canonical.model = legacy.model
            AND canonical.provider_key = legacy.provider_key
            AND canonical.hash = legacy.hash
-           AND canonical.embedding IS legacy.embedding
-           AND canonical.dims IS legacy.dims
-           AND canonical.updated_at IS legacy.updated_at
        )`,
       "embedding_cache",
     );
@@ -459,6 +535,7 @@ function copyLegacyMemoryIndexRows(
 function migrateLegacyMemoryIndexTables(
   db: DatabaseSync,
   preservedEmbeddingCacheTable?: string,
+  ftsTable = MEMORY_INDEX_FTS_TABLE,
 ): void {
   if (!hasLegacyMemoryIndexTables(db)) {
     return;
@@ -467,6 +544,13 @@ function migrateLegacyMemoryIndexTables(
   db.exec("SAVEPOINT migrate_legacy_memory_index_tables");
   try {
     copyLegacyMemoryIndexRows(db, "main", preservedEmbeddingCacheTable);
+    // `chunks_fts` belongs to the legacy schema and is dropped below even when
+    // a deprecated caller also supplied that name as its preferred FTS table.
+    if (ftsTable !== "chunks_fts" && tableExists(db, ftsTable)) {
+      // FTS is derived from canonical chunks. Rebuild inside the migration
+      // savepoint so imported rows and removed stale rows publish atomically.
+      rebuildMemoryChunkFts(db, ftsTable);
+    }
     if (preservedEmbeddingCacheTable !== "embedding_cache" && hasLegacyEmbeddingCacheTable(db)) {
       db.exec("DROP TABLE embedding_cache");
     }
@@ -483,47 +567,6 @@ function migrateLegacyMemoryIndexTables(
   } catch (err) {
     db.exec("ROLLBACK TO migrate_legacy_memory_index_tables");
     db.exec("RELEASE migrate_legacy_memory_index_tables");
-    throw err;
-  }
-}
-
-/** Drop the canonical source-to-path-FTS maintenance triggers. */
-export function dropMemoryPathFtsTriggers(db: DatabaseSync): void {
-  for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
-    db.exec(`DROP TRIGGER IF EXISTS main.${trigger.name}`);
-  }
-}
-
-/** Install the canonical source-to-path-FTS maintenance triggers. */
-export function ensureMemoryPathFtsTriggers(db: DatabaseSync): void {
-  // The named integer source identity survives VACUUM and gives every
-  // FTS update/delete a direct rowid lookup instead of a virtual-table scan.
-  for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {
-    db.exec(trigger.sql);
-  }
-}
-
-function ensureMemoryPathFtsSchema(params: { db: DatabaseSync; tokenizeClause: string }): void {
-  params.db.exec("SAVEPOINT ensure_memory_index_paths_fts");
-  try {
-    params.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS ${MEMORY_INDEX_PATHS_FTS_TABLE} USING fts5(
-        path,
-        source UNINDEXED
-        ${params.tokenizeClause}
-      );
-      -- The initial copy and trigger installation share this savepoint. Once
-      -- populated, the triggers own completeness; per-row FTS probes are too costly.
-      INSERT INTO ${MEMORY_INDEX_PATHS_FTS_TABLE} (rowid, path, source)
-      SELECT id, path, source
-      FROM ${MEMORY_INDEX_SOURCES_TABLE}
-      WHERE NOT EXISTS (SELECT 1 FROM ${MEMORY_INDEX_PATHS_FTS_TABLE} LIMIT 1);
-    `);
-    ensureMemoryPathFtsTriggers(params.db);
-    params.db.exec("RELEASE ensure_memory_index_paths_fts");
-  } catch (err) {
-    params.db.exec("ROLLBACK TO ensure_memory_index_paths_fts");
-    params.db.exec("RELEASE ensure_memory_index_paths_fts");
     throw err;
   }
 }
@@ -646,7 +689,8 @@ export function ensureMemoryIndexSchema(params: {
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);
-  migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable);
+  migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable, ftsTable);
+  dropDisabledMemoryChunkFts(params.db, ftsTable, params.ftsEnabled);
   if (params.cacheEnabled) {
     const updatedAtIndex =
       embeddingCacheTable === MEMORY_EMBEDDING_CACHE_TABLE
@@ -683,8 +727,8 @@ export function ensureMemoryIndexSchema(params: {
           `  end_line UNINDEXED\n` +
           `${tokenizeClause});`,
       );
-      // The shipped generic-table migration and a later FTS enablement both
-      // create an empty derived table beside already-canonical chunk rows.
+      // A migration rebuilds an existing FTS table in its savepoint. If the
+      // table is new, this same empty-table bootstrap covers all canonical rows.
       params.db.exec(`
         INSERT INTO ${ftsTable} (
           text, id, path, source, model, start_line, end_line

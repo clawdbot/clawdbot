@@ -361,7 +361,6 @@ describe("discord config schema", () => {
           enabled: true,
           intervalMs: 30000,
           minUpdateIntervalMs: 15000,
-          exhaustedText: "token exhausted",
         },
       },
     },

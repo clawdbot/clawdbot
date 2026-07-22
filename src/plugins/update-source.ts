@@ -710,11 +710,18 @@ export function resolveClawHubUpdateSpecs(params: {
   fallbackSpec?: string;
   fallbackLabel?: string;
 } {
-  if (!params.officialSpecOverride && !params.record.clawhubPackage) {
+  const clawhubPackage =
+    params.record.clawhubPackage ??
+    parseClawHubPluginSpec(params.record.spec ?? "")?.name ??
+    parseClawHubPluginSpec(params.record.resolvedSpec ?? "")?.name;
+  if (!params.officialSpecOverride && !clawhubPackage) {
     return {};
   }
   const recordSpec =
-    params.officialSpecOverride ?? params.record.spec ?? `clawhub:${params.record.clawhubPackage}`;
+    params.officialSpecOverride ??
+    params.record.spec ??
+    params.record.resolvedSpec ??
+    `clawhub:${clawhubPackage}`;
   return resolveClawHubInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,

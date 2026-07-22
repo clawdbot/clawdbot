@@ -73,6 +73,25 @@ struct OnboardingViewSmokeTests {
         #expect(short < preferred)
     }
 
+    @Test func `permissions page scrolls when the onboarding window is short`() throws {
+        let state = AppState(preview: true)
+        let view = OnboardingView(state: state)
+        let hosting = NSHostingView(rootView: view.permissionsPage())
+        let contentHeight = OnboardingView.contentHeight(
+            for: OnboardingView.minimumWindowHeight,
+            usesCompactHero: false)
+        hosting.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: OnboardingView.windowWidth,
+            height: contentHeight)
+        hosting.layoutSubtreeIfNeeded()
+
+        let scrollView = try #require(Self.firstDescendant(of: NSScrollView.self, in: hosting))
+        #expect(contentHeight == 303)
+        #expect(scrollView.documentView != nil)
+    }
+
     @Test func `local page order includes memory import only while eligible`() {
         let configuredOrder = OnboardingView.pageOrder(
             for: .local,
@@ -588,5 +607,13 @@ struct OnboardingViewSmokeTests {
         #expect(Array(Capability.importanceOrdered.prefix(3))
             == [.appleScript, .accessibility, .screenRecording])
         #expect(Capability.importanceOrdered.last == Capability.location)
+    }
+
+    private static func firstDescendant<T: NSView>(of type: T.Type, in view: NSView) -> T? {
+        if let match = view as? T { return match }
+        for child in view.subviews {
+            if let match = self.firstDescendant(of: type, in: child) { return match }
+        }
+        return nil
     }
 }

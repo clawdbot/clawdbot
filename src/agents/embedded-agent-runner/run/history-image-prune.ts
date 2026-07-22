@@ -1,7 +1,7 @@
 /**
  * Prunes already-processed image payloads from replayed prompt history.
  */
-import { buildLateMediaAttachedText } from "../../../sessions/user-turn-transcript.js";
+import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonBlankUserText } from "./attempt.user-message-boundary.js";
 
@@ -97,7 +97,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
     // Materialize blank marked turns here so this earlier boundary still prunes stale paths.
     const lateMediaText =
       message.role === "user" && !hasNonBlankUserText(message.content)
-        ? buildLateMediaAttachedText(message)
+        ? buildLateMediaAttachedProjection(message).text
         : undefined;
     const content = lateMediaText
       ? Array.isArray(message.content)

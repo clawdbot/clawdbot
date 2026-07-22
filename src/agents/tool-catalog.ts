@@ -373,6 +373,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "mobile_ui",
+    label: "mobile_ui",
+    description: "Observe and control a paired Android app",
+    sectionId: "nodes",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "agents_list",
     label: "agents_list",
     description: "List agents",

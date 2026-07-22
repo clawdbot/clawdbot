@@ -9,7 +9,7 @@ scenario:
     reason: Local version-mismatch fixture only; no assistant turn runs.
   coverage:
     primary:
-      - runtime.codex-plugin.version
+      - openai.doctor-diagnostics
   objective: Verify a Codex plugin pinned behind the OpenClaw host version fails closed with a precise update remediation.
   successCriteria:
     - The lifecycle fixture detects the plugin version is older than the host version.

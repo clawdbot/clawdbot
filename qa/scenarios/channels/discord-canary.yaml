@@ -3,7 +3,8 @@ scenario:
   id: discord-canary
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - discord.configured-and-runtime-routing
   execution:
     profiles: { "discord:adapter": 0, "discord:default": 0 }
     kind: flow

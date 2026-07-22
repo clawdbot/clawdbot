@@ -12,6 +12,5 @@ export function withExactHostnamePolicy(
   return {
     ...basePolicy,
     allowedHostnames: [hostname],
-    hostnameAllowlist: [hostname],
   };
 }

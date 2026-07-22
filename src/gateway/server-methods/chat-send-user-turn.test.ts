@@ -42,6 +42,15 @@ function createAttachments(
     mediaPathOffloadPaths: string[];
     mediaPathOffloadTypes: string[];
     mediaPathOffloadWorkspaceDir: string | undefined;
+    imageOrder: Array<"inline" | "offloaded">;
+    offloadedRefs: Array<{
+      mediaRef: string;
+      id: string;
+      path: string;
+      mimeType: string;
+      label: string;
+      sizeBytes: number;
+    }>;
     parsedMessage: string;
   }> = {},
 ) {
@@ -185,6 +194,57 @@ describe("prepareChatSendUserTurn", () => {
     expect(prepared.ctx).not.toHaveProperty("SenderId");
     expect(prepared.queuedFollowupOwnerKey).toBe("device:device-1");
     await expect(readInput()).resolves.toEqual(controller.baseInput);
+  });
+
+  it("carries retained image claim-check facts without changing the trailing prompt line", () => {
+    const { controller } = createUserTurnInputController();
+    const mediaRef = "media://inbound/image-1.png";
+    const prepared = prepareChatSendUserTurn({
+      request: {
+        clientInfo: createClientInfo(),
+        normalizedAttachments: [{}],
+        suppressCommandInterpretation: false,
+        systemInputProvenance: undefined,
+        systemProvenanceReceipt: undefined,
+      },
+      session: {
+        agentId: "main",
+        clientRunId: "run-1",
+        sessionKey: "agent:main:main",
+      },
+      admission: {
+        originatingRoute: {
+          originatingChannel: "webchat",
+          explicitDeliverRoute: false,
+        },
+      },
+      attachments: createAttachments({
+        imageOrder: ["offloaded"],
+        offloadedRefs: [
+          {
+            mediaRef,
+            id: "image-1.png",
+            path: "/media/inbound/image-1.png",
+            mimeType: "image/png",
+            label: "image.png",
+            sizeBytes: 10,
+          },
+        ],
+        parsedMessage: `inspect\n[media attached: ${mediaRef}]`,
+      }),
+      client: null,
+      logGateway: { warn: vi.fn() } as never,
+      userTurn: controller,
+    });
+
+    expect(prepared.ctx.Body).toBe(`inspect\n[media attached: ${mediaRef}]`);
+    expect(prepared.replyOptionMedia).toEqual([
+      {
+        path: "/media/inbound/image-1.png",
+        url: mediaRef,
+        contentType: "image/png",
+      },
+    ]);
   });
 });
 

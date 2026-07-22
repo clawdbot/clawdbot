@@ -5,6 +5,11 @@ Discover the complete candidate set, obtain maintainer approval, and prepare
 the approved commits as one coordinated PR. Treat commits as canonical; use
 PRs, issues, ClawSweeper reports, and advisories as supporting context.
 
+Read `backport-discovery.md` first. Its evidence-driven inventory, detached
+baseline applicability probes, advisory reconciliation, and durable unreleased
+ledger are mandatory for this maintenance line; this reference adds the
+extended-stable package and publication constraints.
+
 ## Boundaries
 
 - Read `docs/reference/RELEASING.md`,
@@ -19,8 +24,9 @@ PRs, issues, ClawSweeper reports, and advisories as supporting context.
   exact version.
 - Exclude ClawHub publication, GitHub Releases, native apps, Docker images,
   mobile artifacts, website downloads, and private-repository dist-tags.
-- Review the complete mainline delta. Do not stop after the first obvious
-  fixes or consider public PRs the complete source set.
+- Review the complete mainline delta using the shared evidence-driven audit.
+  Do not stop after the first obvious fixes or consider public PRs, titles, or
+  dependency bumps the complete source set.
 - Present the full proposed release set before changing release refs.
 - Never push directly to the canonical branch, create a release tag, publish a
   package, or mutate an npm dist-tag during discovery or staging.
@@ -112,9 +118,12 @@ git cherry "<canonical-extended-stable-ref>" "$scan_end" "$scan_start"
 
 If no auditable start exists, stop rather than guessing from dates or titles.
 
-Create an uncommitted scratch ledger with one row per non-equivalent commit.
-Process deterministic batches of at most 100 commits. Record each SHA, subject,
-changed paths, first-pass decision, and missing evidence.
+Create the durable unreleased backport ledger required by
+`backport-discovery.md`, with one row per non-equivalent commit. Process
+deterministic batches of at most 100 commits. Record each SHA, subject, changed
+paths, first-pass decision, applicability result, exclusions, and missing
+evidence. Keep public security rows opaque and private advisory detail only in
+the approved security record.
 
 ```bash
 ledger_dir=$(mktemp -d)
@@ -125,10 +134,13 @@ split -l 100 "$ledger_dir/all-commits.txt" "$ledger_dir/batch-"
 ```
 
 Review every ledger entry's subject and changed-file summary. Inspect the full
-diff and surrounding code for every plausible security or reliability fix.
-Account for merges, squash commits, direct commits, reordered patches,
-branch-specific equivalents, and companion commits that `git cherry` misses.
-Do not finish while any entry remains unclassified.
+diff and surrounding code for every plausible security or reliability fix, and
+mechanically probe each security- or reliability-signalled production diff in a
+detached baseline worktree as required by `backport-discovery.md`. Separately
+review conventional `fix`, `perf`, and `doctor` commits in the high-risk paths
+named there. Account for merges, squash commits, direct commits, reordered
+patches, branch-specific equivalents, and companion commits that `git cherry`
+misses. Do not finish while any entry remains unclassified.
 
 Also inspect direct maintainer/security commits, linked PRs and issues,
 ClawSweeper findings, companion fixes, callers, siblings, tests, and dependency
@@ -195,7 +207,8 @@ Classify each plausible fix as:
 
 Do not infer that a clean cherry-pick is safe. Treat config/default, persisted
 state, plugin/API boundary, protocol, dependency, packaging, installer, and
-cross-repository changes as high risk requiring maintainer judgment.
+cross-repository changes as high risk requiring maintainer judgment. Collapse
+overlapping or dependent commits to the smallest final fix before proposing it.
 
 ## Present the Full Release Set
 
@@ -211,8 +224,8 @@ affected core/plugin packages, out-of-scope publication surfaces, and
 confidential security status.
 
 Use PR links when they exist, but retain source commit identities in internal
-evidence. Obtain explicit maintainer approval for the complete release set
-before changing branches.
+evidence. Obtain explicit maintainer approval for the complete categorized
+ledger and release set before changing branches.
 
 ## Prepare the Approved Patch Set
 
@@ -240,8 +253,10 @@ before changing branches.
 The PR body must list the intended maintenance tag, exact npm publication
 inventory, every source commit and optional PR, impact, adaptations, focused
 and combined proof, security status, rollback considerations, and exact scan
-bounds. Record unresolved blocked candidates so the next run carries them
-forward.
+bounds. Update the durable ledger with branch/tag/version/SHA provenance and
+unresolved blocked candidates so the next run carries them forward. Dispatch
+npm preflight only after the canonical branch or tag has that exact final
+version and SHA.
 
 ## Handoff
 

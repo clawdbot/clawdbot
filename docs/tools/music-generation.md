@@ -14,7 +14,7 @@ OpenRouter.
 
 <Note>
 `music_generate` only appears when at least one music-generation provider is
-available: an explicit `agents.defaults.musicGenerationModel` config, or an
+available: an explicit `agents.defaults.mediaModels.music` config, or an
 auth-configured provider (a set API key, for example).
 </Note>
 
@@ -182,7 +182,7 @@ captures any requested-to-applied mapping.
 </Note>
 
 Provider request timeouts are operator configuration only. OpenClaw uses
-`agents.defaults.musicGenerationModel.timeoutMs` when configured, raises
+`agents.defaults.mediaModels.music.timeoutMs` when configured, raises
 values below 120000ms to 120000ms, and otherwise defaults provider requests
 to 300000ms.
 
@@ -263,8 +263,8 @@ OpenClaw tries providers in this order:
 If a provider fails, the next candidate is tried automatically. If all
 fail, the error includes details from each attempt.
 
-Set `agents.defaults.mediaGenerationAutoProviderFallback: false` to use only
-explicit `model`, `primary`, and `fallbacks` entries.
+Automatic fallback across authenticated providers is always enabled. A per-call
+`model` remains authoritative.
 
 ## Provider notes
 

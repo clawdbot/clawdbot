@@ -10,6 +10,7 @@ import { configuredModelRouteNeedsCodex } from "../../../config/codex-plugin-dia
 import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import type { MutableRecord } from "./codex-route-types.js";
 
 export function normalizeRuntimeString(value: unknown): string | undefined {
@@ -316,14 +317,8 @@ function findAgentById(
     return undefined;
   }
   const normalizedAgentId = normalizeAgentId(agentId);
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  return agents
-    .map((agent) => asMutableRecord(agent))
-    .find(
-      (agent) =>
-        normalizeAgentId(typeof agent?.id === "string" ? agent.id : undefined) ===
-        normalizedAgentId,
-    );
+  return listMutableCodexRouteAgentEntries(cfg).find((entry) => entry.agentId === normalizedAgentId)
+    ?.agent;
 }
 
 function resolveAliasFromModelsMap(

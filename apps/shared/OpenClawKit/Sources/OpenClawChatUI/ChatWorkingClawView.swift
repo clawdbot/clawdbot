@@ -6,13 +6,14 @@ private enum ChatWorkingClawSeed {
     static let salt = UInt32.random(in: UInt32.min...UInt32.max)
 }
 
-private struct ChatWorkingClawPose {
+struct ChatWorkingClawPose {
     var bodyRotation: CGFloat = 0
     var jawRotation: CGFloat = -10
     var xOffset: CGFloat = 0
     var yOffset: CGFloat = 0
     var zRotation: CGFloat = 0
     var yRotation: CGFloat = 0
+    var bodyScale: CGFloat = 1
     var powOpacity: Double = 0
     var powScale: CGFloat = 0.4
 
@@ -24,7 +25,24 @@ private struct ChatWorkingClawKeyframe {
     let value: CGFloat
 }
 
-private enum ChatWorkingClawMotion {
+enum ChatWorkingClawMotion {
+    private enum Easing {
+        case easeOut
+        case easeInOut
+        case linear
+
+        func amount(for linear: Double) -> Double {
+            switch self {
+            case .easeOut:
+                1 - pow(1 - linear, 3)
+            case .easeInOut:
+                UnitCurve.easeInOut.value(at: linear)
+            case .linear:
+                linear
+            }
+        }
+    }
+
     private static let bodySnips = [
         ChatWorkingClawKeyframe(progress: 0, value: 0),
         ChatWorkingClawKeyframe(progress: 0.06, value: 0),
@@ -99,11 +117,72 @@ private enum ChatWorkingClawMotion {
         ChatWorkingClawKeyframe(progress: 0.78, value: -360),
         ChatWorkingClawKeyframe(progress: 1, value: -360),
     ]
+    private static let zenBodyScale = [
+        ChatWorkingClawKeyframe(progress: 0, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.30, value: 1.08),
+        ChatWorkingClawKeyframe(progress: 0.55, value: 1),
+        ChatWorkingClawKeyframe(progress: 1, value: 1),
+    ]
+    private static let zenJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.60, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -24),
+        ChatWorkingClawKeyframe(progress: 0.76, value: 2),
+        ChatWorkingClawKeyframe(progress: 0.86, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let drummerBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.15, value: -8),
+        ChatWorkingClawKeyframe(progress: 0.30, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.55, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let drummerJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -20),
+        ChatWorkingClawKeyframe(progress: 0.15, value: 2),
+        ChatWorkingClawKeyframe(progress: 0.25, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.50, value: -20),
+        ChatWorkingClawKeyframe(progress: 0.55, value: 2),
+        ChatWorkingClawKeyframe(progress: 0.65, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let peekabooY = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.55, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.62, value: 5),
+        ChatWorkingClawKeyframe(progress: 0.72, value: 5),
+        ChatWorkingClawKeyframe(progress: 0.78, value: -1.5),
+        ChatWorkingClawKeyframe(progress: 0.84, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let peekabooScale = [
+        ChatWorkingClawKeyframe(progress: 0, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.55, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.62, value: 0.72),
+        ChatWorkingClawKeyframe(progress: 0.72, value: 0.72),
+        ChatWorkingClawKeyframe(progress: 0.78, value: 1.06),
+        ChatWorkingClawKeyframe(progress: 0.84, value: 1),
+        ChatWorkingClawKeyframe(progress: 1, value: 1),
+    ]
+    private static let peekabooJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.55, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -2),
+        ChatWorkingClawKeyframe(progress: 0.72, value: -2),
+        ChatWorkingClawKeyframe(progress: 0.78, value: -28),
+        ChatWorkingClawKeyframe(progress: 0.86, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
 
     static func pose(stance: ChatWorkingClawStance, elapsed: TimeInterval) -> ChatWorkingClawPose {
         let duration: TimeInterval = switch stance {
         case .flurry: 1.3
         case .spin: 3.6
+        case .zen: 6
+        case .drummer: 1.2
         default: 2.4
         }
         let progress = max(0, elapsed).truncatingRemainder(dividingBy: duration) / duration
@@ -128,7 +207,7 @@ private enum ChatWorkingClawMotion {
                     .init(progress: 1, value: 0),
                 ],
                 at: progress,
-                eased: false))
+                easing: .linear))
             pose.powScale = self.sample([
                 .init(progress: 0, value: 0.4),
                 .init(progress: 0.46, value: 0.4),
@@ -139,6 +218,16 @@ private enum ChatWorkingClawMotion {
         case .backflip:
             pose.yOffset = self.sample(self.backflipY, at: progress)
             pose.zRotation = self.sample(self.backflipRotation, at: progress)
+        case .zen:
+            pose.bodyScale = self.sample(self.zenBodyScale, at: progress, easing: .easeInOut)
+            pose.jawRotation = self.sample(self.zenJaw, at: progress)
+        case .drummer:
+            pose.bodyRotation = self.sample(self.drummerBodyRotation, at: progress)
+            pose.jawRotation = self.sample(self.drummerJaw, at: progress)
+        case .peekaboo:
+            pose.yOffset = self.sample(self.peekabooY, at: progress)
+            pose.bodyScale = self.sample(self.peekabooScale, at: progress)
+            pose.jawRotation = self.sample(self.peekabooJaw, at: progress)
         }
         return pose
     }
@@ -146,14 +235,14 @@ private enum ChatWorkingClawMotion {
     private static func sample(
         _ frames: [ChatWorkingClawKeyframe],
         at progress: Double,
-        eased: Bool = true) -> CGFloat
+        easing: Easing = .easeOut) -> CGFloat
     {
         guard let first = frames.first else { return 0 }
         guard progress > first.progress else { return first.value }
         for pair in zip(frames, frames.dropFirst()) where progress <= pair.1.progress {
             let span = pair.1.progress - pair.0.progress
             let linear = span > 0 ? (progress - pair.0.progress) / span : 1
-            let amount = eased ? 1 - pow(1 - linear, 3) : linear
+            let amount = easing.amount(for: linear)
             return pair.0.value + (pair.1.value - pair.0.value) * CGFloat(amount)
         }
         return frames.last?.value ?? first.value
@@ -222,6 +311,7 @@ struct ChatWorkingClawView: View {
                 .degrees(pose.yRotation),
                 axis: (x: 0, y: 1, z: 0),
                 perspective: 0.45)
+            .scaleEffect(pose.bodyScale)
             .offset(x: pose.xOffset, y: pose.yOffset)
             .scaleEffect(x: !self.parked && self.stance == .southpaw ? -1 : 1, y: 1)
 

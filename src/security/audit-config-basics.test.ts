@@ -93,7 +93,7 @@ describe("security audit config basics", () => {
               {
                 id: "asset-agent",
                 skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+                tools: { exec: { host: "gateway", mode: "full" } },
               },
             ],
           },
@@ -140,7 +140,7 @@ describe("security audit config basics", () => {
               {
                 id: "asset-agent",
                 skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+                tools: { exec: { host: "gateway", mode: "full" } },
               },
             ],
           },
@@ -177,7 +177,7 @@ describe("security audit config basics", () => {
               {
                 id: "asset-agent",
                 skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+                tools: { exec: { host: "gateway", mode: "full" } },
               },
             ],
           },
@@ -214,7 +214,7 @@ describe("security audit config basics", () => {
               {
                 id: "asset-agent",
                 skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+                tools: { exec: { host: "gateway", mode: "full" } },
               },
             ],
           },
@@ -277,7 +277,7 @@ describe("security audit config basics", () => {
               {
                 id: "asset-agent",
                 skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+                tools: { exec: { host: "gateway", mode: "full" } },
               },
             ],
           },
@@ -315,7 +315,7 @@ describe("security audit config basics", () => {
                 {
                   id: "asset-agent",
                   skills: ["asset-lifecycle-tracking"],
-                  tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+                  tools: { exec: { host: "gateway", mode: "full" } },
                 },
               ],
             },
@@ -360,7 +360,7 @@ describe("security audit config basics", () => {
               {
                 id: "asset-agent",
                 skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+                tools: { exec: { host: "gateway", mode: "full" } },
               },
             ],
           },
@@ -401,7 +401,7 @@ describe("security audit config basics", () => {
               {
                 id: "asset-agent",
                 skills: ["asset-lifecycle-tracking"],
-                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+                tools: { exec: { host: "gateway", mode: "full" } },
               },
             ],
           },
@@ -433,9 +433,9 @@ describe("security audit config basics", () => {
           },
           agents: {
             defaults: { skills: ["docs-search"] },
-            list: [{ id: "docs-agent", tools: { exec: { security: "deny" } } }],
+            list: [{ id: "docs-agent", tools: { exec: { mode: "deny" } } }],
           },
-          tools: { exec: { security: "deny" } },
+          tools: { exec: { mode: "deny" } },
         },
         sourceConfig: {},
         env: { OPENCLAW_STATE_DIR: stateDir },
@@ -496,9 +496,7 @@ describe("security audit config basics", () => {
   it("keeps unrelated dangerous flags active when one dangerous flag is suppressed", async () => {
     const report = await runSecurityAudit({
       config: {
-        gateway: {
-          controlUi: { allowInsecureAuth: true },
-        },
+        hooks: { gmail: { allowUnsafeExternalContent: true } },
         tools: {
           exec: {
             applyPatch: { workspaceOnly: false },
@@ -509,7 +507,7 @@ describe("security audit config basics", () => {
             suppressions: [
               {
                 checkId: "config.insecure_or_dangerous_flags",
-                detailIncludes: "gateway.controlUi.allowInsecureAuth=true",
+                detailIncludes: "hooks.gmail.allowUnsafeExternalContent=true",
                 reason: "accepted local-only browser auth testing",
               },
             ],
@@ -525,7 +523,7 @@ describe("security audit config basics", () => {
     expect(report.suppressedFindings).toEqual([
       expect.objectContaining({
         checkId: "config.insecure_or_dangerous_flags",
-        detail: expect.stringContaining("gateway.controlUi.allowInsecureAuth=true"),
+        detail: expect.stringContaining("hooks.gmail.allowUnsafeExternalContent=true"),
       }),
     ]);
     expect(report.findings).toEqual(
@@ -548,11 +546,7 @@ describe("security audit config basics", () => {
     let report: Awaited<ReturnType<typeof runSecurityAudit>>;
     try {
       report = await runSecurityAudit({
-        config: {
-          logging: {
-            redactSensitive: "off",
-          },
-        },
+        config: {},
         sourceConfig: {},
         env: {},
         includeFilesystem: false,

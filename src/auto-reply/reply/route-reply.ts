@@ -149,15 +149,11 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     : undefined;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
-  const responsePrefix = params.sessionKey
-    ? resolveEffectiveMessagesConfig(
-        cfg,
-        resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
-        { channel: normalizedChannel, accountId },
-      ).responsePrefix
-    : cfg.messages?.responsePrefix === "auto"
-      ? undefined
-      : cfg.messages?.responsePrefix;
+  const responsePrefix = resolveEffectiveMessagesConfig(
+    cfg,
+    resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
+    { channel: normalizedChannel, accountId },
+  ).responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
     responsePrefixContext: params.responsePrefixContext,

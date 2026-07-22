@@ -1196,6 +1196,19 @@ describe("createOpenClawCodingTools", () => {
     expect(cronAllowNames?.includes("process")).toBe(false);
   });
 
+  it("passes the final unrestricted tool surface to cron-created agent turns", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({ config: {} });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllowNames = cronCreatorToolNames(
+      latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist,
+    );
+    expectListIncludes(cronAllowNames, ["read", "cron", "exec"]);
+  });
+
   it("lets embedded attempts refresh a caller-owned cron creator tool surface", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -1780,7 +1793,6 @@ describe("createOpenClawCodingTools", () => {
       modelCompat: {
         toolSchemaProfile: "xai",
         unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
-        nativeWebSearchTool: true,
         toolCallArgumentsEncoding: "html-entities",
       },
     });

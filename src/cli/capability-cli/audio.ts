@@ -40,7 +40,7 @@ async function runAudioTranscribe(params: {
   if (!result.text) {
     if (isMissingMediaUnderstandingProvider(result)) {
       throw new Error(
-        "No audio transcription provider is configured or ready. Configure tools.media.audio.models, or pass --model <provider/model> after configuring that provider's auth/API key.",
+        "No audio transcription provider is configured or ready. Configure an audio-capable tools.media.models entry, or pass --model <provider/model> after configuring that provider's auth/API key.",
       );
     }
     throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);

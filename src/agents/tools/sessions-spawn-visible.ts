@@ -285,6 +285,9 @@ export async function maybeSpawnVisibleSession(params: {
       model: resolvedModel,
       task: params.task,
       parentSessionKey: requesterKey,
+      // Declared spawn lineage: without it the child persists as a depth-0 root
+      // and could spawn past maxSpawnDepth.
+      spawnDepth: callerDepth + 1,
       ...(params.raw.context === "fork" ? { fork: true } : {}),
       ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
       ...(worktree ? { worktree: true } : {}),

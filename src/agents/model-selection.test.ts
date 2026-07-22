@@ -1153,7 +1153,7 @@ describe("model-selection", () => {
       ]);
     });
 
-    it("overlays configured provider metadata after manifest model normalization", () => {
+    it("keeps compat catalog-owned while overlaying metadata after manifest normalization", () => {
       const cfg: OpenClawConfig = {
         models: {
           providers: {
@@ -1185,7 +1185,6 @@ describe("model-selection", () => {
           name: "Configured Llama Fast",
           contextWindow: 128_000,
           reasoning: true,
-          compat: { thinkingFormat: "qwen" },
         },
       ]);
     });

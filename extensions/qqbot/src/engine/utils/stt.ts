@@ -71,8 +71,10 @@ export function resolveSTTConfig(cfg: Record<string, unknown>): STTConfig | null
   const tools = asRecord(cfg.tools);
   const media = asRecord(tools?.media);
   const audio = asRecord(media?.audio);
-  const audioModels = audio?.models;
-  const audioModelEntry = Array.isArray(audioModels) ? asRecord(audioModels[0]) : undefined;
+  const mediaModels = Array.isArray(media?.models) ? media.models : [];
+  const audioModelEntry = mediaModels
+    .map((entry) => asRecord(entry))
+    .find((entry) => !Array.isArray(entry?.capabilities) || entry.capabilities.includes("audio"));
   if (audioModelEntry) {
     const providerId = readString(audioModelEntry, "provider") ?? "openai";
     const providerCfg = asRecord(providers?.[providerId]);

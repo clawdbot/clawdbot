@@ -377,17 +377,17 @@ describe("resolveBootstrapPromptTruncationWarningMode", () => {
     expect(EXPECTED_DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE).toBe("always");
   });
 
-  it("accepts explicit valid modes", () => {
+  it("ignores retired explicit modes", () => {
     expect(
       resolveBootstrapPromptTruncationWarningMode({
         agents: { defaults: { bootstrapPromptTruncationWarning: "off" } },
       } as OpenClawConfig),
-    ).toBe("off");
+    ).toBe("always");
     expect(
       resolveBootstrapPromptTruncationWarningMode({
         agents: { defaults: { bootstrapPromptTruncationWarning: "once" } },
       } as OpenClawConfig),
-    ).toBe("once");
+    ).toBe("always");
     expect(
       resolveBootstrapPromptTruncationWarningMode({
         agents: { defaults: { bootstrapPromptTruncationWarning: "always" } },

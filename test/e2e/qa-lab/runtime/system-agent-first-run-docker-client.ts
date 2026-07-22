@@ -345,7 +345,7 @@ async function main() {
     "first-run setup did not write default workspace",
   );
   assert(resolveDefaultModel(config) === spec.model, "first-run setup did not write default model");
-  const reef = config.agents?.list?.find((agent) => agent.id === spec.agentId);
+  const reef = config.agents?.entries?.[spec.agentId];
   assert(reef, "OpenClaw did not create reef agent");
   assert(reef.workspace === spec.dockerAgentWorkspace, "OpenClaw did not write reef workspace");
   assert(

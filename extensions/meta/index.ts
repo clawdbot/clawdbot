@@ -39,6 +39,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildMetaProvider,
       buildStaticProvider: buildMetaProvider,
+      liveModelDiscovery: true,
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     wrapStreamFn: wrapMetaProviderStream,

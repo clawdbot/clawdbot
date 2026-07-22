@@ -290,6 +290,28 @@ describe("AgentSession queued user turns", () => {
       recorder,
     });
   });
+
+  it("carries prompt facts non-enumerably on the exact steered message", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
+
+    await session.steer("[media attached: /tmp/a.png (image/png)]", undefined, undefined, media);
+
+    const runtimeMessage = steer.mock.calls[0]?.[0];
+    expect(runtimeMessage).toBeDefined();
+    const mediaSymbol = Object.getOwnPropertySymbols(runtimeMessage ?? {}).find(
+      (symbol) => Symbol.keyFor(symbol) === "openclaw.runtimePromptMediaFacts",
+    );
+    expect(mediaSymbol).toBeDefined();
+    if (!mediaSymbol) {
+      throw new Error("expected runtime prompt media symbol");
+    }
+    expect((runtimeMessage as unknown as Record<PropertyKey, unknown>)[mediaSymbol]).toEqual([
+      expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png", kind: "image" }),
+    ]);
+    expect(JSON.stringify(runtimeMessage)).not.toContain("runtimePromptMediaFacts");
+  });
 });
 
 describe("createAgentSession attribution headers", () => {

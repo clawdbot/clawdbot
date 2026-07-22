@@ -113,9 +113,9 @@ regardless of where they are loaded from.
 <AccordionGroup>
   <Accordion title="Allowlist rules">
     - Omit `agents.defaults.skills` to leave all skills unrestricted by default.
-    - Omit `agents.list[].skills` to inherit `agents.defaults.skills`.
-    - Set `agents.list[].skills: []` to expose no skills for that agent.
-    - A non-empty `agents.list[].skills` list is the **final** set — it does not
+    - Omit `agents.entries.*.skills` to inherit `agents.defaults.skills`.
+    - Set `agents.entries.*.skills: []` to expose no skills for that agent.
+    - A non-empty `agents.entries.*.skills` list is the **final** set — it does not
       merge with defaults.
     - The effective allowlist applies across prompt building, slash-command
       discovery, sandbox sync, and skill snapshots.

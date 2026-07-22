@@ -27,6 +27,7 @@ export function buildGatewaySessionEventFields(params: {
   return {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
+    createdBy: sessionRow.createdBy ?? null,
     kind: sessionRow.kind,
     channel: sessionRow.channel,
     subject: sessionRow.subject,

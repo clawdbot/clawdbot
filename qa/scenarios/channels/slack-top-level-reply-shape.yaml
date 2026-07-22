@@ -3,7 +3,8 @@ scenario:
   id: slack-top-level-reply-shape
   surface: channels
   coverage:
-    primary: [channels.group-visible-replies]
+    primary:
+      - slack.thread-routing
   execution:
     profiles: { "slack:default": 3 }
     kind: flow

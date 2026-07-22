@@ -111,7 +111,6 @@ export type TelegramMessageContext = {
   initialTypingCueSent?: boolean;
   ackReactionPromise: Promise<boolean> | null;
   reactionApi: TelegramReactionApi | null;
-  removeAckAfterReply: boolean;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
 };
@@ -538,7 +537,6 @@ export const buildTelegramMessageContext = async ({
   });
   const ackReactionEmoji =
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
-  const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
     ackReaction &&
     shouldAckReactionGate({
@@ -562,7 +560,7 @@ export const buildTelegramMessageContext = async ({
   const resolvedStatusReactionEmojis = statusReactionsEnabled
     ? resolveTelegramStatusReactionEmojis({
         initialEmoji: ackReaction,
-        overrides: statusReactionsConfig?.emojis,
+        overrides: undefined,
       })
     : null;
   const statusReactionVariantsByEmoji = resolvedStatusReactionEmojis
@@ -662,7 +660,6 @@ export const buildTelegramMessageContext = async ({
     initialTypingCueSent,
     ackReactionPromise,
     reactionApi,
-    removeAckAfterReply,
     statusReactionController,
     accountId: account.accountId,
   };

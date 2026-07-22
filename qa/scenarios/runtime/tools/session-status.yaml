@@ -6,7 +6,7 @@ scenario:
   runtimeParityTier: standard
   coverage:
     primary:
-      - tools.session-status
+      - gateway.session-apis-session-status
   objective: Verify session_status preserves arguments and result shape across OpenClaw and Codex.
   successCriteria:
     - Effective tools expose session_status.

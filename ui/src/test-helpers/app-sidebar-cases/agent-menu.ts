@@ -20,7 +20,16 @@ describe("AppSidebar agent chip", () => {
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main"]),
       "panel",
-      TWO_AGENTS,
+      {
+        ...TWO_AGENTS,
+        agents: [
+          { id: "main", identity: { name: "Molty", emoji: "🦞" } },
+          {
+            id: "research",
+            identity: { avatarUrl: "data:image/png;base64,eA==" },
+          },
+        ],
+      },
     );
     const onNavigate = vi.fn();
     sidebar.connected = true;
@@ -74,6 +83,12 @@ describe("AppSidebar agent chip", () => {
       ...(reopenedMenu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? []),
     ];
     expect(agentRows).toHaveLength(2);
+    expect(
+      reopenedMenu?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
+    ).toBe("🦞");
+    expect(
+      reopenedMenu?.querySelector<HTMLImageElement>("img.agent-select__avatar")?.src,
+    ).toContain("data:image/png;base64,eA==");
     expect(reopenedMenu?.querySelector(".sidebar-agent-menu__new")).toBeNull();
     const switchMenu = reopenedMenu;
     const researchRow = [
@@ -161,7 +176,7 @@ describe("AppSidebar agent chip", () => {
     const labels = () =>
       [
         ...sidebar.querySelectorAll(
-          ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch .sidebar-customize-menu__text",
+          ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch .agent-select__option-label",
         ),
       ].map((el) => el.textContent?.trim());
     expect(labels()).toEqual(["agent-7", "agent-12", "agent-1"]);

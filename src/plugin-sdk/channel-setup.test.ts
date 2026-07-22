@@ -1,7 +1,35 @@
 // Channel setup tests cover setup wizard finalize behavior and config write contracts.
 import { runSetupWizardFinalize } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { ChannelSetupInput } from "./channel-setup.js";
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
+
+interface ThirdPartySetupInput {
+  name?: string;
+  botToken?: string;
+}
+
+describe("ChannelSetupInput", () => {
+  it("keeps the generic envelope and deprecated compatibility tier typed", () => {
+    expectTypeOf<ChannelSetupInput["name"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ChannelSetupInput["token"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ChannelSetupInput["tokenFile"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ChannelSetupInput["useEnv"]>().toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<ChannelSetupInput["allowFrom"]>().toEqualTypeOf<string[] | undefined>();
+    expectTypeOf<ChannelSetupInput["defaultTo"]>().toEqualTypeOf<string | undefined>();
+
+    expectTypeOf<ChannelSetupInput["botToken"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ChannelSetupInput["appToken"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ChannelSetupInput["mode"]>().toEqualTypeOf<
+      "socket" | "http" | "relay" | undefined
+    >();
+    expectTypeOf<ChannelSetupInput["privateKey"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<ChannelSetupInput["password"]>().toEqualTypeOf<string | undefined>();
+
+    const assignable: ChannelSetupInput = {} as ThirdPartySetupInput;
+    expectTypeOf(assignable).toEqualTypeOf<ChannelSetupInput>();
+  });
+});
 
 describe("createOptionalChannelSetupSurface", () => {
   it("returns a matched adapter and wizard for optional plugins", async () => {

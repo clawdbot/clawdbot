@@ -87,9 +87,9 @@ extension GatewayConnection {
 
     private func currentCanvasPluginSurfaceRoute() -> GatewayCanvasHostRoute? {
         guard let url = self.canvasPluginSurfaceURL else { return nil }
-        // The operator channel uses platform trust. Pinned remote routes belong
-        // to MacNodeModeCoordinator and arrive through its node session.
-        return GatewayCanvasHostRoute(url: url, tlsFingerprintSHA256: nil)
+        return GatewayCanvasHostRoute(
+            url: url,
+            tlsFingerprintSHA256: self.configuredTLSFingerprintSHA256())
     }
 
     func installCanvasPluginSurfaceURL(from snapshot: HelloOk) {

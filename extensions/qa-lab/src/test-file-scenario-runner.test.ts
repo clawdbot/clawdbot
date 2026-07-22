@@ -60,10 +60,7 @@ function makeTestFileScenario(
     id: `scenario-${executionKind}`,
     title: `${executionKind} scenario`,
     surface: executionKind === "playwright" ? "control-ui" : "qa-lab",
-    category:
-      executionKind === "playwright"
-        ? "browser-control-ui-and-webchat.browser-ui"
-        : "qa-lab.coverage",
+    category: executionKind === "playwright" ? "control-ui.browser-ui" : "qa-lab.coverage",
     coverage: {
       primary: [executionKind === "playwright" ? "ui.control" : "qa.coverage"],
       secondary: [executionKind === "playwright" ? "ui.streaming" : "qa.reporting"],
@@ -448,8 +445,12 @@ describe("qa test file scenario runner", () => {
       },
       coverage: [
         {
-          id: "ui.control",
+          id: "qa.coverage",
           role: "primary",
+        },
+        {
+          id: "qa.reporting",
+          role: "secondary",
         },
       ],
       execution: {
@@ -742,6 +743,10 @@ describe("qa test file scenario runner", () => {
         kind: "script-producer-check",
         id: "script-producer.web-ui.smoke",
       },
+      coverage: [
+        { id: "qa.coverage", role: "primary" },
+        { id: "qa.reporting", role: "secondary" },
+      ],
       result: {
         status: "fail",
         failure: {

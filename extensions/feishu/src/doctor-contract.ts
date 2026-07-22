@@ -25,6 +25,28 @@ const streamingAliasMigration = defineChannelAliasMigration({
 // generic alias migration moves the object verbatim, so strip the dead fields
 // afterwards or `doctor --fix` would emit a schema-invalid coalesce object.
 const LEGACY_COALESCE_FIELDS = ["enabled", "minDelayMs", "maxDelayMs"] as const;
+const LEGACY_HEARTBEAT_FIELDS = ["visibility", "intervalMs"] as const;
+
+function sanitizeLegacyHeartbeatFields(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const heartbeat = asObjectRecord(params.entry.heartbeat);
+  if (
+    !heartbeat ||
+    (Object.keys(heartbeat).length > 0 &&
+      !LEGACY_HEARTBEAT_FIELDS.some((field) => Object.hasOwn(heartbeat, field)))
+  ) {
+    return { entry: params.entry, changed: false };
+  }
+  const next = { ...params.entry };
+  delete next.heartbeat;
+  params.changes.push(
+    `Removed ${params.pathPrefix}.heartbeat (legacy Feishu fields were never read by runtime).`,
+  );
+  return { entry: next, changed: true };
+}
 
 function sanitizeLegacyCoalesceFields(params: {
   entry: Record<string, unknown>;
@@ -68,8 +90,13 @@ function sanitizeFeishuCoalesce(cfg: OpenClawConfig, changes: string[]): OpenCla
     pathPrefix: "channels.feishu",
     changes,
   });
-  let updated = root.entry;
-  let changed = root.changed;
+  const rootHeartbeat = sanitizeLegacyHeartbeatFields({
+    entry: root.entry,
+    pathPrefix: "channels.feishu",
+    changes,
+  });
+  let updated = rootHeartbeat.entry;
+  let changed = root.changed || rootHeartbeat.changed;
 
   const accounts = asObjectRecord(updated.accounts);
   if (accounts) {
@@ -85,8 +112,13 @@ function sanitizeFeishuCoalesce(cfg: OpenClawConfig, changes: string[]): OpenCla
         pathPrefix: `channels.feishu.accounts.${accountId}`,
         changes,
       });
-      if (sanitized.changed) {
-        nextAccounts[accountId] = sanitized.entry;
+      const sanitizedHeartbeat = sanitizeLegacyHeartbeatFields({
+        entry: sanitized.entry,
+        pathPrefix: `channels.feishu.accounts.${accountId}`,
+        changes,
+      });
+      if (sanitized.changed || sanitizedHeartbeat.changed) {
+        nextAccounts[accountId] = sanitizedHeartbeat.entry;
         accountsChanged = true;
       }
     }

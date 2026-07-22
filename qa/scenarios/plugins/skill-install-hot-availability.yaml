@@ -5,9 +5,9 @@ scenario:
   surface: skills
   coverage:
     primary:
-      - plugins.skills
+      - plugins.lifecycle-skills
     secondary:
-      - plugins.hot-install
+      - plugins.lifecycle-hot-install
   objective: Verify a newly added workspace skill shows up without a broken intermediate state and can influence the next turn immediately.
   successCriteria:
     - Skill is absent before install.

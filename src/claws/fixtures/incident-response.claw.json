@@ -9,7 +9,9 @@
       "emoji": "siren"
     },
     "groupChat": {
-      "mentionPatterns": ["@incident-response"]
+      "mentionPatterns": [
+        "@incident-response"
+      ]
     },
     "sandbox": {
       "mode": "all",
@@ -17,8 +19,15 @@
       "workspaceAccess": "rw"
     },
     "tools": {
-      "allow": ["read", "write", "web_fetch"],
-      "deny": ["exec", "browser"]
+      "allow": [
+        "read",
+        "write",
+        "web_fetch"
+      ],
+      "deny": [
+        "exec",
+        "browser"
+      ]
     },
     "heartbeat": {
       "every": "30m",
@@ -30,8 +39,12 @@
   },
   "workspace": {
     "bootstrapFiles": {
-      "SOUL.md": { "source": "workspace/SOUL.md" },
-      "HEARTBEAT.md": { "source": "workspace/HEARTBEAT.md" }
+      "SOUL.md": {
+        "source": "workspace/SOUL.md"
+      },
+      "HEARTBEAT.md": {
+        "source": "workspace/HEARTBEAT.md"
+      }
     }
   },
   "packages": [
@@ -51,7 +64,10 @@
   "mcpServers": {
     "statuspage": {
       "command": "npx",
-      "args": ["--yes", "@acme/statuspage-mcp@1.0.0"],
+      "args": [
+        "--yes",
+        "@acme/statuspage-mcp@1.0.0"
+      ],
       "env": {
         "STATUSPAGE_TOKEN": "${STATUSPAGE_TOKEN}"
       }

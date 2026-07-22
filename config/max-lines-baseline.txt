@@ -405,7 +405,6 @@ src/agents/bash-tools.process.ts
 src/agents/btw.test.ts
 src/agents/btw.ts
 src/agents/cli-auth-epoch.test.ts
-src/agents/cli-backends.test.ts
 src/agents/cli-output.test.ts
 src/agents/cli-output.ts
 src/agents/cli-runner.reliability.test.ts
@@ -1049,7 +1048,6 @@ src/snapshot/local-repository.ts
 src/state/openclaw-agent-db.test.ts
 src/state/openclaw-state-db.test.ts
 src/status/status-message.ts
-src/system-agent/agent-turn.test.ts
 src/system-agent/chat-engine.test.ts
 src/system-agent/chat-engine.ts
 src/system-agent/setup-inference.test.ts

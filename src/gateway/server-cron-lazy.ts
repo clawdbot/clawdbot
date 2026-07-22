@@ -27,7 +27,7 @@ type LoadedGatewayCronState = {
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
   const env = params.env ?? process.env;
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store, env);
+  const storePath = resolveCronJobsStorePath(undefined, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
   let stopped = false;

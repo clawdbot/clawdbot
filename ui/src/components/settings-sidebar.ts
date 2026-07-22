@@ -17,6 +17,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
+import { redactLoginFailureError } from "./login-gate.ts";
 import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
@@ -24,7 +25,8 @@ type SettingsSidebarProps = {
   activeRouteId: RouteId;
   activeSearch?: string;
   activeHash?: string;
-  connected: boolean;
+  offline: boolean;
+  lastError: string | null;
   version: string;
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
@@ -32,6 +34,7 @@ type SettingsSidebarProps = {
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
   onExit: () => void;
+  onRetryConnect: () => void;
   onNavigate: (routeId: RouteId, options?: ApplicationNavigationOptions) => void;
   onPreload?: (routeId: RouteId) => Promise<void> | void;
   onSearchQueryChange: (query: string) => void;
@@ -208,9 +211,7 @@ function syncSettingsSearchScrollShadow(nav: HTMLElement) {
 }
 
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
-  const gatewayStatus = t("chat.gatewayStatus", {
-    status: props.connected ? t("common.online") : t("common.offline"),
-  });
+  const reconnecting = t("connection.reconnecting");
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
     props.searchBlockMatches ?? [],
@@ -296,14 +297,20 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
         .onUpdate=${props.onUpdate}
       ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
-        <span
-          class="sidebar-status__dot ${props.connected
-            ? "sidebar-connection-status--online"
-            : "sidebar-connection-status--offline"}"
-          role="img"
-          aria-label=${gatewayStatus}
-        ></span>
-        <span class="settings-sidebar__footer-status">${gatewayStatus}</span>
+        ${props.offline
+          ? html`<button
+              type="button"
+              class="sidebar-footer-bar__status"
+              aria-live="polite"
+              aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}`}
+              title=${props.lastError ? redactLoginFailureError(props.lastError) : reconnecting}
+              @click=${props.onRetryConnect}
+            >
+              <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
+                "common.offline",
+              )}<span class="sidebar-footer-bar__status-detail">${reconnecting}</span>
+            </button>`
+          : nothing}
         ${props.version
           ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`
           : nothing}

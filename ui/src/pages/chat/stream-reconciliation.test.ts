@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover stream reconciliation behavior.
 import { describe, expect, it } from "vitest";
 import {

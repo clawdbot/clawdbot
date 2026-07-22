@@ -29,6 +29,7 @@ import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelArt } from "./hub-meta.ts";
 import { renderChannelDetail } from "./view.detail.ts";
+import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.ts";
 import { channelEnabled, resolveChannelDisplayState } from "./view.shared.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
@@ -61,6 +62,7 @@ export function renderChannels(props: ChannelsProps) {
       ${props.setupBlockedByDirtyConfig && props.configFormDirty
         ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
         : nothing}
+      ${renderChannelPairingQueue(props)}
       ${renderSettingsSection(
         {
           title: t("channels.hub.connectedTitle"),
@@ -141,6 +143,7 @@ ${props.snapshot
       onWhatsAppStart: props.onWhatsAppStart,
       onWhatsAppWait: props.onWhatsAppWait,
     })}
+    ${renderChannelPairingPrompt(props)}
   `;
 }
 

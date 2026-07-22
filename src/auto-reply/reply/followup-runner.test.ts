@@ -550,6 +550,12 @@ function setFastFollowupCliBackendDeps(): void {
     config: { command: "claude" },
     bundleMcp: false,
   };
+  const codexBackend = {
+    id: "codex",
+    pluginId: "test-codex-cli",
+    config: { command: "codex" },
+    bundleMcp: false,
+  };
   cliBackendsTestingForTest.setDepsForTest({
     resolvePluginSetupCliBackend: ({ backend }) =>
       backend === "claude-cli"
@@ -565,7 +571,7 @@ function setFastFollowupCliBackendDeps(): void {
       autoEnableProbes: [],
       diagnostics: [],
     }),
-    resolveRuntimeCliBackends: () => [claudeBackend],
+    resolveRuntimeCliBackends: () => [claudeBackend, codexBackend],
   });
 }
 
@@ -1696,10 +1702,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            codex: { command: "codex" },
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1757,9 +1759,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1875,9 +1874,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -1939,9 +1935,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2015,9 +2008,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2086,9 +2076,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2156,9 +2143,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2207,9 +2191,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2257,9 +2238,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2320,9 +2298,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2375,9 +2350,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2433,9 +2405,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2508,7 +2477,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: { "claude-cli": { command: "claude" } },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2595,9 +2563,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -2683,9 +2648,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
@@ -2951,9 +2913,6 @@ describe("createFollowupRunner runtime config", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -3643,9 +3602,6 @@ describe("createFollowupRunner progress forwarding", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -3718,9 +3674,6 @@ describe("createFollowupRunner progress forwarding", () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           models: {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
           },
@@ -5327,8 +5280,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     registerFollowupTestSessionStore(storePath, sessionStore);
 
     const cfg = {
-      messages: {
-        responsePrefix: "agent",
+      channels: {
+        slack: { responsePrefix: "agent" },
       },
     };
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
@@ -5537,15 +5490,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         createQueuedRun({
           run: {
             provider: "openai",
-            config: {
-              agents: {
-                defaults: {
-                  cliBackends: {
-                    anthropic: { command: "anthropic" },
-                  },
-                },
-              },
-            } as OpenClawConfig,
+            config: {} as OpenClawConfig,
           },
         }),
       ),

@@ -217,6 +217,7 @@ export function completeEmbeddedAttemptResult(
   }
 
   if (
+    attempt.operation !== "settled-tool-finalization" &&
     input.hookRunner?.hasHooks("llm_output") &&
     shouldRunLlmOutputHooksForAttempt({ promptErrorSource: state.promptErrorSource })
   ) {

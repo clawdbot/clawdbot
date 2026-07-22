@@ -27,6 +27,7 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
       | undefined;
     for (const { sessionKey, entry } of params.api.runtime.agent.session.listSessionEntries({
       agentId: params.agentId,
+      readOnly: true,
     })) {
       if (!entry || typeof entry !== "object") {
         continue;

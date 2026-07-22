@@ -77,7 +77,7 @@ function createContext(opts?: {
     context: {
       getRuntimeConfig:
         opts?.getRuntimeConfig ??
-        (() => ({ gateway: { nodes: { allowCommands: [DEMO_COMMAND] } } })),
+        (() => ({ gateway: { nodes: { commands: { allow: [DEMO_COMMAND] } } } })),
       nodeRegistry: { get: () => nodeSession, invoke },
       broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
@@ -286,9 +286,9 @@ describe("applyPluginNodeInvokePolicy", () => {
     const { context, invoke } = createContext({
       getRuntimeConfig: () => ({
         gateway: {
-          nodes: allowCommand
-            ? { allowCommands: [DEMO_COMMAND] }
-            : { denyCommands: [DEMO_COMMAND] },
+          nodes: {
+            commands: allowCommand ? { allow: [DEMO_COMMAND] } : { deny: [DEMO_COMMAND] },
+          },
         },
       }),
     });

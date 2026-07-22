@@ -109,6 +109,20 @@ describe("chat pane header", () => {
     expect(props.onBeginRename).toHaveBeenCalledOnce();
   });
 
+  it("renders the permanent owner chip only when attribution chrome is enabled", () => {
+    const shown = mount({
+      showOwnerChip: true,
+      session: row({ createdBy: { id: "profile-ada", label: "Ada" } }),
+    });
+    expect(shown.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+
+    const dormant = mount({
+      showOwnerChip: false,
+      session: row({ createdBy: { id: "profile-ada", label: "Ada" } }),
+    });
+    expect(dormant.container.querySelector("openclaw-session-owner-chip")).toBeNull();
+  });
+
   it("routes Enter and Escape from the rename input", () => {
     const enter = mount({ editing: true, renameValue: "  Updated  " });
     const enterInput = enter.container.querySelector<HTMLInputElement>("input");

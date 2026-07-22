@@ -40,9 +40,11 @@ describe("image-generation live-test helpers", () => {
     const cfg = {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "openai/gpt-image-2",
-            fallbacks: ["google/gemini-3.1-flash-image-preview", "invalid"],
+          mediaModels: {
+            image: {
+              primary: "openai/gpt-image-2",
+              fallbacks: ["google/gemini-3.1-flash-image-preview", "invalid"],
+            },
           },
         },
       },

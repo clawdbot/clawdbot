@@ -365,7 +365,7 @@ vi.mock("../config/legacy.js", () => {
         addIssue(
           issues,
           ["memorySearch"],
-          'memorySearch is legacy; use agents.defaults.memorySearch. Run "openclaw doctor --fix".',
+          'memorySearch is legacy; use memory.search. Run "openclaw doctor --fix".',
         );
       }
       const gateway = asRecord(root.gateway);
@@ -575,25 +575,12 @@ vi.mock("../channels/plugins/setup-promotion-helpers.js", () => {
     "defaultTo",
   ]);
   const legacyCommonSingleAccountKeys = new Set([
-    "appToken",
-    "account",
-    "signalNumber",
-    "authDir",
-    "cliPath",
-    "dbPath",
-    "httpUrl",
-    "httpHost",
-    "httpPort",
-    "webhookSecret",
-    "service",
-    "region",
-    "homeserver",
-    "userId",
     "accessToken",
+    "appToken",
+    "httpUrl",
     "password",
-    "deviceName",
-    "url",
-    "code",
+    "userId",
+    "webhookSecret",
   ]);
   const declaredSingleAccountKeys: Record<string, readonly string[]> = {
     discord: [],
@@ -2134,7 +2121,7 @@ describe("doctor config flow", () => {
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
-  it("preserves commitments config on repair", async () => {
+  it("removes retired commitments config on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
       config: {
@@ -2146,10 +2133,7 @@ describe("doctor config flow", () => {
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
-    expect(result.cfg.commitments).toEqual({
-      enabled: true,
-      maxPerDay: 2,
-    });
+    expect(result.cfg).not.toHaveProperty("commitments");
   }, 300_000);
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -3099,7 +3083,7 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("agents.defaults.heartbeat");
       expect(legacyMessages).toContain("channels.defaults.heartbeat");
       expect(legacyMessages).toContain("memorySearch:");
-      expect(legacyMessages).toContain("agents.defaults.memorySearch");
+      expect(legacyMessages).toContain("use memory.search");
       expect(legacyMessages).toContain("gateway.bind:");
       expect(legacyMessages).toContain("gateway.bind host aliases");
       expect(legacyMessages).toContain("channels.telegram.groupMentionsOnly:");

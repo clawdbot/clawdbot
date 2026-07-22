@@ -126,6 +126,7 @@ function createExternalPluginPage(
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello,
     assistantAgentId: null,
@@ -424,6 +425,7 @@ describe("PluginPage", () => {
     const snapshot: ApplicationGatewaySnapshot = {
       client: null,
       connected: true,
+      offlineStable: false,
       reconnecting: false,
       hello,
       assistantAgentId: null,
@@ -494,6 +496,7 @@ describe("PluginPage", () => {
       const snapshot: ApplicationGatewaySnapshot = {
         client: { request } as unknown as GatewayBrowserClient,
         connected: true,
+        offlineStable: false,
         reconnecting: false,
         hello,
         assistantAgentId: null,
@@ -575,6 +578,7 @@ describe("PluginPage", () => {
     const snapshot: ApplicationGatewaySnapshot = {
       client,
       connected: true,
+      offlineStable: false,
       reconnecting: false,
       hello,
       assistantAgentId: null,
@@ -645,6 +649,7 @@ describe("PluginPage", () => {
     const snapshot: ApplicationGatewaySnapshot = {
       client: null,
       connected: true,
+      offlineStable: false,
       reconnecting: false,
       hello,
       assistantAgentId: null,

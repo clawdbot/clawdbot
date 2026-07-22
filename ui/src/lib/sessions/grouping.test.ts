@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {

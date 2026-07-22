@@ -117,7 +117,7 @@
       }
     },
     "discovery": {
-      "together": "static"
+      "together": "refreshable"
     }
   },
   "configSchema": {

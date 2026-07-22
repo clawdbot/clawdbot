@@ -5,7 +5,6 @@ import {
   DEFAULT_TIMING,
   logAckFailure,
   logTypingFailure,
-  removeAckReactionAfterReply,
   type StatusReactionAdapter,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -53,7 +52,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, shouldLogVerbose, sleep } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
@@ -482,12 +481,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     },
   };
-  const statusReactionTiming = DEFAULT_TIMING;
   const statusReactions = createStatusReactionController({
     enabled: statusReactionsEnabled,
     adapter: slackStatusAdapter,
     initialEmoji: prepared.ackReactionValue || "eyes",
-    emojis: cfg.messages?.statusReactions?.emojis,
+    emojis: undefined,
     timing: DEFAULT_TIMING,
     onError: (err) => {
       logAckFailure({
@@ -2345,24 +2343,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   if (statusReactionsEnabled) {
     if (dispatchError) {
       await statusReactions.setError();
-      if (ctx.removeAckAfterReply) {
-        void (async () => {
-          await sleep(statusReactionTiming.errorHoldMs);
-          if (anyReplyDelivered) {
-            await statusReactions.clear();
-          }
-        })();
-      }
     } else if (anyReplyDelivered) {
       await statusReactions.setDone();
-      if (ctx.removeAckAfterReply) {
-        void (async () => {
-          await sleep(statusReactionTiming.doneHoldMs);
-          await statusReactions.clear();
-        })();
-      } else {
-        void statusReactions.restoreInitial();
-      }
+      void statusReactions.restoreInitial();
     } else {
       // Silent success should preserve queued state and clear any stall timers
       // instead of transitioning to terminal/stall reactions after return.
@@ -2393,32 +2376,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     logVerbose(
       `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
     );
-  }
-
-  if (!statusReactionsEnabled) {
-    removeAckReactionAfterReply({
-      removeAfterReply: ctx.removeAckAfterReply && anyReplyDelivered,
-      ackReactionPromise: prepared.ackReactionPromise,
-      ackReactionValue: prepared.ackReactionValue,
-      remove: () =>
-        removeSlackReaction(
-          message.channel,
-          prepared.ackReactionMessageTs ?? "",
-          prepared.ackReactionValue,
-          {
-            token: ctx.botToken,
-            client: slackClient,
-          },
-        ),
-      onError: (err) => {
-        logAckFailure({
-          log: logVerbose,
-          channel: "slack",
-          target: `${message.channel}/${message.ts}`,
-          error: err,
-        });
-      },
-    });
   }
 }
 

@@ -35,6 +35,7 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildGmiProvider,
       buildStaticProvider: buildGmiProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     augmentModelCatalog: ({ config }) =>
       readConfiguredProviderCatalogEntries({

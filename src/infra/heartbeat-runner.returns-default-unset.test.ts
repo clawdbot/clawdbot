@@ -1294,28 +1294,26 @@ describe("runHeartbeatOnce", () => {
         name: "legacy-prefixed reasoning + final payload",
         caseDir: "hb-reasoning",
         replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "Final alert" }],
-        expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
+        expectedTexts: ["Final alert"],
       },
       {
         name: "raw flagged reasoning + final payload",
         caseDir: "hb-reasoning-raw",
         replies: [{ text: "Because it helps", isReasoning: true }, { text: "Final alert" }],
-        expectedTexts: ["Thinking\n\n_Because it helps_", "Final alert"],
+        expectedTexts: ["Final alert"],
       },
       {
         name: "raw flagged reasoning + HEARTBEAT_OK",
         caseDir: "hb-reasoning-heartbeat-ok",
         replies: [{ text: "Because it helps", isReasoning: true }, { text: "HEARTBEAT_OK" }],
-        expectedTexts: ["Thinking\n\n_Because it helps_"],
+        expectedTexts: [],
       },
       {
-        // Reasoning-only result: the selector returns no main reply, but the
-        // documented includeReasoning opt-in must still deliver the Thinking
-        // message instead of going silent (#92242 follow-up / review finding).
+        // Reasoning-only results remain internal under the fixed presentation policy.
         name: "raw flagged reasoning only (no main reply)",
         caseDir: "hb-reasoning-only",
         replies: [{ text: "Because it helps", isReasoning: true }],
-        expectedTexts: ["Thinking\n\n_Because it helps_"],
+        expectedTexts: [],
       },
       {
         name: "visible final that starts with thinking prose",
@@ -1350,7 +1348,6 @@ describe("runHeartbeatOnce", () => {
               heartbeat: {
                 every: "5m",
                 target: "whatsapp",
-                includeReasoning: true,
               },
             },
           },

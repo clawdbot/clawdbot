@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   buildFallbackSlashCommands,
@@ -17,6 +18,7 @@ import {
 } from "./chat-queue.ts";
 import {
   ChatStateController,
+  createPageState,
   handlePageGatewayEvent,
   refreshChatMetadata,
   resetChatStateForRouteSession,
@@ -595,6 +597,52 @@ describe("session pull request refresh", () => {
   });
 });
 
+describe("image lightbox lifecycle", () => {
+  it("invalidates immediately when beginning a deferred image open", () => {
+    const invalidate = vi.fn();
+    const context = {
+      agents: {
+        state: { agentsList: null },
+        adoptList: vi.fn(),
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          chatMessageMaxWidth: null,
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      {
+        invalidate,
+        afterCommit: () => () => {},
+      },
+      { querySelector: () => null },
+    );
+    const release = vi.fn();
+    state.imageLightbox = {
+      src: "blob:managed-image",
+      title: "Generated image",
+      release,
+    };
+
+    const requestVersion = state.beginImageOpen();
+
+    expect(requestVersion).toBe(1);
+    expect(state.imageLightbox).toBeNull();
+    expect(release).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledOnce();
+  });
+});
+
 describe("route composer fallback", () => {
   function createRouteState(chatMessage: string) {
     const resetChatInputHistoryNavigation = vi.fn();
@@ -612,6 +660,8 @@ describe("route composer fallback", () => {
       chatQueueByScope: {},
       chatMessages: [],
       chatMessagesBySession: new Map(),
+      imageLightbox: null,
+      imageLightboxRequestVersion: 0,
       chatAttachments: [
         {
           id: "staged-image",
@@ -633,6 +683,21 @@ describe("route composer fallback", () => {
     } as unknown as ChatPageHost;
     return { resetChatInputHistoryNavigation, resetChatScroll, state };
   }
+
+  it("releases the active image lightbox on a route switch", () => {
+    const { state } = createRouteState("");
+    const release = vi.fn();
+    state.imageLightbox = {
+      src: "blob:managed-image",
+      title: "Generated image",
+      release,
+    };
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(state.imageLightbox).toBeNull();
+  });
 
   it("restores one atomic history snapshot when returning to a session", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());

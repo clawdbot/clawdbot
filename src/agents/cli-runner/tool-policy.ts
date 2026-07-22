@@ -42,7 +42,7 @@ export function resolveLoopbackToolsAllowFromMcpPermissions(
   return [...names];
 }
 
-/** CLI backends cannot enforce runtime caps; keep only real restrictions. */
+/** Keeps only explicit runtime caps for backend-owned exact translation. */
 export function resolveCliRuntimeToolsAllow(
   toolsAllow?: string[],
   toolsAllowIsDefault?: boolean,

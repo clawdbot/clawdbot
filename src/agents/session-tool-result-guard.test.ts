@@ -506,7 +506,7 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
       beforeMessageWriteHook: ({ message }) => ({
-        message: redactTranscriptMessage(message, { logging: { redactSensitive: "tools" } }),
+        message: redactTranscriptMessage(message, {}),
       }),
     });
 

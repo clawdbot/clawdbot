@@ -404,7 +404,7 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it("keeps configured compat when runtime thinking catalog is already loaded", async () => {
+  it("uses only configured compat for a custom route when the catalog is loaded", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
       {
@@ -454,10 +454,7 @@ describe("createModelSelectionState catalog loading", () => {
         provider: "vllm",
         id: "Qwen/Qwen3-8B",
         reasoning: true,
-        compat: {
-          supportedReasoningEfforts: ["xhigh"],
-          thinkingFormat: "qwen-chat-template",
-        },
+        compat: { thinkingFormat: "qwen-chat-template" },
       }),
     ]);
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();

@@ -149,9 +149,9 @@ export async function runMediaUnderstandingFile(
     params.timeoutMs > 0
       ? Math.ceil(params.timeoutMs / 1000)
       : undefined;
-  const cfg =
+  const cfg: OpenClawConfig =
     requestPrompt || requestTimeoutSeconds !== undefined
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -171,7 +171,7 @@ export async function runMediaUnderstandingFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const ctx = buildFileContext({
     ...params,
@@ -396,9 +396,9 @@ export async function describeVideoFile(
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const cfg =
+  const cfg: OpenClawConfig =
     params.language || params.prompt
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -413,7 +413,7 @@ export async function transcribeAudioFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return result;

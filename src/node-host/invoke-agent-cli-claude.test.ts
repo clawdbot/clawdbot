@@ -84,7 +84,8 @@ describe("Claude CLI node command", () => {
           stdin: "hello",
           systemPrompt: "private prompt",
           cwd,
-          env: { NO_COLOR: "1" },
+          env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
+          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
           idleTimeoutMs: 1_000,
           timeoutMs: 2_000,
         }),
@@ -93,7 +94,8 @@ describe("Claude CLI node command", () => {
       cwd,
       stdin: "hello",
       systemPrompt: "private prompt",
-      env: { NO_COLOR: "1" },
+      env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
+      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
     });
   });
 
@@ -118,6 +120,39 @@ describe("Claude CLI node command", () => {
         }),
       ),
     ).rejects.toThrow("environment key is not allowed");
+    await expect(
+      decodeClaudeCliNodeRunParams(
+        JSON.stringify({
+          argv: ["-p"],
+          clearEnv: [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")],
+          idleTimeoutMs: 1_000,
+          timeoutMs: 2_000,
+        }),
+      ),
+    ).rejects.toThrow("clearEnv key is not allowed");
+    await expect(
+      decodeClaudeCliNodeRunParams(
+        JSON.stringify({
+          argv: ["-p"],
+          env: { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" },
+          idleTimeoutMs: 1_000,
+          timeoutMs: 2_000,
+        }),
+      ),
+    ).rejects.toThrow("environment key is not allowed");
+    await expect(
+      decodeClaudeCliNodeRunParams(
+        JSON.stringify({
+          argv: ["-p"],
+          env: {
+            ANTHROPIC_API_KEY: "selected-api-key",
+            CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth-token",
+          },
+          idleTimeoutMs: 1_000,
+          timeoutMs: 2_000,
+        }),
+      ),
+    ).rejects.toThrow("exactly one Claude credential");
   });
 
   it("requires binary availability before consulting exec approval policy", async () => {
@@ -191,6 +226,128 @@ describe("Claude CLI node command", () => {
     });
   });
 
+  it("converts forwarded OAuth into a child-only descriptor after approval", async () => {
+    const executable = await executableScript(`
+const fs = require("node:fs");
+const secret = fs.readFileSync(3, "utf8");
+process.stdout.write(JSON.stringify({
+  type: "result",
+  result: secret,
+  descriptor: process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR,
+  rawPresent: Object.hasOwn(process.env, "CLAUDE_CODE_OAUTH_TOKEN"),
+  scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
+}) + "\\n");`);
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const handleSystemRun = vi.fn(
+      async (options: {
+        params: { command: string[]; env?: Record<string, string>; timeoutMs?: number };
+        runCommand: (
+          argv: string[],
+          cwd: string | undefined,
+          env: Record<string, string> | undefined,
+          timeoutMs: number | undefined,
+        ) => Promise<unknown>;
+        sendInvokeResult: (result: unknown) => Promise<void>;
+      }) => {
+        await options.runCommand(
+          options.params.command,
+          undefined,
+          {
+            ...process.env,
+            ...options.params.env,
+            CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+          } as Record<string, string>,
+          options.params.timeoutMs,
+        );
+        await options.sendInvokeResult({ ok: true });
+      },
+    );
+    await handleInvoke(
+      frame({
+        argv: ["-p"],
+        env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-oauth" },
+        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        idleTimeoutMs: 1_000,
+        timeoutMs: 5_000,
+      }),
+      client(calls),
+      { current: async () => [] },
+      undefined,
+      { claudePath: executable, handleSystemRun: handleSystemRun as never },
+    );
+
+    const progress = calls
+      .filter((call) => call.method === "node.invoke.progress")
+      .map((call) => (call.params as { chunk: string }).chunk)
+      .join("");
+    expect(progress).toContain('"result":"selected-node-oauth"');
+    expect(progress).toContain('"descriptor":"3"');
+    expect(progress).toContain('"rawPresent":false');
+    expect(progress).toContain('"scrubPresent":false');
+    expect(calls).toContainEqual({
+      method: "node.invoke.result",
+      params: expect.objectContaining({
+        ok: true,
+        payloadJSON: expect.stringContaining('"exitCode":0'),
+      }),
+    });
+  });
+
+  it("preserves node-native Claude auth when no profile credential is forwarded", async () => {
+    const executable = await executableScript(`
+process.stdout.write(JSON.stringify({
+  type: "result",
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+  scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
+}) + "\\n");`);
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const handleSystemRun = vi.fn(
+      async (options: {
+        params: { command: string[]; timeoutMs?: number };
+        runCommand: (
+          argv: string[],
+          cwd: string | undefined,
+          env: Record<string, string> | undefined,
+          timeoutMs: number | undefined,
+        ) => Promise<unknown>;
+        sendInvokeResult: (result: unknown) => Promise<void>;
+      }) => {
+        await options.runCommand(
+          options.params.command,
+          undefined,
+          {
+            ...process.env,
+            ANTHROPIC_API_KEY: "node-native-api-key",
+            CLAUDE_CODE_OAUTH_TOKEN: "node-native-oauth",
+            CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+          } as Record<string, string>,
+          options.params.timeoutMs,
+        );
+        await options.sendInvokeResult({ ok: true });
+      },
+    );
+    await handleInvoke(
+      frame({
+        argv: ["-p"],
+        idleTimeoutMs: 1_000,
+        timeoutMs: 5_000,
+      }),
+      client(calls),
+      { current: async () => [] },
+      undefined,
+      { claudePath: executable, handleSystemRun: handleSystemRun as never },
+    );
+
+    const progress = calls
+      .filter((call) => call.method === "node.invoke.progress")
+      .map((call) => (call.params as { chunk: string }).chunk)
+      .join("");
+    expect(progress).toContain('"apiKey":"node-native-api-key"');
+    expect(progress).toContain('"oauth":"node-native-oauth"');
+    expect(progress).toContain('"scrub":"1"');
+  });
+
   it("streams stdin-driven stdout and cleans up a node-local system prompt file", async () => {
     const executable = await executableScript(`
 const fs = require("node:fs");
@@ -235,6 +392,59 @@ process.stdin.on("end", () => {
     expect(promptPath).toBeTruthy();
     await expect(fs.stat(promptPath ?? "")).rejects.toThrow();
   });
+
+  it.each([
+    {
+      descriptorEnv: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+      rawEnv: "CLAUDE_CODE_OAUTH_TOKEN",
+    },
+    {
+      descriptorEnv: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+      rawEnv: "ANTHROPIC_API_KEY",
+    },
+  ])(
+    "delivers selected credentials through fd 3 for $rawEnv",
+    async ({ descriptorEnv, rawEnv }) => {
+      const executable = await executableScript(`
+const fs = require("node:fs");
+const secret = fs.readFileSync(3, "utf8");
+process.stdout.write(JSON.stringify({
+  type: "result",
+  result: secret,
+  descriptor: process.env[${JSON.stringify(descriptorEnv)}],
+  rawPresent: Object.hasOwn(process.env, ${JSON.stringify(rawEnv)}),
+  scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
+}) + "\\n");`);
+      const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const result = await runClaudeCliNodeCommand({
+        client: client(calls),
+        frame: frame(request),
+        request,
+        argv: [executable, ...request.argv],
+        cwd: undefined,
+        env: {
+          ...process.env,
+          [descriptorEnv]: "3",
+        } as Record<string, string>,
+        secretInput: {
+          fd: 3,
+          createData: () => Buffer.from("selected-node-secret"),
+        },
+        timeoutMs: request.timeoutMs,
+      });
+
+      const progress = calls
+        .filter((call) => call.method === "node.invoke.progress")
+        .map((call) => (call.params as { chunk: string }).chunk)
+        .join("");
+      expect(progress).toContain('"result":"selected-node-secret"');
+      expect(progress).toContain('"descriptor":"3"');
+      expect(progress).toContain('"rawPresent":false');
+      expect(progress).toContain('"scrubPresent":false');
+      expect(result).toMatchObject({ exitCode: 0, success: true });
+    },
+  );
 
   it("caps streamed output consistently with system.run", async () => {
     const executable = await executableScript(

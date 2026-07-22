@@ -5,10 +5,10 @@ scenario:
   surface: plugins
   coverage:
     primary:
-      - plugins.lifecycle
+      - plugins.activation-lifecycle
     secondary:
-      - plugins.hot-reload
-      - config.hot-apply
+      - plugins.enable-and-disable-hot-reload
+      - gateway.config-reload-hot-apply
   objective: Verify a runtime-owned capability can be disabled and re-enabled through hot config reload without stale state.
   successCriteria:
     - Workspace skill capability is eligible before reload.

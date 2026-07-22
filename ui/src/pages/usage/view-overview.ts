@@ -608,7 +608,6 @@ function renderSummaryStat(params: {
   compactValue?: boolean;
 }) {
   const hintId = `usage-summary-hint-${params.hintId}`;
-  const tooltipId = `${hintId}-tooltip`;
   const classes = [
     "stat",
     "usage-summary-card",
@@ -629,25 +628,20 @@ function renderSummaryStat(params: {
     <div class=${classes}>
       <div class="usage-summary-title">
         ${params.title}
-        <button
-          id=${hintId}
-          type="button"
-          class="usage-summary-hint"
-          aria-label=${params.hint}
-          @click=${focusSummaryHint}
-        >
-          ?
-        </button>
-        <!-- Some browsers do not focus buttons on pointer activation; the
-             click handler normalizes that path without adding a second toggle. -->
-        <wa-tooltip
-          id=${tooltipId}
-          class="usage-summary-tooltip"
-          for=${hintId}
-          trigger="hover focus"
-        >
-          ${params.hint}
-        </wa-tooltip>
+        <openclaw-tooltip>
+          <button
+            id=${hintId}
+            type="button"
+            class="usage-summary-hint"
+            aria-label=${params.title}
+            @click=${focusSummaryHint}
+          >
+            ?
+          </button>
+          <!-- Some browsers do not focus buttons on pointer activation; the
+               click handler normalizes that path without adding a second toggle. -->
+          <span slot="content">${params.hint}</span>
+        </openclaw-tooltip>
       </div>
       <div class=${valueClasses}>${params.value}</div>
       <div class="usage-summary-sub">${params.sub}</div>

@@ -117,6 +117,7 @@ describe("cdp", () => {
 
   it("creates a target via the browser websocket", async () => {
     const methods: string[] = [];
+    let createTargetParams: Record<string, unknown> | undefined;
     const wsPort = await startWsServerWithMessages((msg, socket) => {
       if (msg.method) {
         methods.push(msg.method);
@@ -124,6 +125,7 @@ describe("cdp", () => {
       if (msg.method !== "Target.createTarget") {
         return;
       }
+      createTargetParams = msg.params;
       socket.send(
         JSON.stringify({
           id: msg.id,
@@ -142,6 +144,7 @@ describe("cdp", () => {
     });
 
     expect(created.targetId).toBe("TARGET_123");
+    expect(createTargetParams).toEqual({ url: "https://example.com", background: true });
     expect(methods).toEqual([
       "Target.createTarget",
       "Target.attachToTarget",

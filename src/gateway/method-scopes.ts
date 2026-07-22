@@ -192,6 +192,13 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
         : undefined;
     return includeSecrets === true ? [READ_SCOPE, TALK_SECRETS_SCOPE] : [READ_SCOPE];
   }
+  if (method === "channels.pairing.approve") {
+    const bootstrapCommandOwner =
+      params && typeof params === "object" && !Array.isArray(params)
+        ? (params as { bootstrapCommandOwner?: unknown }).bootstrapCommandOwner
+        : undefined;
+    return bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
+  }
   if (method === "sessions.patch") {
     return resolveSessionsPatchRequiredScopes(params);
   }

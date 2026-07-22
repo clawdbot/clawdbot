@@ -196,7 +196,12 @@ export async function agentsSetIdentityCommand(
     ...cfg,
     agents: {
       ...cfg.agents,
-      list: nextList,
+      entries: Object.fromEntries(
+        nextList.map((entry) => {
+          const { id, ...config } = entry;
+          return [id, config];
+        }),
+      ),
     },
   };
 

@@ -12,7 +12,7 @@ import {
   type SessionResetPolicy,
   type SessionResetType,
 } from "./reset.js";
-import { loadSessionEntry, type SessionAccessScope } from "./session-accessor.js";
+import { loadSessionEntryReadOnly, type SessionAccessScope } from "./session-accessor.js";
 import type { SessionEntry } from "./types.js";
 
 type ResolveSessionEntryResetFreshnessParams = SessionAccessScope & {
@@ -62,7 +62,7 @@ export function resolveSessionEntryResetFreshness(
       agentId,
       env: params.env,
     });
-  const entry = loadSessionEntry({
+  const entry = loadSessionEntryReadOnly({
     ...params,
     agentId,
     storePath,

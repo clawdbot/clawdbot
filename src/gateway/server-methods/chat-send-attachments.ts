@@ -1,6 +1,5 @@
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { expectDefined } from "@openclaw/normalization-core";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
@@ -155,10 +154,7 @@ async function prestageMediaPathOffloads(params: {
     }
 
     const stagingCtx: MsgContext = {
-      MediaPath: expectDefined(refsToStage[0], "refs to stage entry at 0").path,
-      MediaPaths: refsToStage.map((ref) => ref.path),
-      MediaType: expectDefined(refsToStage[0], "refs to stage entry at 0").mimeType,
-      MediaTypes: refsToStage.map((ref) => ref.mimeType),
+      media: refsToStage.map((ref) => ({ path: ref.path, contentType: ref.mimeType })),
     };
     let stageResult: StageSandboxMediaResult;
     try {
@@ -181,22 +177,21 @@ async function prestageMediaPathOffloads(params: {
     // stageSandboxMedia preserves an absolute source path when no copy lands;
     // the staged map is the authoritative success signal.
     const stagedSources = stageResult.staged;
-    const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
+    const missing = refsToStage.filter((_ref, index) => !stagedSources.has(index));
     const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
     if (unstageable.length > 0) {
       throw new Error(
         `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
       );
     }
-    const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? refsToStage.map((ref) => ref.mimeType);
+    const stagedMedia = stagingCtx.media ?? [];
     // Preserve request order while mixing sandbox-relative paths with managed
     // host paths used by pass-through or fallback PDFs.
     const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
     refsToStage.forEach((ref, index) => {
       resolvedByRef.set(ref, {
-        path: stagedPaths[index] ?? ref.path,
-        mimeType: stagedTypes[index] ?? ref.mimeType,
+        path: stagedMedia[index]?.path ?? ref.path,
+        mimeType: stagedMedia[index]?.contentType ?? ref.mimeType,
       });
     });
     for (const ref of passThroughRefs) {

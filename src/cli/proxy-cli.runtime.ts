@@ -187,11 +187,6 @@ function formatProxyValidationNextSteps(result: ProxyValidationResult): string[]
   if (result.ok) {
     return [];
   }
-  if (result.config.errors.some((error) => error.includes("proxy.enabled"))) {
-    return [
-      "Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.",
-    ];
-  }
   if (result.config.errors.some((error) => error.includes("proxy CA file could not be read"))) {
     return [
       "Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.",

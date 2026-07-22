@@ -6,7 +6,7 @@ scenario:
   runtimeParityTier: standard
   coverage:
     primary:
-      - tools.bash
+      - tools.exec-routing-bash
   objective: Verify shell command behavior is tracked across OpenClaw and Codex while Codex owns exec/process natively.
   successCriteria:
     - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.

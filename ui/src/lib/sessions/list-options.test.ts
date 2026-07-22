@@ -106,7 +106,7 @@ describe("session list replacement options", () => {
     await sessions.refresh({
       agentId: "main",
       search: "filtered",
-      showArchived: true,
+      archivedFilter: "archived",
       limit: 25,
       includeDerivedTitles: true,
       force: true,

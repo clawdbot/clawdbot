@@ -428,7 +428,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
 <AccordionGroup>
   <Accordion title="Per-agent cache overrides">
-    Use model-level params as your baseline, then override specific agents via `agents.list[].params`:
+    Use model-level params as your baseline, then override specific agents via `agents.entries.*.params`:
 
     ```json5
     {
@@ -452,7 +452,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     Config merge order:
 
     1. `agents.defaults.models["provider/model"].params`
-    2. `agents.list[].params` (matching `id`, overrides by key)
+    2. `agents.entries.*.params` (matching `id`, overrides by key)
 
     This lets one agent keep a long-lived cache while another agent on the same model disables caching for bursty/low-reuse traffic.
 

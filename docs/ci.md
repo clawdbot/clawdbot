@@ -207,6 +207,22 @@ The changed-target PR plan reduces the common Node test burst from 14 Blacksmith
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
+## Surface ratchets
+
+Two shrink-only budgets guard the configuration surface. Both fail CI on growth
+until the budget file is consciously updated in the same PR, and both demand a
+ratchet-down when cleanup lowers the real count.
+
+- `config/env-var-count-budget.txt` caps the number of distinct `OPENCLAW_*`
+  names in production source under `src/`, `packages/`, and `extensions/`
+  (tests and QA Lab excluded). Checked by `node scripts/check-env-var-count.mjs`.
+  Removing env vars: lower the number in the same PR. Adding one is a
+  config-surface decision — justify it in the PR body.
+- `docs/.generated/config-baseline.counts.json` caps the per-kind
+  (core/channel/plugin) `openclaw.json` schema entry counts. Checked by
+  `pnpm config:docs:check`; regenerate with `pnpm config:docs:gen` after any
+  schema change.
+
 ## Local equivalents
 
 ```bash
@@ -631,6 +647,17 @@ gh workflow run duplicate-after-merge.yml \
 ```
 
 ## Local check gates and changed routing
+
+### Config baseline count ratchet
+
+`pnpm config:docs:check` rejects undocumented config-surface growth and corrupt or stale count snapshots. When a reviewed product change intentionally adds schema paths, run `pnpm config:docs:gen`, inspect the core/channel/plugin count deltas and generated SHA-256 files, and commit the conscious baseline bump with the schema, help, labels, migration, and tests. Do not hand-edit the counts file to bypass the ratchet.
+
+Config authors must also tier new leaves for Settings. Add `advanced: false` or
+`advanced: true` at the leaf, or place the key beneath an ancestor whose tier
+all descendants should inherit. Unclassified roots fail the schema quality
+test with copy-paste stubs; paths without an ancestor are advanced by default.
+The curated common-leaf snapshot makes intentional tier changes visible in
+review.
 
 Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by `scripts/check-changed.mjs`. That local check gate is stricter about architecture boundaries than the broad CI platform scope:
 

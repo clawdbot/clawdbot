@@ -50,7 +50,7 @@ type TestChatHost = Omit<ChatHost, "settings"> & {
   chatAvatarReason?: string | null;
   sessionsError?: string | null;
   sessionsResultAgentId?: string | null;
-  sessionsShowArchived?: boolean;
+  sessionsArchivedFilter?: "active" | "archived" | "all";
   password?: string;
   pendingSettingsPatches?: Record<string, Promise<boolean>>;
   settings?: Partial<UiSettings>;
@@ -330,7 +330,7 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
     sessionsResult: null,
     sessionsResultAgentId: null,
     sessionsError: null,
-    sessionsShowArchived: false,
+    sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
     chatModelCatalog: [],
     refreshSessionsAfterChat: new Map(),
@@ -378,7 +378,7 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
   for (const session of host.sessionsResult?.sessions ?? []) {
     sessions.reconcile(session, host.sessionsResult?.defaults, {
       selectedGlobalAgentId: host.assistantAgentId,
-      showArchived: host.sessionsShowArchived,
+      archivedFilter: host.sessionsArchivedFilter,
     });
   }
   const pendingSettingsPatches = overrides?.pendingSettingsPatches;
@@ -1619,7 +1619,7 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "/reset",
       sessionKey: "agent:main",
-      sessionsShowArchived: true,
+      sessionsArchivedFilter: "archived",
       sessionsResult: archivedSessions,
     });
 

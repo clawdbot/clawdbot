@@ -4,6 +4,7 @@ import type { ActiveMediaModel } from "../../packages/media-understanding-common
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { projectMediaFacts, resolveMediaFacts } from "../media/media-facts.js";
 import { isAudioAttachment } from "./attachments.js";
 import { runAudioTranscription } from "./audio-transcription-runner.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -69,8 +70,15 @@ export async function transcribeFirstAudio(params: {
       });
     }
 
-    // Mark this attachment as transcribed so the main media pass does not duplicate STT output.
-    firstAudio.alreadyTranscribed = true;
+    // Persist transcription state on the matching fact so later normalization
+    // cannot shift or lose it through a parallel index list.
+    const media = resolveMediaFacts(ctx);
+    const transcribedFact = media[firstAudio.index];
+    if (transcribedFact) {
+      media[firstAudio.index] = { ...transcribedFact, transcribed: true };
+      ctx.media = media;
+      ctx.MediaTranscribedIndexes = projectMediaFacts(media).MediaTranscribedIndexes;
+    }
 
     if (shouldLogVerbose()) {
       logVerbose(

@@ -6,7 +6,7 @@ scenario:
   runtimeParityTier: standard
   coverage:
     primary:
-      - tools.web-fetch
+      - web-search.web-fetch-exposure
   objective: Verify web_fetch preserves arguments and result shape across OpenClaw and Codex.
   successCriteria:
     - Effective tools expose web_fetch.

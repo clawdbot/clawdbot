@@ -6507,9 +6507,11 @@ describe("DiscordVoiceManager", () => {
         discriminator: "4321",
       },
     });
-    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client, {
-      commands: { useAccessGroups: false },
-    });
+    const manager = createManager(
+      { groupPolicy: "open", allowFrom: ["discord:u-owner"] },
+      client,
+      {},
+    );
     await processVoiceSegment(manager, "u-guest");
   });
 
@@ -6607,9 +6609,7 @@ describe("DiscordVoiceManager", () => {
         },
       },
       client,
-      {
-        commands: { useAccessGroups: false },
-      },
+      {},
     );
     await processVoiceSegment(manager, "u-guest");
 
@@ -6636,9 +6636,7 @@ describe("DiscordVoiceManager", () => {
         discriminator: "4321",
       },
     });
-    const manager = createManager({ groupPolicy: "open" }, client, {
-      commands: { useAccessGroups: false },
-    });
+    const manager = createManager({ groupPolicy: "open" }, client, {});
     await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = lastAgentCommandArgs() as
@@ -6670,9 +6668,7 @@ describe("DiscordVoiceManager", () => {
         discriminator: "0001",
       },
     });
-    const manager = createManager({ groupPolicy: "open" }, client, {
-      commands: { useAccessGroups: false },
-    });
+    const manager = createManager({ groupPolicy: "open" }, client, {});
 
     await processVoiceSegment(manager, "u-debug");
 
@@ -6710,9 +6706,7 @@ describe("DiscordVoiceManager", () => {
         discriminator: "4321",
       },
     });
-    const manager = createManager({ groupPolicy: "open" }, client, {
-      commands: { useAccessGroups: false },
-    });
+    const manager = createManager({ groupPolicy: "open" }, client, {});
     await processVoiceSegment(manager, "u-guest");
 
     expect(lastTtsStreamArgs().channel).toBe("discord");
@@ -6754,9 +6748,7 @@ describe("DiscordVoiceManager", () => {
         },
       },
       client,
-      {
-        commands: { useAccessGroups: false },
-      },
+      {},
     );
     await processVoiceSegment(manager, "u-guest");
 
@@ -6828,7 +6820,7 @@ describe("DiscordVoiceManager", () => {
         },
       },
       client,
-      { commands: { useAccessGroups: false } },
+      {},
     );
     manager.setBotUserId("bot-user");
 

@@ -8,6 +8,7 @@ import { CommanderError } from "commander";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
+import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
@@ -2241,8 +2242,8 @@ describe("runCli exit behavior", () => {
   it("replaces the early managed proxy with the final accepted gateway config", async () => {
     const earlyHandle = makeProxyHandle();
     const finalHandle = makeProxyHandle();
-    const earlyProxy = { enabled: true, proxyUrl: "http://127.0.0.1:19876" };
-    const finalProxy = { enabled: true, proxyUrl: "http://127.0.0.1:29876" };
+    const earlyProxy = { proxyUrl: "http://127.0.0.1:19876" };
+    const finalProxy = { proxyUrl: "http://127.0.0.1:29876" };
     loadConfigMock.mockReturnValueOnce({ proxy: earlyProxy });
     startProxyMock.mockResolvedValueOnce(earlyHandle).mockResolvedValueOnce(finalHandle);
     commanderParseAsyncMock.mockImplementationOnce(async () => {
@@ -2268,8 +2269,8 @@ describe("runCli exit behavior", () => {
 
   it("removes early proxy signal handlers when the final config disables the proxy", async () => {
     const earlyHandle = makeProxyHandle();
-    const earlyProxy = { enabled: true, proxyUrl: "http://127.0.0.1:19876" };
-    const finalProxy = { enabled: false };
+    const earlyProxy = { proxyUrl: "http://127.0.0.1:19876" };
+    const finalProxy = undefined;
     loadConfigMock.mockReturnValueOnce({ proxy: earlyProxy });
     startProxyMock.mockResolvedValueOnce(earlyHandle).mockResolvedValueOnce(null);
     const processOnceSpy = vi.spyOn(process, "once");
@@ -3047,59 +3048,61 @@ describe("runCli exit behavior", () => {
       `fs.writeFileSync(${JSON.stringify(passwordMarker)},'1');`,
       "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { PASSWORD_SECRET: 'password-from-exec' } }));", // pragma: allowlist secret
     ].join("");
-    readConfigFileSnapshotMock.mockResolvedValueOnce({
-      exists: true,
-      valid: true,
-      sourceConfig: {
-        secrets: {
-          providers: {
-            tokenprovider: {
-              source: "exec",
-              command: process.execPath,
-              args: ["-e", tokenProgram],
-              allowInsecurePath: true,
+    await withSecureTestNodeExecPath(async () => {
+      readConfigFileSnapshotMock.mockResolvedValueOnce({
+        exists: true,
+        valid: true,
+        sourceConfig: {
+          secrets: {
+            providers: {
+              tokenprovider: {
+                source: "exec",
+                command: process.execPath,
+                args: ["-e", tokenProgram],
+                allowInsecurePath: true,
+              },
+              passwordprovider: {
+                source: "exec",
+                command: process.execPath,
+                args: ["-e", passwordProgram],
+                allowInsecurePath: true,
+              },
             },
-            passwordprovider: {
-              source: "exec",
-              command: process.execPath,
-              args: ["-e", passwordProgram],
-              allowInsecurePath: true,
+          },
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "password",
+              token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
+              password: {
+                source: "exec",
+                provider: "passwordprovider",
+                id: "PASSWORD_SECRET",
+              },
             },
           },
         },
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "password",
-            token: { source: "exec", provider: "tokenprovider", id: "TOKEN_SECRET" },
-            password: {
-              source: "exec",
-              provider: "passwordprovider",
-              id: "PASSWORD_SECRET",
-            },
-          },
-        },
-      },
+      });
+
+      try {
+        await withInteractiveTty(async () => {
+          await runCli(["node", "openclaw"]);
+        });
+
+        expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+          url: "ws://127.0.0.1:18789",
+          password: "password-from-exec",
+        });
+        await expect(fs.access(tokenMarker)).rejects.toThrow();
+        await expect(fs.access(passwordMarker)).resolves.toBeUndefined();
+        expect(launchTuiCliMock).toHaveBeenCalledWith(
+          { deliver: false },
+          { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
+        );
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
     });
-
-    try {
-      await withInteractiveTty(async () => {
-        await runCli(["node", "openclaw"]);
-      });
-
-      expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
-        url: "ws://127.0.0.1:18789",
-        password: "password-from-exec",
-      });
-      await expect(fs.access(tokenMarker)).rejects.toThrow();
-      await expect(fs.access(passwordMarker)).resolves.toBeUndefined();
-      expect(launchTuiCliMock).toHaveBeenCalledWith(
-        { deliver: false },
-        { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
   });
 
   it("probes local gateways over loopback even when the gateway advertises a LAN bind", async () => {

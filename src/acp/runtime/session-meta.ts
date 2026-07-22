@@ -7,7 +7,7 @@ import type { Insertable, Selectable } from "kysely";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
-  listSessionEntries,
+  listSessionEntriesReadOnly,
   patchSessionEntryWithKey,
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
@@ -366,7 +366,7 @@ function readSessionEntryFromStore(params: {
     env: params.env,
   });
   try {
-    const entries = listSessionEntries({
+    const entries = listSessionEntriesReadOnly({
       ...(agentId ? { agentId } : {}),
       storePath,
       ...(params.clone === false ? { clone: false } : {}),
@@ -438,7 +438,7 @@ export async function listAcpSessionEntries(params: {
     });
     let sessionEntries: SessionEntrySummary[];
     try {
-      sessionEntries = listSessionEntries({
+      sessionEntries = listSessionEntriesReadOnly({
         ...(agentId ? { agentId } : {}),
         storePath,
         ...(params.clone === false ? { clone: false } : {}),

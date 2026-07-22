@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as sessionAccessorModule from "../../config/sessions/session-accessor.js";
 import * as sessionStoreModule from "../../config/sessions/store.js";
 import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -210,9 +211,12 @@ function createDeliveryDeps(params: {
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
-    loadSessionStore: vi.fn((storePath) => readSessionStore(storePath)),
+    loadSessionEntry: vi.fn(({ storePath, sessionKey }) =>
+      sessionAccessorModule.loadSessionEntry({ storePath, sessionKey }),
+    ),
     log,
     now: vi.fn(() => 1_700_000_000_000),
+    patchSessionEntry: sessionAccessorModule.patchSessionEntry,
     resolveContinuationRuntimeConfig: vi.fn(() => ({
       ...defaultRuntimeConfig,
       ...params.runtimeConfig,
@@ -242,13 +246,19 @@ async function seedSessionStore(
   storePath: string,
   store: Record<string, SessionEntry>,
 ): Promise<void> {
-  await sessionStoreModule.saveSessionStore(storePath, store, { skipMaintenance: true });
-  sessionStoreModule.clearSessionStoreCacheForTest();
+  await Promise.all(
+    Object.entries(store).map(async ([sessionKey, entry]) => {
+      await sessionAccessorModule.upsertSessionEntry({ storePath, sessionKey }, entry);
+    }),
+  );
 }
 
 function readSessionStore(storePath: string): Record<string, SessionEntry> {
-  sessionStoreModule.clearSessionStoreCacheForTest();
-  return sessionStoreModule.loadSessionStore(storePath, { skipCache: true });
+  return Object.fromEntries(
+    sessionAccessorModule
+      .listSessionEntries({ storePath })
+      .map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
 }
 
 afterEach(() => {

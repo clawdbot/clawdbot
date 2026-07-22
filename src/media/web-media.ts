@@ -1,4 +1,5 @@
 // Web media helpers load local and remote media for web-facing surfaces.
+import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
@@ -17,11 +18,23 @@ import { resolveCanvasHttpPathToLocalPath } from "../canvas/documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { isNotFoundPathError } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
+import { chunkItems } from "../utils/chunk-items.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
 import {
   assertLocalMediaAllowed,
@@ -46,6 +59,8 @@ export type WebMediaResult = {
   contentType?: string;
   kind: MediaKind | undefined;
   fileName?: string;
+  /** Source bytes came from a generated-HTML trust boundary. */
+  trustedGeneratedHtmlSource?: boolean;
 };
 
 type WebMediaOptions = {
@@ -299,28 +314,160 @@ function hasHtmlDocumentShape(text: string): boolean {
   return /^(?:<!doctype\s+html\b|<html\b)/iu.test(sample) || /<\/(?:html|body)>/iu.test(sample);
 }
 
-async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined): Promise<boolean> {
+type HostReadHtmlTrust =
+  | { source: "temp-root" }
+  | { source: "outbound"; expectedSha256: string; expectedSize: number };
+
+const TRUSTED_GENERATED_HTML_MARKER_VERSION = 1;
+const TRUSTED_GENERATED_HTML_MARKER_KIND = "trusted-generated-html";
+type OutboundProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "outbound_media_provenance">;
+
+async function getTrustedGeneratedHtmlMarker(
+  resolvedFilePath: string,
+): Promise<{ sha256: string; size: number } | undefined> {
+  try {
+    const { db } = openOpenClawStateDatabase();
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+        .selectFrom("outbound_media_provenance")
+        .select(["kind", "version", "sha256", "size_bytes"])
+        .where("realpath", "=", resolvedFilePath),
+    );
+    return row?.kind === TRUSTED_GENERATED_HTML_MARKER_KIND &&
+      row.version === TRUSTED_GENERATED_HTML_MARKER_VERSION
+      ? { sha256: row.sha256, size: row.size_bytes }
+      : undefined;
+  } catch (error) {
+    // State failures must narrow trust, never turn into a permissive fallback.
+    logVerbose(
+      `trusted-html marker lookup failed (${resolvedFilePath}): ${formatErrorMessage(error)}`,
+    );
+    return undefined;
+  }
+}
+
+async function resolveTrustedGeneratedHostReadHtml(
+  filePath: string | undefined,
+): Promise<HostReadHtmlTrust | undefined> {
   if (!filePath) {
-    return false;
+    return undefined;
   }
   const info = await lstat(filePath).catch(() => undefined);
   if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
-    return false;
+    return undefined;
   }
-  const [resolvedFilePath, resolvedTmpRoot] = await Promise.all([
+  const [resolvedFilePath, tmpRoot, outboundRoot] = await Promise.all([
     realpath(filePath).catch(() => undefined),
     realpath(resolvePreferredOpenClawTmpDir()).catch(() => undefined),
+    realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined),
   ]);
-  return Boolean(
-    resolvedFilePath && resolvedTmpRoot && isPathInsideRoot(resolvedFilePath, resolvedTmpRoot),
-  );
+  if (!resolvedFilePath) {
+    return undefined;
+  }
+  // Outbound staging always requires provenance, even when a custom state dir
+  // places media/outbound underneath the otherwise trusted temp root.
+  if (outboundRoot && isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+    const marker = await getTrustedGeneratedHtmlMarker(resolvedFilePath);
+    return marker
+      ? { source: "outbound", expectedSha256: marker.sha256, expectedSize: marker.size }
+      : undefined;
+  }
+  return tmpRoot && isPathInsideRoot(resolvedFilePath, tmpRoot)
+    ? { source: "temp-root" }
+    : undefined;
+}
+
+/** Records exact-byte provenance for a trusted generated HTML staged outbound. */
+export async function markTrustedGeneratedHtmlPath(
+  filePath: string,
+  contents: Buffer,
+): Promise<void> {
+  const resolvedFilePath = await realpath(filePath);
+  const outboundRoot = await realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined);
+  if (!outboundRoot || !isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+    throw new Error(
+      `markTrustedGeneratedHtmlPath: refusing path outside outbound staging: ${resolvedFilePath}`,
+    );
+  }
+  const sha256 = createHash("sha256").update(contents).digest("hex");
+  const sizeBytes = contents.length;
+  const createdAtMs = Date.now();
+  runOpenClawStateWriteTransaction(({ db }) => {
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+        .insertInto("outbound_media_provenance")
+        .values({
+          realpath: resolvedFilePath,
+          kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
+          version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+          sha256,
+          size_bytes: sizeBytes,
+          created_at_ms: createdAtMs,
+        })
+        .onConflict((conflict) =>
+          conflict.column("realpath").doUpdateSet({
+            kind: TRUSTED_GENERATED_HTML_MARKER_KIND,
+            version: TRUSTED_GENERATED_HTML_MARKER_VERSION,
+            sha256,
+            size_bytes: sizeBytes,
+            created_at_ms: createdAtMs,
+          }),
+        ),
+    );
+  });
+}
+
+/** Removes provenance whose staged regular file no longer exists. */
+export async function pruneStaleTrustedGeneratedHtmlMarkers(): Promise<void> {
+  const { db } = openOpenClawStateDatabase();
+  const rows = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<OutboundProvenanceDatabase>(db)
+      .selectFrom("outbound_media_provenance")
+      .select("realpath"),
+  ).rows;
+  const stale: string[] = [];
+  for (const row of rows) {
+    let info: Awaited<ReturnType<typeof lstat>>;
+    try {
+      info = await lstat(row.realpath);
+    } catch (error) {
+      if (isNotFoundPathError(error)) {
+        stale.push(row.realpath);
+      } else {
+        logVerbose(
+          `trusted-html prune kept uninspectable marker (${row.realpath}): ${formatErrorMessage(error)}`,
+        );
+      }
+      continue;
+    }
+    if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
+      stale.push(row.realpath);
+    }
+  }
+  if (stale.length === 0) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(({ db: writeDb }) => {
+    for (const batch of chunkItems(stale, 500)) {
+      executeSqliteQuerySync(
+        writeDb,
+        getNodeSqliteKysely<OutboundProvenanceDatabase>(writeDb)
+          .deleteFrom("outbound_media_provenance")
+          .where("realpath", "in", batch),
+      );
+    }
+  });
+  logVerbose(`trusted-html prune removed ${stale.length} stale marker(s)`);
 }
 
 function isTrustedGeneratedHostReadHtml(params: {
   filePath?: string;
   sniffedContentType?: string;
   buffer?: Buffer;
-  trustedGeneratedHtmlPath?: boolean;
+  trustedGeneratedHtmlPath?: HostReadHtmlTrust;
 }): boolean {
   const sniffedMime = normalizeMimeType(params.sniffedContentType);
   if (sniffedMime && sniffedMime !== "text/html") {
@@ -330,7 +477,17 @@ function isTrustedGeneratedHostReadHtml(params: {
     return false;
   }
   const text = getValidatedHostReadText(params.buffer);
-  return text !== undefined && hasHtmlDocumentShape(text);
+  if (text === undefined || !hasHtmlDocumentShape(text)) {
+    return false;
+  }
+  if (params.trustedGeneratedHtmlPath.source === "temp-root") {
+    return true;
+  }
+  return (
+    params.buffer?.length === params.trustedGeneratedHtmlPath.expectedSize &&
+    createHash("sha256").update(params.buffer).digest("hex") ===
+      params.trustedGeneratedHtmlPath.expectedSha256
+  );
 }
 
 function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string): boolean {
@@ -373,7 +530,7 @@ function assertHostReadMediaAllowed(params: {
   filePath?: string;
   kind: MediaKind | undefined;
   buffer?: Buffer;
-  trustedGeneratedHtmlPath?: boolean;
+  trustedGeneratedHtmlPath?: HostReadHtmlTrust;
 }): void {
   const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
   const normalizedMime = normalizeMimeType(params.contentType);
@@ -922,6 +1079,7 @@ async function loadWebMediaInternal(
     contentType?: string;
     kind: MediaKind | undefined;
     fileName?: string;
+    trustedGeneratedHtmlSource?: boolean;
   }): Promise<WebMediaResult> => {
     // If caller explicitly provides maxBytes, trust it (for channels that handle large files).
     // Otherwise fall back to per-kind defaults.
@@ -971,6 +1129,7 @@ async function loadWebMediaInternal(
       contentType: params.contentType ?? undefined,
       kind: params.kind,
       fileName: params.fileName,
+      ...(params.trustedGeneratedHtmlSource ? { trustedGeneratedHtmlSource: true } : {}),
     };
   };
 
@@ -1036,11 +1195,11 @@ async function loadWebMediaInternal(
   const hostReadDeclaredMime = hostReadCapability
     ? normalizeMimeType(mimeTypeFromFilePath(mediaUrl))
     : undefined;
-  const trustedGeneratedHtmlPath =
+  const htmlTrust =
     hostReadDeclaredMime === "text/html"
-      ? await isTrustedGeneratedHostReadHtmlPath(mediaUrl)
-      : false;
-  if (hostReadDeclaredMime === "text/html" && !trustedGeneratedHtmlPath) {
+      ? await resolveTrustedGeneratedHostReadHtml(mediaUrl)
+      : undefined;
+  if (hostReadDeclaredMime === "text/html" && !htmlTrust) {
     throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
   }
 
@@ -1084,7 +1243,7 @@ async function loadWebMediaInternal(
       filePath: mediaUrl,
       kind,
       buffer: data,
-      trustedGeneratedHtmlPath,
+      trustedGeneratedHtmlPath: htmlTrust,
     });
   }
   let fileName = resolveLocalMediaFileName(mediaUrl);
@@ -1099,6 +1258,7 @@ async function loadWebMediaInternal(
     contentType: mime,
     kind,
     fileName,
+    trustedGeneratedHtmlSource: Boolean(htmlTrust && hostReadDeclaredMime === "text/html"),
   });
 }
 

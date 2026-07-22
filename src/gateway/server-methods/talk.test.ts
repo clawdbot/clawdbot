@@ -756,13 +756,11 @@ describe("talk.speak handler", () => {
         },
       },
     };
-    runtimeConfig.messages = {
-      tts: {
-        providers: {
-          acme: {
-            speakerVoice: "marin",
-            speakerVoiceId: "voice-123",
-          },
+    runtimeConfig.tts = {
+      providers: {
+        acme: {
+          speakerVoice: "marin",
+          speakerVoiceId: "voice-123",
         },
       },
     };
@@ -808,8 +806,8 @@ describe("talk.speak handler", () => {
     });
     mocks.synthesizeSpeech.mockImplementation(
       async ({ cfg }: { cfg: OpenClawConfig; text: string; disableFallback: boolean }) => {
-        expect(cfg.messages?.tts?.provider).toBe("acme");
-        expect(cfg.messages?.tts?.providers?.acme?.apiKey).toBe("env-acme-key");
+        expect(cfg.tts?.provider).toBe("acme");
+        expect(cfg.tts?.providers?.acme?.apiKey).toBe("env-acme-key");
         return {
           success: true,
           provider: "acme",
@@ -1005,7 +1003,7 @@ describe("talk.config handler", () => {
     expect(JSON.stringify(response)).not.toContain("runtime-azure-secret");
   });
 
-  it("passes runtime-resolved messages.tts provider secrets to strict provider resolvers", async () => {
+  it("passes runtime-resolved tts provider secrets to strict provider resolvers", async () => {
     const sourceConfig = {
       talk: {
         provider: "acme",
@@ -1018,28 +1016,24 @@ describe("talk.config handler", () => {
           },
         },
       },
-      messages: {
-        tts: {
-          provider: "acme",
-          timeoutMs: 12_345,
-          providers: {
-            acme: {
-              apiKey: { source: "env", provider: "default", id: "ACME_SPEECH_API_KEY" },
-            },
+      tts: {
+        provider: "acme",
+        timeoutMs: 12_345,
+        providers: {
+          acme: {
+            apiKey: { source: "env", provider: "default", id: "ACME_SPEECH_API_KEY" },
           },
         },
       },
     } as OpenClawConfig;
     const runtimeConfig = {
       ...sourceConfig,
-      messages: {
-        tts: {
-          provider: "acme",
-          timeoutMs: 54_321,
-          providers: {
-            acme: {
-              apiKey: "env-acme-key",
-            },
+      tts: {
+        provider: "acme",
+        timeoutMs: 54_321,
+        providers: {
+          acme: {
+            apiKey: "env-acme-key",
           },
         },
       },
@@ -1067,7 +1061,7 @@ describe("talk.config handler", () => {
         const providerConfig = (providers.acme ?? {}) as Record<string, unknown>;
         const apiKey = normalizeResolvedSecretInputString({
           value: providerConfig.apiKey,
-          path: "messages.tts.providers.acme.apiKey",
+          path: "tts.providers.acme.apiKey",
         });
         expect(apiKey).toBe("env-acme-key");
         expect(timeoutMs).toBe(54_321);

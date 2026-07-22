@@ -8,34 +8,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "OAuth2 client secret for the Discord application that hosts Activities. Keep this value secret; DISCORD_CLIENT_SECRET is used when this field is unset.",
   "channels.discord.activities.applicationId":
     "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
-  meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
-  "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
-  "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
-  "meta.migrations": "System-managed completion markers for one-time config migrations.",
+  meta: "Backward-readable compatibility metadata retained so older binaries can refuse unsafe config downgrades.",
+  "meta.lastTouchedVersion": "OpenClaw version that most recently wrote this config.",
+  "meta.migrations": "Bounded compatibility markers for completed config migrations.",
   "meta.migrations.modelPolicyAllowlist":
-    "Records that doctor preserved or evaluated legacy default and per-agent model-map override restrictions.",
-  marketplaces:
-    "Marketplace feed and local package source profile settings. Feeds provide package selection and governance metadata, while sources define the local source names that install candidates may reference.",
-  "marketplaces.feeds":
-    "Named marketplace feed profiles. The default public profile can be used as shipped, and deployments can add or override profiles to point OpenClaw at their effective feed endpoint.",
-  "marketplaces.feeds.*.url":
-    "HTTPS URL for the marketplace feed profile. Remote feed documents cannot introduce new registry domains or credentials; they only reference locally configured sources by name.",
-  "marketplaces.feeds.*.verification":
-    "Feed authenticity policy. Use unsigned only as an explicit local opt-in for self-hosted feeds. Use signed to name locally trusted publisher public keys before refresh enforcement consumes verified envelopes.",
-  "marketplaces.feeds.*.verification.mode":
-    'Feed verification mode: "unsigned" for explicit unsigned opt-in, or "signed" for local direct-key verification once refresh enforcement is wired.',
-  "marketplaces.feeds.*.verification.keys":
-    "Trusted publisher public keys for signed feed envelopes. These non-secret local trust anchors belong in source-profile config; remote feed documents cannot introduce or rotate them by themselves.",
-  "marketplaces.feeds.*.verification.keys[].keyId":
-    "Stable publisher key identifier expected in a signed feed envelope signature.",
-  "marketplaces.feeds.*.verification.keys[].publicKey":
-    "Ed25519 publisher public key for feed envelope verification, encoded as PEM or raw base64url. Feed signing private keys are publisher-side secrets managed outside this config; do not reuse platform signing identities or certificates here.",
-  "marketplaces.feeds.*.verification.threshold":
-    "Optional number of trusted signatures required for a signed feed. Defaults to one in the later refresh enforcement slice.",
-  "marketplaces.sources":
-    "Named package source profiles that feed entries can reference using sourceRef. Keep credentials and registry endpoints local so remote feeds cannot bootstrap trust roots.",
-  "marketplaces.sources.*.type":
-    "Package source profile type: npm, clawhub, or git. This slice validates sourceRef names only; registry and host endpoints are added when installer resolution can enforce them.",
+    "Records that legacy model-map restrictions were preserved or evaluated.",
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
     "Shell environment import controls for loading variables from your login shell during startup. Keep this enabled when you depend on profile-defined secrets or PATH customizations.",
@@ -46,27 +23,26 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "env.vars":
     "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
   wizard:
-    "Setup wizard state tracking fields that record the most recent guided setup run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
-  "wizard.lastRunAt":
-    "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm setup recency during support and operational audits.",
-  "wizard.lastRunVersion":
-    "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
-  "wizard.lastRunCommit":
-    "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate setup behavior with exact source state during debugging.",
-  "wizard.lastRunCommand":
-    "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
-  "wizard.lastRunMode":
-    'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
+    "User-owned setup preferences. Machine-owned wizard history and acknowledgement state live in the shared state database.",
+  "wizard.accessMode":
+    'Discovery consent for guided setup: "full" scans silently while "guarded" asks before inspecting local applications.',
+  "wizard.appRecommendations":
+    "Controls whether guided setup may use installed-application labels to recommend relevant plugins and skills.",
+  "wizard.lastRunAt": "Timestamp of the last successfully committed wizard run.",
+  "wizard.lastRunVersion": "OpenClaw version used by the last wizard run.",
+  "wizard.lastRunCommit": "Source commit used by the last development wizard run.",
+  "wizard.lastRunCommand": "Command that invoked the last wizard run.",
+  "wizard.lastRunMode": 'Whether the last wizard run targeted "local" or "remote" setup.',
   "wizard.localModelLeanAutoModel":
-    "System-managed model reference indicating that inference onboarding enabled the global lean-model surface. A later verified route uses this marker to remove only the onboarding-owned setting; a model changed outside onboarding hands ownership back to the user.",
+    "Model reference whose lean-mode setting remains owned by onboarding.",
   "wizard.securityAcknowledgedAt":
-    "ISO timestamp for when the setup security acknowledgement was accepted on this config. Setup uses this to avoid repeating the acknowledgement on later wizard runs.",
-  audit:
+    "Timestamp of the setup security acknowledgement, committed with the target config.",
+  "logging.audit":
     "Bounded metadata-only audit history for operator review. Run and tool records are enabled by default; message lifecycle metadata is a separate privacy-sensitive opt-in. The background writer is best-effort rather than a lossless compliance archive.",
-  "audit.enabled":
+  "logging.audit.enabled":
     "Records new run, tool, and enabled message audit events. Default: true. Disabling event inserts does not immediately delete existing records; retained rows remain queryable until they expire.",
-  "audit.messages":
-    'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Both audit.enabled and audit.messages are startup-scoped; restart the Gateway after changing either setting.',
+  "logging.audit.messages":
+    'Controls content-free message lifecycle records: "off" (default), "direct" for known direct conversations only, or "all" for direct, group, channel, and unknown conversation kinds. Both logging.audit.enabled and logging.audit.messages are startup-scoped; restart the Gateway after changing either setting.',
   diagnostics:
     "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
   "diagnostics.otel":
@@ -82,16 +58,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "logging.consoleLevel":
     'Console-specific log threshold: "silent", "fatal", "error", "warn", "info", "debug", or "trace" for terminal output control. Use this to keep local console quieter while retaining richer file logging if needed.',
   "logging.consoleStyle":
-    'Console output format style: "pretty", "compact", or "json" based on operator and ingestion needs. Use json for machine parsing pipelines and pretty/compact for human-first terminal workflows.',
-  "logging.redactSensitive":
-    'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
+    'Console output format style: "pretty" or "json". Use json for machine parsing pipelines and pretty for human-first terminal workflows.',
   "logging.redactPatterns":
     "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
-  cli: "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
-  "cli.banner":
-    "CLI startup banner controls for title/version line and tagline style behavior. Keep banner enabled for fast version/context checks, then tune tagline mode to your preferred noise level.",
-  "cli.banner.taglineMode":
-    'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel":
@@ -103,7 +72,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   cloudWorkers:
     "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
   "cloudWorkers.profiles":
-    "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings plus optional stored lifetime policy.",
+    "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings.",
   "cloudWorkers.profiles.*":
     "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
   "cloudWorkers.profiles.*.provider":
@@ -112,12 +81,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
   "cloudWorkers.profiles.*.settings":
     "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
-  "cloudWorkers.profiles.*.lifetime":
-    "Stored environment lifetime policy. This first cloud-worker slice records these values as data; automatic idle and maximum-lifetime enforcement lands in later lifecycle work.",
-  "cloudWorkers.profiles.*.lifetime.idleTimeoutMinutes":
-    "Positive inactivity interval in minutes after which later lifecycle policy may reclaim an idle environment. Omit to leave idle cleanup unspecified.",
-  "cloudWorkers.profiles.*.lifetime.maxLifetimeMinutes":
-    "Positive maximum environment lifetime in minutes for later lifecycle enforcement. Omit to leave the maximum lifetime unspecified.",
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":
@@ -280,35 +243,31 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
   "acp.runtime.installCommand":
     "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
-  commitments:
-    "Inferred follow-up commitment controls for automatically detecting check-ins from conversation turns and delivering them through heartbeat runs.",
-  "commitments.enabled":
-    "Enable hidden LLM extraction, storage, and heartbeat delivery for inferred follow-up commitments. Default: false.",
-  "commitments.maxPerDay":
-    "Maximum inferred follow-up commitments delivered per agent session in a rolling day. Default: 3.",
-  "agents.list.*.skills":
-    "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
-  "agents.list[].skills":
+  surfaces:
+    "Per-surface message policy overrides keyed by the resolved delivery surface id. Use this only when one deployed surface needs stricter silent-reply handling than the agent default.",
+  "surfaces.*.silentReply":
+    "Overrides silent-reply policy for one resolved delivery surface. Unset fields inherit agents.defaults.silentReply; use narrow surface ids so internal or group-specific behavior does not spill into other destinations.",
+  "agents.entries.*.skills":
     "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   agents:
-    "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
+    "Agent runtime configuration root. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
   "agents.defaults":
-    "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
+    "Shared default settings inherited by agents unless overridden per entry in agents.entries. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":
-    "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+    "Optional default skill allowlist inherited by agents that omit agents.entries.*.skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.entries.*.skills replaces this default instead of merging with it.",
   "agents.defaults.subagents.delegationMode":
     'Prompt-only sub-agent delegation strength. "suggest" keeps the default guidance; "prefer" strongly instructs the main agent to delegate anything more involved than a direct reply via sessions_spawn.',
-  "agents.list[].subagents.delegationMode":
+  "agents.entries.*.subagents.delegationMode":
     "Per-agent override for sub-agent delegation strength. Use this for coordinator agents that should stay responsive and push non-trivial work into spawned sub-agents.",
-  "agents.list[].contextInjection":
+  "agents.entries.*.contextInjection":
     "Per-agent override for when workspace bootstrap files are injected into this agent's system prompt. Omit to inherit agents.defaults.contextInjection.",
-  "agents.list[].bootstrapMaxChars":
+  "agents.entries.*.bootstrapMaxChars":
     "Per-agent override for max characters of each workspace bootstrap file injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapMaxChars.",
-  "agents.list[].bootstrapTotalMaxChars":
+  "agents.entries.*.bootstrapTotalMaxChars":
     "Per-agent override for max total characters across all workspace bootstrap files injected into this agent's system prompt. Omit to inherit agents.defaults.bootstrapTotalMaxChars.",
-  "agents.list[].experimental":
+  "agents.entries.*.experimental":
     "Per-agent experimental flags. Omitted fields inherit agents.defaults.experimental.",
-  "agents.list[].experimental.localModelLean":
+  "agents.entries.*.experimental.localModelLean":
     "Per-agent override for lean local-model mode. Enable it for one smaller local-model agent without trimming tools from every agent.",
   "agents.defaults.contextLimits":
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
@@ -320,54 +279,48 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Advanced ceiling for a single live tool result before truncation. Leave unset to use the model-context auto cap; explicit values affect both persisted live tool-result writes and overflow-recovery truncation heuristics.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
-  "agents.list":
+  "agents.entries":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
-  "agents.list[].skillsLimits":
+  "agents.entries.*.skillsLimits":
     "Optional per-agent overrides for skills subsystem budgets. Use this when an agent needs a different skills prompt budget without introducing a second generic context-limits path.",
-  "agents.list[].skillsLimits.maxSkillsPromptChars":
+  "agents.entries.*.skillsLimits.maxSkillsPromptChars":
     "Per-agent override for the skills prompt character budget. This extends the existing skills.limits.maxSkillsPromptChars path instead of routing the same budget through contextLimits.",
-  "agents.list[].contextLimits":
+  "agents.entries.*.contextLimits":
     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
-  "agents.list[].contextLimits.memoryGetMaxChars":
+  "agents.entries.*.contextLimits.memoryGetMaxChars":
     "Per-agent override for the default memory_get max character budget.",
-  "agents.list[].contextLimits.memoryGetDefaultLines":
+  "agents.entries.*.contextLimits.memoryGetDefaultLines":
     "Per-agent override for the default memory_get line window when lines is omitted.",
-  "agents.list[].contextLimits.toolResultMaxChars":
+  "agents.entries.*.contextLimits.toolResultMaxChars":
     "Per-agent advanced ceiling for the live tool-result max character budget. Omit to inherit defaults or the model-context auto cap.",
-  "agents.list[].contextLimits.postCompactionMaxChars":
+  "agents.entries.*.contextLimits.postCompactionMaxChars":
     "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
-  "agents.list[].thinkingDefault":
+  "agents.entries.*.thinkingDefault":
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
-  "agents.list[].reasoningDefault":
+  "agents.entries.*.reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
-  "agents.list[].fastModeDefault":
+  "agents.entries.*.fastModeDefault":
     'Optional per-agent default for fast mode ("auto", true, or false). Applies when no per-message or session fast-mode override is set.',
-  "agents.list[].runtime":
+  "agents.defaults.fastModeDefault":
+    'Default fast-mode policy for the agent loop ("auto", true, or false). Individual agent entries override it.',
+  "agents.entries.*.runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
-  "agents.list[].runtime.type":
+  "agents.entries.*.runtime.type":
     'Runtime type for this agent: "embedded" (default OpenClaw runtime) or "acp" (ACP harness defaults).',
-  "agents.list[].runtime.acp":
+  "agents.entries.*.runtime.acp":
     "ACP runtime defaults for this agent when runtime.type=acp. Binding-level ACP overrides still take precedence per conversation.",
-  "agents.list[].runtime.acp.agent":
+  "agents.entries.*.runtime.acp.agent":
     "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
-  "agents.list[].runtime.acp.backend":
+  "agents.entries.*.runtime.acp.backend":
     "Optional ACP backend override for this agent's ACP sessions (falls back to global acp.backend).",
-  "agents.list[].runtime.acp.mode":
+  "agents.entries.*.runtime.acp.mode":
     "Optional ACP session mode default for this agent (persistent or oneshot).",
-  "agents.list[].runtime.acp.cwd":
+  "agents.entries.*.runtime.acp.cwd":
     "Optional default working directory for this agent's ACP sessions.",
-  "agents.list[].identity.avatar":
+  "agents.entries.*.identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
-  "agents.defaults.heartbeat.suppressToolErrorWarnings":
-    "Suppress tool error warning payloads during heartbeat runs.",
-  "agents.list[].heartbeat.suppressToolErrorWarnings":
-    "Suppress tool error warning payloads during heartbeat runs.",
   "agents.defaults.heartbeat.timeoutSeconds":
     "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
-  "agents.list[].heartbeat.timeoutSeconds":
+  "agents.entries.*.heartbeat.timeoutSeconds":
     "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
-  "agents.defaults.heartbeat.skipWhenBusy":
-    "When true, defer heartbeat turns on this agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
-  "agents.list[].heartbeat.skipWhenBusy":
-    "Per-agent override that defers heartbeat turns on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
 };

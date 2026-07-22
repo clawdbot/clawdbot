@@ -41,7 +41,7 @@ function mount(params: {
 }
 
 describe("session discussion panel", () => {
-  it("automatically opens an available discussion and renders both URLs", async () => {
+  it("automatically opens an available discussion without a redundant header", async () => {
     const loadInfo = vi.fn<SessionDiscussionInfoLoader>().mockResolvedValue({
       state: "available",
     });
@@ -50,7 +50,8 @@ describe("session discussion panel", () => {
       embedUrl: "https://discussion.example/embed/thread",
       openUrl: "https://discussion.example/thread",
     });
-    const panel = mount({ loadInfo, openDiscussion });
+    const onStateChange = vi.fn<SessionDiscussionStateListener>();
+    const panel = mount({ loadInfo, openDiscussion, onStateChange });
 
     await vi.waitFor(() => {
       expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
@@ -60,11 +61,36 @@ describe("session discussion panel", () => {
         "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
       );
     });
-    const external = panel.querySelector<HTMLAnchorElement>("a");
     expect(loadInfo).toHaveBeenCalledTimes(1);
     expect(openDiscussion).toHaveBeenCalledTimes(1);
     expect(openDiscussion).toHaveBeenCalledWith("agent:main:first");
-    expect(external?.href).toBe("https://discussion.example/thread");
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      "agent:main:first",
+      "open",
+      "https://discussion.example/thread",
+    );
+    expect(panel.querySelector(".session-discussion__header")).toBeNull();
+    expect(panel.querySelector("a")).toBeNull();
+  });
+
+  it("offers the valid open URL when a same-origin embed is rejected", async () => {
+    const openUrl = "https://discussion.example/thread";
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({
+        state: "open",
+        embedUrl: new URL("/embed/thread", window.location.origin).href,
+        openUrl,
+      }),
+      openDiscussion: vi.fn(),
+    });
+
+    await vi.waitFor(() => {
+      expect(panel.textContent).toContain("This discussion cannot be embedded");
+    });
+    const external = panel.querySelector<HTMLAnchorElement>("a");
+    expect(panel.querySelector("iframe")).toBeNull();
+    expect(external?.textContent).toContain("Open discussion in a new tab");
+    expect(external?.href).toBe(openUrl);
     expect(external?.target).toBe("_blank");
     expect(external?.rel).toBe("noopener");
   });
@@ -133,7 +159,7 @@ describe("session discussion panel", () => {
 
     await vi.waitFor(() => {
       expect(loadInfo).toHaveBeenNthCalledWith(2, "agent:main:second");
-      expect(onStateChange).toHaveBeenLastCalledWith("agent:main:second", "none");
+      expect(onStateChange).toHaveBeenLastCalledWith("agent:main:second", "none", null);
     });
     expect(panel.querySelector("button")).toBeNull();
     expect(panel.querySelector("iframe")).toBeNull();

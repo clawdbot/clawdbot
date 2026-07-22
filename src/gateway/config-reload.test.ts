@@ -865,7 +865,7 @@ describe("startGatewayConfigReloader include files", () => {
     const nestedIncludePath = nodePath.join(rootDir, "hooks-enabled.json5");
     await writeFile(
       configPath,
-      `${JSON.stringify({ gateway: { reload: { mode: "hot" } }, hooks: { $include: "./hooks-link.json5" } }, null, 2)}\n`,
+      `${JSON.stringify({ gateway: { reload: { mode: "hybrid" } }, hooks: { $include: "./hooks-link.json5" } }, null, 2)}\n`,
     );
     await writeFile(
       includePath,
@@ -2668,59 +2668,6 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("does not publish a restart-only hot-mode candidate through a later safe edit", async () => {
-    const initialConfig: OpenClawConfig = {
-      gateway: {
-        reload: { mode: "hot" },
-        auth: { mode: "token", token: "old-token" },
-      },
-      logging: { level: "info" },
-    };
-    const makeWrite = (config: OpenClawConfig, persistedHash: string): ConfigWriteNotification => ({
-      configPath: "/tmp/openclaw.json",
-      sourceConfig: config,
-      runtimeConfig: config,
-      persistedHash,
-      revision: 1,
-      fingerprint: `runtime-${persistedHash}`,
-      sourceFingerprint: `source-${persistedHash}`,
-      writtenAtMs: Date.now(),
-    });
-    let watcherSnapshot = makeSnapshot({ config: initialConfig, hash: "initial" });
-    const harness = createReloaderHarness(async () => watcherSnapshot, { initialConfig });
-    const restartOnlyConfig: OpenClawConfig = {
-      ...initialConfig,
-      gateway: {
-        ...initialConfig.gateway,
-        auth: { mode: "token", token: "new-token" },
-      },
-    };
-
-    harness.emitWrite(makeWrite(restartOnlyConfig, "restart-only"));
-    await vi.runAllTimersAsync();
-    watcherSnapshot = makeSnapshot({ config: restartOnlyConfig, hash: "restart-only" });
-    harness.watcher.emit("change");
-    await vi.runAllTimersAsync();
-    harness.emitWrite(
-      makeWrite({ ...restartOnlyConfig, logging: { level: "debug" } }, "safe-after-restart"),
-    );
-    await vi.runAllTimersAsync();
-
-    expect(harness.onNoopConfigCommit).not.toHaveBeenCalled();
-    expect(harness.onHotReload).not.toHaveBeenCalled();
-    expect(harness.onRestart).not.toHaveBeenCalled();
-    expect(harness.onConfigAccepted.mock.calls.map((call) => call[3])).toEqual([
-      { runtimeApplied: false },
-      { runtimeApplied: false },
-      { runtimeApplied: false },
-    ]);
-    expect(harness.log.warn).toHaveBeenCalledTimes(2);
-    expect(harness.log.warn).toHaveBeenLastCalledWith(
-      expect.stringContaining("gateway.auth.token"),
-    );
-    await harness.reloader.stop();
-  });
-
   it("notifies lifecycle owners before hot reload and commits after success", async () => {
     const initialConfig: OpenClawConfig = {
       gateway: { reload: {} },
@@ -2830,12 +2777,12 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("does not notify lifecycle owners when hot mode ignores a restart-only change", async () => {
+  it("notifies lifecycle owners when hybrid mode applies a restart-only change", async () => {
     const initialConfig: OpenClawConfig = {
-      gateway: { reload: { mode: "hot" }, terminal: { enabled: true } },
+      gateway: { reload: { mode: "hybrid" }, terminal: { enabled: true } },
     };
     const nextConfig: OpenClawConfig = {
-      gateway: { reload: { mode: "hot" }, terminal: { enabled: false } },
+      gateway: { reload: { mode: "hybrid" }, terminal: { enabled: false } },
     };
     const readSnapshot = vi.fn(async () => makeSnapshot({ config: nextConfig, hash: "hot" }));
     const harness = createReloaderHarness(readSnapshot, { initialConfig });
@@ -2843,9 +2790,9 @@ describe("startGatewayConfigReloader", () => {
     harness.watcher.emit("change");
     await vi.runAllTimersAsync();
 
-    expect(harness.onConfigChange).not.toHaveBeenCalled();
+    expect(harness.onConfigChange).toHaveBeenCalledOnce();
     expect(harness.onHotReload).not.toHaveBeenCalled();
-    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.onRestart).toHaveBeenCalledOnce();
     await harness.reloader.stop();
   });
 
@@ -3261,7 +3208,12 @@ describe("startGatewayConfigReloader", () => {
       expected: "old",
     },
     { label: "reload off", afterWrite: undefined, reloadMode: "off", expected: "old" },
-    { label: "hot restart ignore", afterWrite: undefined, reloadMode: "hot", expected: "old" },
+    {
+      label: "hybrid restart",
+      afterWrite: undefined,
+      reloadMode: "hybrid",
+      expected: "candidate",
+    },
   ] as const)(
     "publishes config env only for a runtime-applied $label transaction",
     async (testCase) => {

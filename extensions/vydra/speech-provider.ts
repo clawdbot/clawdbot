@@ -43,7 +43,7 @@ function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>): VydraSp
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.vydra.apiKey",
+      path: "tts.providers.vydra.apiKey",
     }),
     baseUrl: normalizeVydraBaseUrl(
       trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.VYDRA_BASE_URL),
@@ -146,6 +146,12 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
           timeoutMs: req.timeoutMs,
           fetchFn,
           maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "audio" }),
+          requestPolicy: {
+            allowPrivateNetwork,
+            dispatcherPolicy,
+            headers,
+            headerOrigin: new URL(baseUrl).origin,
+          },
         });
         return {
           audioBuffer: audio.buffer,

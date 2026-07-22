@@ -26,6 +26,7 @@ import {
   resolveDefaultCronStaggerMs,
 } from "../stagger.js";
 import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
+import { applyDefaultCronToolsAllow, cronJobUsesToolRuntime } from "../tools-allow.js";
 import type {
   CronDelivery,
   CronDeliveryPatch,
@@ -1119,7 +1120,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     payload:
       input.payload.kind === "script"
         ? normalizeCronScriptPayload(structuredClone(input.payload))
-        : input.payload,
+        : structuredClone(input.payload),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
@@ -1130,6 +1131,9 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
         : {}),
     },
   };
+  // New trusted jobs are explicit by construction. Agent-runtime callers are
+  // required to arrive with a creator cap before the service can apply this default.
+  applyDefaultCronToolsAllow(job);
   assertSupportedJobSpec(job);
   assertPacingSupport(job);
   assertTriggerSupport(job, {
@@ -1162,6 +1166,8 @@ export function applyJobPatch(
     cronConfig?: CronConfig;
   },
 ) {
+  const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
+  const explicitlyClearsToolsAllow = patch.payload?.toolsAllow === null;
   const previousScheduleKind = job.schedule.kind;
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
@@ -1250,6 +1256,11 @@ export function applyJobPatch(
       job.payload = normalizeCronScriptPayload(job.payload);
     }
   }
+  if (cronJobUsesToolRuntime(job) && (!previouslyUsedToolRuntime || explicitlyClearsToolsAllow)) {
+    // `null` means unrestricted, not a return to ambiguous legacy semantics.
+    // Ordinary edits to an existing capless job intentionally remain legacy.
+    applyDefaultCronToolsAllow(job);
+  }
   if (patch.delivery) {
     const implicitMode = resolveCronDeliveryPlan(job).mode;
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery, implicitMode);
@@ -1336,6 +1347,9 @@ export function applyDeclarativeJobSpec(
     cronConfig?: CronConfig;
   },
 ) {
+  const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
+  const previousToolsAllow = job.payload.toolsAllow;
+  const previousToolsAllowIsDefault = job.payload.toolsAllowIsDefault;
   // Name, target, routing, owner, and run policy remain outside declaration
   // convergence; changing those uses cron.update and cannot retarget an identity.
   const displayName = normalizeOptionalString(input.displayName);
@@ -1389,6 +1403,19 @@ export function applyDeclarativeJobSpec(
     job.trigger = structuredClone(input.trigger);
   } else {
     delete job.trigger;
+  }
+  if (cronJobUsesToolRuntime(job) && job.payload.toolsAllow === undefined) {
+    if (previousToolsAllow !== undefined) {
+      // Omitted declaration fields preserve explicit authority already stored
+      // on the job, including the server-managed creator-default marker.
+      job.payload.toolsAllow = [...previousToolsAllow];
+      if (previousToolsAllowIsDefault === true) {
+        job.payload.toolsAllowIsDefault = true;
+      }
+    } else if (!previouslyUsedToolRuntime) {
+      // A declaration that newly becomes tool-bearing adopts current explicit semantics.
+      applyDefaultCronToolsAllow(job);
+    }
   }
   const delivery = resolveInitialCronDelivery(input);
   if (delivery) {

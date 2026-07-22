@@ -305,7 +305,7 @@ Set `messages.statusReactions.enabled: true` to let Signal show the shared queue
 
 Status reactions also require an ack reaction and a matching `messages.ackReactionScope` (`direct`, `group-all`, `group-mentions`, or `all`). Set `channels.signal.reactionLevel: "off"` to disable Signal status reactions.
 
-`messages.removeAckAfterReply: true` clears the final status reaction after the configured hold time. Otherwise Signal restores the initial ack reaction after the final done/error state.
+Signal restores the initial ack reaction after the final done/error state.
 
 ## Reactions (message tool)
 
@@ -453,8 +453,7 @@ Provider options:
 - `channels.signal.accountUuid`: optional bot account UUID for native @mention detection and loop protection.
 - `channels.signal.cliPath`: path to `signal-cli`.
 - `channels.signal.configPath`: optional `signal-cli --config` directory.
-- `channels.signal.httpUrl`: full daemon URL (overrides host/port).
-- `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind (default `127.0.0.1:8080`).
+- `channels.signal.httpUrl`: full daemon URL and canonical daemon bind (default `http://127.0.0.1:8080`).
 - `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).
 - `channels.signal.startupTimeoutMs`: startup wait timeout in ms (min 1000, cap 120000; default 30000).
 - `channels.signal.receiveMode`: `on-start | manual`.
@@ -484,9 +483,9 @@ Provider options:
 
 Related global options:
 
-- `agents.list[].groupChat.mentionPatterns` (plain-text fallback; Signal native @mentions are detected from structured metadata when the bot account identity is configured).
+- `agents.entries.*.groupChat.mentionPatterns` (plain-text fallback; Signal native @mentions are detected from structured metadata when the bot account identity is configured).
 - `messages.groupChat.mentionPatterns` (global fallback).
-- `messages.responsePrefix`.
+- `channels.signal.responsePrefix` or an account-level `responsePrefix`.
 
 ## Related
 

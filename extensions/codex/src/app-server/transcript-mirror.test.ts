@@ -1022,11 +1022,11 @@ describe("mirrorCodexAppServerTranscript", () => {
       "turn-1:assistant",
     );
 
-    const assistantTranscriptOwned = await mirrorTranscriptBestEffort({
+    const mirrorOutcome = await mirrorTranscriptBestEffort({
       params: {
         sessionId: "session-1",
         suppressNextUserMessagePersistence: true,
-      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
+      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
       result: {
         messagesSnapshot: [assistantMessage],
       } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
@@ -1036,7 +1036,99 @@ describe("mirrorCodexAppServerTranscript", () => {
       turnId: "turn-1",
     });
 
-    expect(assistantTranscriptOwned).toBe(false);
+    expect(mirrorOutcome).toEqual({ assistantTranscriptOwned: false, mirroredMessages: [] });
+  });
+
+  it("does not attest a stale idempotency hit with the same mirror identity", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-stale-identity-");
+    const staleMessage = attachCodexMirrorIdentity(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "stale answer" }],
+        timestamp: Date.now(),
+      }),
+      "turn-1:assistant",
+    );
+    await mirrorCodexAppServerTranscript({
+      ...target,
+      messages: [staleMessage],
+      idempotencyScope: "codex-app-server:thread-1",
+    });
+    const currentMessage = attachCodexMirrorIdentity(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "current answer" }],
+        timestamp: Date.now() + 1,
+      }),
+      "turn-1:assistant",
+    );
+
+    const mirrorOutcome = await mirrorTranscriptBestEffort({
+      params: {
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+        suppressNextUserMessagePersistence: true,
+      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
+      result: {
+        messagesSnapshot: [currentMessage],
+      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      notifyUserMessagePersisted: () => undefined,
+      cwd: target.storePath,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(mirrorOutcome.assistantTranscriptOwned).toBe(true);
+    expect(mirrorOutcome.mirroredMessages).toEqual([]);
+  });
+
+  it("attests the exact persisted payload after a message-write hook transforms it", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: () => ({
+            message: castAgentMessage({
+              role: "assistant",
+              content: [{ type: "text", text: "[redacted by hook]" }],
+            }),
+          }),
+        },
+      ]),
+    );
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-attested-hook-");
+    const sourceMessage = attachCodexMirrorIdentity(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "sensitive answer" }],
+        timestamp: Date.now(),
+      }),
+      "turn-1:assistant",
+    );
+
+    const mirrorOutcome = await mirrorTranscriptBestEffort({
+      params: {
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+        suppressNextUserMessagePersistence: true,
+      } as unknown as Parameters<typeof mirrorTranscriptBestEffort>[0]["params"],
+      result: {
+        messagesSnapshot: [sourceMessage],
+      } as Parameters<typeof mirrorTranscriptBestEffort>[0]["result"],
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      notifyUserMessagePersisted: () => undefined,
+      cwd: target.storePath,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(mirrorOutcome.assistantTranscriptOwned).toBe(true);
+    expect(mirrorOutcome.mirroredMessages).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "[redacted by hook]" }] },
+    ]);
+    expect(JSON.stringify(mirrorOutcome.mirroredMessages)).not.toContain("sensitive answer");
   });
 
   it("dedupes mirrored messages despite snapshot positional shifts", async () => {

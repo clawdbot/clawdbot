@@ -15,6 +15,7 @@ import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
+import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
@@ -200,6 +201,8 @@ export type RunEmbeddedAgentParams = {
   currentInboundContext?: CurrentInboundPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in the current prompt. */
+  media?: MediaFact[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
@@ -336,6 +339,11 @@ export type RunEmbeddedAgentParams = {
    * final answer for silence.
    */
   allowEmptyAssistantReplyAsSilent?: boolean;
+  /**
+   * Whether this run still owes a visible reply after settled non-reporting tools.
+   * Exact configured silence and committed delivery remain terminal outcomes.
+   */
+  terminalReplyExpectation?: "required" | "optional";
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
    * One-shot helper runs may opt in to executing through the provider's CLI

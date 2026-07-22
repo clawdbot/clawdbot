@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import {
@@ -184,7 +185,7 @@ describe("config schema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts queued status reaction emoji overrides", () => {
+  it("rejects retired status reaction emoji overrides", () => {
     const result = OpenClawSchema.safeParse({
       messages: {
         statusReactions: {
@@ -194,7 +195,7 @@ describe("config schema", () => {
         },
       },
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it("includes MCP SSE header schema under mcp.servers entries", () => {
@@ -691,8 +692,8 @@ describe("config schema", () => {
     ).toBe(true);
   });
 
-  it("accepts only the Discord subagent progress enable toggle", () => {
-    expect(DiscordConfigSchema.safeParse({ subagentProgress: true }).success).toBe(true);
+  it("rejects retired Discord subagent progress config", () => {
+    expect(DiscordConfigSchema.safeParse({ subagentProgress: true }).success).toBe(false);
     expect(DiscordConfigSchema.safeParse({ subagentProgress: { enabled: true } }).success).toBe(
       false,
     );
@@ -701,15 +702,14 @@ describe("config schema", () => {
   it("keeps per-agent model overrides limited to model selection", () => {
     const result = OpenClawSchema.safeParse({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             model: {
               primary: "openai/gpt-5.5",
               timeoutMs: 30_000,
             },
           },
-        ],
+        },
       },
     });
 
@@ -719,9 +719,8 @@ describe("config schema", () => {
   it("rejects per-agent subagent model timeout config", () => {
     const result = OpenClawSchema.safeParse({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             subagents: {
               model: {
                 primary: "openai/gpt-5.5",
@@ -729,7 +728,7 @@ describe("config schema", () => {
               },
             },
           },
-        ],
+        },
       },
     });
 
@@ -746,19 +745,18 @@ describe("config schema", () => {
 
     const config = OpenClawSchema.parse({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             tools: {
               exec: {
                 commandHighlighting: false,
               },
             },
           },
-        ],
+        },
       },
     });
-    expect(config.agents?.list?.[0]?.tools?.exec?.commandHighlighting).toBe(false);
+    expect(config.agents?.entries?.main?.tools?.exec?.commandHighlighting).toBe(false);
   });
 
   it("accepts exec reviewer model config in global and agent scopes", () => {
@@ -778,9 +776,8 @@ describe("config schema", () => {
 
     const config = OpenClawSchema.parse({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             tools: {
               exec: {
                 reviewer: {
@@ -789,10 +786,10 @@ describe("config schema", () => {
               },
             },
           },
-        ],
+        },
       },
     });
-    expect(config.agents?.list?.[0]?.tools?.exec?.reviewer?.model).toBe("openai/gpt-5.5");
+    expect(config.agents?.entries?.main?.tools?.exec?.reviewer?.model).toBe("openai/gpt-5.5");
   });
 
   it("rejects mixed normalized and legacy exec policy config", () => {
@@ -884,8 +881,6 @@ describe("config schema", () => {
             },
             passEnv: ["OPENCLAW_STATE_DIR"],
             trustedDirs: ["/usr/local/bin"],
-            allowInsecurePath: false,
-            allowSymlinkCommand: false,
           },
         },
       },
@@ -1010,27 +1005,25 @@ describe("config schema", () => {
   it("rejects allowPrivateNetwork on media-understanding request config", () => {
     const result = ToolsSchema.safeParse({
       media: {
-        image: {
-          models: [
-            {
-              provider: "openai",
-              model: "gpt-4.1-mini",
-              request: {
-                allowPrivateNetwork: true,
-              },
+        models: [
+          {
+            provider: "openai",
+            model: "gpt-4.1-mini",
+            capabilities: ["image"],
+            request: {
+              allowPrivateNetwork: true,
             },
-          ],
-        },
+          },
+        ],
       },
     });
 
     expect(result.success).toBe(false);
     if (!result.success) {
       const requestIssue = result.error.issues.find(
-        (issue) =>
-          JSON.stringify(issue.path) === JSON.stringify(["media", "image", "models", 0, "request"]),
+        (issue) => JSON.stringify(issue.path) === JSON.stringify(["media", "models", 0, "request"]),
       );
-      expect(requestIssue?.path).toEqual(["media", "image", "models", 0, "request"]);
+      expect(requestIssue?.path).toEqual(["media", "models", 0, "request"]);
       const requestKeys = (requestIssue as { keys?: unknown } | undefined)?.keys;
       expect(requestKeys).toEqual(["allowPrivateNetwork"]);
     }
@@ -1044,9 +1037,40 @@ describe("config schema", () => {
     const tokenChild = lookup?.children.find((child) => child.key === "token");
     expect(tokenChild?.path).toBe("gateway.auth.token");
     expect(tokenChild?.hint?.sensitive).toBe(true);
+    expect(tokenChild?.hint?.advanced).toBe(false);
     expect(tokenChild?.hintPath).toBe("gateway.auth.token");
     const schema = lookup?.schema as { properties?: unknown } | undefined;
     expect(schema?.properties).toBeUndefined();
+  });
+
+  it("materializes resolved common and advanced tiers in schema hints", () => {
+    expect(baseSchema.uiHints["gateway.port"]?.advanced).toBe(false);
+    expect(baseSchema.uiHints["gateway.reload.mode"]?.advanced).toBe(true);
+    expect(baseSchema.uiHints["agents.defaults.workspace"]?.advanced).toBe(false);
+    expect(baseSchema.uiHints["agents.defaults.compaction.timeoutSeconds"]?.advanced).toBe(true);
+  });
+
+  it("preserves explicit common hints on numeric leaves while defaulting tuning advanced", () => {
+    const hints = applyResolvedConfigTierHints(
+      {
+        type: "object",
+        properties: {
+          custom: {
+            type: "object",
+            properties: {
+              visibleCount: { type: "integer" },
+              tuningMs: { type: "integer" },
+            },
+          },
+        },
+      },
+      {
+        custom: { advanced: false },
+        "custom.visibleCount": { advanced: false },
+      },
+    );
+    expect(hints["custom.visibleCount"]?.advanced).toBe(false);
+    expect(hints["custom.tuningMs"]?.advanced).toBe(true);
   });
 
   it("looks up root config schema children without returning the full schema tree", () => {
@@ -1086,9 +1110,9 @@ describe("config schema", () => {
   });
 
   it("returns a shallow lookup schema without nested composition keywords", () => {
-    const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
-    expect(lookup?.path).toBe("agents.list.0.runtime");
-    expect(lookup?.hintPath).toBe("agents.list[].runtime");
+    const lookup = lookupConfigSchema(baseSchema, "agents.entries.main.runtime");
+    expect(lookup?.path).toBe("agents.entries.main.runtime");
+    expect(lookup?.hintPath).toBe("agents.entries.*.runtime");
     expect(lookup?.schema).not.toHaveProperty("allOf");
     expect(lookup?.schema).not.toHaveProperty("oneOf");
     const schema = lookup?.schema as { anyOf?: Array<{ properties?: Record<string, unknown> }> };
@@ -1097,12 +1121,12 @@ describe("config schema", () => {
     expect(lookup?.schema).toHaveProperty("description");
   });
 
-  it("keeps scoped collection item schemas for form editing", () => {
-    const lookup = lookupConfigSchema(baseSchema, "agents.list");
-    expect(lookup?.schema).toHaveProperty("items");
+  it("keeps scoped record entry schemas for form editing", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.entries");
+    expect(lookup?.schema).toHaveProperty("additionalProperties");
     const schema = lookup?.schema as
       | {
-          items?: {
+          additionalProperties?: {
             properties?: Record<
               string,
               { anyOf?: Array<{ properties?: Record<string, unknown> }> }
@@ -1110,39 +1134,35 @@ describe("config schema", () => {
           };
         }
       | undefined;
-    expect(schema?.items?.properties).toHaveProperty("runtime");
-    const runtimeVariants = schema?.items?.properties?.runtime?.anyOf ?? [];
+    expect(schema?.additionalProperties?.properties).toHaveProperty("runtime");
+    const runtimeVariants = schema?.additionalProperties?.properties?.runtime?.anyOf ?? [];
     expect(runtimeVariants.length).toBeGreaterThan(0);
     expect(runtimeVariants.some((variant) => variant.properties?.type)).toBe(true);
   });
 
   it("keeps scoped map properties for form editing", () => {
     const lookup = lookupConfigSchema(baseSchema, "env");
-    expect(lookup?.children.map((child) => child.key)).toEqual(["shellEnv", "vars", "*"]);
-    const schema = lookup?.schema as { properties?: Record<string, unknown> } | undefined;
-    expect(schema?.properties).toHaveProperty("shellEnv");
-    expect(schema?.properties).toHaveProperty("vars");
+    expect(lookup?.children.map((child) => child.key)).toEqual(["shellEnv", "vars"]);
   });
 
   it("matches wildcard ui hints for concrete lookup paths", () => {
-    const lookup = lookupConfigSchema(baseSchema, "agents.list.0.identity.avatar");
-    expect(lookup?.path).toBe("agents.list.0.identity.avatar");
-    expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
+    const lookup = lookupConfigSchema(baseSchema, "agents.entries.main.identity.avatar");
+    expect(lookup?.path).toBe("agents.entries.main.identity.avatar");
+    expect(lookup?.hintPath).toBe("agents.entries.*.identity.avatar");
     expect(lookup?.hint?.help).toContain("workspace-relative path");
     expect(lookup?.schema?.title).toBe("Identity Avatar");
     expect(lookup?.schema?.description).toContain("Agent avatar");
   });
 
-  it("normalizes bracketed lookup paths", () => {
-    const lookup = lookupConfigSchema(baseSchema, "agents.list[0].identity.avatar");
-    expect(lookup?.path).toBe("agents.list.0.identity.avatar");
-    expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
+  it("rejects quoted bracket map paths", () => {
+    const lookup = lookupConfigSchema(baseSchema, 'agents.entries["main"].identity.avatar');
+    expect(lookup).toBeNull();
   });
 
-  it("matches ui hints that use empty array brackets", () => {
-    const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
-    expect(lookup?.path).toBe("agents.list.0.runtime");
-    expect(lookup?.hintPath).toBe("agents.list[].runtime");
+  it("matches ui hints for keyed record entries", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.entries.main.runtime");
+    expect(lookup?.path).toBe("agents.entries.main.runtime");
+    expect(lookup?.hintPath).toBe("agents.entries.*.runtime");
     expect(lookup?.hint?.label).toBe("Agent Runtime");
   });
 

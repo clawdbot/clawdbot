@@ -77,8 +77,12 @@ not overwrite the existing skill.
 
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
-- `--flow quickstart`: opens the classic wizard with minimal prompts and
-  auto-generates a gateway token.
+- `--flow quickstart`: opens the classic wizard with minimal prompts, uses
+  token auth by default, and generates a token when no stored or explicit
+  credential applies. Explicit local Gateway flags such as
+  `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
+  override the corresponding stored or default quickstart values; omitted
+  options keep their current values.
 - `--flow manual` (alias `advanced`): opens the classic wizard with full prompts
   for port, bind, and auth.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`), previews the plan, then applies after confirmation. When an interactive import supplies a default model, onboarding requires that route to pass a live completion before it skips provider setup; a failed imported route returns to provider configuration. Import only runs against a fresh OpenClaw setup - reset config, credentials, sessions, and workspace state first if any exist. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.

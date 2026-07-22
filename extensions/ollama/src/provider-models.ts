@@ -256,6 +256,37 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
+type OllamaModelSource = "cloud" | "local";
+
+function parseOllamaModelSourceSuffix(
+  modelName: string,
+): { base: string; source: OllamaModelSource } | undefined {
+  const sourceSeparator = modelName.lastIndexOf(":");
+  if (sourceSeparator < 0) {
+    return undefined;
+  }
+  const source = modelName.slice(sourceSeparator + 1);
+  if (source === "cloud" || source === "local") {
+    return { base: modelName.slice(0, sourceSeparator), source };
+  }
+  if (!source.includes("/") && source.endsWith("-cloud")) {
+    return {
+      base: modelName.slice(0, sourceSeparator + 1) + source.slice(0, -"-cloud".length),
+      source: "cloud",
+    };
+  }
+  return undefined;
+}
+
+export function isOllamaCloudModel(modelName: string | undefined): boolean {
+  const normalized = modelName?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const parsed = parseOllamaModelSourceSuffix(normalized);
+  return parsed?.source === "cloud" && parseOllamaModelSourceSuffix(parsed.base) === undefined;
+}
+
 export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
@@ -304,7 +335,7 @@ export function buildOllamaModelDefinition(
 }
 
 export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelDefinitionConfig {
-  if (typeof model.contextWindow !== "number") {
+  if (isOllamaCloudModel(model.id) || typeof model.contextWindow !== "number") {
     return model;
   }
   return {

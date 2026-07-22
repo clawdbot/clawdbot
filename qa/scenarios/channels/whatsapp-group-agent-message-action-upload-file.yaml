@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-group-agent-message-action-upload-file
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-image
   execution:
     profiles: { "whatsapp:mock-default": 13 }
     kind: flow

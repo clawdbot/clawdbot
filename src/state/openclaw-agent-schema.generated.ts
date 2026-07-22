@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS session_entries (
   entry_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
+  created_by_json TEXT,
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 ) STRICT;
 

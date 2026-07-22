@@ -12,6 +12,13 @@ export const SessionsCreateParamsSchema = closedObject({
   thinkingLevel: Type.Optional(NonEmptyString),
   catalogId: Type.Optional(NonEmptyString),
   parentSessionKey: Type.Optional(NonEmptyString),
+  spawnDepth: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      description:
+        "Spawn-lineage depth for spawn-owned creations (visible subagent sessions); requires parentSessionKey. Omitted creations persist as root sessions (depth 0).",
+    }),
+  ),
   fork: Type.Optional(
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
@@ -49,7 +56,7 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.String({
       minLength: 1,
       description:
-        "Absolute source directory for a managed worktree, or the working directory on execNode. Requires operator.admin.",
+        "Absolute Gateway working directory, managed-worktree source directory, or working directory on execNode. Requires operator.admin.",
     }),
   ),
 });

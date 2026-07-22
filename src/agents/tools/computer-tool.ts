@@ -36,7 +36,12 @@ import {
 } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
-import { listNodes, type NodeListNode, resolveNodeIdFromList } from "./nodes-utils.js";
+import {
+  type EligibleNodeMessages,
+  listNodes,
+  type NodeListNode,
+  resolveEligibleNodeFromList,
+} from "./nodes-utils.js";
 
 const COMPUTER_ACT_COMMAND = "computer.act";
 const SCREEN_SNAPSHOT_COMMAND = "screen.snapshot";
@@ -325,14 +330,19 @@ function isEligibleComputerNode(node: NodeListNode): boolean {
 const NOT_COMPUTER_CAPABLE_HINT =
   "enable Computer Control in the OpenClaw app and approve the pairing update";
 
-function nodeMatchesQuery(node: NodeListNode, query: string): boolean {
-  const lowered = query.toLowerCase();
-  return (
-    node.nodeId === query ||
-    node.nodeId.toLowerCase() === lowered ||
-    node.displayName?.toLowerCase() === lowered
-  );
-}
+const COMPUTER_NODE_MESSAGES: EligibleNodeMessages = {
+  ineligibleExact: (query, eligibleIds) =>
+    `node "${query}" is not computer-capable (needs a connected node advertising ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT}; ` +
+    `eligible node ids: ${eligibleIds})`,
+  nameResolveFailed: (reason, eligibleIds) =>
+    `${reason} (eligible computer-capable node ids: ${eligibleIds})`,
+  noneEligible: () =>
+    `no connected computer-capable node (a node must advertise ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
+  multipleEligible: (eligible) =>
+    `multiple computer-capable nodes connected; pass node explicitly: ${eligible
+      .map((node) => node.nodeId)
+      .join(", ")}`,
+};
 
 async function resolveComputerNode(
   gatewayOpts: GatewayCallOptions,
@@ -340,46 +350,7 @@ async function resolveComputerNode(
   signal?: AbortSignal,
 ): Promise<NodeListNode> {
   const nodes = await listNodes(gatewayOpts, signal);
-  const eligible = nodes.filter(isEligibleComputerNode);
-  const trimmed = query?.trim();
-  if (trimmed) {
-    // Shared resolver: prefers exact node ids and rejects ambiguous
-    // display-name collisions, so control never lands on the wrong machine.
-    let nodeId: string;
-    try {
-      nodeId = resolveNodeIdFromList(eligible, trimmed, false);
-    } catch (err) {
-      const ineligible = nodes.find((node) => nodeMatchesQuery(node, trimmed));
-      if (ineligible && !isEligibleComputerNode(ineligible)) {
-        throw new Error(
-          `node "${trimmed}" is not computer-capable (needs a connected node advertising ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
-          { cause: err },
-        );
-      }
-      throw err instanceof Error ? err : new Error(String(err));
-    }
-    const match = eligible.find((node) => node.nodeId === nodeId);
-    if (!match) {
-      throw new Error(`node not found: ${trimmed}`);
-    }
-    return match;
-  }
-  if (eligible.length === 1) {
-    const node = eligible.at(0);
-    if (node) {
-      return node;
-    }
-  }
-  if (eligible.length === 0) {
-    throw new Error(
-      `no connected computer-capable node (a node must advertise ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT})`,
-    );
-  }
-  throw new Error(
-    `multiple computer-capable nodes connected; pass node explicitly: ${eligible
-      .map((node) => node.nodeId)
-      .join(", ")}`,
-  );
+  return resolveEligibleNodeFromList(nodes, query, isEligibleComputerNode, COMPUTER_NODE_MESSAGES);
 }
 
 type ScreenshotCapture = {
@@ -478,8 +449,8 @@ function resolveReferenceWidth(limits: { maxDimensionPx?: number }): number {
 
 // The gateway hint for dangerous commands (see buildNodeCommandRejectionHint
 // in src/gateway/server-methods/nodes.ts); mapped to the arming workflow.
-const DANGEROUS_OPT_IN_HINT = "requires explicit gateway.nodes.allowCommands opt-in";
-const DANGEROUS_DENY_HINT = "blocked by gateway.nodes.denyCommands";
+const DANGEROUS_OPT_IN_HINT = "requires explicit gateway.nodes.commands.allow opt-in";
+const DANGEROUS_DENY_HINT = "blocked by gateway.nodes.commands.deny";
 const BUTTON_NOT_HELD_HINT = "left button is not held by computer control";
 
 export type ComputerContextEpoch = {
@@ -564,7 +535,7 @@ function withArmHint(err: unknown): Error {
     return new Error(
       `${message} — computer control is disarmed; an operator can arm it with ` +
         `"/phone arm computer <duration>". Persistent configuration must both allow ${COMPUTER_ACT_COMMAND} ` +
-        `and remove it from gateway.nodes.denyCommands.`,
+        `and remove it from gateway.nodes.commands.deny.`,
       { cause: err },
     );
   }

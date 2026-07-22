@@ -32,21 +32,21 @@ authorization on the Gateway.
 
 ### 1. Authorize the Gateway command
 
-Add `health.summary` to the existing `gateway.nodes.allowCommands` array in
+Add `health.summary` to the existing `gateway.nodes.commands.allow` array in
 `openclaw.json`. Preserve any commands already present:
 
 ```json5
 {
   gateway: {
     nodes: {
-      allowCommands: ["health.summary"],
+      commands: { allow: ["health.summary"] },
     },
   },
 }
 ```
 
 `health.summary` is classified as privacy-heavy and is never allowed by the
-iOS platform default. An entry in `gateway.nodes.denyCommands` overrides the
+iOS platform default. An entry in `gateway.nodes.commands.deny` overrides the
 allow entry. See [Node command policy](/nodes#command-policy).
 
 ### 2. Enable sharing on the iOS device
@@ -137,7 +137,7 @@ calculated, so the same minute is not counted twice.
 To stop sharing, return to **Apple Health Summaries** and tap **Turn Off Summaries**.
 The iOS device then removes the Health capability and `health.summary` command from its node
 surface. You can also remove `health.summary` from
-`gateway.nodes.allowCommands` to close the Gateway side of the gate.
+`gateway.nodes.commands.allow` to close the Gateway side of the gate.
 
 ## Troubleshooting
 
@@ -149,8 +149,8 @@ Run `openclaw nodes pending` and approve any capability update, then inspect
 
 ### Command requires explicit opt-in
 
-Add `health.summary` to `gateway.nodes.allowCommands`. Also check that
-`gateway.nodes.denyCommands` does not contain it; the deny list wins.
+Add `health.summary` to `gateway.nodes.commands.allow`. Also check that
+`gateway.nodes.commands.deny` does not contain it; the deny list wins.
 
 ### `HEALTH_ACCESS_DISABLED`
 

@@ -1,4 +1,42 @@
 import Foundation
+import OpenClawProtocol
+
+public struct OpenClawChatSessionAgentStatus: Codable, Sendable, Hashable {
+    public let note: String
+    public let expiresAt: Double
+    public let attention: String?
+}
+
+public struct OpenClawChatSessionObserverDigest: Codable, Sendable, Hashable {
+    public let runId: String?
+    public let revision: Int
+    public let updatedAt: Double
+    public let headline: String
+    public let health: String
+
+    public init(
+        runId: String? = nil,
+        revision: Int,
+        updatedAt: Double,
+        headline: String,
+        health: String)
+    {
+        self.runId = runId
+        self.revision = revision
+        self.updatedAt = updatedAt
+        self.headline = headline
+        self.health = health
+    }
+
+    public init(_ digest: SessionObserverDigest) {
+        self.init(
+            runId: digest.runid,
+            revision: digest.revision,
+            updatedAt: Double(digest.updatedat),
+            headline: digest.headline,
+            health: digest.health.rawValue)
+    }
+}
 
 public struct OpenClawChatThinkingLevelOption: Codable, Identifiable, Sendable, Hashable {
     public let id: String
@@ -321,6 +359,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var archived: Bool?
     public var archivedAt: Double?
     public var unread: Bool?
+    public var agentStatus: OpenClawChatSessionAgentStatus?
+    public var observerDigest: OpenClawChatSessionObserverDigest?
     public var surface: String?
     public var subject: String?
     public var room: String?
@@ -335,7 +375,9 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var spawnedBy: String?
     public var childSessions: [String]?
     public var status: String?
+    public var lastRunError: String?
     public var hasActiveRun: Bool?
+    public var activeRunIds: [String]?
     public var hasActiveSubagentRun: Bool?
     public var worktree: OpenClawChatSessionWorktree?
     public var startedAt: Double?
@@ -393,6 +435,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         archived: Bool? = nil,
         archivedAt: Double? = nil,
         unread: Bool? = nil,
+        agentStatus: OpenClawChatSessionAgentStatus? = nil,
+        observerDigest: OpenClawChatSessionObserverDigest? = nil,
         lastReadAt: Double? = nil,
         lastInteractionAt: Double? = nil,
         lastActivityAt: Double? = nil,
@@ -400,7 +444,9 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         spawnedBy: String? = nil,
         childSessions: [String]? = nil,
         status: String? = nil,
+        lastRunError: String? = nil,
         hasActiveRun: Bool? = nil,
+        activeRunIds: [String]? = nil,
         hasActiveSubagentRun: Bool? = nil,
         worktree: OpenClawChatSessionWorktree? = nil,
         fastMode: OpenClawChatFastMode? = nil,
@@ -420,6 +466,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.archived = archived
         self.archivedAt = archivedAt
         self.unread = unread
+        self.agentStatus = agentStatus
+        self.observerDigest = observerDigest
         self.surface = surface
         self.subject = subject
         self.room = room
@@ -433,7 +481,9 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.spawnedBy = spawnedBy
         self.childSessions = childSessions
         self.status = status
+        self.lastRunError = lastRunError
         self.hasActiveRun = hasActiveRun
+        self.activeRunIds = activeRunIds
         self.hasActiveSubagentRun = hasActiveSubagentRun
         self.worktree = worktree
         self.startedAt = startedAt

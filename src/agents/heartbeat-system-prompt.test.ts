@@ -3,22 +3,18 @@ import { describe, expect, it } from "vitest";
 import { resolveHeartbeatPromptForSystemPrompt } from "./heartbeat-system-prompt.js";
 
 describe("resolveHeartbeatPromptForSystemPrompt", () => {
-  it("omits the heartbeat section when disabled in defaults", () => {
+  it("includes the heartbeat section for the default enabled cadence", () => {
     expect(
       resolveHeartbeatPromptForSystemPrompt({
         config: {
           agents: {
-            defaults: {
-              heartbeat: {
-                includeSystemPromptSection: false,
-              },
-            },
+            defaults: { heartbeat: {} },
           },
         },
         agentId: "main",
         defaultAgentId: "main",
       }),
-    ).toBeUndefined();
+    ).toBeDefined();
   });
 
   it("omits the heartbeat section when the default cadence is disabled", () => {

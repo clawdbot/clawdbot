@@ -1459,7 +1459,7 @@ internal fun overviewRecentSessionRows(
         key = session.key,
         ownerAgentId = session.ownerAgentId,
         title = title,
-        source = sessionSourceLabel(session.key, channelsSummary),
+        source = sessionListSubtitle(session, sessionSourceLabel(session.key, channelsSummary)),
         metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::overviewRelativeSessionTime) ?: "",
       )
     }

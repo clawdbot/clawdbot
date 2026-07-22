@@ -468,7 +468,10 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
           .evaluateAll(
             (inputs) => inputs.filter((input) => (input as HTMLInputElement).disabled).length,
           ),
-      ).toBe(4);
+      ).toBe(3);
+      expect(
+        await createForm.locator(".workboard-agent-select .agent-select__trigger").isDisabled(),
+      ).toBe(true);
       const pendingCancelButtons = createForm.getByRole("button", {
         name: "Cancel",
         exact: true,

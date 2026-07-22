@@ -398,6 +398,17 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
         ? { supported: true, priority: 100 }
         : { supported: false },
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
+    finalizeSettledTurn: async ({ attempt }) => {
+      const result = await mockedRunEmbeddedAttempt({ ...attempt, disableTools: true });
+      const assistant =
+        result.currentAttemptCompletedAssistant ??
+        result.currentAttemptAssistant ??
+        result.lastAssistant;
+      if (!assistant) {
+        throw new Error("mocked settled-turn finalization returned no assistant message");
+      }
+      return { assistant, ...(result.attemptUsage ? { usage: result.attemptUsage } : {}) };
+    },
   });
 
   mockedGlobalHookRunner.hasHooks.mockReset();

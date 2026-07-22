@@ -17,6 +17,7 @@ import { applyMergePatch } from "../config/merge-patch.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { readHookInstalls } from "../hooks/installs.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import { normalizeUpdateChannel } from "../infra/update-channels.js";
 import {
@@ -219,8 +220,9 @@ export async function runPluginUpdateCommand(params: {
     rawId: params.id,
     all: params.opts.all,
   });
+  const selectedHooks = readHookInstalls();
   const hookSelection = resolveHookPackUpdateSelection({
-    installs: cfg.hooks?.internal?.installs ?? {},
+    installs: selectedHooks,
     rawId: params.id,
     all: params.opts.all,
   });
@@ -234,7 +236,6 @@ export async function runPluginUpdateCommand(params: {
     return defaultRuntime.exit(1);
   }
 
-  const selectedHooks = cfg.hooks?.internal?.installs ?? {};
   const pluginUpdateMayMutate =
     !params.opts.dryRun &&
     pluginSelection.pluginIds.some((pluginId) => {

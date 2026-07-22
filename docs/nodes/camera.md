@@ -154,7 +154,7 @@ Linux returns capture-capable, readable V4L2 device paths from `camera.list`; FF
 
 The plugin uses `libx264` for MP4 video and does not silently change codecs. An FFmpeg build without the required input or encoders returns `CAMERA_UNAVAILABLE`. Photos and clips that would exceed the 25MB base64 payload budget fail with `PAYLOAD_TOO_LARGE`.
 
-`camera.snap` and `camera.clip` remain dangerous commands. Add them to `gateway.nodes.allowCommands` only when you intend to arm capture; enabling the plugin alone does not bypass Gateway policy.
+`camera.snap` and `camera.clip` remain dangerous commands. Add them to `gateway.nodes.commands.allow` only when you intend to arm capture; enabling the plugin alone does not bypass Gateway policy.
 
 ## Safety + practical limits
 

@@ -32,9 +32,13 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: vi.fn(),
-}));
+vi.mock("../../config/sessions/session-accessor.js", () => {
+  const loadSessionEntry = vi.fn();
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+  };
+});
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
   resolveMessageChannelSelection: vi

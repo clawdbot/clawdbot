@@ -19,12 +19,42 @@ export function normalizeSqliteStatus(value: unknown): SessionEntryStatus | null
     : null;
 }
 
+function normalizeSessionCreatorIdentity(value: unknown): SessionEntry["createdBy"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value as { id?: unknown; label?: unknown };
+  const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+  if (!id) {
+    return undefined;
+  }
+  const label = typeof candidate.label === "string" ? candidate.label.trim() : "";
+  return { id, ...(label ? { label } : {}) };
+}
+
+export function serializeSqliteSessionCreatorIdentity(
+  createdBy: SessionEntry["createdBy"],
+): string | null {
+  const normalized = normalizeSessionCreatorIdentity(createdBy);
+  return normalized ? JSON.stringify(normalized) : null;
+}
+
 export function parseSqliteSessionEntryJson(row: { entry_json: string }): SessionEntry | null {
   try {
     const parsed = JSON.parse(row.entry_json) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as SessionEntry)
-      : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const entry = parsed as SessionEntry;
+    // entry_json stays authoritative across downgrade/upgrade cycles: an older
+    // binary can rewrite it without knowing about the additive projection column.
+    const createdBy = normalizeSessionCreatorIdentity(entry.createdBy);
+    if (createdBy) {
+      entry.createdBy = createdBy;
+    } else {
+      delete entry.createdBy;
+    }
+    return entry;
   } catch {
     return null;
   }

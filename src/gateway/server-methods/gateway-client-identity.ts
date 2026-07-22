@@ -17,3 +17,8 @@ export function gatewayClientSenderFields(client: GatewayClient | null): {
   }
   return client?.authenticatedUserId ? { sender: { id: client.authenticatedUserId } } : {};
 }
+
+/** Returns the trusted creator identity captured during connection admission. */
+export function gatewayClientSessionCreator(client: GatewayClient | null) {
+  return client?.operatorIdentity ? { ...client.operatorIdentity } : undefined;
+}

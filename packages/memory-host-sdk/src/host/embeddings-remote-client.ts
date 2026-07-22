@@ -42,7 +42,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({
     value: remote?.apiKey,
-    path: "agents.*.memorySearch.remote.apiKey",
+    path: "memory.search.remote.apiKey",
   });
   const remoteBaseUrl = normalizeOptionalString(remote?.baseUrl);
   const providerConfig = params.options.config.models?.providers?.[params.provider];

@@ -950,7 +950,8 @@ describe("resolvePluginCapabilityProviders", () => {
         plugins: { allow: ["openai", "deepgram", "google"] },
         tools: {
           media: {
-            audio: { enabled: true, models: [{ provider: "deepgram", model: "nova-3" }] },
+            models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
+            audio: { enabled: true },
           },
         },
       } as OpenClawConfig,
@@ -986,7 +987,7 @@ describe("resolvePluginCapabilityProviders", () => {
       key: "speechProviders",
       cfg: {
         plugins: { entries: { microsoft: { enabled: true } } },
-        messages: { tts: { provider: "edge" } },
+        tts: { provider: "edge" },
       } as OpenClawConfig,
     });
 
@@ -1027,7 +1028,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     const providers = resolvePluginCapabilityProviders({
       key: "speechProviders",
-      cfg: { messages: { tts: { provider: "acme" } } } as OpenClawConfig,
+      cfg: { tts: { provider: "acme" } } as OpenClawConfig,
     });
 
     expectResolvedCapabilityProviderIds(providers, ["acme"]);
@@ -1096,7 +1097,7 @@ describe("resolvePluginCapabilityProviders", () => {
       key: "speechProviders",
       cfg: {
         plugins: { allow: ["openai", "microsoft"] },
-        messages: { tts: { provider: "edge" } },
+        tts: { provider: "edge" },
       } as OpenClawConfig,
     });
 
@@ -1163,7 +1164,7 @@ describe("resolvePluginCapabilityProviders", () => {
     const providers = resolvePluginCapabilityProviders({
       key: "speechProviders",
       cfg: {
-        messages: { tts: { provider: "google" } },
+        tts: { provider: "google" },
       } as OpenClawConfig,
     });
 
@@ -1251,7 +1252,7 @@ describe("resolvePluginCapabilityProviders", () => {
     const providers = resolvePluginCapabilityProviders({
       key: "speechProviders",
       cfg: {
-        messages: { tts: { provider: "google" } },
+        tts: { provider: "google" },
       } as OpenClawConfig,
     });
 
@@ -1452,7 +1453,7 @@ describe("resolvePluginCapabilityProviders", () => {
       key: "speechProviders",
       cfg: {
         plugins: { allow: ["openai", "microsoft", "elevenlabs"] },
-        messages: { tts: { provider: "edge" } },
+        tts: { provider: "edge" },
       } as OpenClawConfig,
     });
 
@@ -1652,7 +1653,7 @@ describe("resolvePluginCapabilityProviders", () => {
   it("loads bundled speech providers through compat when plugins are globally disabled", () => {
     const cfg = {
       plugins: { enabled: false },
-      messages: { tts: { provider: "mistral" } },
+      tts: { provider: "mistral" },
     } as OpenClawConfig;
     const compatConfig = {
       ...cfg,

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
@@ -130,8 +130,8 @@ const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 const IMESSAGE_SPLIT_SEND_COMPAT_DEBOUNCE_MS = 7_000;
 type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
 
-function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig) {
-  return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
+function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig, agentId: string) {
+  return resolveAgentConfig(cfg, agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
 }
 
 function resolveIMessageSplitSendCompatDebounceMs(
@@ -551,7 +551,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : recoveryCursorRowid
       : recoveryBoundaryRowid;
 
-  const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
+  const coalesceSameSenderDms = false;
   const debounceMsOverride = resolveIMessageSplitSendCompatDebounceMs(cfg, coalesceSameSenderDms);
   // Session capability latch: flips true once any inbound row from this imsg
   // build carries balloon metadata. The coalesce flush gate needs a build-level
@@ -1073,7 +1073,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
       }
     }
-    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg, decision.route.agentId);
     const sendPolicy = resolveSendPolicy({
       cfg,
       entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),

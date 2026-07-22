@@ -8,6 +8,7 @@ import {
 import {
   loadSessionEntry,
   listSessionEntries,
+  listSessionEntriesReadOnly,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
 import type {
@@ -195,7 +196,7 @@ export function resolveSessionTranscriptReadTarget(
       : storePath
         ? resolveSessionEntryFromStore({
             store: Object.fromEntries(
-              listSessionEntries({ agentId, storePath }).map(({ sessionKey, entry }) => [
+              listSessionEntriesReadOnly({ agentId, storePath }).map(({ sessionKey, entry }) => [
                 sessionKey,
                 entry,
               ]),

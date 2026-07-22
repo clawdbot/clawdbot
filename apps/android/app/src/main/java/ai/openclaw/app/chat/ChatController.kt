@@ -10,6 +10,7 @@ import ai.openclaw.app.gateway.QuestionAnswers
 import ai.openclaw.app.gateway.QuestionGetResult
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
+import ai.openclaw.app.gateway.SessionObserverDigest
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
@@ -2842,6 +2843,10 @@ class ChatController internal constructor(
           handleSessionsChangedEvent(payloadJson)
         }
       }
+      "session.observer" -> {
+        if (payloadJson.isNullOrBlank()) return
+        handleSessionObserverEvent(payloadJson)
+      }
       "session.message" -> {
         if (payloadJson.isNullOrBlank()) return
         handleSessionMessageEvent(payloadJson)
@@ -5027,6 +5032,11 @@ class ChatController internal constructor(
     applySessionEvent(payload, refreshWhenMissing = true)
   }
 
+  private fun handleSessionObserverEvent(payloadJson: String) {
+    val digest = runCatching { json.decodeFromString<SessionObserverDigest>(payloadJson) }.getOrNull() ?: return
+    _sessions.value = applySessionObserverDigest(_sessions.value, digest)
+  }
+
   private fun scheduleSessionsChangedBranchReconciliation(
     eventGatewayScope: ChatCacheScope?,
     sessionKey: String,
@@ -5673,6 +5683,13 @@ class ChatController internal constructor(
       archived = obj["archived"].asBooleanOrNull(),
       unread = obj["unread"].asBooleanOrNull(),
       lastReadAt = obj["lastReadAt"].asLongOrNull(),
+      agentStatus = parseSessionAgentStatus(obj["agentStatus"]),
+      hasAgentStatusMetadata = "agentStatus" in obj,
+      observerDigest =
+        obj["observerDigest"]
+          ?.takeUnless { it is JsonNull }
+          ?.let { runCatching { json.decodeFromJsonElement<SessionObserverDigest>(it) }.getOrNull() },
+      hasObserverDigestMetadata = "observerDigest" in obj,
       lastActivityAt = obj["lastActivityAt"].asLongOrNull(),
       totalTokens = obj["totalTokens"].asLongOrNull(),
       totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
@@ -5691,17 +5708,31 @@ class ChatController internal constructor(
         obj["activeRunIds"]
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) },
+      hasActiveRunMetadata = "hasActiveRun" in obj || "activeRunIds" in obj,
       status = obj["status"].asStringOrNull()?.trim(),
+      lastRunError = obj["lastRunError"].asStringOrNull()?.trim(),
       startedAt = obj["startedAt"].asLongOrNull(),
       endedAt = obj["endedAt"].asLongOrNull(),
       runtimeMs = obj["runtimeMs"].asLongOrNull(),
       outputTokens = obj["outputTokens"].asLongOrNull(),
       hasRunMetadata =
         "status" in obj ||
+          "lastRunError" in obj ||
           "startedAt" in obj ||
           "endedAt" in obj ||
           "runtimeMs" in obj ||
           "outputTokens" in obj,
+    )
+  }
+
+  private fun parseSessionAgentStatus(element: JsonElement?): ChatSessionAgentStatus? {
+    val obj = element.asObjectOrNull() ?: return null
+    val note = obj["note"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val expiresAt = obj["expiresAt"].asLongOrNull() ?: return null
+    return ChatSessionAgentStatus(
+      note = note,
+      expiresAt = expiresAt,
+      attention = obj["attention"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
     )
   }
 
@@ -6430,6 +6461,17 @@ internal fun mergeChatSessionEntry(
   preserveExistingContextUsageWithoutTotal: Boolean = false,
 ): ChatSessionEntry {
   val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
+  val hasActiveRun = if (next.hasActiveRunMetadata) next.hasActiveRun else existing.hasActiveRun
+  val activeRunIds = if (next.hasActiveRunMetadata) next.activeRunIds else existing.activeRunIds
+  val observerDigest =
+    reconcileSessionObserverDigest(
+      existing = existing.observerDigest,
+      next = next.observerDigest,
+      hasNextProjection = next.hasObserverDigestMetadata,
+      hasActiveRun = hasActiveRun,
+      activeRunIds = activeRunIds,
+      status = if (next.hasRunMetadata) next.status else existing.status,
+    )
   return existing.copy(
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     ownerAgentId = next.ownerAgentId ?: existing.ownerAgentId,
@@ -6440,6 +6482,10 @@ internal fun mergeChatSessionEntry(
     archived = next.archived ?: existing.archived,
     unread = next.unread ?: existing.unread,
     lastReadAt = next.lastReadAt ?: existing.lastReadAt,
+    agentStatus = if (next.hasAgentStatusMetadata) next.agentStatus else existing.agentStatus,
+    hasAgentStatusMetadata = existing.hasAgentStatusMetadata || next.hasAgentStatusMetadata,
+    observerDigest = observerDigest,
+    hasObserverDigestMetadata = existing.hasObserverDigestMetadata || next.hasObserverDigestMetadata,
     lastActivityAt = next.lastActivityAt ?: existing.lastActivityAt,
     totalTokens =
       when {
@@ -6469,7 +6515,11 @@ internal fun mergeChatSessionEntry(
         preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
         else -> next.hasContextUsageMetadata
       },
+    hasActiveRun = hasActiveRun,
+    activeRunIds = activeRunIds,
+    hasActiveRunMetadata = existing.hasActiveRunMetadata || next.hasActiveRunMetadata,
     status = if (next.hasRunMetadata) next.status else existing.status,
+    lastRunError = if (next.hasRunMetadata) next.lastRunError else existing.lastRunError,
     startedAt = if (next.hasRunMetadata) next.startedAt else existing.startedAt,
     endedAt = if (next.hasRunMetadata) next.endedAt else existing.endedAt,
     runtimeMs = if (next.hasRunMetadata) next.runtimeMs else existing.runtimeMs,
@@ -6477,6 +6527,62 @@ internal fun mergeChatSessionEntry(
     hasRunMetadata = existing.hasRunMetadata || next.hasRunMetadata,
   )
 }
+
+internal fun applySessionObserverDigest(
+  sessions: List<ChatSessionEntry>,
+  digest: SessionObserverDigest,
+): List<ChatSessionEntry> {
+  val index = sessions.indexOfFirst { it.key == digest.sessionKey }
+  if (index < 0) return sessions
+  val session = sessions[index]
+  val runId = digest.runId?.trim()?.takeIf { it.isNotEmpty() } ?: return sessions
+  val isRunning = session.hasActiveRun == true || session.status?.trim()?.lowercase() == "running"
+  val matchesActiveRun = session.activeRunIds.orEmpty().any { it.trim() == runId }
+  if (!isRunning || !matchesActiveRun) return sessions
+  val previous = session.observerDigest
+  if (previous?.runId == runId && !observerDigestIsNewer(digest, previous)) return sessions
+  return sessions.toMutableList().also {
+    it[index] = session.copy(observerDigest = digest, hasObserverDigestMetadata = true)
+  }
+}
+
+private fun reconcileSessionObserverDigest(
+  existing: SessionObserverDigest?,
+  next: SessionObserverDigest?,
+  hasNextProjection: Boolean,
+  hasActiveRun: Boolean?,
+  activeRunIds: List<String>?,
+  status: String?,
+): SessionObserverDigest? {
+  val isRunning = hasActiveRun == true || status?.trim()?.lowercase() == "running"
+  val activeIds = activeRunIds.orEmpty().mapNotNull { it.trim().takeIf(String::isNotEmpty) }.toSet()
+  var resolved = existing
+  if (isRunning && resolved?.runId?.trim()?.let(activeIds::contains) != true) {
+    resolved = null
+  }
+  if (next != null) {
+    val matchesActiveRun = !isRunning || next.runId?.trim()?.let(activeIds::contains) == true
+    if (matchesActiveRun) {
+      val previous = resolved
+      resolved =
+        if (previous != null && previous.runId == next.runId && !observerDigestIsNewer(next, previous)) {
+          previous
+        } else {
+          next
+        }
+    }
+  } else if (hasNextProjection) {
+    resolved = null
+  }
+  return resolved
+}
+
+private fun observerDigestIsNewer(
+  candidate: SessionObserverDigest,
+  previous: SessionObserverDigest,
+): Boolean =
+  candidate.revision > previous.revision ||
+    (candidate.revision == previous.revision && candidate.updatedAt > previous.updatedAt)
 
 private fun ChatSessionEntry.providerQualifiedModelRef(): String? {
   val model = model?.trim()?.takeIf { it.isNotEmpty() } ?: return null

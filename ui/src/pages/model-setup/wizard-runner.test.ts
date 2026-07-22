@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 
 describe("ModelSetupWizardRunner", () => {
@@ -32,6 +32,7 @@ describe("ModelSetupWizardRunner", () => {
       onDone,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
+      sessionExpiredMessage: () => "expired",
     });
 
     await runner.start("openai-oauth");
@@ -70,6 +71,7 @@ describe("ModelSetupWizardRunner", () => {
       onDone: () => undefined,
       requestFailedMessage: () => "failed",
       cancelledMessage: () => "cancelled",
+      sessionExpiredMessage: () => "expired",
     });
 
     await runner.start("openai-oauth");
@@ -79,5 +81,59 @@ describe("ModelSetupWizardRunner", () => {
       { sessionId: expect.any(String) },
       { timeoutMs: 30_000 },
     );
+  });
+
+  it("clears an expired session and abort without cancelling or replaying the answer", async () => {
+    let nextCount = 0;
+    let answerSignal: AbortSignal | undefined;
+    const request = vi.fn(
+      (method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+        if (method === "openclaw.setup.auth.start") {
+          return Promise.resolve({ sessionId: "session-expired", done: false, status: "running" });
+        }
+        if (method === "wizard.next" && nextCount++ === 0) {
+          return Promise.resolve({
+            done: false,
+            status: "running",
+            step: { id: "api-key", type: "text", message: "API key", sensitive: true },
+          });
+        }
+        if (method === "wizard.next") {
+          answerSignal = options?.signal;
+          return Promise.reject(
+            new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "wizard not found",
+              details: { code: "WIZARD_NOT_FOUND" },
+            }),
+          );
+        }
+        return Promise.resolve({ ok: true });
+      },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const runner = new ModelSetupWizardRunner({
+      getClient: () => client,
+      onChange: () => undefined,
+      onDone: () => undefined,
+      requestFailedMessage: () => "failed",
+      cancelledMessage: () => "cancelled",
+      sessionExpiredMessage: () => "Setup expired. Close and restart setup.",
+    });
+
+    await runner.start("api-key");
+    await runner.answer("secret-key");
+
+    expect(runner.state).toEqual({
+      phase: "error",
+      message: "Setup expired. Close and restart setup.",
+    });
+    expect(answerSignal?.aborted).toBe(true);
+    await runner.cancel();
+    expect(
+      request.mock.calls.filter(([method]) => method === "openclaw.setup.auth.start"),
+    ).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(2);
+    expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([]);
   });
 });

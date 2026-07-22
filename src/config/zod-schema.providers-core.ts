@@ -27,7 +27,6 @@ import {
   DmPolicySchema,
   ExecutableTokenSchema,
   GroupPolicySchema,
-  HexColorSchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
   SecretInputSchema,
@@ -446,18 +445,6 @@ const DiscordGuildSchema = buildGroupEntrySchema(
   { omit: ["enabled", "skills", "allowFrom", "systemPrompt"] },
 );
 
-const DiscordUiSchema = z
-  .object({
-    components: z
-      .object({
-        accentColor: HexColorSchema.optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict()
-  .optional();
-
 const DiscordVoiceAutoJoinSchema = z
   .object({
     guildId: z.string().min(1),
@@ -608,7 +595,6 @@ const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
-    ui: DiscordUiSchema,
     slashCommand: z
       .object({
         ephemeral: z.boolean().optional(),
@@ -625,7 +611,6 @@ const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
-    subagentProgress: z.boolean().optional(),
     intents: z
       .object({
         presence: z.boolean().optional(),
@@ -653,9 +638,6 @@ const DiscordAccountSchema = z
         enabled: z.boolean().optional(),
         intervalMs: z.number().int().positive().optional(),
         minUpdateIntervalMs: z.number().int().positive().optional(),
-        healthyText: z.string().optional(),
-        degradedText: z.string().optional(),
-        exhaustedText: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -820,14 +802,6 @@ const DirectGroupReplyToModeByChatTypeSchema = z
   })
   .strict();
 
-const SlackSocketModeSchema = z
-  .object({
-    clientPingTimeout: z.number().int().positive().optional(),
-    serverPingTimeout: z.number().int().positive().optional(),
-    pingPongLoggingEnabled: z.boolean().optional(),
-  })
-  .strict();
-
 const SlackRelaySchema = z
   .object({
     url: z.string().optional(),
@@ -845,10 +819,9 @@ const SlackAccountSchema = z
       capabilities: SlackCapabilitiesSchema.optional(),
       streaming: SlackStreamingConfigSchema.optional(),
     }),
-    identity: SlackIdentitySchema.default("bot"),
+    postAs: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     enterpriseOrgInstall: z.boolean().optional(),
-    socketMode: SlackSocketModeSchema.optional(),
     relay: SlackRelaySchema.optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
@@ -901,10 +874,10 @@ const SlackAccountSchema = z
   })
   .strict();
 
-// Account entries leave identity unset to inherit the top-level default. DM allowlist
+// Account entries leave postAs unset to inherit the top-level default. DM allowlist
 // validation stays at SlackConfigSchema so entries can also inherit top-level allowFrom.
 const SlackAccountEntrySchema = SlackAccountSchema.extend({
-  identity: SlackIdentitySchema.optional(),
+  postAs: SlackIdentitySchema.optional(),
 });
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
@@ -1031,8 +1004,6 @@ const SignalAccountSchemaBase = z
     accountUuid: z.string().optional(),
     configPath: z.string().optional(),
     httpUrl: z.string().optional(),
-    httpHost: z.string().optional(),
-    httpPort: z.number().int().positive().optional(),
     cliPath: ExecutableTokenSchema.optional(),
     autoStart: z.boolean().optional(),
     startupTimeoutMs: z.number().int().min(1000).max(120000).optional(),
@@ -1153,7 +1124,6 @@ const IMessageAccountSchemaBase = z
     probeTimeoutMs: z.number().int().positive().optional(),
     sendReadReceipts: ChannelSendReadReceiptsSchema,
     ...buildChannelReactionShape({ notificationModes: ["off", "own", "all"] }),
-    coalesceSameSenderDms: z.boolean().optional(),
     catchup: z
       .object({
         enabled: z.boolean().optional(),

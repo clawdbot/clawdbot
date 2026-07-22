@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveAgentEffectiveModelPrimary,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import {
@@ -13,6 +17,7 @@ import {
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -193,6 +198,15 @@ class SetupInferenceActivationUnavailableError extends Error {
   override name = "SetupInferenceActivationUnavailableError";
 }
 
+/**
+ * The live-tested owner no longer matches current config. Activation maps this
+ * to `{ ok: false, status: "auth" }` so the guided-onboarding ladder can move
+ * to its next candidate instead of crashing the CLI.
+ */
+class SetupInferenceOwnerDriftError extends Error {
+  override name = "SetupInferenceOwnerDriftError";
+}
+
 export type VerifySetupInferenceResult =
   | {
       ok: true;
@@ -281,6 +295,7 @@ type SetupInferenceRunEmbeddedAgent = (
   params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
     onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
     authProfileStateMode?: "read-write" | "read-only";
+    preparedModelRuntimeMode?: "isolated-read-only";
   },
 ) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
 
@@ -804,7 +819,9 @@ function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef: strin
       ]),
     );
   const defaultAgentId = resolveDefaultAgentId(config);
-  const agent = config.agents?.list?.find((entry) => normalizeAgentId(entry.id) === defaultAgentId);
+  const agent = listAgentEntries(config).find(
+    (entry) => normalizeAgentId(entry.id) === defaultAgentId,
+  );
   return {
     defaultAgentId,
     defaults: project(config.agents?.defaults?.models),
@@ -908,30 +925,27 @@ function copySelectedModelMetadata(params: {
   }
 
   const defaultAgentId = resolveDefaultAgentId(params.target);
-  const preparedAgent = params.prepared.agents?.list?.find((agent) => agent.id === defaultAgentId);
+  const preparedAgent = listAgentEntries(params.prepared).find(
+    (agent) => normalizeAgentId(agent.id) === defaultAgentId,
+  );
   if (!preparedAgent?.models || !Object.hasOwn(preparedAgent.models, params.modelRef)) {
     return;
   }
-  const targetAgents = params.target.agents?.list;
-  const targetAgentIndex = targetAgents?.findIndex((agent) => agent.id === defaultAgentId) ?? -1;
-  if (!targetAgents || targetAgentIndex < 0) {
-    return;
-  }
-  const nextAgents = structuredClone(targetAgents);
-  const targetAgent = expectDefined(
-    nextAgents[targetAgentIndex],
-    "next agents entry at target agent index",
+  const targetEntryKey = Object.keys(params.target.agents?.entries ?? {}).find(
+    (agentId) => normalizeAgentId(agentId) === defaultAgentId,
   );
-  if (!targetAgent) {
+  if (!targetEntryKey || !params.target.agents?.entries?.[targetEntryKey]) {
     return;
   }
+  const nextEntries = structuredClone(params.target.agents.entries);
+  const targetAgent = expectDefined(nextEntries[targetEntryKey], "target agent entry");
   targetAgent.models = {
     ...targetAgent.models,
     [params.modelRef]: structuredClone(
       expectDefined(preparedAgent.models[params.modelRef], "models entry at params.model ref"),
     ),
   };
-  params.target.agents = { ...params.target.agents, list: nextAgents };
+  params.target.agents = { ...params.target.agents, entries: nextEntries };
 }
 
 function findSelectedProviderConfigKey(
@@ -1050,7 +1064,7 @@ async function buildTestPlan(params: {
   isRemoteProviderAuth?: boolean;
   routeAgentId?: string;
   deps: ActivateSetupInferenceDeps;
-}): Promise<SetupInferenceTestPlan | { error: string }> {
+}): Promise<SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }> {
   const { kind, cfg, workspaceDir } = params;
   const resolveRouteModelRef = (defaultModelRef: string): string | { error: string } => {
     const modelRef = params.modelRef?.trim() || defaultModelRef;
@@ -1195,7 +1209,17 @@ async function buildTestPlan(params: {
   }
   switch (kind) {
     case "existing-model": {
-      const route = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.routeAgentId);
+      let route;
+      try {
+        route = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.routeAgentId, {
+          loadAuthProfileStoreForRuntime: params.deps.loadAuthProfileStoreForRuntime,
+        });
+      } catch (error) {
+        if (error instanceof CliExecutionAuthProfileError) {
+          return { error: error.message, status: "auth" as const };
+        }
+        throw error;
+      }
       if (!route) {
         return { error: "No configured default-agent inference route is available." };
       }
@@ -1608,6 +1632,9 @@ export async function activateSetupInference(
     if (error instanceof SetupInferenceActivationUnavailableError) {
       return { ok: false, status: "unavailable", error: redacted };
     }
+    if (error instanceof SetupInferenceOwnerDriftError) {
+      return { ok: false, status: "auth", error: redacted };
+    }
     if (error instanceof SetupInferenceActivationIndeterminateError) {
       throw new SetupInferenceActivationIndeterminateError(redacted);
     }
@@ -1668,7 +1695,11 @@ async function activateSetupInferenceUnredacted(
       deps,
     });
     if ("error" in plan) {
-      return { ok: false, status: "unavailable", error: plan.error };
+      return {
+        ok: false,
+        status: plan.status ?? "unavailable",
+        error: plan.error,
+      };
     }
 
     const hasPreparedAuthProfiles = (plan.manualAuth?.profiles.length ?? 0) > 0;
@@ -2014,23 +2045,12 @@ async function activateSetupInferenceUnredacted(
             "The default-agent inference route could not be resolved after its live test. Review the current model/auth/runtime settings and retry.",
         };
       }
-      try {
-        const binding = await revalidateSetupInferenceOwner({
-          route: latestResolvedRoute,
-          auth: test.auth,
-          deps,
-        });
-        if (!hasSameOwnerPluginArtifacts(binding, stagedOwnerPluginArtifacts)) {
-          throw new Error("inference owner plugin runtime changed during its live test");
-        }
-      } catch {
-        return {
-          ok: false,
-          status: "auth",
-          error:
-            "The verified inference owner changed before activation completed. Retry the inference check.",
-        };
-      }
+      await revalidateStableSetupInferenceOwner({
+        route: latestResolvedRoute,
+        auth: test.auth,
+        stagedOwnerPluginArtifacts,
+        deps,
+      });
     }
     if (needsPersistence) {
       const { stripPendingPluginInstallRecords } =
@@ -2228,14 +2248,12 @@ async function activateSetupInferenceUnredacted(
                 "The source config no longer matches the verified candidate, so it was not saved. Review the current config and retry.",
               );
             }
-            const binding = await revalidateSetupInferenceOwner({
+            await revalidateStableSetupInferenceOwner({
               route: nextResolvedRoute,
               auth: test.auth,
+              stagedOwnerPluginArtifacts,
               deps,
             });
-            if (!hasSameOwnerPluginArtifacts(binding, stagedOwnerPluginArtifacts)) {
-              throw new Error("inference owner plugin runtime changed during its live test");
-            }
             // Once this callback returns, the config writer owns the candidate.
             // Any later throw may be post-commit and needs reconciliation.
             throwIfSetupInferenceCancelled(params);
@@ -2405,6 +2423,41 @@ function hasSameOwnerPluginArtifacts(
     isDeepStrictEqual(binding.ownerPluginIds, snapshot.ownerPluginIds) &&
     isDeepStrictEqual(binding.ownerPluginArtifacts, snapshot.ownerPluginArtifacts)
   );
+}
+
+/**
+ * Revalidate the successful probe's owner against current config. Any drift
+ * throws SetupInferenceOwnerDriftError, which activation returns as an auth
+ * failure result — a throw that escapes here would crash the onboarding ladder.
+ */
+async function revalidateStableSetupInferenceOwner(params: {
+  route: SystemAgentConfiguredRoute;
+  auth: AgentExecutionAuthBinding;
+  stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
+  deps: ActivateSetupInferenceDeps;
+}): Promise<SystemAgentVerifiedInferenceBinding> {
+  let binding: SystemAgentVerifiedInferenceBinding;
+  try {
+    binding = await revalidateSetupInferenceOwner({
+      route: params.route,
+      auth: params.auth,
+      deps: params.deps,
+    });
+  } catch (error) {
+    throw new SetupInferenceOwnerDriftError(
+      `The verified inference owner changed before activation completed. Retry the inference check. (${formatErrorMessage(error)})`,
+      { cause: error },
+    );
+  }
+  if (
+    !params.stagedOwnerPluginArtifacts ||
+    !hasSameOwnerPluginArtifacts(binding, params.stagedOwnerPluginArtifacts)
+  ) {
+    throw new SetupInferenceOwnerDriftError(
+      "The verified inference owner changed before activation completed. Retry the inference check. (The owner plugin runtime changed during its live test.)",
+    );
+  }
+  return binding;
 }
 
 type VerifySetupInferenceParams = {
@@ -2621,7 +2674,11 @@ export async function verifySetupInferenceConfig(params: {
       deps,
     });
     if ("error" in builtPlan) {
-      return { ok: false, status: "unavailable", error: builtPlan.error };
+      return {
+        ok: false,
+        status: builtPlan.status ?? "unavailable",
+        error: builtPlan.error,
+      };
     }
     let plan: SetupInferenceTestPlan = builtPlan;
     if (params.authProfiles && params.authProfiles.length > 0) {
@@ -2783,17 +2840,12 @@ export async function verifySetupInferenceConfig(params: {
       }
       if (params.requireExecutionOwner || params.onVerifiedExecution) {
         try {
-          const binding = await revalidateSetupInferenceOwner({
+          const binding = await revalidateStableSetupInferenceOwner({
             route: configuredRoute!,
             auth: test.auth,
+            stagedOwnerPluginArtifacts,
             deps,
           });
-          if (
-            !stagedOwnerPluginArtifacts ||
-            !hasSameOwnerPluginArtifacts(binding, stagedOwnerPluginArtifacts)
-          ) {
-            throw new Error("inference owner plugin runtime changed during its live test");
-          }
           params.onVerifiedExecution?.(test.auth, binding);
         } catch {
           return {
@@ -2880,7 +2932,11 @@ export async function completeSetupInferenceConfig(params: {
       deps,
     });
     if ("error" in plan) {
-      return { ok: false, status: "unavailable", error: plan.error };
+      return {
+        ok: false,
+        status: plan.status ?? "unavailable",
+        error: plan.error,
+      };
     }
     const result = await runSetupInferenceTest({
       plan,
@@ -3175,7 +3231,7 @@ function configReferencesManualAuthProfiles(
   if (modelSelectionReferencesProfile(config.agents?.defaults?.model, profileIds)) {
     return true;
   }
-  return (config.agents?.list ?? []).some((agent) =>
+  return listAgentEntries(config).some((agent) =>
     modelSelectionReferencesProfile(agent.model, profileIds),
   );
 }
@@ -3411,6 +3467,7 @@ async function runSetupInferenceTest(params: {
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),
         authProfileStateMode,
+        preparedModelRuntimeMode: "isolated-read-only",
         ...(plan.cleanupBundleMcpOnRunEnd ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(plan.agentHarnessRuntimeOverride
           ? { agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride }

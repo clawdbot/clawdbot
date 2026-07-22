@@ -1,9 +1,7 @@
-// Registers <wa-tooltip>: the status row's hover preview uses it directly
-// because openclaw-tooltip only carries plain-text content.
-import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { html, nothing, type TemplateResult } from "lit";
 import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
@@ -79,21 +77,14 @@ function renderStatusPreview(props: BackgroundTasksProps): TemplateResult {
   const preview = tasks.slice(0, STATUS_PREVIEW_LIMIT);
   const overflow = tasks.length - preview.length;
   return html`
-    <wa-tooltip
-      class="chat-tasks-status__preview"
-      for=${props.statusRowId}
-      placement="top-start"
-      without-arrow
-    >
-      <div class="chat-tasks-preview">
-        ${preview.map((task) => renderStatusPreviewRow(task))}
-        ${overflow > 0
-          ? html`<div class="chat-tasks-preview__more">
-              ${t("chat.backgroundTasks.statusPreviewMore", { count: String(overflow) })}
-            </div>`
-          : nothing}
-      </div>
-    </wa-tooltip>
+    <div slot="content" class="chat-tasks-preview">
+      ${preview.map((task) => renderStatusPreviewRow(task))}
+      ${overflow > 0
+        ? html`<div class="chat-tasks-preview__more">
+            ${t("chat.backgroundTasks.statusPreviewMore", { count: String(overflow) })}
+          </div>`
+        : nothing}
+    </div>
   `;
 }
 
@@ -119,25 +110,25 @@ export function renderBackgroundTasksStatusRow(
       backgroundTasks.onToggleCollapsed();
     }
   };
-  // The preview tooltip anchors the whole row (not the link button): wa-tooltip
-  // joins the anchor's aria-labelledby, which would replace the button's
-  // accessible name. It also stays a sibling so the ticking preview content
-  // never lives inside the polite live region.
+  // The preview tooltip anchors the whole row (not the link button), so the
+  // ticking preview content stays outside the polite live region.
   return html`
-    <div class="chat-tasks-status" id=${backgroundTasks.statusRowId} role="status">
-      <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
-      ${status.startedMs !== null
-        ? html`
-            <!-- Ticking time stays out of the polite live region: without
-                 aria-hidden, screen readers would re-announce every second. -->
-            <span class="chat-tasks-status__time" aria-hidden="true">
-              <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
-            </span>
-            <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
-          `
-        : nothing}
-      <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
-    </div>
-    ${renderStatusPreview(backgroundTasks)}
+    <openclaw-tooltip class="chat-tasks-status__preview">
+      <div class="chat-tasks-status" id=${backgroundTasks.statusRowId} role="status">
+        <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
+        ${status.startedMs !== null
+          ? html`
+              <!-- Ticking time stays out of the polite live region: without
+                   aria-hidden, screen readers would re-announce every second. -->
+              <span class="chat-tasks-status__time" aria-hidden="true">
+                <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
+              </span>
+              <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
+            `
+          : nothing}
+        <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
+      </div>
+      ${renderStatusPreview(backgroundTasks)}
+    </openclaw-tooltip>
   `;
 }

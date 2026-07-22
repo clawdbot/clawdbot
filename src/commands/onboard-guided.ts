@@ -286,7 +286,10 @@ async function runGuidedOnboardingFlow(
       });
       if (attempt.kind === "success") {
         resultLines = activationLines(attempt.result);
-        successLabel = candidate.label;
+        successLabel =
+          candidate.kind === "existing-model"
+            ? `${candidate.label} (${candidate.modelRef})`
+            : candidate.label;
         break;
       }
       // The verification probe runs outside the configured workspace (setup never

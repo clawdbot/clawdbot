@@ -5,6 +5,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
+    case sessionObserver(SessionObserverDigest)
     case chat(OpenClawChatEventPayload)
     case sessionMessage(OpenClawSessionMessageEventPayload)
     case agent(OpenClawAgentEventPayload)
@@ -30,11 +31,98 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let sessionKey: String?
     public let agentId: String?
     public let reason: String
+    public let updatedAt: Double?
+    public let lastReadAt: Double?
+    public let agentStatus: OpenClawChatSessionAgentStatus?
+    public let observerDigest: OpenClawChatSessionObserverDigest?
+    public let status: String?
+    public let lastRunError: String?
+    public let hasActiveRun: Bool?
+    public let activeRunIds: [String]?
+    public let startedAt: Double?
+    public let endedAt: Double?
+    let agentStatusPresent: Bool
+    let observerDigestPresent: Bool
+    let statusPresent: Bool
+    let lastRunErrorPresent: Bool
 
-    public init(sessionKey: String?, agentId: String? = nil, reason: String) {
+    public init(
+        sessionKey: String?,
+        agentId: String? = nil,
+        reason: String,
+        updatedAt: Double? = nil,
+        lastReadAt: Double? = nil,
+        agentStatus: OpenClawChatSessionAgentStatus? = nil,
+        observerDigest: OpenClawChatSessionObserverDigest? = nil,
+        status: String? = nil,
+        lastRunError: String? = nil,
+        hasActiveRun: Bool? = nil,
+        activeRunIds: [String]? = nil,
+        startedAt: Double? = nil,
+        endedAt: Double? = nil,
+        agentStatusPresent: Bool? = nil,
+        observerDigestPresent: Bool? = nil,
+        statusPresent: Bool? = nil,
+        lastRunErrorPresent: Bool? = nil)
+    {
         self.sessionKey = sessionKey
         self.agentId = agentId
         self.reason = reason
+        self.updatedAt = updatedAt
+        self.lastReadAt = lastReadAt
+        self.agentStatus = agentStatus
+        self.observerDigest = observerDigest
+        self.status = status
+        self.lastRunError = lastRunError
+        self.hasActiveRun = hasActiveRun
+        self.activeRunIds = activeRunIds
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.agentStatusPresent = agentStatusPresent ?? (agentStatus != nil)
+        self.observerDigestPresent = observerDigestPresent ?? (observerDigest != nil)
+        self.statusPresent = statusPresent ?? (status != nil)
+        self.lastRunErrorPresent = lastRunErrorPresent ?? (lastRunError != nil)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.sessionKey = try container.decodeIfPresent(String.self, forKey: .sessionKey)
+        self.agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
+        self.reason = try container.decode(String.self, forKey: .reason)
+        self.updatedAt = try container.decodeIfPresent(Double.self, forKey: .updatedAt)
+        self.lastReadAt = try container.decodeIfPresent(Double.self, forKey: .lastReadAt)
+        self.agentStatus = try container.decodeIfPresent(
+            OpenClawChatSessionAgentStatus.self,
+            forKey: .agentStatus)
+        self.observerDigest = try container.decodeIfPresent(
+            OpenClawChatSessionObserverDigest.self,
+            forKey: .observerDigest)
+        self.status = try container.decodeIfPresent(String.self, forKey: .status)
+        self.lastRunError = try container.decodeIfPresent(String.self, forKey: .lastRunError)
+        self.hasActiveRun = try container.decodeIfPresent(Bool.self, forKey: .hasActiveRun)
+        self.activeRunIds = try container.decodeIfPresent([String].self, forKey: .activeRunIds)
+        self.startedAt = try container.decodeIfPresent(Double.self, forKey: .startedAt)
+        self.endedAt = try container.decodeIfPresent(Double.self, forKey: .endedAt)
+        self.agentStatusPresent = container.contains(.agentStatus)
+        self.observerDigestPresent = container.contains(.observerDigest)
+        self.statusPresent = container.contains(.status)
+        self.lastRunErrorPresent = container.contains(.lastRunError)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionKey
+        case agentId
+        case reason
+        case updatedAt
+        case lastReadAt
+        case agentStatus
+        case observerDigest
+        case status
+        case lastRunError
+        case hasActiveRun
+        case activeRunIds
+        case startedAt
+        case endedAt
     }
 }
 

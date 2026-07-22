@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as sessionAccessorModule from "../../config/sessions/session-accessor.js";
 import * as sessionStoreModule from "../../config/sessions/store.js";
 import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -210,9 +211,12 @@ function createDeliveryDeps(params: {
   const deps: PostCompactionDelegateDeliveryDeps = {
     enqueueSystemEvent,
     getRuntimeConfig: vi.fn(() => cfg),
-    loadSessionStore: vi.fn((storePath) => readSessionStore(storePath)),
+    loadSessionEntry: vi.fn(({ storePath, sessionKey }) =>
+      sessionAccessorModule.loadSessionEntry({ storePath, sessionKey }),
+    ),
     log,
     now: vi.fn(() => 1_700_000_000_000),
+    patchSessionEntry: sessionAccessorModule.patchSessionEntry,
     resolveContinuationRuntimeConfig: vi.fn(() => ({
       ...defaultRuntimeConfig,
       ...params.runtimeConfig,
@@ -242,13 +246,11 @@ async function seedSessionStore(
   storePath: string,
   store: Record<string, SessionEntry>,
 ): Promise<void> {
-  await sessionStoreModule.saveSessionStore(storePath, store, { skipMaintenance: true });
-  sessionStoreModule.clearSessionStoreCacheForTest();
-}
-
-function readSessionStore(storePath: string): Record<string, SessionEntry> {
-  sessionStoreModule.clearSessionStoreCacheForTest();
-  return sessionStoreModule.loadSessionStore(storePath, { skipCache: true });
+  await Promise.all(
+    Object.entries(store).map(async ([sessionKey, entry]) => {
+      await sessionAccessorModule.upsertSessionEntry({ storePath, sessionKey }, entry);
+    }),
+  );
 }
 
 afterEach(() => {
@@ -403,28 +405,24 @@ describe("post-compaction delegate dispatch extraction", () => {
       await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: 1 } });
       const { deps, log, spawnSubagentDirect } = createDeliveryDeps({ storePath });
 
-      // Force the chain-state persist to throw by spying on updateSessionStore.
+      // Force the chain-state persist to throw through the storage-neutral accessor.
       // With the persist-then-spawn ordering (cmt451), the persist runs BEFORE
       // the subagent spawn, so a persist failure must reject WITHOUT having
       // spawned a child. That is the fix: when the retry re-drains this entry,
       // there is no already-accepted spawn to duplicate. (Pre-fix, the spawn ran
       // first and a post-spawn persist failure left the entry pending -> the next
       // drain re-spawned the same delegate = duplicated work.)
-      const persistSpy = vi
-        .spyOn(sessionStoreModule, "updateSessionStore")
-        .mockRejectedValueOnce(new Error("persist failed"));
-      try {
-        await expect(
-          deliverQueuedPostCompactionDelegate({ entry: createQueuedEntry() }, deps),
-        ).rejects.toBeDefined();
-        expect(persistSpy).toHaveBeenCalledWith(
-          storePath,
-          expect.any(Function),
-          expect.objectContaining({ requireWriteSuccess: true }),
-        );
-      } finally {
-        persistSpy.mockRestore();
-      }
+      const persist = vi.fn<typeof sessionAccessorModule.patchSessionEntry>();
+      persist.mockRejectedValueOnce(new Error("persist failed"));
+      deps.patchSessionEntry = persist;
+      await expect(
+        deliverQueuedPostCompactionDelegate({ entry: createQueuedEntry() }, deps),
+      ).rejects.toBeDefined();
+      expect(persist).toHaveBeenCalledWith(
+        { storePath, sessionKey: "main" },
+        expect.any(Function),
+        expect.objectContaining({ requireWriteSuccess: true }),
+      );
 
       // The load-bearing assertion: NO spawn happened, so the retry cannot
       // duplicate it. (This is what fails on the old spawn-then-persist order.)
@@ -480,7 +478,7 @@ describe("post-compaction delegate dispatch extraction", () => {
     const { deps } = createDispatchDeps({ staged, rejectEnqueueAt: 0 });
 
     const persistSpy = vi
-      .spyOn(sessionStoreModule, "updateSessionStore")
+      .spyOn(sessionAccessorModule, "patchSessionEntry")
       .mockRejectedValue(new Error("store write failed"));
     try {
       await dispatchPostCompactionDelegates(

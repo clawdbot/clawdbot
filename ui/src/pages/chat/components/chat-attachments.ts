@@ -349,6 +349,68 @@ export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentCont
   void appendAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
 }
 
+type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
+  canCompose: boolean;
+};
+
+export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps) {
+  let depth = 0;
+  const setActive = (event: DragEvent, active: boolean) => {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (active) {
+      if (!props.canCompose || !isFileDrag(event.dataTransfer)) {
+        return;
+      }
+      depth += 1;
+    } else {
+      depth = Math.max(0, depth - 1);
+    }
+    target.toggleAttribute("data-attachment-drop-active", depth > 0);
+  };
+  const clearActive = (event: DragEvent) => {
+    depth = 0;
+    const target = event.currentTarget;
+    if (target instanceof HTMLElement) {
+      target.removeAttribute("data-attachment-drop-active");
+    }
+  };
+  return {
+    onDragenter: (event: DragEvent) => setActive(event, true),
+    onDragleave: (event: DragEvent) => setActive(event, false),
+    onDragover: (event: DragEvent) => {
+      if (!isFileDrag(event.dataTransfer)) {
+        if (!isEditableDropTarget(event)) {
+          event.preventDefault();
+          if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = "none";
+          }
+        }
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = props.canCompose ? "copy" : "none";
+      }
+    },
+    onDrop: (event: DragEvent) => {
+      if (!isFileDrag(event.dataTransfer)) {
+        if (!isEditableDropTarget(event)) {
+          event.preventDefault();
+        }
+        return;
+      }
+      event.preventDefault();
+      clearActive(event);
+      if (props.canCompose) {
+        handleChatAttachmentDrop(event, props);
+      }
+    },
+  };
+}
+
 export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
   return html`
     <input

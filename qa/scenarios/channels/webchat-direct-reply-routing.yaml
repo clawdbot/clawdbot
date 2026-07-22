@@ -6,10 +6,10 @@ scenario:
   runtimeParityTier: live-only
   coverage:
     primary:
-      - runtime.direct-reply-routing
+      - control-ui.chat-send-lifecycle-direct-reply-routing
     secondary:
-      - tools.message
-      - channels.webchat
+      - control-ui.chat-send-lifecycle-message
+      - control-ui.chat-send-lifecycle-webchat
   objective: Verify a current-chat reply is delivered as assistant text, not by calling `message(action=send)` and ending with `Sent.`.
   gatewayConfigPatch:
     session:

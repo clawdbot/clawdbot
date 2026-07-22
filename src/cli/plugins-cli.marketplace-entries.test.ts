@@ -69,13 +69,8 @@ describe("plugins marketplace entries", () => {
     vi.unstubAllEnvs();
   });
 
-  it("lists entries from the configured marketplace feed as JSON", async () => {
-    const config = {
-      marketplaces: {
-        feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
-        sources: { "acme-npm": { type: "npm" as const } },
-      },
-    };
+  it("lists entries from an explicitly selected marketplace feed as JSON", async () => {
+    const config = {};
     mocks.getRuntimeConfig.mockReturnValue(config);
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
       source: "hosted-snapshot",
@@ -87,7 +82,7 @@ describe("plugins marketplace entries", () => {
           state: "available",
           publisher: { trust: "official" },
           install: {
-            candidates: [{ sourceRef: "acme-npm", package: "@acme/calendar", version: "1.2.3" }],
+            candidates: [{ sourceRef: "public-npm", package: "@acme/calendar", version: "1.2.3" }],
           },
           openclaw: {
             plugin: { id: "acme-calendar", label: "Acme Calendar" },
@@ -128,10 +123,10 @@ describe("plugins marketplace entries", () => {
     const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceEntriesCommand({ feedProfile: "acme", offline: true, json: true });
 
-    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith(
-      config,
-      { feedProfile: "acme", offline: true },
-    );
+    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith({
+      feedProfile: "acme",
+      offline: true,
+    });
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "hosted-snapshot",

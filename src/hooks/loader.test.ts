@@ -164,11 +164,6 @@ describe("loader", () => {
           hooks: { internal: { enabled: true } },
         } satisfies OpenClawConfig),
       ).toBeNull();
-      expect(
-        resolveConfiguredInternalHookNames({
-          hooks: { internal: { installs: { pack: { source: "path" } } } },
-        } satisfies OpenClawConfig),
-      ).toBeNull();
     });
 
     const createLegacyHandlerConfig = () =>

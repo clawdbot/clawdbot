@@ -458,13 +458,6 @@ describe("setup migration recovery", () => {
     ).resolves.toBe(initial);
     await expect(
       buildSetupMigrationTargetSnapshot({
-        config: { meta: { lastTouchedAt: "2026-07-13T23:00:00.000Z" } },
-        stateDir,
-        workspaceDir,
-      }),
-    ).resolves.toBe(initial);
-    await expect(
-      buildSetupMigrationTargetSnapshot({
         config: { wizard: { securityAcknowledgedAt: "2026-07-13T23:00:00.000Z" } },
         stateDir,
         workspaceDir,

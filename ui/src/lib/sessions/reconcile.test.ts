@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";
@@ -40,6 +41,45 @@ test("sessions.changed removes a label when the event carries null", () => {
   expect(reconciled.applied).toBe(true);
   expect(reconciled.result?.sessions[0]?.label).toBeUndefined();
   expect(reconciled.result?.sessions[0]?.displayName).toBeUndefined();
+});
+
+test("sessions.changed invalidates the complete creator facet until canonical refresh", () => {
+  const key = "agent:main:main";
+  const result = buildResult([
+    {
+      key,
+      kind: "global",
+      updatedAt: 1,
+      createdBy: { id: "profile-ada", label: "Ada" },
+    },
+  ]);
+  result.creators = [{ id: "profile-ada", label: "Ada" }];
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "reset",
+    updatedAt: 2,
+    createdBy: { id: "profile-bob", label: "Bob" },
+  });
+
+  expect(reconciled.result?.sessions[0]?.createdBy?.id).toBe("profile-bob");
+  expect(reconciled.result?.creators).toBeUndefined();
+});
+
+test("sessions.changed preserves the creator facet when ownership is unchanged", () => {
+  const key = "agent:main:main";
+  const createdBy = { id: "profile-ada", label: "Ada" };
+  const result = buildResult([{ key, kind: "global", updatedAt: 1, createdBy }]);
+  result.creators = [createdBy];
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "send",
+    updatedAt: 2,
+    createdBy,
+  });
+
+  expect(reconciled.result?.creators).toEqual([createdBy]);
 });
 
 describe("reconcileSessionChanged", () => {
@@ -288,5 +328,21 @@ describe("reconcileSessionChanged", () => {
     });
 
     expect(next.row?.thinkingLevel).toBeUndefined();
+  });
+
+  it("keeps archive-state changes in an all-status result", () => {
+    const key = "agent:main:thread";
+    const result = buildResult([{ key, kind: "direct", updatedAt: 1, sessionId: "s1" }]);
+
+    const next = reconcileSessionHistory(
+      result,
+      { key, kind: "direct", updatedAt: 2, sessionId: "s1", archived: true },
+      undefined,
+      { archivedFilter: "all" },
+    );
+
+    expect(next?.sessions).toEqual([
+      expect.objectContaining({ key, archived: true, updatedAt: 2 }),
+    ]);
   });
 });

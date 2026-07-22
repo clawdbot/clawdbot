@@ -1108,6 +1108,12 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
+      # Reruns the (warm, seconds-cheap) asset hooks and fails on drift so
+      # packages/-only PRs cannot land stale committed plugin bundles; the
+      # extension byte-equality suites do not run for those diffs.
+      - name: Check bundled plugin generated assets
+        run: pnpm plugins:assets:check
+
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
 

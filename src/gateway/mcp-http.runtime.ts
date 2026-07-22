@@ -96,7 +96,18 @@ export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
   tools: McpLoopbackTool[];
 } {
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
-  if (params.nodeExecAllowed === true) {
+  // Restricted CLI grants use OpenClaw's implementations for coding tools;
+  // native CLI tools bypass path, approval, sandbox, and exec policy.
+  const mediatedNativeTools = new Set(
+    (params.toolsAllow ?? [])
+      .map((name) => normalizeToolName(name))
+      .filter((name) => NATIVE_TOOL_EXCLUDE.has(name)),
+  );
+  for (const toolName of mediatedNativeTools) {
+    excludeToolNames.delete(toolName);
+  }
+  const includeNodeExecTool = params.nodeExecAllowed === true && mediatedNativeTools.size === 0;
+  if (includeNodeExecTool) {
     excludeToolNames.delete("exec");
   }
   const scoped = resolveGatewayScopedTools({
@@ -104,7 +115,7 @@ export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
     conversationReadOrigin: "delegated",
     surface: "loopback",
     excludeToolNames,
-    includeNodeExecTool: params.nodeExecAllowed === true,
+    includeNodeExecTool,
   });
   return {
     agentId: scoped.agentId,

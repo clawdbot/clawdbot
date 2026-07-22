@@ -4,9 +4,15 @@ import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js"
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
+type CatalogSessionEntryLoader = (
+  sessionKey: string,
+  options?: { agentId?: string; clone?: boolean },
+) => { entry: { createdBy?: { id: string; label?: string } } | undefined };
+
 const hoisted = vi.hoisted(() => ({
   activeRegistry: { sessionCatalogs: [] as unknown[] },
   pinnedSessionExtensionRegistry: undefined as { sessionCatalogs: unknown[] } | undefined,
+  loadSessionEntryReadOnly: vi.fn<CatalogSessionEntryLoader>(() => ({ entry: undefined })),
   recordSessionStateEvent: vi.fn(),
   upsertSessionUpstreamLink: vi.fn(),
 }));
@@ -33,6 +39,10 @@ vi.mock("../../sessions/session-upstream-links.js", () => ({
 vi.mock("../../plugins/session-conversation-binding.js", () => ({
   bindPluginSessionConversation: conversationBindingMocks.bindPluginSessionConversation,
 }));
+vi.mock("../session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-utils.js")>();
+  return { ...actual, loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly };
+});
 
 const { resolveSessionCatalogCreateTarget, sessionCatalogHandlers } =
   await import("./session-catalog.js");
@@ -71,6 +81,8 @@ describe("session catalog Gateway methods", () => {
   beforeEach(() => {
     hoisted.activeRegistry.sessionCatalogs = [];
     hoisted.pinnedSessionExtensionRegistry = undefined;
+    hoisted.loadSessionEntryReadOnly.mockReset();
+    hoisted.loadSessionEntryReadOnly.mockReturnValue({ entry: undefined });
     hoisted.recordSessionStateEvent.mockClear();
     hoisted.upsertSessionUpstreamLink.mockClear();
     conversationBindingMocks.bindPluginSessionConversation.mockClear();
@@ -142,6 +154,98 @@ describe("session catalog Gateway methods", () => {
     expect(respond).toHaveBeenCalledWith(true, {
       catalogs: [expect.objectContaining({ id: "codex", hosts: [host] })],
     });
+  });
+
+  it("projects authoritative creator ownership onto streamed and final catalog rows", async () => {
+    const broadcastToConnIds = vi.fn();
+    const host = {
+      hostId: "gateway:local",
+      label: "Local Claude",
+      kind: "gateway" as const,
+      connected: true,
+      sessions: [
+        {
+          threadId: "owned-thread",
+          status: "stored",
+          archived: false,
+          sessionKey: "agent:main:owned",
+          createdBy: { id: "provider-spoof" },
+          canContinue: true,
+          canArchive: false,
+        },
+        {
+          threadId: "missing-thread",
+          status: "stored",
+          archived: false,
+          sessionKey: "agent:main:missing",
+          createdBy: { id: "provider-spoof" },
+          canContinue: true,
+          canArchive: false,
+        },
+        {
+          threadId: "external-thread",
+          status: "stored",
+          archived: false,
+          createdBy: { id: "provider-spoof" },
+          canContinue: true,
+          canArchive: false,
+        },
+      ],
+    };
+    hoisted.loadSessionEntryReadOnly.mockImplementation((sessionKey: string) => ({
+      entry:
+        sessionKey === "agent:main:owned"
+          ? { createdBy: { id: "profile-ada", label: "Ada" } }
+          : undefined,
+    }));
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("claude", {
+          list: vi.fn(async ({ onHost }) => {
+            onHost?.(host);
+            return [host];
+          }),
+        }),
+      },
+    ];
+
+    const respond = await call(
+      "sessions.catalog.list",
+      { progressId: "progress-creator" },
+      {},
+      { connId: "requester", connect: {} },
+      { broadcastToConnIds },
+    );
+    const projectedSessions = [
+      expect.objectContaining({
+        threadId: "owned-thread",
+        createdBy: { id: "profile-ada", label: "Ada" },
+      }),
+      expect.not.objectContaining({ createdBy: expect.anything() }),
+      expect.not.objectContaining({ createdBy: expect.anything() }),
+    ];
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.catalog.host",
+      expect.objectContaining({
+        catalog: expect.objectContaining({
+          hosts: [expect.objectContaining({ sessions: projectedSessions })],
+        }),
+      }),
+      new Set(["requester"]),
+      { dropIfSlow: true },
+    );
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          hosts: [expect.objectContaining({ sessions: projectedSessions })],
+        }),
+      ],
+    });
+    expect(hoisted.loadSessionEntryReadOnly).toHaveBeenCalledWith("agent:main:owned", {
+      agentId: "main",
+    });
+    expect(hoisted.loadSessionEntryReadOnly).toHaveBeenCalledTimes(2);
   });
 
   it("uses the pinned Gateway catalog runtime after active registry churn", async () => {

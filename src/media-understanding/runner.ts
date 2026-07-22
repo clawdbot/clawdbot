@@ -40,10 +40,12 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
+import { resolveMediaFacts } from "../media/media-facts.js";
 import { runExec } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
+import { matchesMediaEntryCapability } from "./entry-capabilities.js";
 import {
   clearLocalAudioInspectionCacheForTests,
   inspectLocalAudioSelection,
@@ -344,15 +346,13 @@ export function resolveMediaAttachmentLocalRoots(params: {
   ctx: MsgContext;
   workspaceDir?: string;
 }): readonly string[] {
-  // ctx.MediaWorkspaceDir is set by chat.send's prestageNonImageOffloads when
-  // inbound attachments were staged into a sandbox workspace. The paths in
-  // ctx.MediaPaths are kept sandbox-relative (so the agent inside the
-  // container can read them), and the workspace dir is carried separately so
-  // host-side media-understanding can still resolve them via this root list.
-  const workspaceDir = params.ctx.MediaWorkspaceDir ?? params.workspaceDir;
+  const workspaceDirs = resolveMediaFacts(params.ctx).flatMap((fact) =>
+    fact.workspaceDir ? [path.resolve(fact.workspaceDir)] : [],
+  );
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
-    workspaceDir ? [path.resolve(workspaceDir)] : undefined,
+    workspaceDirs,
+    params.workspaceDir ? [path.resolve(params.workspaceDir)] : undefined,
     resolveChannelInboundAttachmentRoots(params),
   );
 }
@@ -663,9 +663,17 @@ function resolveImageModelFromAgentDefaults(params: {
 }
 
 function hasExplicitImageUnderstandingConfig(params: {
-  config?: MediaUnderstandingConfig;
+  cfg: OpenClawConfig;
+  providerRegistry: ProviderRegistry;
 }): boolean {
-  return (params.config?.models?.length ?? 0) > 0;
+  return (params.cfg.tools?.media?.models ?? []).some((entry) =>
+    matchesMediaEntryCapability({
+      entry,
+      source: "shared",
+      capability: "image",
+      providerRegistry: params.providerRegistry,
+    }),
+  );
 }
 
 function isMinimaxNativeVisionModel(params: { provider: string; model?: string }): boolean {
@@ -894,7 +902,7 @@ async function runAttachmentEntries(params: {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
   ctx: MsgContext;
-  attachmentIndex: number;
+  attachment: MediaAttachment;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -907,6 +915,7 @@ async function runAttachmentEntries(params: {
   attempts: MediaUnderstandingModelDecision[];
 }> {
   const { entries, capability } = params;
+  const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
   for (const candidate of entries) {
     const { entry } = candidate;
@@ -919,7 +928,7 @@ async function runAttachmentEntries(params: {
               entry,
               cfg: params.cfg,
               ctx: params.ctx,
-              attachmentIndex: params.attachmentIndex,
+              attachment: params.attachment,
               cache: params.cache,
               config: params.config,
             })
@@ -928,7 +937,7 @@ async function runAttachmentEntries(params: {
               entry,
               cfg: params.cfg,
               ctx: params.ctx,
-              attachmentIndex: params.attachmentIndex,
+              attachmentIndex,
               cache: params.cache,
               agentId: params.agentId,
               agentDir: params.agentDir,
@@ -1009,7 +1018,7 @@ export async function runCapability(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<RunCapabilityResult> {
   const { capability, cfg, ctx } = params;
-  const config = params.config ?? cfg.tools?.media?.[capability];
+  const config: MediaUnderstandingConfig = params.config ?? cfg.tools?.media?.[capability] ?? {};
   if (config?.enabled === false) {
     return {
       outputs: [],
@@ -1052,7 +1061,8 @@ export async function runCapability(params: {
     capability === "image" &&
     activeProvider &&
     !hasExplicitImageUnderstandingConfig({
-      config,
+      cfg,
+      providerRegistry: params.providerRegistry,
     })
   ) {
     if (
@@ -1131,7 +1141,7 @@ export async function runCapability(params: {
       capability,
       cfg,
       ctx,
-      attachmentIndex: attachment.index,
+      attachment,
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,

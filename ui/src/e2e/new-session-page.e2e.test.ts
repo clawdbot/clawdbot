@@ -11,7 +11,6 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
-  type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -71,89 +70,6 @@ async function pastePng(target: Locator, count = 1) {
     },
     { base64: ONE_PIXEL_PNG_B64, fileCount: count },
   );
-}
-
-function installRepositorySwitchGateway(page: Page, sessionKey: string) {
-  return installMockGateway(page, {
-    workspaceGit: true,
-    methodResponses: {
-      "agents.list": {
-        agents: [
-          {
-            id: "main",
-            identity: { name: "Main" },
-            name: "Main",
-            workspace: SOURCE_REPO,
-            workspaceGit: true,
-          },
-        ],
-        defaultId: "main",
-        mainKey: "main",
-        scope: "agent",
-      },
-      "fs.listDir": {
-        cases: [
-          {
-            match: { path: SOURCE_REPO },
-            response: {
-              path: SOURCE_REPO,
-              parent: "/tmp",
-              home: "/home/peter",
-              entries: [],
-            },
-          },
-        ],
-      },
-      "worktrees.branches": {
-        cases: [
-          {
-            match: { repoRoot: SOURCE_REPO },
-            response: {
-              branches: [{ kind: "local", name: "alpha" }],
-              headBranch: "alpha",
-              repoRoot: SOURCE_REPO,
-            },
-          },
-          {
-            match: { repoRoot: TARGET_REPO },
-            response: {
-              branches: [
-                { kind: "local", name: "main" },
-                { kind: "local", name: "feature-choice" },
-              ],
-              headBranch: "main",
-              repoRoot: TARGET_REPO,
-            },
-          },
-        ],
-      },
-      "sessions.create": { key: sessionKey },
-    },
-  });
-}
-
-async function deferTargetRepositorySelection(
-  page: Page,
-  gateway: MockGatewayControls,
-): Promise<Locator> {
-  await page.goto(`${server.baseUrl}new`);
-  await gateway.waitForRequest("worktrees.branches");
-
-  const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
-  await page.locator("#new-session-place-trigger").click();
-  await placeSelect.getByRole("button", { name: "Worktree" }).click();
-  const baseInput = page.getByLabel("Base branch");
-  await expect.poll(() => baseInput.inputValue()).toBe("alpha");
-  const requestsBeforeSwitch = (await gateway.getRequests("worktrees.branches")).length;
-
-  await gateway.deferNext("worktrees.branches");
-  await placeSelect.getByRole("button", { name: "Browse folders" }).click();
-  await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
-  await page.getByRole("button", { name: "Use this folder" }).click();
-  await expect
-    .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
-    .toBe(requestsBeforeSwitch + 1);
-  return baseInput;
 }
 
 async function replaceGatewayClient(page: Page) {
@@ -430,6 +346,15 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     });
     await installMockGateway(page, {
       methodResponses: {
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "writer", name: "Writer" },
+          ],
+        },
         "sessions.create": { key: "agent:main:preview-cleanup", runStarted: true },
       },
     });
@@ -468,7 +393,26 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       await pastePng(composer);
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
+      await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
+      await expect
+        .poll(() =>
+          agentDropdown.evaluate((dropdown) => (dropdown as HTMLElement & { open: boolean }).open),
+        )
+        .toBe(true);
       await navigate("new-session", "?agent=main&catalog=missing");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                document.querySelector(".new-session-page__select--agent wa-dropdown") as
+                  | (HTMLElement & { open: boolean })
+                  | null
+              )?.open ?? false,
+          ),
+        )
+        .toBe(false);
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
       await expect.poll(async () => (await proof()).revoked).toBe(2);
 
@@ -590,6 +534,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "fs.listDir": {
           cases: [
@@ -699,13 +644,14 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
         .toBe("packages");
 
-      // Custom host folders force a managed worktree; the unified chip carries
-      // the badge and its worktree row stays checked and locked.
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
+      // Git-backed custom folders stay direct until the user explicitly chooses isolation.
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
       await placeTrigger.click();
       const worktreeItem = page.getByRole("button", { name: "Worktree" });
-      await expect.poll(() => worktreeItem.getAttribute("aria-pressed")).toBe("true");
-      expect(await worktreeItem.isDisabled()).toBe(true);
+      await expect.poll(() => worktreeItem.getAttribute("aria-pressed")).toBe("false");
+      expect(await worktreeItem.isEnabled()).toBe(true);
+      await worktreeItem.click();
+      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
       await page.keyboard.press("Escape");
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
@@ -740,6 +686,89 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => new URL(page.url()).search)
         .toContain(`session=${encodeURIComponent("agent:main:draft-e2e")}`);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("runs directly in a custom non-Git Gateway folder", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
+        "worktrees.branches": {
+          cases: [
+            {
+              match: { repoRoot: WORKSPACE },
+              response: {
+                branches: [{ kind: "local", name: "main" }],
+                defaultBranch: "main",
+                repositoryStatus: "git",
+              },
+            },
+            {
+              match: { repoRoot: "/home" },
+              response: { branches: [], repositoryStatus: "not_git" },
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:plain-folder" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      const trigger = page.locator("#new-session-place-trigger");
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await page.locator("input.new-session-page__browser-path").fill("/home");
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
+        .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("home · Gateway · local");
+
+      await trigger.click();
+      expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
+      const cloud = place.getByRole("button", { name: "Cloud · aws" });
+      expect(await cloud.isDisabled()).toBe(true);
+      expect(await cloud.getAttribute("title")).toBe("Cloud workers require a managed worktree");
+      await page.keyboard.press("Escape");
+
+      await page.locator(".new-session-page__message").fill("clone and inspect this project");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        cwd: "/home",
+        message: "clone and inspect this project",
+      });
+      expect(create.params).not.toHaveProperty("worktree");
+      expect(create.params).not.toHaveProperty("worktreeBaseRef");
     } finally {
       await context.close();
     }
@@ -1028,6 +1057,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           home: WORKSPACE,
           entries: [],
         },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
       },
     });
 
@@ -1093,6 +1127,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.create": { key: sessionKey },
         "sessions.dispatch": {
@@ -1368,6 +1403,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
       },
     });
@@ -1405,10 +1441,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe(true);
       await page.keyboard.press("Escape");
 
-      await page.locator("#new-session-agent-trigger").click();
-      await page
-        .locator("wa-popover.new-session-page__agent-popover")
-        .getByRole("button", { name: "Local" })
+      const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      await agentPicker.locator(".agent-select__trigger").click();
+      await agentPicker
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "Local" })
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
@@ -1447,6 +1484,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.create": { key: sessionKey },
         "sessions.dispatch": {
@@ -1578,6 +1616,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
       },
     });
@@ -1709,6 +1748,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.dispatch": {
           placement: { state: "active", environmentId: "worker-create-recovery" },
@@ -1784,6 +1824,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
       },
     });
@@ -1872,6 +1913,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.create": { key: sessionKey },
         "sessions.dispatch": {
@@ -1998,6 +2040,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.catalog.list": {
           catalogs: [
@@ -2086,6 +2129,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
       },
     });
@@ -2158,6 +2202,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.catalog.list": {
           catalogs: [
@@ -2181,7 +2226,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}new?agent=research`);
       await page.getByRole("heading", { name: "Research" }).waitFor();
       await gateway.setOnline(false);
-      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=research&catalog=claude");
@@ -2271,6 +2316,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.create": { key: "agent:research:manual-reconnect" },
       },
@@ -2280,10 +2326,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}new`);
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await gateway.waitForRequest("worktrees.branches");
-      await page.locator("#new-session-agent-trigger").click();
-      await page
-        .locator("wa-popover.new-session-page__agent-popover")
-        .getByRole("button", { name: "Research" })
+      const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      await agentPicker.locator(".agent-select__trigger").click();
+      await agentPicker
+        .locator("wa-dropdown-item[data-agent-option]")
+        .filter({ hasText: "Research" })
         .click();
       await page.getByRole("heading", { name: "Research" }).waitFor();
 
@@ -2293,7 +2340,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await gateway.setOnline(false);
-      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
       await gateway.setMethodResponse("agents.list", {
         agents: [
           {
@@ -2334,6 +2381,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe(branchRequestsBefore + 1);
       expect((await gateway.getRequests("worktrees.branches")).at(-1)?.params).toEqual({
         repoRoot: REFRESHED_RESEARCH_WORKSPACE,
+        includeRepositoryStatus: true,
       });
 
       const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
@@ -2349,7 +2397,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const branchesBeforeSameWorkspaceReconnect = (await gateway.getRequests("worktrees.branches"))
         .length;
       await gateway.setOnline(false);
-      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
       await gateway.setOnline(true);
 
       await expect
@@ -2357,14 +2405,18 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe(branchesBeforeSameWorkspaceReconnect + 1);
       expect((await gateway.getRequests("worktrees.branches")).at(-1)?.params).toEqual({
         repoRoot: REFRESHED_RESEARCH_WORKSPACE,
+        includeRepositoryStatus: true,
       });
       expect(await baseInput.inputValue()).toBe("");
       expect(await baseInput.getAttribute("placeholder")).toBe("Loading…");
+      await placeTrigger.click();
+      await baseInput.fill("feature-choice");
       await gateway.resolveDeferred("worktrees.branches", {
         branches: [{ kind: "local", name: "beta" }],
         defaultBranch: "beta",
+        repositoryStatus: "git",
       });
-      await expect.poll(() => baseInput.inputValue()).toBe("beta");
+      await expect.poll(() => baseInput.inputValue()).toBe("feature-choice");
 
       await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
@@ -2372,9 +2424,253 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         agentId: "research",
         message: "keep my selected agent",
         worktree: true,
-        worktreeBaseRef: "beta",
+        worktreeBaseRef: "feature-choice",
       });
       expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("preserves a selected workspace worktree when branch rediscovery is unavailable", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "sessions.create": { key: "agent:main:worktree-unavailable" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("worktrees.branches");
+      const trigger = page.locator("#new-session-place-trigger");
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Worktree" }).click();
+      await page.keyboard.press("Escape");
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+
+      const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
+      await gateway.deferNext("worktrees.branches");
+      await gateway.setOnline(false);
+      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await gateway.setOnline(true);
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .toBe(branchRequests + 1);
+      await gateway.rejectDeferred("worktrees.branches", {
+        code: "UNAVAILABLE",
+        message: "branch lookup unavailable",
+      });
+
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      await trigger.click();
+      const worktree = place.getByRole("button", { name: "Worktree" });
+      await expect.poll(() => worktree.getAttribute("aria-pressed")).toBe("true");
+      expect(await worktree.isEnabled()).toBe(true);
+      await page.keyboard.press("Escape");
+
+      await page.locator(".new-session-page__message").fill("keep this task isolated");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        message: "keep this task isolated",
+        worktree: true,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("clears a custom worktree when the folder becomes confirmed non-Git", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+        "sessions.create": { key: "agent:main:custom-now-direct" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const trigger = page.locator("#new-session-place-trigger");
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
+        .toEqual({ repoRoot: TARGET_REPO, includeRepositoryStatus: true });
+      await trigger.click();
+      await place.getByRole("button", { name: "Worktree" }).click();
+      await page.keyboard.press("Escape");
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [],
+        repositoryStatus: "not_git",
+      });
+      const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
+      await gateway.setOnline(false);
+      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await gateway.setOnline(true);
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .toBe(branchRequests + 1);
+
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+      await trigger.click();
+      expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator(".new-session-page__message").fill("continue directly");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({ cwd: TARGET_REPO, message: "continue directly" });
+      expect(create.params).not.toHaveProperty("worktree");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("blocks a custom worktree when Git rediscovery is unavailable", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const trigger = page.locator("#new-session-place-trigger");
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
+        .toEqual({ repoRoot: TARGET_REPO, includeRepositoryStatus: true });
+      await trigger.click();
+      await place.getByRole("button", { name: "Worktree" }).click();
+      await page.keyboard.press("Escape");
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [],
+        repositoryStatus: "unavailable",
+      });
+      const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
+      await gateway.setOnline(false);
+      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await gateway.setOnline(true);
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .toBe(branchRequests + 1);
+
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      await page.locator(".new-session-page__message").fill("do not run directly");
+      const start = page.getByRole("button", { name: "Start thread" });
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      await trigger.click();
+      const worktree = place.getByRole("button", { name: "Worktree" });
+      expect(await worktree.isDisabled()).toBe(true);
+      expect(await worktree.getAttribute("title")).toBe(
+        "Couldn't verify Git for this folder. Choose it again to retry.",
+      );
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("blocks a custom cloud worktree when Git rediscovery is unavailable", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "environments.list": {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox" }],
+        },
+        "fs.listDir": { path: WORKSPACE, home: "/home/peter", entries: [] },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      const trigger = page.locator("#new-session-place-trigger");
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await trigger.click();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
+        .toEqual({ repoRoot: TARGET_REPO, includeRepositoryStatus: true });
+      await trigger.click();
+      await place.getByRole("button", { name: "Cloud · aws" }).click();
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [],
+        repositoryStatus: "unavailable",
+      });
+      const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
+      await gateway.setOnline(false);
+      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await gateway.setOnline(true);
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .toBe(branchRequests + 1);
+
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
+      await page.locator(".new-session-page__message").fill("do not run directly");
+      const start = page.getByRole("button", { name: "Start thread" });
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      await trigger.click();
+      const cloud = place.getByRole("button", { name: "Cloud · aws" });
+      expect(await cloud.isDisabled()).toBe(true);
+      expect(await cloud.getAttribute("title")).toBe(
+        "Couldn't verify Git for this folder. Choose it again to retry.",
+      );
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await context.close();
     }
@@ -2416,6 +2712,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.create": { key: "agent:main:validated-device" },
       },
@@ -2432,7 +2729,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const nodeRequestsBefore = (await gateway.getRequests("node.list")).length;
 
       await gateway.setOnline(false);
-      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
       await gateway.deferNext("node.list");
       await gateway.setOnline(true);
       await expect
@@ -2488,6 +2785,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "alpha" }],
           defaultBranch: "alpha",
+          repositoryStatus: "git",
         },
       },
     });
@@ -2539,6 +2837,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await gateway.setMethodResponse("worktrees.branches", {
         branches: [{ kind: "local", name: "beta" }],
         defaultBranch: "beta",
+        repositoryStatus: "git",
       });
       const socketsBefore = await gateway.getSocketCount();
       const nodesBefore = (await gateway.getRequests("node.list")).length;
@@ -2565,7 +2864,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .toBe("target-repo · Gateway · local");
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
-      expect(branchRequests.at(-1)?.params).toEqual({ repoRoot: TARGET_REPO });
+      expect(branchRequests.at(-1)?.params).toEqual({
+        repoRoot: TARGET_REPO,
+        includeRepositoryStatus: true,
+      });
       await placeTrigger.click();
       await placeSelect.getByRole("button", { name: "New device" }).waitFor();
       expect(await placeSelect.getByRole("button", { name: "Old device" }).count()).toBe(0);
@@ -2617,6 +2919,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           "worktrees.branches": {
             branches: [{ kind: "local", name: "main" }],
             defaultBranch: "main",
+            repositoryStatus: "git",
           },
           "sessions.create": { key: sessionKey },
         },
@@ -2655,7 +2958,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         } else {
           const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
           await gateway.setOnline(false);
-          await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+          await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
           await gateway.setOnline(true);
           await expect
             .poll(async () => (await gateway.getRequests("agents.list")).length)
@@ -2710,6 +3013,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.catalog.list": {
           catalogs: [
@@ -2790,6 +3094,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.list": {
           count: 0,
@@ -2855,65 +3160,6 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
-  it("does not submit a previous repository's worktree base while branches load", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installRepositorySwitchGateway(page, "agent:main:repo-switch");
-
-    try {
-      const baseInput = await deferTargetRepositorySelection(page, gateway);
-
-      expect(await baseInput.inputValue()).toBe("");
-      expect(await baseInput.getAttribute("placeholder")).toBe("Loading…");
-
-      await page.locator(".new-session-page__message").fill("use the selected repository");
-      await page.getByRole("button", { name: "Start thread" }).click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        cwd: TARGET_REPO,
-        worktree: true,
-      });
-      expect(create.params).not.toHaveProperty("worktreeBaseRef");
-      await gateway.resolveDeferred("worktrees.branches");
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("preserves a manually entered worktree base when branch discovery resolves", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installRepositorySwitchGateway(page, "agent:main:manual-base");
-
-    try {
-      const baseInput = await deferTargetRepositorySelection(page, gateway);
-      await page.locator("#new-session-place-trigger").click();
-      await baseInput.fill("feature-choice");
-      await gateway.resolveDeferred("worktrees.branches");
-      await expect.poll(() => baseInput.getAttribute("placeholder")).not.toBe("Loading…");
-      expect(await baseInput.inputValue()).toBe("feature-choice");
-
-      await page.locator(".new-session-page__message").fill("use my selected base");
-      await page.getByRole("button", { name: "Start thread" }).click();
-      const create = await gateway.waitForRequest("sessions.create");
-      expect(create.params).toMatchObject({
-        cwd: TARGET_REPO,
-        worktree: true,
-        worktreeBaseRef: "feature-choice",
-      });
-    } finally {
-      await context.close();
-    }
-  });
-
   it("keeps a rejected first message visible and retryable after reload", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -2943,6 +3189,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
+          repositoryStatus: "git",
         },
         "sessions.list": {
           count: 1,

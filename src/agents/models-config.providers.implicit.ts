@@ -7,10 +7,7 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -95,11 +92,6 @@ function resolveProviderDiscoveryFilter(params: {
   providerIds?: readonly string[];
 }): string[] | undefined {
   const { config, workspaceDir, env } = params;
-  const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
-  if (testRaw) {
-    const ids = normalizeStringEntries(testRaw.split(","));
-    return ids.length > 0 ? uniqueStrings(ids) : undefined;
-  }
   const scopedProviderIds = params.providerIds
     ? normalizeStringEntries([...params.providerIds])
     : undefined;

@@ -42,6 +42,7 @@ import {
   formatPlanChecklistLines,
   normalizeAgentPlanSteps,
 } from "../../channels/streaming.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -2276,8 +2277,13 @@ async function dispatchReplyFromConfigInner(
       params.replyResolver ??
       (await traceReplyPhase("reply.load_reply_resolver", () => loadGetReplyFromConfigRuntime()))
         .getReplyFromConfig;
+    // Channel runtimes can outlive a config reload. Resolve one live snapshot
+    // per turn so reply setup and dispatch callbacks share the same authority.
+    const runtimeReplyConfig = getRuntimeConfigSnapshot() ?? cfg;
     const replyConfig = withFullRuntimeReplyConfig(
-      params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
+      params.configOverride
+        ? (applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig)
+        : runtimeReplyConfig,
     );
     recordAgentDispatchStarted();
     const replyResult = await runWithDispatchLifecycleAdmission(

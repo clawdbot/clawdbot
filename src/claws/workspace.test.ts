@@ -339,7 +339,7 @@ describe("workspace files in the consented add lifecycle", () => {
       ],
       installRecord: { status: "complete" },
     });
-    expect(config.agents?.list?.some((agent) => agent.id === "workspace-agent")).toBe(true);
+    expect(config.agents?.entries?.["workspace-agent"]).toBeDefined();
     expect(readInstallStatus("workspace-agent", root)).toBe("complete");
   });
 
@@ -370,7 +370,7 @@ describe("workspace files in the consented add lifecycle", () => {
         diagnostics: [expect.objectContaining({ code: "workspace_source_changed" })],
       },
     });
-    expect(config.agents?.list?.some((agent) => agent.id === "workspace-agent")).toBe(true);
+    expect(config.agents?.entries?.["workspace-agent"]).toBeDefined();
     expect(readInstallStatus("workspace-agent", root)).toBe("config_committed");
 
     await writeFile(join(root, "content", "policy.md"), "Policy\n", "utf8");

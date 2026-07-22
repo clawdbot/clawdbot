@@ -1671,11 +1671,13 @@ describe("memory plugin e2e", () => {
     }));
     const pluginEntryConfig = parseConfig({ autoCapture: true, autoRecall: true });
     let configFile: Record<string, unknown> = {
+      memory: { search: { enabled: true } },
+
       agents: {
-        defaults: { memorySearch: { enabled: true } },
+        defaults: {},
         list: [
-          { id: "main", memorySearch: { enabled: true } },
-          { id: "xiaohuo", memorySearch: { enabled: false } },
+          { id: "main", memory: { search: { enabled: true } } },
+          { id: "xiaohuo", memory: { search: { enabled: false } } },
         ],
       },
       plugins: {
@@ -1804,7 +1806,9 @@ describe("memory plugin e2e", () => {
       embeddingsCreate.mockClear();
       configFile = {
         ...configFile,
-        agents: { defaults: { memorySearch: { enabled: false } } },
+        memory: { search: { enabled: false } },
+
+        agents: { defaults: {} },
       };
       const recallDefaultDisabled = await beforePromptBuild?.(recallEvent, {
         agentId: "unlisted",

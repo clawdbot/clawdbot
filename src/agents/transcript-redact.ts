@@ -27,27 +27,24 @@ function resolveTranscriptRedactPatterns(patterns?: string[]) {
 
 function redactTranscriptOptions(cfg?: OpenClawConfig) {
   const configuredLogging = readLoggingConfig();
-  const mode = cfg?.logging?.redactSensitive ?? configuredLogging?.redactSensitive;
   const patterns = resolveTranscriptRedactPatterns(
     cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns,
   );
-  if (mode === undefined && patterns === undefined) {
+  if (patterns === undefined) {
     return undefined;
   }
   return {
-    ...(mode !== undefined ? { mode } : {}),
+    mode: "tools" as const,
     ...(patterns !== undefined ? { patterns } : {}),
   };
 }
 
 function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
-  return (cfg?.logging?.redactSensitive ?? readLoggingConfig()?.redactSensitive) === "off";
+  void cfg;
+  return false;
 }
 
 function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
-  if (cfg?.logging?.redactSensitive === "off") {
-    return value;
-  }
   return redactSensitiveText(value, redactTranscriptOptions(cfg));
 }
 
@@ -56,9 +53,6 @@ function redactTranscriptStructuredFieldValue(
   value: string,
   cfg?: OpenClawConfig,
 ): string {
-  if (cfg?.logging?.redactSensitive === "off") {
-    return value;
-  }
   // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
   return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
     ? redactTranscriptText(value, cfg)

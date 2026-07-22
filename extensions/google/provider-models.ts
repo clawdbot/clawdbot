@@ -12,12 +12,9 @@ const GOOGLE_ANTIGRAVITY_PROVIDER_ID = "google-antigravity";
 const GEMINI_2_5_PRO_PREFIX = "gemini-2.5-pro";
 const GEMINI_2_5_FLASH_LITE_PREFIX = "gemini-2.5-flash-lite";
 const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
-const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
-const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
-const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
-const GEMINI_3_FLASH_LITE_PREFIX = "gemini-3-flash-lite";
-const GEMINI_3_FLASH_PREFIX = "gemini-3-flash";
-const GEMINI_3_5_FLASH_PREFIX = "gemini-3.5-flash";
+const GEMINI_3_PRO_RE = /^gemini-3(?:\.\d+)?-pro(?:-|$)/;
+const GEMINI_3_FLASH_LITE_RE = /^gemini-3(?:\.\d+)?-flash-lite(?:-|$)/;
+const GEMINI_3_FLASH_RE = /^gemini-3(?:\.\d+)?-flash(?:-|$)/;
 const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
 const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
 const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
@@ -34,6 +31,7 @@ const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
 // until a dedicated Gemma template is registered in the catalog.
 const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
 const GOOGLE_PROVIDER_PREFIX = "google/";
+const GOOGLE_NON_TEXT_MODEL_ID_MARKERS = ["-image", "-tts", "-live", "native-audio"] as const;
 
 function normalizeGeminiProRequestId(id: string): string {
   if (id.startsWith(GOOGLE_PROVIDER_PREFIX)) {
@@ -52,6 +50,25 @@ function normalizeGeminiProRequestId(id: string): string {
 
 function googleFamilyModelId(id: string): string {
   return id.startsWith(GOOGLE_PROVIDER_PREFIX) ? id.slice(GOOGLE_PROVIDER_PREFIX.length) : id;
+}
+
+export function isGoogleTextGenerationModelId(id: string): boolean {
+  const lower = normalizeOptionalLowercaseString(googleFamilyModelId(id)) ?? "";
+  if (GOOGLE_NON_TEXT_MODEL_ID_MARKERS.some((marker) => lower.includes(marker))) {
+    return false;
+  }
+  return (
+    lower.startsWith(GEMINI_2_5_PRO_PREFIX) ||
+    lower.startsWith(GEMINI_2_5_FLASH_LITE_PREFIX) ||
+    lower.startsWith(GEMINI_2_5_FLASH_PREFIX) ||
+    GEMINI_3_PRO_RE.test(lower) ||
+    GEMINI_3_FLASH_LITE_RE.test(lower) ||
+    GEMINI_3_FLASH_RE.test(lower) ||
+    lower === GEMINI_PRO_LATEST_ID ||
+    lower === GEMINI_FLASH_LATEST_ID ||
+    lower === GEMINI_FLASH_LITE_LATEST_ID ||
+    lower.startsWith(GEMMA_PREFIX)
+  );
 }
 
 type GoogleForwardCompatFamily = {
@@ -148,6 +165,10 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
   const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
   const lower = normalizeOptionalLowercaseString(googleFamilyModelId(trimmed)) ?? "";
 
+  if (!isGoogleTextGenerationModelId(lower)) {
+    return undefined;
+  }
+
   let family: GoogleForwardCompatFamily;
   let patch: Partial<ProviderRuntimeModel> | undefined;
   if (lower.startsWith(GEMINI_2_5_PRO_PREFIX)) {
@@ -168,7 +189,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       preferExternalFirstForCli: true,
     };
-  } else if (lower.startsWith(GEMINI_3_1_PRO_PREFIX) || lower === GEMINI_PRO_LATEST_ID) {
+  } else if (GEMINI_3_PRO_RE.test(lower) || lower === GEMINI_PRO_LATEST_ID) {
     family = {
       googleTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_PRO_TEMPLATE_IDS,
@@ -177,22 +198,13 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     if (params.providerId === "google" || params.providerId === GOOGLE_GEMINI_CLI_PROVIDER_ID) {
       patch = { reasoning: true };
     }
-  } else if (
-    lower.startsWith(GEMINI_3_1_FLASH_LITE_PREFIX) ||
-    lower.startsWith(GEMINI_3_FLASH_LITE_PREFIX) ||
-    lower === GEMINI_FLASH_LITE_LATEST_ID
-  ) {
+  } else if (GEMINI_3_FLASH_LITE_RE.test(lower) || lower === GEMINI_FLASH_LITE_LATEST_ID) {
     family = {
       googleTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
       antigravityTemplateIds: GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS,
     };
-  } else if (
-    lower.startsWith(GEMINI_3_1_FLASH_PREFIX) ||
-    lower.startsWith(GEMINI_3_5_FLASH_PREFIX) ||
-    lower.startsWith(GEMINI_3_FLASH_PREFIX) ||
-    lower === GEMINI_FLASH_LATEST_ID
-  ) {
+  } else if (GEMINI_3_FLASH_RE.test(lower) || lower === GEMINI_FLASH_LATEST_ID) {
     family = {
       googleTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,
       cliTemplateIds: GEMINI_3_1_FLASH_TEMPLATE_IDS,

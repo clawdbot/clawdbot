@@ -48,6 +48,14 @@
     "target": "Claws"
   },
   {
+    "source": "Cron jobs",
+    "target": "定时任务"
+  },
+  {
+    "source": "MCP configuration",
+    "target": "MCP 配置"
+  },
+  {
     "source": "ClawRouter (managed multi-provider routing)",
     "target": "ClawRouter（托管式多提供商路由）"
   },
@@ -1606,5 +1614,25 @@
   {
     "source": "Baseten (Inkling + Model APIs)",
     "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "Multi-user mode",
+    "target": "多用户模式"
+  },
+  {
+    "source": "The main session",
+    "target": "主会话"
+  },
+  {
+    "source": "Session management",
+    "target": "会话管理"
+  },
+  {
+    "source": "Presence",
+    "target": "在线状态"
+  },
+  {
+    "source": "Gateway security",
+    "target": "Gateway 安全"
   }
 ]

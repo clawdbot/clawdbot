@@ -58,7 +58,7 @@ type WhatsAppSharedConfig = CommonChannelMessagingConfig<string[], string> &
   };
 
 type WhatsAppSpecificConfig = {
-  /** Inbound message prefix override (WhatsApp only). */
+  /** @deprecated Doctor-only legacy input. */
   messagePrefix?: string;
 };
 

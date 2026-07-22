@@ -575,7 +575,7 @@ Warning and audit signals:
 - `SECRETS_REF_OVERRIDES_PLAINTEXT` (runtime warning)
 - `REF_SHADOWED` (audit finding when `auth-profiles.json` credentials take precedence over `openclaw.json` refs)
 
-Google Chat compatibility: `serviceAccountRef` takes precedence over plaintext `serviceAccount`; the plaintext value is ignored once the sibling ref is set.
+Google Chat `serviceAccount` accepts inline JSON or a SecretRef. Doctor moves the retired sibling `serviceAccountRef` into this canonical field when it is unset.
 
 ## Activation triggers
 

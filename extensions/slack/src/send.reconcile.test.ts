@@ -307,7 +307,7 @@ describe("reconcileSlackUnknownSend", () => {
     const userIdentityCfg = {
       channels: {
         slack: {
-          identity: "user",
+          postAs: "user",
           userToken: "test-user-token",
         },
       },

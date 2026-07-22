@@ -17,7 +17,7 @@ describe("resolveCronStyleNow", () => {
       8_640_000_000_000_001,
     );
 
-    expect(result.formattedTime).toBe("Saturday, May 30th, 2026 - 12:00");
+    expect(result.formattedTime).toBe("Saturday, May 30th, 2026 - 12:00 PM");
     expect(result.timeLine).toContain("Reference UTC: 2026-05-30 12:00 UTC");
   });
 

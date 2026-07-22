@@ -1,6 +1,7 @@
 /** Builds compact prompt notes for inbound media attachments. */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeMediaFacts, resolveMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { getMediaDir } from "../media/store.js";
 import type { MsgContext } from "./templating.js";
 
@@ -130,8 +131,13 @@ function collectTranscribedAudioAttachmentIndices(
   return transcribedAudioIndices;
 }
 
-/** Formats a prompt-visible media attachment note, omitting audio already represented by transcript. */
-export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
+type InboundMediaNoteProjection = {
+  text?: string;
+  media: MediaFact[];
+};
+
+/** Formats prompt-visible attachment text and retains the facts represented by it. */
+export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNoteProjection {
   // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
   const paths =
@@ -141,7 +147,7 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
         ? [ctx.MediaPath.trim()]
         : [];
   if (paths.length === 0) {
-    return undefined;
+    return { media: [] };
   }
 
   const transcribedAudioIndices = collectTranscribedAudioAttachmentIndices(ctx, paths.length);
@@ -187,14 +193,26 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       return true;
     });
   if (entries.length === 0) {
-    return undefined;
+    return { media: [] };
   }
+  const facts = resolveMediaFacts(ctx);
+  const media = normalizeMediaFacts(
+    entries.map((entry) => ({
+      ...facts[entry.index],
+      path: entry.path,
+      url: entry.url,
+      contentType: entry.type,
+    })),
+  );
   if (entries.length === 1) {
-    return formatMediaAttachedLine({
-      path: entries[0]?.path ?? "",
-      type: entries[0]?.type,
-      url: entries[0]?.url,
-    });
+    return {
+      text: formatMediaAttachedLine({
+        path: entries[0]?.path ?? "",
+        type: entries[0]?.type,
+        url: entries[0]?.url,
+      }),
+      media,
+    };
   }
 
   const count = entries.length;
@@ -210,5 +228,5 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
       }),
     );
   }
-  return lines.join("\n");
+  return { text: lines.join("\n"), media };
 }

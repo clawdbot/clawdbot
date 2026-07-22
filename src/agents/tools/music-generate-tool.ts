@@ -159,13 +159,13 @@ function resolveMusicGenerationModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.musicGenerationModel,
+    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.music,
     providers: () => listRuntimeMusicGenerationProviders({ config: params.cfg }),
   });
 }
 
 function hasExplicitMusicGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.musicGenerationModel));
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.music));
 }
 
 function resolveSelectedMusicGenerationProvider(params: {
@@ -590,7 +590,7 @@ export function createMusicGenerateTool(options?: {
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.musicGenerationModel,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.music,
       providerKey: "musicGenerationProviders",
     })
   ) {

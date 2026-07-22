@@ -1408,6 +1408,7 @@ export async function handleFeishuMessage(params: {
           rawBody: commandFacingContent,
           commandBody: commandFacingContent,
         },
+        sessionTranscript: { historyLimit: isGroup ? historyLimit : 0 },
         access: {
           mentions: {
             canDetectMention: isGroup,

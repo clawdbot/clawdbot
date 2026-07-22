@@ -3859,18 +3859,18 @@ describe("gateway Gmail hot reload handlers", () => {
     const fourthRef = { source: "env" as const, provider: "default", id: "TTS_FOURTH" };
     const sourceConfig = (ref: typeof firstRef): OpenClawConfig => ({
       gateway: { reload: {} },
-      messages: { tts: { providers: { elevenlabs: { apiKey: ref } } } },
+      tts: { providers: { elevenlabs: { apiKey: ref } } },
     });
     const runtimeConfig: OpenClawConfig = {
       gateway: { reload: {} },
-      messages: { tts: { providers: { elevenlabs: { apiKey: String(42) } } } },
+      tts: { providers: { elevenlabs: { apiKey: String(42) } } },
     };
     const ttsContractDigest = "tts-source-only-contract";
     const initialSourceConfig = sourceConfig(firstRef);
     const nextSourceConfig = sourceConfig(secondRef);
     const activeWarning = {
       code: "SECRETS_OWNER_UNAVAILABLE" as const,
-      path: "messages.tts.providers.elevenlabs.apiKey",
+      path: "tts.providers.elevenlabs.apiKey",
       message: "Text-to-speech remains unavailable.",
     };
     activateSecretsRuntimeSnapshot({
@@ -3899,7 +3899,7 @@ describe("gateway Gmail hot reload handlers", () => {
           ownerKind: "capability",
           ownerId: "tts",
           state: "unavailable",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           refKeys: ["env:default:TTS_FIRST"],
           reason: "secret reference was not found",
         },

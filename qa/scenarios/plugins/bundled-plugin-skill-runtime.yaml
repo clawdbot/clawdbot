@@ -5,9 +5,9 @@ scenario:
   surface: skills
   coverage:
     primary:
-      - plugins.skills
+      - plugins.activation-skills
     secondary:
-      - plugins.runtime
+      - plugins.activation-runtime
   objective: Verify packaged bundled plugin skills load from dist-runtime instead of being skipped by path-containment checks.
   successCriteria:
     - The runtime-packaged bundled plugin tree is used as OPENCLAW_BUNDLED_PLUGINS_DIR.

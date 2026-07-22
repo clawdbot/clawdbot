@@ -145,6 +145,108 @@ final class RootSidebarModel {
         }
     }
 
+    func observeSessionEvents(appModel: NodeAppModel) async {
+        await Self.consumeSubscribedSessionEvents(
+            makeStream: {
+                await appModel.operatorSession.subscribeServerEvents(bufferingNewest: 200)
+            },
+            subscribe: {
+                _ = try await appModel.operatorSession.request(
+                    method: "sessions.subscribe",
+                    paramsJSON: nil,
+                    timeoutSeconds: 12)
+            },
+            onEvent: { [weak self] frame in
+                await self?.handleSessionEvent(frame, appModel: appModel) ?? false
+            })
+    }
+
+    static func consumeSubscribedSessionEvents(
+        makeStream: @MainActor () async -> AsyncStream<EventFrame>,
+        subscribe: @MainActor () async throws -> Void,
+        onEvent: @MainActor (EventFrame) async -> Bool,
+        retryDelays: [Duration] = [
+            .seconds(1),
+            .seconds(2),
+            .seconds(4),
+            .seconds(8),
+            .seconds(16),
+            .seconds(30),
+        ],
+        sleep: @MainActor (Duration) async throws -> Void = { delay in
+            try await Task.sleep(for: delay)
+        }) async
+    {
+        var failureCount = 0
+        while !Task.isCancelled {
+            // Register the local continuation before the RPC. The gateway may
+            // synchronously emit a one-off final digest while handling subscribe.
+            let stream = await makeStream()
+            do {
+                try await subscribe()
+                failureCount = 0
+            } catch is CancellationError {
+                return
+            } catch {
+                failureCount += 1
+                guard await self.waitForSessionEventRetry(
+                    failureCount: failureCount,
+                    retryDelays: retryDelays,
+                    sleep: sleep)
+                else { return }
+                continue
+            }
+
+            for await frame in stream {
+                guard !Task.isCancelled else { return }
+                if await onEvent(frame) {
+                    break
+                }
+            }
+            guard !Task.isCancelled else { return }
+            failureCount += 1
+            guard await self.waitForSessionEventRetry(
+                failureCount: failureCount,
+                retryDelays: retryDelays,
+                sleep: sleep)
+            else { return }
+        }
+    }
+
+    private static func waitForSessionEventRetry(
+        failureCount: Int,
+        retryDelays: [Duration],
+        sleep: @MainActor (Duration) async throws -> Void) async -> Bool
+    {
+        let delay = retryDelays.isEmpty
+            ? .zero
+            : retryDelays[min(max(0, failureCount - 1), retryDelays.count - 1)]
+        do {
+            try await sleep(delay)
+            return !Task.isCancelled
+        } catch {
+            return false
+        }
+    }
+
+    private func handleSessionEvent(_ frame: EventFrame, appModel: NodeAppModel) async -> Bool {
+        guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else { return false }
+        switch event {
+        case .sessionsChanged:
+            await self.refreshSessions(appModel: appModel)
+        case let .sessionObserver(digest):
+            self.sessions = ChatSessionSidebarModel.applying(
+                observerDigest: digest,
+                to: self.sessions)
+        case .seqGap:
+            await self.refreshSessions(appModel: appModel)
+            return true
+        default:
+            return false
+        }
+        return false
+    }
+
     func reportSessionError(_ error: any Error) {
         self.sessionErrorText = error.localizedDescription
     }

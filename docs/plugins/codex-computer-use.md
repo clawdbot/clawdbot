@@ -320,10 +320,12 @@ tools when available, and the specific message for the failing setup step.
 
 ## macOS permissions
 
-Computer Use is macOS-specific. The Codex-owned MCP server may need local OS
-permissions before it can inspect or control apps. If OpenClaw says Computer
-Use is installed but the MCP server is unavailable, verify the Codex-side
-Computer Use setup first:
+This Codex-owned Computer Use path runs on macOS, where the MCP server may need
+local OS permissions before it can inspect or control apps. (For cross-platform
+desktop control on Windows and Linux node hosts, see the
+[cua-computer fulfiller](/nodes/computer-use#windows-and-linux-experimental-via-cua-driver).)
+If OpenClaw says Computer Use is installed but the MCP server is unavailable,
+verify the Codex-side Computer Use setup first:
 
 - Codex app-server is running on the same host where desktop control should
   happen.

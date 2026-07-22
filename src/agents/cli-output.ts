@@ -7,7 +7,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentPlanStep } from "../channels/streaming.js";
-import type { CliBackendConfig } from "../config/types.js";
+import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { isRecord } from "../utils.js";
 import type {

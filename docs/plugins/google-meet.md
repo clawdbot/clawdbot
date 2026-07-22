@@ -199,7 +199,7 @@ Route Meet through that node:
 {
   gateway: {
     nodes: {
-      allowCommands: ["googlemeet.chrome", "browser.proxy"],
+      commands: { allow: ["googlemeet.chrome", "browser.proxy"] },
     },
   },
   plugins: {
@@ -244,7 +244,7 @@ If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one con
 | Symptom                                                  | Fix                                                                                                                                                                                                                                                                 |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Configured Google Meet node ... is not usable: offline` | The pinned node is known but unavailable. Report the setup blocker; do not silently fall back to another transport unless asked.                                                                                                                                    |
-| `No connected Google Meet-capable node`                  | Run `openclaw node run` in the VM, approve pairing, and run `openclaw plugins enable google-meet` and `openclaw plugins enable browser` there. Confirm `gateway.nodes.allowCommands` includes `googlemeet.chrome` and `browser.proxy`.                              |
+| `No connected Google Meet-capable node`                  | Run `openclaw node run` in the VM, approve pairing, and run `openclaw plugins enable google-meet` and `openclaw plugins enable browser` there. Confirm `gateway.nodes.commands.allow` includes `googlemeet.chrome` and `browser.proxy`.                             |
 | `BlackHole 2ch audio device not found`                   | Install `blackhole-2ch` on the host being checked and reboot.                                                                                                                                                                                                       |
 | `BlackHole 2ch audio device not found on the node`       | Install `blackhole-2ch` in the VM and reboot the VM.                                                                                                                                                                                                                |
 | Chrome opens but cannot join                             | Sign in to the browser profile in the VM, or keep `chrome.guestName` set. Guest auto-join uses OpenClaw browser automation through the node browser proxy; point the node's `browser.defaultProfile` (or a named existing-session profile) at the profile you want. |
@@ -762,14 +762,12 @@ ElevenLabs for both agent-mode listening and speaking:
 
 ```json5
 {
-  messages: {
-    tts: {
-      provider: "elevenlabs",
-      providers: {
-        elevenlabs: {
-          modelId: "eleven_v3",
-          speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
-        },
+  tts: {
+    provider: "elevenlabs",
+    providers: {
+      elevenlabs: {
+        modelId: "eleven_v3",
+        speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
       },
     },
   },
@@ -795,7 +793,7 @@ ElevenLabs for both agent-mode listening and speaking:
 }
 ```
 
-The persistent Meet voice comes from `messages.tts.providers.elevenlabs.speakerVoiceId`. Agent replies can also use per-reply `[[tts:speakerVoiceId=... model=eleven_v3]]` directives when TTS model overrides are enabled, but config is the deterministic default for meetings. On join, logs show `transcriptionProvider=elevenlabs`, and each spoken reply logs `provider=elevenlabs model=eleven_v3 speakerVoiceId=<voiceId>`.
+The persistent Meet voice comes from `tts.providers.elevenlabs.speakerVoiceId`. Agent replies can also use per-reply `[[tts:speakerVoiceId=... model=eleven_v3]]` directives when TTS model overrides are enabled, but config is the deterministic default for meetings. On join, logs show `transcriptionProvider=elevenlabs`, and each spoken reply logs `provider=elevenlabs model=eleven_v3 speakerVoiceId=<voiceId>`.
 
 Twilio-only config:
 
@@ -1038,7 +1036,7 @@ The node must be connected and list `googlemeet.chrome` plus `browser.proxy`; th
 {
   gateway: {
     nodes: {
-      allowCommands: ["browser.proxy", "googlemeet.chrome"],
+      commands: { allow: ["browser.proxy", "googlemeet.chrome"] },
     },
   },
 }

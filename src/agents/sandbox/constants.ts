@@ -42,6 +42,7 @@ export const DEFAULT_TOOL_DENY = [
   "browser",
   "canvas",
   "computer",
+  "mobile_ui",
   "nodes",
   "cron",
   "gateway",

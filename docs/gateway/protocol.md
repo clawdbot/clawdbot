@@ -355,7 +355,7 @@ path; skills are not accepted in `connect` params. Each descriptor contains a
 safe name, description, and bounded `SKILL.md` content. The Gateway parses that
 content with the normal skills loader, includes it in agent skill snapshots
 while the node is connected, and removes it on disconnect. Set
-`gateway.nodes.skills.enabled: false` to ignore node-published skills.
+`gateway.nodes.allowSkills: false` to ignore node-published skills.
 
 ## Presence
 
@@ -531,7 +531,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `tts.enable` and `tts.disable` toggle TTS prefs state.
     - `tts.setProvider` updates the preferred TTS provider.
     - `tts.convert` runs one-shot text-to-speech conversion.
-    - `tts.speak` (`operator.write`) renders non-empty `text` with the configured general TTS provider chain and returns one whole clip inline as `audioBase64`, plus `provider` and optional `outputFormat`, `mimeType`, and `fileExtension` metadata. Unlike `tts.convert`, it does not return a Gateway-local path; unlike `talk.speak`, it does not require a Talk provider. Text above `messages.tts.maxTextLength` returns `INVALID_REQUEST`; synthesis failures return `UNAVAILABLE`.
+    - `tts.speak` (`operator.write`) renders non-empty `text` with the configured general TTS provider chain and returns one whole clip inline as `audioBase64`, plus `provider` and optional `outputFormat`, `mimeType`, and `fileExtension` metadata. Unlike `tts.convert`, it does not return a Gateway-local path; unlike `talk.speak`, it does not require a Talk provider. Text above `tts.maxTextLength` returns `INVALID_REQUEST`; synthesis failures return `UNAVAILABLE`.
 
   </Accordion>
 
@@ -540,7 +540,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
     - `config.get` returns the current on-disk config snapshot, raw root-file `hash`, resolved `configRevisionHash`, and optional `appliedConfigHash` for the resolved revision accepted by the active Gateway runtime.
     - `config.set` writes a validated config payload.
-    - `config.patch` merges a partial config update. Destructive array replacement requires the affected path in `replacePaths`; nested arrays under array entries use `[]` paths such as `agents.list[].skills`.
+    - `config.patch` merges a partial config update. Destructive array replacement requires the affected path in `replacePaths`; nested arrays under array entries use `[]` paths such as `agents.entries.*.skills`.
     - `config.apply` validates + replaces the full config payload.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, generation metadata, plugin + channel schema metadata when loadable. It includes `title` / `description` metadata from the same labels/help text as the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
     - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, optional `reloadKind`, and immediate child summaries for UI/CLI drill-down. `reloadKind` is one of `restart`, `hot`, or `none` (`src/config/schema.ts`) and mirrors the gateway config reload planner for the requested path. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, optional `reloadKind`, plus the matched `hint` / `hintPath`.
@@ -607,7 +607,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
-    - `mcp.tools.call.v1` is the headless node-host command for calling a configured node-local MCP tool. It is carried through `node.invoke`, requires the node to declare the command, and remains subject to pairing approval and `gateway.nodes.denyCommands`.
+    - `mcp.tools.call.v1` is the headless node-host command for calling a configured node-local MCP tool. It is carried through `node.invoke`, requires the node to declare the command, and remains subject to pairing approval and `gateway.nodes.commands.deny`.
     - `node.event` carries node-originated events back into the gateway.
     - `node.pluginTools.update` is the only publication path for replacing the connected node's agent-visible plugin/MCP tool descriptors; `connect` params do not carry them.
     - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
@@ -1107,11 +1107,7 @@ not replay rejected requests after reconnecting.
   and require approval.
 - WS clients normally include `device` identity during `connect` (operator +
   node). The only device-less operator exceptions are explicit trust paths:
-  - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure
-    HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
-  - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe
-    security downgrade).
   - direct-loopback `gateway-client` backend RPCs on the reserved internal
     helper path.
 - Omitting device identity has scope consequences. When a device-less
@@ -1119,9 +1115,6 @@ not replay rejected requests after reconnecting.
   still clears self-declared scopes to an empty set unless that path has a
   named scope-preservation exception. Scope-gated methods then fail with
   `missing scope`.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth=true` is a Control UI
-  break-glass scope-preservation path. It does not grant scopes to arbitrary
-  custom backend or CLI-shaped WebSocket clients.
 - The reserved direct-loopback `gateway-client` backend helper path preserves
   scopes only for internal local control-plane RPCs; custom backend IDs do
   not receive this exception.

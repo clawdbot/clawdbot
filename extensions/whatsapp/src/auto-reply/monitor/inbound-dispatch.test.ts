@@ -680,6 +680,16 @@ describe("whatsapp inbound dispatch", () => {
     expect(responsePrefix).toBeUndefined();
   });
 
+  it("retains the global response prefix when the shared pipeline has no value", async () => {
+    const responsePrefix = resolveWhatsAppResponsePrefix({
+      cfg: { messages: { responsePrefix: "[legacy]" } } as never,
+      agentId: "main",
+      isSelfChat: false,
+    });
+
+    expect(responsePrefix).toBe("[legacy]");
+  });
+
   it("clears pending group history when the dispatcher does not queue a final reply", async () => {
     const groupHistories = new Map<string, Array<{ sender: string; body: string }>>([
       ["whatsapp:default:group:123@g.us", [{ sender: "Alice (+111)", body: "first" }]],

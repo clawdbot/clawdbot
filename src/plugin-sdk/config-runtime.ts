@@ -131,7 +131,6 @@ export type {
   TtsModelOverrideConfig,
   TtsPersonaConfig,
   TtsPersonaFallbackPolicy,
-  TtsPersonaPromptConfig,
   TtsProvider,
 } from "../config/types.js";
 export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";

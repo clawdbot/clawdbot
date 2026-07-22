@@ -24,7 +24,6 @@ function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
   return applyModelCompatPatch(model as T & { compat?: ModelCompatConfig }, {
     toolSchemaProfile: "xai",
     unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
-    nativeWebSearchTool: true,
     toolCallArgumentsEncoding: "html-entities",
   }) as T;
 }

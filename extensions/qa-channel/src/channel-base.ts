@@ -7,7 +7,7 @@ import {
 } from "./accounts.js";
 import { qaChannelPluginConfigSchema } from "./config-schema.js";
 import type { ChannelPlugin } from "./runtime-api.js";
-import { applyQaSetup } from "./setup.js";
+import { applyQaSetup, type QaChannelSetupInput } from "./setup.js";
 import type { CoreConfig } from "./types.js";
 
 export const QA_CHANNEL_ID = "qa-channel" as const;
@@ -44,7 +44,7 @@ export function createQaChannelPluginBase(
         applyQaSetup({
           cfg,
           accountId,
-          input: input as Record<string, unknown>,
+          input: input as QaChannelSetupInput,
         }),
     },
     config: {

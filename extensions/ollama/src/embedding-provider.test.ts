@@ -283,7 +283,7 @@ describe("ollama embedding provider", () => {
           apiKey: { source: "env", provider: "default", id: "OLLAMA_API_KEY" },
         },
       }),
-    ).rejects.toThrow(/agents\.\*\.memorySearch\.remote\.apiKey: unresolved SecretRef/i);
+    ).rejects.toThrow(/memory\.search\.remote\.apiKey: unresolved SecretRef/i);
   });
 
   it("falls back to env key when provider apiKey is an unresolved SecretRef", async () => {

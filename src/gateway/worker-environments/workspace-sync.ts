@@ -50,11 +50,13 @@ import {
 } from "./workspace-sync-helpers.js";
 import { runLocalCommandToFile, writeEligibleGitFiles } from "./workspace-sync-local.js";
 export { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
-import { REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS } from "./workspace-quiescence-renew-script.js";
+import {
+  REMOTE_WORKSPACE_QUIESCE_JS,
+  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+  REMOTE_WORKSPACE_RESUME_JS,
+} from "./workspace-quiescence-scripts.js";
 import {
   REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
   REMOTE_WORKSPACE_MANIFEST_JS,
   REMOTE_WORKSPACE_SETUP_SCRIPT,
 } from "./workspace-sync-scripts.js";

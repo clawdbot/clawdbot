@@ -1468,9 +1468,8 @@ export default definePluginEntry({
         return undefined;
       }
       const agentId = normalizeAgentId(rawAgentId);
-      const overrides = resolveAgentConfig(runtimeConfig, agentId)?.memorySearch;
-      const enabled =
-        overrides?.enabled ?? runtimeConfig.agents?.defaults?.memorySearch?.enabled ?? true;
+      const overrides = resolveAgentConfig(runtimeConfig, agentId)?.memory?.search;
+      const enabled = overrides?.enabled ?? runtimeConfig.memory?.search?.enabled ?? true;
       return enabled ? agentId : undefined;
     };
     const resolveCliAgentId = (rawAgentId: unknown): string => {

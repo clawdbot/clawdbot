@@ -2,10 +2,11 @@ title: Telegram compact tools command reply
 
 scenario:
   id: telegram-tools-compact-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify Telegram renders the compact model-tool inventory.
   successCriteria:
     - The compact tools command reaches native command dispatch.

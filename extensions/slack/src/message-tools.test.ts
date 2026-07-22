@@ -223,7 +223,7 @@ describe("Slack message tools", () => {
     const cfg = {
       channels: {
         slack: {
-          identity: "user",
+          postAs: "user",
           userToken: "test-user-token",
           appToken: "test-app-token",
         },

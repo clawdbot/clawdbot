@@ -21,6 +21,7 @@
     "CONFIG_SHELL",
     "CONFIG_SITE",
     "CORECLR_PROFILER",
+    "CPP",
     "CXX",
     "DOTNET_ADDITIONAL_DEPS",
     "DOTNET_STARTUP_HOOKS",
@@ -269,5 +270,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 264
+  "expectedTotalReportedEntries": 265
 }

@@ -36,13 +36,9 @@ function createDefaultSpawnConfig(): OpenClawConfig {
     session: {
       mainKey: "main",
       scope: "per-sender",
-    },
-    channels: {
-      discord: {
-        threadBindings: {
-          enabled: true,
-          spawnSessions: true,
-        },
+      threadBindings: {
+        enabled: true,
+        spawnSessions: true,
       },
     },
   };
@@ -97,21 +93,24 @@ const hoisted = vi.hoisted(() => {
       >;
       return store[scope.sessionKey];
     };
+    const listMockEntries = (
+      scope: {
+        agentId?: string;
+        env?: NodeJS.ProcessEnv;
+        storePath?: string;
+      } = {},
+    ) => {
+      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+        string,
+        SessionEntry
+      >;
+      return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    };
     return {
-      listSessionEntries: (
-        scope: {
-          agentId?: string;
-          env?: NodeJS.ProcessEnv;
-          storePath?: string;
-        } = {},
-      ) => {
-        const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
-          string,
-          SessionEntry
-        >;
-        return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
-      },
+      listSessionEntries: listMockEntries,
+      listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
+      loadSessionEntryReadOnly: loadMockEntry,
       resolveSessionTranscriptRuntimeTarget: async (scope: {
         agentId: string;
         sessionId: string;
@@ -629,12 +628,11 @@ function enableLineCurrentConversationBindings(): void {
 function enableTelegramCurrentConversationBindings(): void {
   replaceSpawnConfig({
     ...hoisted.state.cfg,
-    channels: {
-      ...hoisted.state.cfg.channels,
-      telegram: {
-        threadBindings: {
-          enabled: true,
-        },
+    session: {
+      ...hoisted.state.cfg.session,
+      threadBindings: {
+        ...hoisted.state.cfg.session?.threadBindings,
+        enabled: true,
       },
     },
   });
@@ -2532,12 +2530,11 @@ describe("spawnAcpDirect", () => {
   it("fails fast when Discord ACP thread spawn is disabled", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
-      channels: {
-        discord: {
-          threadBindings: {
-            enabled: true,
-            spawnSessions: false,
-          },
+      session: {
+        ...hoisted.state.cfg.session,
+        threadBindings: {
+          enabled: true,
+          spawnSessions: false,
         },
       },
     });

@@ -3,6 +3,10 @@
  * token usage, chooses chunking strategy, and preserves active tool-use pairs
  * while splitting history for summaries.
  */
+import {
+  projectCompactionPlanningMessages,
+  readCompactionPlanningOmittedChars,
+} from "./compaction-planning-projection.js";
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
@@ -51,7 +55,7 @@ export type HistoryPrunePlan = {
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details and runtime-context transcript entries must never enter LLM-facing compaction.
   const safe = sanitizeCompactionMessages(messages);
-  return safe.reduce((sum, message) => sum + estimateTokens(message), 0);
+  return safe.reduce((sum, message) => sum + estimateCompactionPlanningTokens(message), 0);
 }
 
 /**
@@ -65,7 +69,9 @@ function estimatePerMessageTokens(messages: AgentMessage[]): number[] {
   const detailStripped = stripToolResultDetails(messages);
   // stripRuntimeContextCustomMessages filters by reference, so kept entries keep their identity.
   const modelVisible = new Set(stripRuntimeContextCustomMessages(detailStripped));
-  return detailStripped.map((message) => (modelVisible.has(message) ? estimateTokens(message) : 0));
+  return detailStripped.map((message) =>
+    modelVisible.has(message) ? estimateCompactionPlanningTokens(message) : 0,
+  );
 }
 
 /** Removes runtime-only context and tool-result details before token estimates or summaries. */
@@ -76,6 +82,20 @@ export function sanitizeCompactionMessages(messages: AgentMessage[]): AgentMessa
 /** Estimates one message using the same sanitization path as multi-message planning. */
 function estimateCompactionMessageTokens(message: AgentMessage): number {
   return estimateMessagesTokens([message]);
+}
+
+function estimateCompactionPlanningTokens(message: AgentMessage): number {
+  const omittedChars = readCompactionPlanningOmittedChars(message);
+  if (omittedChars === 0) {
+    return estimateTokens(message);
+  }
+  return estimateTokens(message) + Math.ceil(omittedChars / 4);
+}
+
+/** Builds a bounded planning projection that preserves token pressure accounting. */
+export function projectCompactionMessagesForPlanning(messages: AgentMessage[]): AgentMessage[] {
+  const safe = sanitizeCompactionMessages(messages);
+  return projectCompactionPlanningMessages(safe);
 }
 
 /** Clamps requested split parts to a usable count for the available messages. */

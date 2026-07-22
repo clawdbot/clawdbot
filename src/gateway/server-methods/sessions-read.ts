@@ -19,7 +19,7 @@ import {
   serializeSessionCleanupResult,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { listSessionEntries } from "../../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -132,7 +132,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const targetSessionKeys =
           scopedSessionKeys ??
           (target && !isPerAgentSessionStoreConfig(cfg.session?.store)
-            ? listSessionEntries({ agentId: target.agentId, storePath: target.storePath })
+            ? listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
                 .map((entry) => entry.sessionKey)
                 .filter((sessionKey) => {
                   const parsed = parseAgentSessionKey(sessionKey);

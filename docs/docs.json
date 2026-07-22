@@ -1233,6 +1233,7 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/main-session",
+                  "concepts/multi-user",
                   "concepts/session",
                   "concepts/session-search",
                   "concepts/channel-docking",

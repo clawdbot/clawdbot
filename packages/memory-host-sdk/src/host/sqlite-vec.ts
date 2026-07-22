@@ -11,7 +11,7 @@ type SqliteVecModule = {
 
 const SQLITE_VEC_MODULE_ID = "sqlite-vec";
 const SQLITE_VEC_CONFIG_HINT =
-  "Set agents.defaults.memorySearch.store.vector.extensionPath, or an agent-specific memorySearch.store.vector.extensionPath, to a sqlite-vec loadable extension path.";
+  "Set memory.search.store.vector.extensionPath, or an agent-specific memory.search.store.vector.extensionPath, to a sqlite-vec loadable extension path.";
 
 async function loadSqliteVecModule(): Promise<SqliteVecModule> {
   return import(SQLITE_VEC_MODULE_ID) as Promise<SqliteVecModule>;

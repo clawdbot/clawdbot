@@ -265,7 +265,6 @@ describe("monitorSlackProvider tool results", () => {
         ackReaction: "👀",
         ackReactionScope: "group-mentions",
         groupChat: { visibleReplies: "automatic" },
-        removeAckAfterReply: true,
         statusReactions: statusReactionsEnabled
           ? { enabled: true, timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 } }
           : { enabled: false },

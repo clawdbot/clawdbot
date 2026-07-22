@@ -16,6 +16,7 @@ type UserTurnSessionEntry = {
 
 export type PersistedUserTurnMediaInput = Pick<MediaFactInput, "contentType" | "path" | "url"> & {
   kind?: string | null;
+  workspaceDir?: string | null;
 };
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;

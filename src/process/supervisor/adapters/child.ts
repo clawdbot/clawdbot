@@ -8,6 +8,11 @@ import {
 } from "../../../plugin-sdk/windows-spawn.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
+import {
+  addSecretInputStdio,
+  type SpawnStdioEntry,
+  writeSecretInputToChild,
+} from "../../spawn-secret-input.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -15,7 +20,7 @@ import {
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
-import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
+import type { ManagedRunStdin, SpawnProcessAdapter, SpawnSecretInput } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
@@ -78,6 +83,7 @@ export async function createChildAdapter(params: {
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+  secretInput?: SpawnSecretInput;
 }): Promise<ChildAdapter> {
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const invocation = resolveChildInvocation({
@@ -96,19 +102,17 @@ export async function createChildAdapter(params: {
   // existing POSIX detached behavior.
   const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
 
+  const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
+  addSecretInputStdio(stdio, params.secretInput);
+
   const options: SpawnOptions = {
     cwd: params.cwd,
     env: preparedSpawn.env,
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio,
     detached: useDetached,
     windowsHide: true,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   };
-  if (stdinMode === "inherit") {
-    options.stdio = ["inherit", "pipe", "pipe"];
-  } else {
-    options.stdio = ["pipe", "pipe", "pipe"];
-  }
 
   const spawned = await spawnWithFallback({
     argv: [preparedSpawn.command, ...preparedSpawn.args],
@@ -396,6 +400,15 @@ export async function createChildAdapter(params: {
     }
     settleWait(resolveObservedExitState(childCloseState));
   });
+
+  if (params.secretInput) {
+    try {
+      await writeSecretInputToChild(spawned.child, params.secretInput);
+    } catch (error) {
+      spawned.child.kill("SIGKILL");
+      throw error;
+    }
+  }
 
   const wait = async () => {
     if (waitResult) {

@@ -49,16 +49,12 @@ export function resolveSignalAccount(params: {
   const merged = mergeSignalAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const host = normalizeOptionalString(merged.httpHost) ?? "127.0.0.1";
-  const port = merged.httpPort ?? 8080;
-  const baseUrl = normalizeOptionalString(merged.httpUrl) ?? `http://${host}:${port}`;
+  const baseUrl = normalizeOptionalString(merged.httpUrl) ?? "http://127.0.0.1:8080";
   const configured = Boolean(
     normalizeOptionalString(merged.account) ||
     normalizeOptionalString(merged.configPath) ||
     normalizeOptionalString(merged.httpUrl) ||
     normalizeOptionalString(merged.cliPath) ||
-    normalizeOptionalString(merged.httpHost) ||
-    typeof merged.httpPort === "number" ||
     typeof merged.autoStart === "boolean",
   );
   return {

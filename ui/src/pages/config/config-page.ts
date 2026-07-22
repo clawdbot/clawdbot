@@ -69,6 +69,7 @@ type ConfigSelection = { activeSection: string | null; activeSubsection: string 
 type ConfigPageSetting =
   | "textScale"
   | "sidebarLiveActivity"
+  | "showAdvancedSettings"
   | "chatSendShortcut"
   | "chatFollowUpMode"
   | "catalogOpenTarget"
@@ -712,6 +713,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       sidebarLiveActivity: next.sidebarLiveActivity,
+      showAdvancedSettings: next.showAdvancedSettings,
       chatSendShortcut: next.chatSendShortcut,
       chatFollowUpMode: next.chatFollowUpMode,
       catalogOpenTarget: next.catalogOpenTarget,
@@ -938,6 +940,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       sidebarLiveActivity: this.settings.sidebarLiveActivity !== false,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
+      showAdvancedSettings: this.settings.showAdvancedSettings === true,
+      setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
+      forceAdvancedSection: this.routeData?.advanced ? this.routeData.section : null,
       sessionObserverEnabled: controlUiConfig?.sessionObserver !== false,
       sessionObserverUtilityModel:
         typeof agentsDefaults?.utilityModel === "string" ? agentsDefaults.utilityModel : undefined,

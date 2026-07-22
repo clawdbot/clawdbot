@@ -2,8 +2,8 @@ title: ClawHub marketplace list package lane
 
 scenario:
   id: clawhub-marketplace-list
-  surface: clawhub-and-external-plugin-distribution
-  category: clawhub-and-external-plugin-distribution.plugin-lifecycle-and-health
+  surface: clawhub
+  category: clawhub.plugin-lifecycle-and-health
   coverage:
     primary:
       - clawhub.marketplace-list

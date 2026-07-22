@@ -12,6 +12,7 @@ vi.mock("../config/sessions/paths.js", () => ({ resolveStorePath }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   appendTranscriptEvent,
   loadSessionEntry,
+  loadSessionEntryReadOnly: loadSessionEntry,
   readSessionUpdatedAt,
 }));
 vi.mock("./turn/kernel.js", () => ({ dispatchChannelInboundTurn }));

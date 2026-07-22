@@ -271,7 +271,7 @@ async function requestGatewayDiagnosticsExportApproval(
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
   codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
 ): Promise<GatewayDiagnosticsApprovalResult> {
-  const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+  const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
     resolveSessionAgentId({

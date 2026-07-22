@@ -91,6 +91,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          install-trufflehog: "true"
 
       - name: Resolve release dist cache seeds
         id: dist-cache-seeds

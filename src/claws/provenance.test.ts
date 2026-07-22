@@ -9,9 +9,12 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
+import { ClawCronInstallError } from "./cron.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
+  persistClawPackageRef,
   persistClawInstallRecord,
+  readClawPackageRefs,
   readClawInstallRecord,
   updateClawInstallRecordStatus,
 } from "./provenance.js";
@@ -81,6 +84,44 @@ function readInstallRow(agentId: string, root: string) {
 }
 
 describe("Claw root install provenance", () => {
+  it("replays an exact package ref without losing its relationship or origin", async () => {
+    const { root, plan } = await makePlan();
+    const pkg = {
+      kind: "plugin" as const,
+      source: "clawhub" as const,
+      ref: "@acme/audit",
+      version: "1.2.3",
+      integrity: `sha256:${"a".repeat(64)}`,
+    };
+
+    persistClawPackageRef(plan, pkg, {
+      env: stateEnv(root),
+      nowMs: 42,
+      status: "pending",
+      relationship: "referenced",
+      origin: "claw-introduced",
+      independentOwner: false,
+    });
+    const replayed = persistClawPackageRef(plan, pkg, {
+      env: stateEnv(root),
+      nowMs: 84,
+      status: "complete",
+      relationship: "referenced",
+      origin: "pre-existing",
+      independentOwner: true,
+    });
+
+    expect(replayed).toMatchObject({
+      status: "complete",
+      relationship: "referenced",
+      origin: "claw-introduced",
+      independentOwner: true,
+      installedAtMs: 42,
+      updatedAtMs: 84,
+    });
+    expect(readClawPackageRefs({ env: stateEnv(root) })).toEqual([replayed]);
+  });
+
   it("persists package identity, agent ownership, workspace, and config digest", async () => {
     const { root, plan } = await makePlan();
 
@@ -93,7 +134,7 @@ describe("Claw root install provenance", () => {
       planIntegrity: plan.planIntegrity,
       agentId: "worker",
       workspace: plan.agent.workspace,
-      agentOwnedPaths: ['agents.list["worker"]'],
+      agentOwnedPaths: ['agents.entries["worker"]'],
       status: "complete",
       addedAtMs: 42,
     });
@@ -188,7 +229,7 @@ describe("applyClawAddPlan", () => {
     let config: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/operator/default" },
-        list: [{ id: "main", default: true }],
+        entries: { main: { default: true } },
       },
     };
 
@@ -210,16 +251,15 @@ describe("applyClawAddPlan", () => {
       installRecord: { agentId: "worker" },
     });
     expect(config.agents?.defaults).toEqual({ workspace: "/operator/default" });
-    expect(config.agents?.list).toEqual([
-      { id: "main", default: true },
-      {
-        id: "worker",
+    expect(config.agents?.entries).toEqual({
+      main: { default: true },
+      worker: {
         name: "Worker",
         identity: { name: "Work" },
         tools: { deny: ["exec"] },
         workspace: plan.agent.workspace,
       },
-    ]);
+    });
     await expect(access(plan.agent.workspace)).resolves.toBeUndefined();
   });
 
@@ -235,10 +275,10 @@ describe("applyClawAddPlan", () => {
       },
     });
 
-    expect(config.agents?.list).toEqual([
-      { id: "main", default: true },
-      expect.objectContaining({ id: "worker" }),
-    ]);
+    expect(config.agents?.entries).toEqual({
+      main: { default: true },
+      worker: expect.any(Object),
+    });
   });
 
   it("rejects overlap with the implicit main workspace before materializing it", async () => {
@@ -256,9 +296,14 @@ describe("applyClawAddPlan", () => {
           transform({ agents: { defaults: { workspace: mainWorkspace } } });
         },
       }),
-    ).rejects.toMatchObject({ code: "workspace_collision" });
+    ).resolves.toMatchObject({
+      status: "partial",
+      workspaceCreated: false,
+      configCommitted: false,
+      error: { code: "workspace_collision" },
+    });
     await expect(access(plan.agent.workspace)).rejects.toThrow();
-    expect(readInstallRow("worker", planRoot)).toBeUndefined();
+    expect(readInstallRow("worker", planRoot)?.status).toBe("partial");
   });
 
   it("rechecks agent collisions during the config commit and cleans the reserved workspace", async () => {
@@ -268,10 +313,15 @@ describe("applyClawAddPlan", () => {
       applyClawAddPlan(plan, {
         consentPlanIntegrity: plan.planIntegrity,
         commitConfig: async (transform) => {
-          transform({ agents: { list: [{ id: "worker" }] } });
+          transform({ agents: { entries: { worker: {} } } });
         },
       }),
-    ).rejects.toMatchObject({ code: "agent_id_collision" });
+    ).resolves.toMatchObject({
+      status: "partial",
+      workspaceCreated: false,
+      configCommitted: false,
+      error: { code: "agent_id_collision" },
+    });
     await expect(access(plan.agent.workspace)).rejects.toThrow();
   });
 
@@ -283,10 +333,15 @@ describe("applyClawAddPlan", () => {
         env: stateEnv(root),
         consentPlanIntegrity: plan.planIntegrity,
         commitConfig: async (transform) => {
-          transform({ agents: { list: [{ id: " Worker " }] } });
+          transform({ agents: { entries: { " Worker ": {} } } });
         },
       }),
-    ).rejects.toMatchObject({ code: "agent_id_collision" });
+    ).resolves.toMatchObject({
+      status: "partial",
+      workspaceCreated: false,
+      configCommitted: false,
+      error: { code: "agent_id_collision" },
+    });
     await expect(access(plan.agent.workspace)).rejects.toThrow();
   });
 
@@ -307,12 +362,17 @@ describe("applyClawAddPlan", () => {
         commitConfig: async (transform) => {
           transform({
             agents: {
-              list: [{ id: "other", workspace: join(aliasParent, "workspace-worker") }],
+              entries: { other: { workspace: join(aliasParent, "workspace-worker") } },
             },
           });
         },
       }),
-    ).rejects.toMatchObject({ code: "workspace_collision" });
+    ).resolves.toMatchObject({
+      status: "partial",
+      workspaceCreated: false,
+      configCommitted: false,
+      error: { code: "workspace_collision" },
+    });
     await expect(access(plan.agent.workspace)).rejects.toThrow();
   });
 
@@ -351,8 +411,13 @@ describe("applyClawAddPlan", () => {
         consentPlanIntegrity: plan.planIntegrity,
         env: stateEnv(root),
       }),
-    ).rejects.toMatchObject({ code: "workspace_collision" });
-    expect(readInstallRow("worker", root)).toBeUndefined();
+    ).resolves.toMatchObject({
+      status: "partial",
+      workspaceCreated: false,
+      configCommitted: false,
+      error: { code: "workspace_collision" },
+    });
+    expect(readInstallRow("worker", root)?.status).toBe("partial");
   });
 
   it("records parent-directory creation failures before workspace mutation", async () => {
@@ -399,20 +464,23 @@ describe("applyClawAddPlan", () => {
     let config: OpenClawConfig = {};
     let attempts = 0;
 
-    await expect(
-      applyClawAddPlan(plan, {
-        consentPlanIntegrity: plan.planIntegrity,
-        env: stateEnv(root),
-        commitConfig: async (transform) => {
-          attempts += 1;
-          if (attempts === 1) {
-            await writeFile(join(plan.agent.workspace, "leftover.txt"), "keep", "utf8");
-            throw new Error("config unavailable");
-          }
-          config = transform(config);
-        },
-      }),
-    ).rejects.toThrow("config unavailable");
+    const first = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      commitConfig: async (transform) => {
+        attempts += 1;
+        if (attempts === 1) {
+          await writeFile(join(plan.agent.workspace, "leftover.txt"), "keep", "utf8");
+          throw new Error("config unavailable");
+        }
+        config = transform(config);
+      },
+    });
+
+    expect(first).toMatchObject({
+      status: "partial",
+      error: { code: "config_commit_failed", message: "config unavailable" },
+    });
     expect(readInstallRow("worker", root)?.status).toBe("workspace_ready");
 
     const retry = await applyClawAddPlan(plan, {
@@ -428,7 +496,7 @@ describe("applyClawAddPlan", () => {
       workspaceCreated: true,
       configCommitted: true,
     });
-    expect(config.agents?.list).toContainEqual(expect.objectContaining({ id: "worker" }));
+    expect(config.agents?.entries?.worker).toBeDefined();
     expect(readInstallRow("worker", root)?.status).toBe("complete");
   });
 
@@ -451,7 +519,7 @@ describe("applyClawAddPlan", () => {
 
     expect(result.status).toBe("complete");
     await expect(access(plan.agent.workspace)).resolves.toBeUndefined();
-    expect(config.agents?.list).toContainEqual(expect.objectContaining({ id: "worker" }));
+    expect(config.agents?.entries?.worker).toBeDefined();
   });
 
   it("rejects a non-directory replacement for a workspace-ready record", async () => {
@@ -474,7 +542,7 @@ describe("applyClawAddPlan", () => {
       }),
     ).rejects.toMatchObject({ code: "workspace_collision" });
 
-    expect(config.agents?.list).toBeUndefined();
+    expect(config.agents?.entries).toBeUndefined();
     expect(readClawInstallRecord("worker", { env: stateEnv(root) })?.status).toBe(
       "workspace_ready",
     );
@@ -484,7 +552,14 @@ describe("applyClawAddPlan", () => {
     const { plan } = await makePlan({
       schemaVersion: 1,
       agent: { id: "worker" },
-      packages: [{ kind: "skill", source: "clawhub", ref: "demo", version: "1.0.0" }],
+      packages: [
+        {
+          kind: "skill",
+          source: "clawhub",
+          ref: "demo",
+          version: "1.0.0",
+        },
+      ],
     });
 
     await expect(
@@ -510,7 +585,7 @@ describe("applyClawAddPlan", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "provenance_failed" });
-    expect(config.agents?.list).toBeUndefined();
+    expect(config.agents?.entries).toBeUndefined();
   });
 
   it("rejects mutation when consent does not bind the current plan", async () => {
@@ -520,5 +595,54 @@ describe("applyClawAddPlan", () => {
       applyClawAddPlan(plan, { consentPlanIntegrity: "sha256:stale" }),
     ).rejects.toMatchObject({ code: "plan_integrity_mismatch" });
     await expect(access(plan.agent.workspace)).rejects.toThrow();
+  });
+
+  it("returns partial cron ownership when scheduler installation fails", async () => {
+    const { root, plan } = await makePlan({
+      schemaVersion: 1,
+      agent: { id: "worker" },
+      cronJobs: [
+        {
+          id: "daily-report",
+          schedule: { cron: "0 9 * * *", timezone: "UTC" },
+          session: "isolated",
+          message: "Prepare report",
+        },
+      ],
+    });
+    const failedRef = {
+      schemaVersion: "openclaw.clawCronRef.v1" as const,
+      agentId: "worker",
+      manifestId: "daily-report",
+      declarationKey: "claw:worker:daily-report",
+      status: "failed" as const,
+      job: {
+        id: "daily-report",
+        schedule: { cron: "0 9 * * *", timezone: "UTC" },
+        session: "isolated" as const,
+        message: "Prepare report",
+      },
+      error: "gateway unavailable",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+    };
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      commitConfig: async (transform) => {
+        transform({});
+      },
+      installCronJobs: async () => {
+        throw new ClawCronInstallError("cron_install_failed", "gateway unavailable", [failedRef]);
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      cronJobs: [{ manifestId: "daily-report", status: "failed" }],
+      installRecord: { status: "config_committed" },
+      error: { code: "cron_install_failed", message: "gateway unavailable" },
+    });
   });
 });

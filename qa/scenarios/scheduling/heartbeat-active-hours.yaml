@@ -2,8 +2,8 @@ title: Heartbeat active-hours scheduling evidence
 
 scenario:
   id: heartbeat-active-hours
-  surface: automation-cron-hooks-tasks-polling
-  category: automation-cron-hooks-tasks-polling.heartbeat
+  surface: automation
+  category: automation.heartbeat
   coverage:
     secondary:
       - automation.active-hours

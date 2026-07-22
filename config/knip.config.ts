@@ -357,6 +357,9 @@ const config = {
     "src/boards/board-layout.ts": ["types"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
+    // Test and E2E callers reach these hooks through runtime.test-support.ts;
+    // the full-tree companion config still audits their actual consumers.
+    "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
@@ -364,6 +367,10 @@ const config = {
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
+    // Focused tests consume these diagnostic/test seams; production code uses
+    // the surrounding runtime helpers rather than importing the exports.
+    "extensions/signal/src/setup-core.ts": ["exports"],
+    "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
     ".": {

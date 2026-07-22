@@ -4,21 +4,21 @@ import { expect, it, vi } from "vitest";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { AgentSelect } from "./agent-select.ts";
+import { AgentSelect, type AgentSelectOption } from "./agent-select.ts";
 
 const AGENT_SELECT_TEST_TAG = `test-openclaw-agent-select-${crypto.randomUUID()}`;
 
 customElements.define(AGENT_SELECT_TEST_TAG, class extends AgentSelect {});
 
 type AgentSelectElement = HTMLElement & {
-  agents: GatewayAgentRow[];
-  selectedId: string | null;
-  defaultId: string | null;
+  options: AgentSelectOption[];
+  value: string;
+  accessibleLabel: string;
   identityById: Record<string, AgentIdentityResult>;
   authToken: string | null;
   disabled: boolean;
-  onSelect: (agentId: string) => void;
-  onCreateAgent: () => void;
+  onSelect: (value: string) => void;
+  onCreateAgent: (() => void) | null;
   updateComplete: Promise<boolean>;
 };
 
@@ -26,6 +26,11 @@ const agents: GatewayAgentRow[] = [
   { id: "alpha", name: "Alpha agent" },
   { id: "beta", name: "Beta agent" },
 ];
+const options: AgentSelectOption[] = agents.map((agent) => ({
+  value: agent.id,
+  label: agent.name ?? agent.id,
+  agent,
+}));
 
 function createIdentity(
   agentId: string,
@@ -43,8 +48,9 @@ async function createAgentSelect(
   overrides: Partial<Omit<AgentSelectElement, keyof HTMLElement>> = {},
 ): Promise<AgentSelectElement> {
   const element = document.createElement(AGENT_SELECT_TEST_TAG) as AgentSelectElement;
-  element.agents = agents;
-  element.selectedId = "alpha";
+  element.options = options;
+  element.value = "alpha";
+  element.onCreateAgent = vi.fn();
   Object.assign(element, overrides);
   document.body.append(element);
   await element.updateComplete;
@@ -67,13 +73,39 @@ it("renders the selected label and a data URL image avatar", async () => {
   }
 });
 
+it("prefers the roster-projected avatar URL over the raw local source", async () => {
+  const dataUrl = "data:image/png;base64,cm9zdGVy";
+  const element = await createAgentSelect({
+    options: [
+      {
+        value: "alpha",
+        label: "Alpha agent",
+        agent: {
+          id: "alpha",
+          identity: { avatar: "avatar.png", avatarUrl: dataUrl },
+        },
+      },
+    ],
+  });
+
+  try {
+    expect(element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.src).toContain(
+      dataUrl,
+    );
+  } finally {
+    element.remove();
+  }
+});
+
 it("renders an emoji text avatar when no image URL is available", async () => {
   const element = await createAgentSelect({
     identityById: { alpha: createIdentity("alpha", { emoji: "🦉" }) },
   });
 
   try {
-    expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("🦉");
+    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+      "🦉",
+    );
     expect(element.querySelector("img.agent-select__avatar")).toBeNull();
   } finally {
     element.remove();
@@ -84,7 +116,9 @@ it("falls back to the uppercase agent initial", async () => {
   const element = await createAgentSelect();
 
   try {
-    expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+      "A",
+    );
   } finally {
     element.remove();
   }
@@ -113,7 +147,9 @@ it("fetches local avatars with the bearer credential when token auth is active",
 
   try {
     // Text fallback renders while the authenticated fetch is in flight.
-    expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+      "A",
+    );
     expect(fetchMock).toHaveBeenCalledWith("/avatar/alpha", {
       headers: { Authorization: "Bearer tok" },
       signal: expect.any(AbortSignal),
@@ -267,7 +303,9 @@ it("aborts a stalled local avatar fetch after the request deadline", async () =>
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
     expect(fetchInit?.signal?.aborted).toBe(false);
-    expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+      "A",
+    );
 
     await vi.advanceTimersByTimeAsync(29_999);
     expect(fetchInit?.signal?.aborted).toBe(false);
@@ -276,7 +314,9 @@ it("aborts a stalled local avatar fetch after the request deadline", async () =>
 
     await waitForFast(() => {
       expect(element.querySelector("img.agent-select__avatar")).toBeNull();
-      expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+      expect(
+        element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
+      ).toBe("A");
     });
     expect(vi.getTimerCount()).toBe(0);
   } finally {
@@ -320,7 +360,9 @@ it("aborts a stalled local avatar body after the request deadline", async () => 
     expect(fetchInit?.signal?.aborted).toBe(true);
     await waitForFast(() => {
       expect(element.querySelector("img.agent-select__avatar")).toBeNull();
-      expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+      expect(
+        element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
+      ).toBe("A");
     });
     expect(vi.getTimerCount()).toBe(0);
   } finally {
@@ -346,23 +388,131 @@ it("renders a local avatar image when token auth is not active", async () => {
 });
 
 it("renders the agent picker as a Web Awesome dropdown", async () => {
-  const element = await createAgentSelect({ defaultId: "beta" });
+  const element = await createAgentSelect({
+    options: options.map((option) =>
+      option.value === "beta" ? { ...option, badge: "default" } : option,
+    ),
+  });
 
   try {
     const dropdown = element.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
-    const options = Array.from(
+    const items = Array.from(
       element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
-        "wa-dropdown-item[data-agent-id]",
+        "wa-dropdown-item[data-agent-option]",
       ),
     );
     expect(dropdown).not.toBeNull();
-    expect(options).toHaveLength(2);
-    expect(options[0]?.checked).toBe(true);
-    expect(options[1]?.checked).toBe(false);
-    expect(options[0]?.value).toBe("alpha");
-    expect(options[1]?.value).toBe("beta");
-    expect(options[1]?.querySelector(".agent-select__badge")?.textContent?.trim()).toBe("default");
+    expect(items).toHaveLength(2);
+    expect(items[0]?.checked).toBe(true);
+    expect(items[1]?.checked).toBe(false);
+    expect(items[0]?.value).toBe("alpha");
+    expect(items[1]?.value).toBe("beta");
+    expect(items[1]?.querySelector(".agent-select__badge")?.textContent?.trim()).toBe("default");
     expect(dropdown?.shadowRoot?.querySelector('[role="menu"]')).not.toBeNull();
+  } finally {
+    element.remove();
+  }
+});
+
+it("keeps avatar text out of typeahead and announces option metadata", async () => {
+  const element = await createAgentSelect({
+    accessibleLabel: "Agent",
+    options: options.map((option) =>
+      option.value === "beta"
+        ? { ...option, description: "Handles research", badge: "Default" }
+        : option,
+    ),
+    value: "beta",
+  });
+
+  try {
+    const items = Array.from(
+      element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
+    );
+    expect(items.find((item) => item.value === "alpha")?.textContent?.trim()).toBe("Alpha agent");
+    expect(items.find((item) => item.value === "beta")?.getAttribute("aria-label")).toBe(
+      "Beta agent, Handles research, Default",
+    );
+    expect(element.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toBe(
+      "Agent: Beta agent, Default",
+    );
+  } finally {
+    element.remove();
+  }
+});
+
+it("shows an unmatched selected value instead of the first option", async () => {
+  const element = await createAgentSelect({ value: "system-monitor" });
+
+  try {
+    expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe(
+      "system-monitor",
+    );
+    expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
+      "S",
+    );
+    expect(
+      Array.from(
+        element.querySelectorAll<HTMLElement & { checked: boolean }>("[data-agent-option]"),
+      ).some((item) => item.checked),
+    ).toBe(false);
+  } finally {
+    element.remove();
+  }
+});
+
+it("focuses and scrolls the selected row into view when opened", async () => {
+  const element = await createAgentSelect({ value: "beta" });
+
+  try {
+    const beta = Array.from(
+      element.querySelectorAll<HTMLElement & { active: boolean; value: string }>(
+        "[data-agent-option]",
+      ),
+    ).find((item) => item.value === "beta");
+    if (!beta) {
+      throw new Error("expected beta option");
+    }
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(beta, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    element.querySelector("wa-dropdown")?.dispatchEvent(new CustomEvent("wa-after-show"));
+
+    expect(beta.active).toBe(true);
+    expect(document.activeElement).toBe(beta);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+  } finally {
+    element.remove();
+  }
+});
+
+it("closes and rejects selection when disabled while open", async () => {
+  const onSelect = vi.fn<(value: string) => void>();
+  const element = await createAgentSelect({ onSelect });
+
+  try {
+    const dropdown = element.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
+    const beta = Array.from(
+      element.querySelectorAll<HTMLElement & { disabled: boolean; value: string }>(
+        "[data-agent-option]",
+      ),
+    ).find((item) => item.value === "beta");
+    if (!dropdown || !beta) {
+      throw new Error("expected dropdown and beta option");
+    }
+    dropdown.open = true;
+    element.disabled = true;
+    await element.updateComplete;
+
+    expect(dropdown.open).toBe(false);
+    expect(beta.disabled).toBe(true);
+    const selection = new CustomEvent("wa-select", {
+      bubbles: true,
+      cancelable: true,
+      detail: { item: beta },
+    });
+    dropdown.dispatchEvent(selection);
+    expect(selection.defaultPrevented).toBe(true);
+    expect(onSelect).not.toHaveBeenCalled();
   } finally {
     element.remove();
   }
@@ -393,7 +543,16 @@ it("selects a different agent and ignores the already-selected agent", async () 
   const element = await createAgentSelect({ onSelect });
 
   try {
-    const beta = element.querySelector('[data-agent-id="beta"]');
+    const items = Array.from(
+      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
+        "[data-agent-option]",
+      ),
+    );
+    const beta = items.find((item) => item.value === "beta");
+    const alpha = items.find((item) => item.value === "alpha");
+    if (!beta || !alpha) {
+      throw new Error("expected alpha and beta options");
+    }
     const dropdown = element.querySelector("wa-dropdown");
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", { detail: { item: beta }, bubbles: true }),
@@ -402,7 +561,6 @@ it("selects a different agent and ignores the already-selected agent", async () 
     expect(onSelect).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledWith("beta");
 
-    const alpha = element.querySelector('[data-agent-id="alpha"]');
     const repeatedSelection = new CustomEvent("wa-select", {
       detail: { item: alpha },
       bubbles: true,
@@ -413,8 +571,48 @@ it("selects a different agent and ignores the already-selected agent", async () 
 
     expect(onSelect).toHaveBeenCalledOnce();
     expect(repeatedSelection.defaultPrevented).toBe(true);
-    expect((alpha as HTMLElement & { checked: boolean }).checked).toBe(true);
+    expect(alpha.checked).toBe(true);
     expect(document.activeElement).toBe(element.querySelector(".agent-select__trigger"));
+  } finally {
+    element.remove();
+  }
+});
+
+it("selects an empty-string special option and exposes radio semantics", async () => {
+  const onSelect = vi.fn<(value: string) => void>();
+  const element = await createAgentSelect({
+    options: [{ value: "", label: "All agents" }, ...options],
+    value: "alpha",
+    onSelect,
+  });
+
+  try {
+    const items = Array.from(
+      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
+        "[data-agent-option]",
+      ),
+    );
+    const allAgents = items.find((item) => item.value === "");
+    if (!allAgents) {
+      throw new Error("expected all-agents option");
+    }
+    await waitForFast(() => {
+      expect(items.find((item) => item.value === "alpha")?.getAttribute("role")).toBe(
+        "menuitemradio",
+      );
+      expect(items.find((item) => item.value === "alpha")?.getAttribute("aria-checked")).toBe(
+        "true",
+      );
+      expect(items.find((item) => item.value === "alpha")?.getAttribute("aria-label")).toBe(
+        "Alpha agent",
+      );
+    });
+
+    element
+      .querySelector("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: allAgents }, bubbles: true }));
+
+    expect(onSelect).toHaveBeenCalledWith("");
   } finally {
     element.remove();
   }
@@ -437,7 +635,7 @@ it("opens the new-agent flow from the footer item", async () => {
 });
 
 it("keeps the new-agent footer reachable with an empty roster", async () => {
-  const element = await createAgentSelect({ agents: [], selectedId: null });
+  const element = await createAgentSelect({ options: [], value: "" });
 
   try {
     const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
@@ -448,9 +646,20 @@ it("keeps the new-agent footer reachable with an empty roster", async () => {
   }
 });
 
+it("disables an empty picker when no footer action is available", async () => {
+  const element = await createAgentSelect({ options: [], value: "", onCreateAgent: null });
+
+  try {
+    expect(element.querySelector<HTMLButtonElement>(".agent-select__trigger")?.disabled).toBe(true);
+    expect(element.querySelector("[data-create-agent]")).toBeNull();
+  } finally {
+    element.remove();
+  }
+});
+
 it("refreshes translated labels when the locale changes while mounted", async () => {
   await i18n.setLocale("en");
-  const element = await createAgentSelect({ agents: [], selectedId: null });
+  const element = await createAgentSelect({ options: [], value: "" });
 
   try {
     const label = element.querySelector(".agent-select__label");

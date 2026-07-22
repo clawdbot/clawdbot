@@ -11,8 +11,11 @@ import {
 } from "../../agents/subagent-spawn.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
-import { resolveSessionStoreEntry, updateSessionStore } from "../../config/sessions/store.js";
+import {
+  loadSessionEntry,
+  patchSessionEntry,
+  resolveSessionEntryFromStore,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContinuationTraceparent } from "../../infra/continuation-tracer.js";
@@ -49,9 +52,10 @@ export type PostCompactionDelegateDeliveryDeps = {
     options: { sessionKey: string; traceparent?: string; trusted?: boolean },
   ): void;
   getRuntimeConfig(): OpenClawConfig;
-  loadSessionStore(storePath: string): Record<string, SessionEntry>;
+  loadSessionEntry(params: { storePath: string; sessionKey: string }): SessionEntry | undefined;
   log(message: string): void;
   now(): number;
+  patchSessionEntry: typeof patchSessionEntry;
   resolveContinuationRuntimeConfig(cfg: OpenClawConfig): ContinuationRuntimeConfig;
   resolveSessionAgentId(params: { sessionKey?: string; config?: OpenClawConfig }): string;
   resolveStorePath(store?: string, opts?: { agentId?: string; env?: NodeJS.ProcessEnv }): string;
@@ -70,9 +74,10 @@ export type PostCompactionDelegateDeliveryDeps = {
 const defaultPostCompactionDelegateDeliveryDeps: PostCompactionDelegateDeliveryDeps = {
   enqueueSystemEvent,
   getRuntimeConfig,
-  loadSessionStore,
+  loadSessionEntry,
   log: (message) => defaultRuntime.log(message),
   now: () => Date.now(),
+  patchSessionEntry,
   resolveContinuationRuntimeConfig,
   resolveSessionAgentId,
   resolveStorePath,
@@ -92,12 +97,20 @@ function syncPendingPostCompactionDelegates(params: {
   if (params.sessionEntry) {
     params.sessionEntry.pendingPostCompactionDelegates = params.delegates;
   }
-  const storedEntry = params.sessionStore?.[params.sessionKey];
-  if (storedEntry && params.sessionStore) {
-    params.sessionStore[params.sessionKey] = {
-      ...storedEntry,
-      pendingPostCompactionDelegates: params.delegates,
-    };
+  if (params.sessionStore) {
+    const resolved = resolveSessionEntryFromStore({
+      store: params.sessionStore,
+      sessionKey: params.sessionKey,
+    });
+    if (resolved.existing) {
+      params.sessionStore[resolved.normalizedKey] = {
+        ...resolved.existing,
+        pendingPostCompactionDelegates: params.delegates,
+      };
+      for (const legacyKey of resolved.legacyKeys) {
+        delete params.sessionStore[legacyKey];
+      }
+    }
   }
 }
 
@@ -182,36 +195,38 @@ export async function persistPendingPostCompactionDelegates(params: {
     return combinedLocal;
   }
 
-  const persisted = await updateSessionStore(params.storePath, (store) => {
-    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
-    const current =
-      resolved.existing ??
-      params.sessionStore?.[params.sessionKey] ??
-      params.sessionEntry ??
-      undefined;
-    const combined = [
-      ...(current?.pendingPostCompactionDelegates ?? []).map(normalizePostCompactionDelegate),
-      ...normalizedDelegates,
-    ];
-    if (current) {
-      store[resolved.normalizedKey] = {
-        ...current,
-        pendingPostCompactionDelegates: combined,
-      };
-      for (const legacyKey of resolved.legacyKeys) {
-        delete store[legacyKey];
-      }
-    }
-    return combined;
-  });
+  const localStoredEntry = params.sessionStore
+    ? resolveSessionEntryFromStore({
+        store: params.sessionStore,
+        sessionKey: params.sessionKey,
+      }).existing
+    : undefined;
+  const fallbackEntry = localStoredEntry ?? params.sessionEntry;
+  const persistedEntry = await patchSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    (current) => ({
+      pendingPostCompactionDelegates: [
+        ...(current.pendingPostCompactionDelegates ?? []).map(normalizePostCompactionDelegate),
+        ...normalizedDelegates,
+      ],
+    }),
+    {
+      ...(fallbackEntry ? { fallbackEntry } : {}),
+      preserveActivity: true,
+      requireWriteSuccess: true,
+    },
+  );
+  const persisted = (persistedEntry?.pendingPostCompactionDelegates ?? combinedLocal).map(
+    normalizePostCompactionDelegate,
+  );
 
   syncPendingPostCompactionDelegates({
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
-    delegates: persisted.length > 0 ? persisted : combinedLocal,
+    delegates: persisted,
   });
-  return persisted.length > 0 ? persisted : combinedLocal;
+  return persisted;
 }
 
 export async function takePendingPostCompactionDelegates(params: {
@@ -234,27 +249,17 @@ export async function takePendingPostCompactionDelegates(params: {
     return localDelegates;
   }
 
-  const persisted = await updateSessionStore(params.storePath, (store) => {
-    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
-    const current =
-      resolved.existing ??
-      params.sessionStore?.[params.sessionKey] ??
-      params.sessionEntry ??
-      undefined;
-    const delegates = (current?.pendingPostCompactionDelegates ?? []).map(
-      normalizePostCompactionDelegate,
-    );
-    if (current && delegates.length > 0) {
-      store[resolved.normalizedKey] = {
-        ...current,
-        pendingPostCompactionDelegates: undefined,
-      };
-      for (const legacyKey of resolved.legacyKeys) {
-        delete store[legacyKey];
-      }
-    }
-    return delegates;
-  });
+  let persisted: SessionPostCompactionDelegate[] = [];
+  await patchSessionEntry(
+    { storePath: params.storePath, sessionKey: params.sessionKey },
+    (current) => {
+      persisted = (current.pendingPostCompactionDelegates ?? []).map(
+        normalizePostCompactionDelegate,
+      );
+      return persisted.length > 0 ? { pendingPostCompactionDelegates: undefined } : null;
+    },
+    { preserveActivity: true, requireWriteSuccess: true },
+  );
 
   syncPendingPostCompactionDelegates({
     sessionEntry: params.sessionEntry,
@@ -349,9 +354,9 @@ function maybeFinalizePreviouslyAcceptedSourceBackedDelivery(params: {
 async function persistPostCompactionDelegateChainState(params: {
   count: number;
   log: (message: string) => void;
+  patchSessionEntry: typeof patchSessionEntry;
   sessionEntry?: SessionEntry;
   sessionKey: string;
-  sessionStore?: Record<string, SessionEntry>;
   startedAt: number;
   storePath?: string;
   tokens: number;
@@ -365,56 +370,26 @@ async function persistPostCompactionDelegateChainState(params: {
   // post-handoff).
   const previousChainId = params.sessionEntry?.continuationChainId;
   const chainId = previousChainId ?? generateChainId();
-  if (params.sessionEntry) {
-    params.sessionEntry.continuationChainCount = params.count;
-    params.sessionEntry.continuationChainStartedAt = params.startedAt;
-    params.sessionEntry.continuationChainTokens = params.tokens;
-    params.sessionEntry.continuationChainId = chainId;
-  }
-  if (params.sessionStore) {
-    const resolved = resolveSessionStoreEntry({
-      store: params.sessionStore,
-      sessionKey: params.sessionKey,
-    });
-    const existingEntry =
-      resolved.existing ?? params.sessionStore[params.sessionKey] ?? params.sessionEntry;
-    if (existingEntry) {
-      params.sessionStore[resolved.normalizedKey] = {
-        ...existingEntry,
-        continuationChainCount: params.count,
-        continuationChainStartedAt: params.startedAt,
-        continuationChainTokens: params.tokens,
-        continuationChainId: chainId,
-      };
-      for (const legacyKey of resolved.legacyKeys) {
-        delete params.sessionStore[legacyKey];
-      }
-    }
-  }
+  let persistedEntry: SessionEntry | null = null;
   if (params.storePath) {
     try {
-      await updateSessionStore(
-        params.storePath,
-        (store) => {
-          const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
-          const existingEntry = resolved.existing ?? store[params.sessionKey];
-          if (existingEntry) {
-            store[resolved.existing ? resolved.normalizedKey : params.sessionKey] = {
-              ...existingEntry,
-              continuationChainCount: params.count,
-              continuationChainStartedAt: params.startedAt,
-              continuationChainTokens: params.tokens,
-              continuationChainId: chainId,
-            };
-            if (resolved.existing) {
-              for (const legacyKey of resolved.legacyKeys) {
-                delete store[legacyKey];
-              }
-            }
-          }
+      persistedEntry = await params.patchSessionEntry(
+        { storePath: params.storePath, sessionKey: params.sessionKey },
+        () => ({
+          continuationChainCount: params.count,
+          continuationChainStartedAt: params.startedAt,
+          continuationChainTokens: params.tokens,
+          continuationChainId: chainId,
+        }),
+        {
+          ...(params.sessionEntry ? { fallbackEntry: params.sessionEntry } : {}),
+          preserveActivity: true,
+          requireWriteSuccess: true,
         },
-        { requireWriteSuccess: true },
       );
+      if (!persistedEntry) {
+        throw new Error(`session entry was not found: ${params.sessionKey}`);
+      }
     } catch (err) {
       params.log(
         `Failed to persist post-compaction delegate chain state for ${params.sessionKey}: ${String(
@@ -432,6 +407,17 @@ async function persistPostCompactionDelegateChainState(params: {
       // `maxChainLength`.
       throw err;
     }
+  }
+  if (params.sessionEntry) {
+    Object.assign(
+      params.sessionEntry,
+      persistedEntry ?? {
+        continuationChainCount: params.count,
+        continuationChainStartedAt: params.startedAt,
+        continuationChainTokens: params.tokens,
+        continuationChainId: chainId,
+      },
+    );
   }
   return { chainId };
 }
@@ -467,12 +453,10 @@ export async function deliverQueuedPostCompactionDelegate(
     return;
   }
   const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
-  const sessionStore = deps.loadSessionStore(storePath);
-  const resolved = resolveSessionStoreEntry({
-    store: sessionStore,
+  const sessionEntry = deps.loadSessionEntry({
+    storePath,
     sessionKey: params.entry.sessionKey,
   });
-  const sessionEntry = resolved.existing ?? sessionStore[params.entry.sessionKey];
   const {
     maxChainLength: maxCompactionChainLength,
     costCapTokens: compactionCostCapTokens,
@@ -568,9 +552,9 @@ export async function deliverQueuedPostCompactionDelegate(
   const persistedChain = await persistPostCompactionDelegateChainState({
     count: nextCompactionChainCount,
     log: (message) => deps.log(message),
+    patchSessionEntry: deps.patchSessionEntry,
     sessionEntry,
     sessionKey: params.entry.sessionKey,
-    sessionStore,
     startedAt: compactionChainStartedAt,
     storePath,
     tokens: compactionChainTokens,

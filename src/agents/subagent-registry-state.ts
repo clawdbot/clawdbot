@@ -1,3 +1,4 @@
+import { isVitestRuntimeEnv } from "../infra/env.js";
 /**
  * Subagent registry state persistence bridge.
  *
@@ -56,10 +57,7 @@ function rememberPersistedSubagentRunsSnapshot(runs: Map<string, SubagentRunReco
 }
 
 function shouldReadPersistedSubagentRuns(): boolean {
-  return (
-    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1" ||
-    !(process.env.VITEST || process.env.NODE_ENV === "test")
-  );
+  return !isVitestRuntimeEnv() || process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE === "1";
 }
 
 function getFreshPersistedSubagentRunsSnapshot(

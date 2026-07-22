@@ -5,9 +5,9 @@ scenario:
   surface: models
   coverage:
     primary:
-      - models.switching
+      - agent-runtime.runtime-override-switching
     secondary:
-      - runtime.tool-continuity
+      - agent-runtime.tool-continuity
   objective: Verify switching models preserves session context and tool use instead of dropping into plain-text only behavior.
   successCriteria:
     - Alternate model is actually requested.

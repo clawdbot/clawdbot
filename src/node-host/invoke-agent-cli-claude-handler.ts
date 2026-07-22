@@ -59,6 +59,45 @@ type ClaudeCliNodeInvokeDeps = Pick<
   ) => Promise<void>;
 };
 
+const CLAUDE_NODE_AUTH_INPUTS = [
+  {
+    requestEnv: "CLAUDE_CODE_OAUTH_TOKEN",
+    descriptorEnv: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  },
+  {
+    requestEnv: "ANTHROPIC_API_KEY",
+    descriptorEnv: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  },
+] as const;
+
+function prepareClaudeNodeSecretInput(params: {
+  requestEnv: Record<string, string> | undefined;
+  childEnv: Record<string, string>;
+}): { secretInput?: { fd: 3; createData: () => Buffer }; cleanup: () => void } {
+  const selected = CLAUDE_NODE_AUTH_INPUTS.find(({ requestEnv }) =>
+    Object.hasOwn(params.requestEnv ?? {}, requestEnv),
+  );
+  if (!selected) {
+    return { cleanup: () => {} };
+  }
+  for (const key of [
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
+  ]) {
+    delete params.childEnv[key];
+  }
+  const source = Buffer.from(params.requestEnv?.[selected.requestEnv] ?? "", "utf8");
+  params.childEnv[selected.descriptorEnv] = "3";
+  return {
+    secretInput: {
+      fd: 3,
+      createData: () => Buffer.from(source),
+    },
+    cleanup: () => source.fill(0),
+  };
+}
+
 export async function handleClaudeCliNodeInvoke(params: {
   frame: NodeInvokeRequestPayload;
   client: NodeHostClient;
@@ -137,16 +176,31 @@ export async function handleClaudeCliNodeInvoke(params: {
     isCmdExeInvocation: params.deps.isCmdExeInvocation,
     sanitizeEnv: params.deps.sanitizeEnv,
     runCommand: async (approvalArgv, cwd, env, timeoutMs) => {
-      runResult = await runClaudeCliNodeCommand({
-        client: params.client,
-        frame: params.frame,
-        request,
-        argv: approvalArgv,
-        cwd,
-        env,
-        timeoutMs,
-        signal: params.runtime.signal,
+      const childEnv = { ...env };
+      for (const key of request.clearEnv ?? []) {
+        if (!Object.hasOwn(request.env ?? {}, key)) {
+          delete childEnv[key];
+        }
+      }
+      const preparedSecret = prepareClaudeNodeSecretInput({
+        requestEnv: request.env,
+        childEnv,
       });
+      try {
+        runResult = await runClaudeCliNodeCommand({
+          client: params.client,
+          frame: params.frame,
+          request,
+          argv: approvalArgv,
+          cwd,
+          env: childEnv,
+          secretInput: preparedSecret.secretInput,
+          timeoutMs,
+          signal: params.runtime.signal,
+        });
+      } finally {
+        preparedSecret.cleanup();
+      }
       return runResult;
     },
     runViaMacAppExecHost: params.deps.runViaMacAppExecHost,

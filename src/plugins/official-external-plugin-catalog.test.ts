@@ -37,10 +37,10 @@ const HOSTED_CATALOG_PAYLOAD_TYPE = "openclaw.official-external-plugin-catalog-f
 type HostedCatalogConfig = NonNullable<
   NonNullable<
     Parameters<typeof loadConfiguredHostedOfficialExternalPluginCatalogEntries>[0]
-  >["marketplaces"]
+  >["catalogConfig"]
 >;
 type ConfiguredHostedCatalogLoadParams = NonNullable<
-  Parameters<typeof loadConfiguredHostedOfficialExternalPluginCatalogEntries>[1]
+  Parameters<typeof loadConfiguredHostedOfficialExternalPluginCatalogEntries>[0]
 >;
 type HostedCatalogLoadParams = ConfiguredHostedCatalogLoadParams & {
   catalogConfig?: HostedCatalogConfig;
@@ -49,11 +49,7 @@ type HostedCatalogLoadParams = ConfiguredHostedCatalogLoadParams & {
 function loadHostedCatalog(
   params: HostedCatalogLoadParams = {},
 ): ReturnType<typeof loadConfiguredHostedOfficialExternalPluginCatalogEntries> {
-  const { catalogConfig, ...loadParams } = params;
-  return loadConfiguredHostedOfficialExternalPluginCatalogEntries(
-    catalogConfig ? { marketplaces: catalogConfig } : undefined,
-    loadParams,
-  );
+  return loadConfiguredHostedOfficialExternalPluginCatalogEntries(params);
 }
 
 function createInMemoryHostedCatalogSnapshotStore(

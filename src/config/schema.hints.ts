@@ -8,6 +8,7 @@ import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyConfigTierHints } from "./schema.tiers.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -139,7 +140,7 @@ export function buildBaseHints(): ConfigUiHints {
     const current = hints[path];
     hints[path] = current ? { ...current, placeholder } : { placeholder };
   }
-  return applyDerivedTags(hints);
+  return applyDerivedTags(applyConfigTierHints(hints));
 }
 
 /** Mark sensitive config paths in a hint map without overwriting explicit sensitivity metadata. */

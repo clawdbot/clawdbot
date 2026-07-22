@@ -100,10 +100,10 @@ type ChatComposerProps = {
   sessionKey: string;
   currentAgentId: string;
   connected: boolean;
+  offline?: boolean;
   canSend: boolean;
   disabledReason: string | null;
-  disabledActionLabel?: string | null;
-  onDisabledAction?: (() => void) | null;
+  disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
   runError?: { summary: string } | null;
   sending: boolean;
   canAbort?: boolean;
@@ -2733,11 +2733,26 @@ export function renderChatComposer(props: ChatComposerProps) {
             </div>
           `
         : nothing}
+      ${props.disabledBanner
+        ? html`
+            <div class="agent-chat__disabled-banner callout info callout--action" role="status">
+              <span class="callout__content">${props.disabledBanner.text}</span>
+              <button type="button" class="btn btn--xs" @click=${props.disabledBanner.onAction}>
+                ${props.disabledBanner.actionLabel}
+              </button>
+            </div>
+          `
+        : nothing}
       ${showComposer
         ? html`<div
-            class="agent-chat__input"
+            class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
           >
+            ${props.offline
+              ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
+                  ${t("chat.composer.offlineHint")}
+                </div>`
+              : nothing}
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}
             ${renderAttachmentPreview(props)}
             ${props.replyTarget
@@ -2859,17 +2874,6 @@ export function renderChatComposer(props: ChatComposerProps) {
               ? html`
                   <div class="agent-chat__disabled-reason">
                     <span>${props.disabledReason}</span>
-                    ${props.disabledActionLabel && props.onDisabledAction
-                      ? html`
-                          <button
-                            type="button"
-                            class="btn btn--xs"
-                            @click=${props.onDisabledAction}
-                          >
-                            ${props.disabledActionLabel}
-                          </button>
-                        `
-                      : nothing}
                   </div>
                 `
               : nothing}

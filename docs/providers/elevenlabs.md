@@ -13,7 +13,7 @@ enabled by default; no `plugins install` step is needed.
 
 | Capability               | OpenClaw surface                                                     | Default                  |
 | ------------------------ | -------------------------------------------------------------------- | ------------------------ |
-| Text-to-speech           | `messages.tts` / `talk`                                              | `eleven_multilingual_v2` |
+| Text-to-speech           | `tts` / `talk`                                                       | `eleven_multilingual_v2` |
 | Batch speech-to-text     | `tools.media.audio`                                                  | `scribe_v2`              |
 | Streaming speech-to-text | Voice Call streaming or Google Meet `realtime.transcriptionProvider` | `scribe_v2_realtime`     |
 
@@ -30,14 +30,12 @@ export ELEVENLABS_API_KEY="..."
 
 ```json5
 {
-  messages: {
-    tts: {
-      providers: {
-        elevenlabs: {
-          apiKey: "${ELEVENLABS_API_KEY}",
-          voiceId: "pMsXgVXv3BLzUgSXRplE",
-          modelId: "eleven_multilingual_v2",
-        },
+  tts: {
+    providers: {
+      elevenlabs: {
+        apiKey: "${ELEVENLABS_API_KEY}",
+        voiceId: "pMsXgVXv3BLzUgSXRplE",
+        modelId: "eleven_multilingual_v2",
       },
     },
   },
@@ -48,7 +46,7 @@ Set `modelId` to `eleven_v3` to use ElevenLabs v3 TTS. OpenClaw keeps
 `eleven_multilingual_v2` as the default for existing installs.
 
 Discord voice channels use ElevenLabs' streaming TTS endpoint when ElevenLabs
-is the selected `voice.tts`/`messages.tts` provider: playback starts from the
+is the selected `voice.tts`/`tts` provider: playback starts from the
 returned audio stream instead of waiting for OpenClaw to download the whole
 audio file first. `latencyTier` maps to ElevenLabs' `optimize_streaming_latency`
 query parameter for models that accept it; OpenClaw omits that parameter for

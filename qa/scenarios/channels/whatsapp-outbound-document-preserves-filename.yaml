@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-outbound-document-preserves-filename
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-document
   execution:
     profiles: { "whatsapp:mock-default": 19 }
     kind: flow

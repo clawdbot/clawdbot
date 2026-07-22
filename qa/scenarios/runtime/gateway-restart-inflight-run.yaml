@@ -6,10 +6,10 @@ scenario:
   runtimeParityTier: live-only
   coverage:
     primary:
-      - runtime.restart-recovery
+      - session-memory.recovery-restart-recovery
     secondary:
-      - runtime.gateway-restart
-      - runtime.delivery
+      - gateway.restart-and-stop-gateway-restart
+      - session-memory.recovery-delivery
   gatewayConfigPatch:
     tools:
       alsoAllow:

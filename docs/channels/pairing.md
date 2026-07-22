@@ -32,20 +32,43 @@ Pairing codes:
 - **Expire after 1 hour**. The bot only sends the pairing message when a new request is created (roughly once per hour per sender).
 - Pending DM pairing requests are capped at **3 per channel account**; additional requests are ignored until one expires or is approved.
 
-### Approve a sender
+### Approve from the Control UI
+
+Open **Settings → Channels → DM access requests**. The queue combines pending
+requests from every configured channel account whose DM policy is `pairing`.
+Filter by channel or account, review the sender ID and metadata, then choose
+**Approve**.
+
+Approval grants direct-message access only. It does not grant group access. The
+approval dialog also offers these explicit options when supported:
+
+- **Notify the requester after approval**
+- **Also make this sender the first command owner**, shown only when no command
+  owner exists and the Control UI session has `operator.admin`
+
+Choose **Dismiss** to remove a pending request without approving it. Dismissal is
+not a permanent block; the sender can request access again later.
+
+### Approve from the CLI
 
 ```bash
 openclaw pairing list telegram
 openclaw pairing approve telegram <CODE>
 ```
 
-Add `--notify` to the approve command to tell the requester on the same channel. Multi-account channels take `--account <id>`.
+Add `--notify` to tell the requester on the same channel. Multi-account channels
+take `--account <id>`.
 
-If no command owner is configured yet, approving a DM pairing code also bootstraps
-`commands.ownerAllowFrom` to the approved sender, such as `telegram:123456789`.
-That gives first-time setups an explicit owner for privileged commands and exec
-approval prompts. After an owner exists, later pairing approvals only grant DM
-access; they do not add more owners.
+Unlike the Control UI's explicit checkbox, the CLI automatically bootstraps
+`commands.ownerAllowFrom` when no command owner is configured, using an entry
+such as `telegram:123456789`. This gives first-time setups an explicit owner for
+privileged commands and exec approval prompts. After an owner exists, later
+pairing approvals only grant DM access; they do not add more owners.
+
+<Note>
+WhatsApp's login QR links a WhatsApp account to OpenClaw. DM access requests
+approve people who message that account. These are separate flows.
+</Note>
 
 Supported channels (any installed channel plugin that declares pairing; external plugins such as `openclaw-weixin` can add more): `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `sms`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
 

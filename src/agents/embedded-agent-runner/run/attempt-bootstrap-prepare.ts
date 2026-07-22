@@ -42,6 +42,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   sessionLabel: string;
 }) {
   const { attempt } = params;
+  const suppressAmbientContext =
+    params.isRawModelRun || attempt.operation === "settled-tool-finalization";
   const contextInjectionMode = resolveContextInjectionMode(attempt.config, params.sessionAgentId);
   const bootstrapWarn = makeBootstrapWarn({
     sessionLabel: params.sessionLabel,
@@ -67,17 +69,17 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       hasBootstrapFileAccess: params.hasReadTool,
     });
   const shouldProbeContinuationSkip =
-    !params.isRawModelRun &&
+    !suppressAmbientContext &&
     contextInjectionMode === "continuation-skip" &&
     !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind) &&
     (await hasCompletedBootstrapTurnForAttempt(attempt.sessionFile));
   let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
   let bootstrapRouting =
-    shouldProbeContinuationSkip || params.isRawModelRun || contextInjectionMode === "never"
+    shouldProbeContinuationSkip || suppressAmbientContext || contextInjectionMode === "never"
       ? await resolveBootstrapRouting()
       : undefined;
   if (
-    !params.isRawModelRun &&
+    !suppressAmbientContext &&
     contextInjectionMode !== "never" &&
     (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
   ) {
@@ -100,9 +102,9 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     contextFiles: resolvedContextFiles,
     shouldRecordCompletedBootstrapTurn,
   } = await resolveAttemptBootstrapContext({
-    // modelRun is a provider probe, not an agent turn. Keep AGENTS/BOOTSTRAP
-    // context out even when the gateway is exercising the embedded runtime.
-    contextInjectionMode: params.isRawModelRun ? "never" : contextInjectionMode,
+    // Raw probes and isolated finalization must not load AGENTS/BOOTSTRAP
+    // context even though finalization preserves the settled transcript.
+    contextInjectionMode: suppressAmbientContext ? "never" : contextInjectionMode,
     bootstrapContextMode: attempt.bootstrapContextMode,
     bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
     bootstrapMode,

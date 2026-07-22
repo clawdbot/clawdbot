@@ -7539,6 +7539,16 @@
       "translated": "Відповісти"
     },
     {
+      "id": "native.android.6c07db7bdc4b43a4",
+      "source": "Rewind to here",
+      "translated": "Перемотати сюди"
+    },
+    {
+      "id": "native.android.c824bdc38278a218",
+      "source": "Fork from here",
+      "translated": "Відгалузити звідси"
+    },
+    {
       "id": "native.android.319b4a29df279bb3",
       "source": "Select text",
       "translated": "Вибрати текст"
@@ -7639,14 +7649,19 @@
       "translated": "Надіслано — підтвердження доставки…"
     },
     {
-      "id": "native.android.15d71d54c0ce946b",
-      "source": "Failed",
-      "translated": "Помилка"
+      "id": "native.android.ac5949efe3cfe48c",
+      "source": "Session branch changed; review and retry this message.",
+      "translated": "Гілку сеансу змінено; перегляньте та повторіть це повідомлення."
     },
     {
       "id": "native.android.6f734a7527ae9c5a",
       "source": "Failed — $it",
       "translated": "Помилка — $it"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "Помилка"
     },
     {
       "id": "native.android.552a4d6f5110e6a3",
@@ -7997,6 +8012,31 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "Зупинити"
+    },
+    {
+      "id": "native.android.be42506226307680",
+      "source": "Switch branch",
+      "translated": "Змінити гілку"
+    },
+    {
+      "id": "native.android.39ea147abba2af8a",
+      "source": "Untitled branch",
+      "translated": "Гілка без назви"
+    },
+    {
+      "id": "native.android.4e2cbf557e2e3cd6",
+      "source": "Current branch",
+      "translated": "Поточна гілка"
+    },
+    {
+      "id": "native.android.d79a4188788ccf49",
+      "source": "Messages: $count",
+      "translated": "Повідомлень: $count"
+    },
+    {
+      "id": "native.android.76e548dffafc9de9",
+      "source": "$count · $updated",
+      "translated": "$count · $updated"
     },
     {
       "id": "native.android.2cb3ec7379426dfe",
@@ -21979,6 +22019,21 @@
       "translated": "Місцезнаходження"
     },
     {
+      "id": "native.apple.c105a651c5f972b6",
+      "source": "Privacy",
+      "translated": "Конфіденційність"
+    },
+    {
+      "id": "native.apple.b98013fb799d4f3c",
+      "source": "Active computer detection",
+      "translated": "Виявлення активного комп'ютера"
+    },
+    {
+      "id": "native.apple.870e09824984a9b2",
+      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "Діліться тривалістю простою цього Mac, щоб OpenClaw міг визначити Mac, який ви використовували останнім, і спрямовувати сповіщення вузлів. Ніколи не надсилає клавіші, позиції вказівника, назви застосунків чи заголовки вікон. Потребує Спеціальні можливості."
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "Налаштування"
@@ -22074,6 +22129,11 @@
       "translated": "Оновити"
     },
     {
+      "id": "native.apple.326e187a6656d8d9",
+      "source": "Check",
+      "translated": "Перевірити"
+    },
+    {
       "id": "native.apple.7b62187659c9925f",
       "source": "Grant",
       "translated": "Надати"
@@ -22094,9 +22154,14 @@
       "translated": "Запросити доступ"
     },
     {
-      "id": "native.apple.4a4c10ca63e99590",
-      "source": "Control other apps (e.g. Terminal) for automation actions",
-      "translated": "Керування іншими застосунками (наприклад, Terminal) для дій автоматизації"
+      "id": "native.apple.5a5689d96828c424",
+      "source": "Status unavailable",
+      "translated": "Статус недоступний"
+    },
+    {
+      "id": "native.apple.2d263648f3916394",
+      "source": "Control Terminal for automation actions; other apps request access separately",
+      "translated": "Керуйте Terminal для дій автоматизації; інші застосунки запитують доступ окремо"
     },
     {
       "id": "native.apple.5f7eb4234f63c4ad",
@@ -22114,14 +22179,14 @@
       "translated": "Захоплювати екран для контексту або знімків екрана"
     },
     {
-      "id": "native.apple.b004145c37a470f8",
-      "source": "Allow Voice Wake and audio capture",
-      "translated": "Дозволити Voice Wake і захоплення аудіо"
+      "id": "native.apple.45119f87d3069501",
+      "source": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation",
+      "translated": "Дозволити Voice Wake, push-to-talk, режим розмови та диктування Quick Chat"
     },
     {
-      "id": "native.apple.7c8b825829b3924d",
-      "source": "Transcribe Voice Wake trigger phrases on-device",
-      "translated": "Транскрибувати тригерні фрази Voice Wake на пристрої"
+      "id": "native.apple.33f1e220cc7d69e1",
+      "source": "Use Apple Speech; passive Voice Wake stays on-device",
+      "translated": "Використовувати Apple Speech; пасивний Voice Wake залишається на пристрої"
     },
     {
       "id": "native.apple.37880f3b7ae6c259",
@@ -22754,14 +22819,14 @@
       "translated": "OpenClaw використовує локальну мережу для підключення до вашого віддаленого OpenClaw gateway через LAN, Tailnet або SSH."
     },
     {
-      "id": "native.apple.5db9a976fd1c7fcb",
-      "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
-      "translated": "OpenClaw потрібен мікрофон для тестів Voice Wake і захоплення аудіо агентом."
+      "id": "native.apple.0fdd4a93f90c6f95",
+      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenClaw використовує мікрофон для Voice Wake, push-to-talk, режиму розмови, диктування Quick Chat і запису аудіо агента."
     },
     {
-      "id": "native.apple.b7aba524ef867e7f",
-      "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
-      "translated": "OpenClaw використовує розпізнавання мовлення для виявлення вашої тригерної фрази Voice Wake."
+      "id": "native.apple.44701896858c9029",
+      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenClaw використовує Apple Speech для Voice Wake, push-to-talk, режиму розмови та диктування Quick Chat. Voice Wake залишається на пристрої."
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
@@ -23624,9 +23689,14 @@
       "translated": "Увімкнути Voice Wake"
     },
     {
-      "id": "native.apple.e992b45cdbccdd10",
-      "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
-      "translated": "Прослуховувати фразу пробудження перед виконанням голосових команд. Розпізнавання виконується повністю на пристрої."
+      "id": "native.apple.e2811fb1981c52f9",
+      "source": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.",
+      "translated": "Слухати фразу пробудження перед виконанням голосових команд. Розпізнавання фрази пробудження залишається на цьому Mac."
+    },
+    {
+      "id": "native.apple.8e55ed92eb632efa",
+      "source": "On-device recognition is unavailable for the selected language on this Mac.",
+      "translated": "Розпізнавання на пристрої недоступне для вибраної мови на цьому Mac."
     },
     {
       "id": "native.apple.475eb587a8accd92",
@@ -23787,6 +23857,11 @@
       "id": "native.apple.d57fd5213daf2a6e",
       "source": "\\(self.friendlyName(for: current)) (System)",
       "translated": "\\(self.friendlyName(for: current)) (Система)"
+    },
+    {
+      "id": "native.apple.2565d77dbe6ce76b",
+      "source": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.",
+      "translated": "Голосовому пробудженню потрібне розпізнавання на пристрої для вибраної мови. Функції push-to-talk та режим розмови залишаються доступними."
     },
     {
       "id": "native.apple.79db41c7b941a50f",

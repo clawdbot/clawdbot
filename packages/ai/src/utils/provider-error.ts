@@ -1,3 +1,5 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 const MAX_ERROR_BODY_LENGTH = 4000;
 
 type HttpErrorShape = Error & {
@@ -47,7 +49,7 @@ function readBody(error: HttpErrorShape): string | undefined {
     if (body.length > 0) {
       return body.length <= MAX_ERROR_BODY_LENGTH
         ? body
-        : `${body.slice(0, MAX_ERROR_BODY_LENGTH)}... [truncated]`;
+        : `${truncateUtf16Safe(body, MAX_ERROR_BODY_LENGTH)}... [truncated]`;
     }
   }
   return undefined;

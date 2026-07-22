@@ -5,7 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
-  loadSessionEntry as loadAccessorSessionEntry,
+  loadSessionEntryReadOnly as loadAccessorSessionEntry,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
@@ -31,7 +31,7 @@ import {
 } from "./session-transcript-readers.js";
 import {
   loadGatewaySessionRow,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   type GatewaySessionRow,
 } from "./session-utils.js";
 
@@ -93,6 +93,7 @@ function buildGatewaySessionSnapshot(params: {
   const session = params.includeSession
     ? {
         ...buildGatewaySessionEventRow(sessionRow),
+        createdBy: sessionRow.createdBy ?? null,
         thinkingLevel: sessionRow.thinkingLevel ?? null,
       }
     : undefined;
@@ -198,7 +199,7 @@ async function handleTranscriptUpdateBroadcast(
       : undefined;
     const fallbackTarget = markerEntry
       ? undefined
-      : loadSessionEntry(sessionKey, { agentId: visibleAgentId });
+      : loadSessionEntryReadOnly(sessionKey, { agentId: visibleAgentId });
     const entry = markerEntry ?? fallbackTarget?.entry;
     const storePath = sqliteMarker?.storePath ?? fallbackTarget?.storePath;
     messageSeq = entry?.sessionId

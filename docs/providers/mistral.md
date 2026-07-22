@@ -190,10 +190,8 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: { provider: "mistral" },
-        },
+      memory: {
+        search: { provider: "mistral" },
       },
     }
     ```

@@ -58,13 +58,12 @@ vi.mock("../../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
-    isCliProvider: (provider: string, cfg?: OpenClawConfig) => {
+    isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
       const normalized = provider.trim().toLowerCase();
       return (
         normalized === "claude-cli" ||
         normalized === "google-gemini-cli" ||
-        normalized === "codex-cli" ||
-        Boolean(cfg?.agents?.defaults?.cliBackends?.[normalized])
+        normalized === "codex-cli"
       );
     },
   };
@@ -463,6 +462,10 @@ describe("runReplyAgent media path normalization", () => {
     ];
     const followupRun = createMockFollowupRun({ prompt: "compare these" });
     followupRun.images = images;
+    followupRun.media = [
+      { path: "/tmp/first.jpg", contentType: "image/jpeg" },
+      { path: "/tmp/second.png", contentType: "image/png" },
+    ];
 
     await runReplyAgent(
       makeRunReplyAgentParams({
@@ -481,6 +484,7 @@ describe("runReplyAgent media path normalization", () => {
         steeringMode: "all",
         isInboundUserMessage: true,
         images,
+        media: followupRun.media,
         taskSuggestionDeliveryMode: undefined,
       },
     );

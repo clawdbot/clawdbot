@@ -141,9 +141,10 @@ export function renderPlaceSelect(params: {
   execNode: string;
   syncFolder: string;
   worktree: boolean;
+  worktreeVisible: boolean;
   worktreeAvailable: boolean;
+  worktreeDisabledReason?: string;
   cloudDisabledReason?: string;
-  customFolder: boolean;
   branches: DraftBranches | null;
   branchesLoading: boolean;
   baseRef: string;
@@ -390,7 +391,7 @@ export function renderPlaceSelect(params: {
                       : nothing}
                   `
                 : nothing}
-              ${!params.execNode
+              ${!params.execNode && params.worktreeVisible
                 ? html`
                     <div class="session-menu__separator" role="separator"></div>
                     ${renderSessionMenuItem(
@@ -398,15 +399,13 @@ export function renderPlaceSelect(params: {
                         value: "worktree",
                         label: t("newSession.worktree"),
                         checked: params.worktree,
-                        disabled:
-                          Boolean(params.cloudProfileId) ||
-                          !params.worktreeAvailable ||
-                          params.customFolder,
+                        disabled: Boolean(params.cloudProfileId) || !params.worktreeAvailable,
                         title: params.cloudProfileId
                           ? t("newSession.cloudRequiresWorktree")
                           : params.worktreeAvailable
                             ? t("chat.runControls.newSessionWorktree")
-                            : t("newSession.worktreeUnavailable"),
+                            : (params.worktreeDisabledReason ??
+                              t("newSession.worktreeUnavailable")),
                         onSelect: params.onToggleWorktree,
                         keepOpen: true,
                       },

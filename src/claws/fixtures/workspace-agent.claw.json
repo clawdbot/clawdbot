@@ -9,8 +9,12 @@
   },
   "workspace": {
     "bootstrapFiles": {
-      "SOUL.md": { "source": "workspace/SOUL.md" },
-      "HEARTBEAT.md": { "source": "workspace/HEARTBEAT.md" }
+      "SOUL.md": {
+        "source": "workspace/SOUL.md"
+      },
+      "HEARTBEAT.md": {
+        "source": "workspace/HEARTBEAT.md"
+      }
     },
     "files": [
       {

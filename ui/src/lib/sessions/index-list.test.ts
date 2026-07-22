@@ -12,7 +12,7 @@ describe("session list requests", () => {
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [],
     };
-    const request = vi.fn(async () => result);
+    const request = vi.fn(async (_method: string, _params?: unknown) => result);
     const client = { request } as unknown as GatewayBrowserClient;
     const snapshot = {
       client,
@@ -43,6 +43,40 @@ describe("session list requests", () => {
       limit: 20,
       spawnedBy: "agent:main:parent",
     });
+    sessions.dispose();
+  });
+
+  it("maps archived status filters to the tri-state wire contract", async () => {
+    const result: SessionsListResult = {
+      ts: 1,
+      path: "(multiple)",
+      count: 0,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [],
+    };
+    const request = vi.fn(async (_method: string, _params?: unknown) => result);
+    const sessions = createSessionCapability({
+      snapshot: {
+        client: { request } as unknown as GatewayBrowserClient,
+        connected: true,
+        sessionKey: "agent:main:main",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await sessions.list({ archivedFilter: "active", activeMinutes: 30 });
+    await sessions.list({ archivedFilter: "archived", activeMinutes: 30 });
+    await sessions.list({ archivedFilter: "all", activeMinutes: 30 });
+
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ activeMinutes: 30 });
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("archived");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ archived: true });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("activeMinutes");
+    expect(request.mock.calls[2]?.[1]).toMatchObject({ archived: "all" });
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("activeMinutes");
     sessions.dispose();
   });
 });

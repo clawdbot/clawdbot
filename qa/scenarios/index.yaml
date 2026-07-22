@@ -17,8 +17,8 @@ title: OpenClaw QA Scenario Pack
 #
 # - use `coverage.primary` only for evidence that executes the required product boundary
 # - use `coverage.secondary` for helper or supporting evidence; it may stand alone
-# - keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted
-#   as `namespace.behavior`, with dashes allowed inside each segment
+# - keep IDs behavior-shaped, broad enough to reuse, lowercase, and exactly
+#   `surface.feature`, with dashes allowed inside each segment
 # - use the exact values listed under feature `coverageIds` in `taxonomy.yaml`
 # - taxonomy feature coverage IDs are exact proof targets, not aliases
 # - scenario primary can list multiple IDs only when this scenario is primary

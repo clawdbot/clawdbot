@@ -37,12 +37,13 @@ let createDiscordNativeCommand: typeof import("./native-command.js").createDisco
 function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
   return {
     commands: {
-      useAccessGroups: false,
+      allowFrom: { discord: ["user:owner"] },
     },
     channels: {
       discord: {
         dm: { enabled: true },
         dmPolicy: "open",
+        groupPolicy: "open",
         allowFrom: ["*"],
         guilds: {
           guild1: {

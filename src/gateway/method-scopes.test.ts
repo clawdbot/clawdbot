@@ -180,6 +180,29 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: true });
   });
 
+  it("requires admin only when DM pairing approval bootstraps a command owner", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("channels.pairing.approve", {})).toEqual([
+      "operator.pairing",
+    ]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("channels.pairing.approve", {
+        bootstrapCommandOwner: true,
+      }),
+    ).toEqual(["operator.pairing", "operator.admin"]);
+    expect(
+      authorizeOperatorScopesForMethod("channels.pairing.approve", ["operator.pairing"], {
+        bootstrapCommandOwner: true,
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.admin" });
+    expect(
+      authorizeOperatorScopesForMethod(
+        "channels.pairing.approve",
+        ["operator.pairing", "operator.admin"],
+        { bootstrapCommandOwner: true },
+      ),
+    ).toEqual({ allowed: true });
+  });
+
   it("classifies plugin session actions with a CLI-safe default operator scope", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction")).toEqual([
       "operator.write",

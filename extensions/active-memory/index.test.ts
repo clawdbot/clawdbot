@@ -684,8 +684,8 @@ describe("active-memory plugin", () => {
       hasRememberAcrossConversationsAgent({
         agents: {
           list: [
-            { id: "personal", memorySearch: { rememberAcrossConversations: false } },
-            { id: "support", memorySearch: { rememberAcrossConversations: false } },
+            { id: "personal", memory: { search: { rememberAcrossConversations: false } } },
+            { id: "support", memory: { search: { rememberAcrossConversations: false } } },
           ],
         },
       }),
@@ -896,7 +896,7 @@ describe("active-memory plugin", () => {
             workspace: "/tmp/live-personal-workspace",
             agentDir: "/tmp/live-personal-agent",
             model: { primary: "openai/gpt-5.5" },
-            memorySearch: { rememberAcrossConversations: true },
+            memory: { search: { rememberAcrossConversations: true } },
           },
         ],
       },
@@ -935,7 +935,7 @@ describe("active-memory plugin", () => {
             workspace: "/tmp/live-personal-workspace",
             agentDir: "/tmp/live-personal-agent",
             model: { primary: "openai/gpt-5.5" },
-            memorySearch: { rememberAcrossConversations: true },
+            memory: { search: { rememberAcrossConversations: true } },
           },
         ],
       },
@@ -951,7 +951,7 @@ describe("active-memory plugin", () => {
           {
             id: "personal",
             model: { primary: "github-copilot/gpt-5.4-mini" },
-            memorySearch: { rememberAcrossConversations: true },
+            memory: { search: { rememberAcrossConversations: true } },
           },
         ],
       },
@@ -1057,7 +1057,7 @@ describe("active-memory plugin", () => {
     configFile = {
       ...configFile,
       agents: {
-        list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }],
+        list: [{ id: "personal", memory: { search: { rememberAcrossConversations: true } } }],
       },
     };
     hoisted.sessionStore[testCase.sessionKey] = { sessionId: "s-personal", updatedAt: 0 };
@@ -1122,7 +1122,7 @@ describe("active-memory plugin", () => {
           {
             id: "personal",
             model: { primary: "github-copilot/gpt-5.4-mini" },
-            memorySearch: { rememberAcrossConversations: true },
+            memory: { search: { rememberAcrossConversations: true } },
           },
         ],
       },
@@ -1164,7 +1164,7 @@ describe("active-memory plugin", () => {
     configFile = {
       ...configFile,
       agents: {
-        list: [{ id: "personal", memorySearch: { rememberAcrossConversations: true } }],
+        list: [{ id: "personal", memory: { search: { rememberAcrossConversations: true } } }],
       },
     };
     const sessionKey = "agent:personal:telegram:direct:owner";

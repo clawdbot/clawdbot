@@ -19,6 +19,7 @@ import {
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
@@ -239,7 +240,10 @@ function setDefaultPluginMetadataSnapshot(): void {
   });
 }
 
-afterEach(resetModelFallbackTestState);
+afterEach(() => {
+  resetModelFallbackTestState();
+  cliBackendsTesting.resetDepsForTest();
+});
 
 beforeEach(() => {
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
@@ -1351,10 +1355,15 @@ describe("runWithModelFallback", () => {
   });
 
   it("prefers a prepared harness over a colliding CLI runtime id", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        { id: "codex", pluginId: "test-codex-cli", config: { command: "codex" } },
+      ],
+    });
     const cfg = makeCfg({
       agents: {
         defaults: {
-          cliBackends: { codex: { command: "codex" } },
           model: { primary: "anthropic/claude-sonnet-4-6" },
         },
       },
@@ -1444,9 +1453,6 @@ describe("runWithModelFallback", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
           model: {
             primary: "claude-cli/opus",
           },

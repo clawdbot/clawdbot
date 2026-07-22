@@ -14,7 +14,93 @@ struct ChatWorkingProgressTests {
         #expect(first == ChatWorkingClawStance.seeded(run, salt: salt))
         #expect(first == .southpaw)
         #expect(ChatWorkingClawStance.seeded("run-a", salt: salt) == .standard)
-        #expect(ChatWorkingClawStance.seeded("run-8", salt: salt) == .spin)
+        #expect(ChatWorkingClawStance.seeded("run-21", salt: salt) == .spin)
+    }
+
+    @Test func `stance weights total one hundred and match the allowlist`() {
+        let weightedStances = ChatWorkingClawStance.weightedStances
+        #expect(weightedStances.reduce(0) { $0 + $1.weight } == 100)
+        #expect(weightedStances.map(\.weight) == [63, 19, 5, 4, 3, 2, 2, 1, 1])
+        #expect(weightedStances.map(\.stance) == [
+            .standard,
+            .southpaw,
+            .flurry,
+            .spin,
+            .shadowbox,
+            .backflip,
+            .zen,
+            .drummer,
+            .peekaboo,
+        ])
+        #expect(weightedStances.map(\.stance) == ChatWorkingClawStance.allCases)
+    }
+
+    @Test func `new rare stances are selectable`() {
+        let salt: UInt32 = 0xA1B2_C3D4
+        #expect(ChatWorkingClawStance.seeded("run-10", salt: salt) == .zen)
+        #expect(ChatWorkingClawStance.seeded("run-299", salt: salt) == .drummer)
+        #expect(ChatWorkingClawStance.seeded("run-22", salt: salt) == .peekaboo)
+    }
+
+    @Test func `zen samples the breath and deliberate snip keyframes`() {
+        for (elapsed, scale) in [(0.0, 1.0), (1.8, 1.08), (3.3, 1.0), (6.0, 1.0)] {
+            let pose = ChatWorkingClawMotion.pose(stance: .zen, elapsed: elapsed)
+            self.expectClose(pose.bodyScale, scale)
+            #expect(pose.bodyRotation == 0)
+            #expect(pose.xOffset == 0)
+            #expect(pose.yOffset == 0)
+        }
+        for (elapsed, jaw) in [(3.6, -10.0), (4.2, -24.0), (4.56, 2.0), (5.16, -10.0)] {
+            let pose = ChatWorkingClawMotion.pose(stance: .zen, elapsed: elapsed)
+            self.expectClose(pose.jawRotation, jaw)
+        }
+    }
+
+    @Test func `drummer samples the two tilt and jaw hit keyframes`() {
+        for (elapsed, rotation) in [(0.0, 0.0), (0.18, -8.0), (0.36, 0.0), (0.66, 8.0), (0.84, 0.0)] {
+            let pose = ChatWorkingClawMotion.pose(stance: .drummer, elapsed: elapsed)
+            self.expectClose(pose.bodyRotation, rotation)
+            #expect(pose.bodyScale == 1)
+            #expect(pose.xOffset == 0)
+            #expect(pose.yOffset == 0)
+        }
+        for (elapsed, jaw) in [
+            (0.12, -20.0),
+            (0.18, 2.0),
+            (0.30, -10.0),
+            (0.60, -20.0),
+            (0.66, 2.0),
+            (0.78, -10.0),
+        ] {
+            let pose = ChatWorkingClawMotion.pose(stance: .drummer, elapsed: elapsed)
+            self.expectClose(pose.jawRotation, jaw)
+        }
+    }
+
+    @Test func `peekaboo samples the vertical duck pop and boo keyframes`() {
+        for (elapsed, yOffset, scale) in [
+            (1.32, 0.0, 1.0),
+            (1.488, 5.0, 0.72),
+            (1.728, 5.0, 0.72),
+            (1.872, -1.5, 1.06),
+            (2.016, 0.0, 1.0),
+        ] {
+            let pose = ChatWorkingClawMotion.pose(stance: .peekaboo, elapsed: elapsed)
+            self.expectClose(pose.yOffset, yOffset)
+            self.expectClose(pose.bodyScale, scale)
+            #expect(pose.bodyRotation == 0)
+            #expect(pose.xOffset == 0)
+        }
+        for (elapsed, jaw) in [
+            (1.32, -10.0),
+            (1.488, -2.0),
+            (1.728, -2.0),
+            (1.872, -28.0),
+            (2.064, -10.0),
+        ] {
+            let pose = ChatWorkingClawMotion.pose(stance: .peekaboo, elapsed: elapsed)
+            self.expectClose(pose.jawRotation, jaw)
+        }
     }
 
     @Test func `working identity survives run rekey but resets for turn and session`() throws {
@@ -348,5 +434,9 @@ struct ChatWorkingProgressTests {
             endedAt: endedAt,
             runtimeMs: runtimeMs,
             outputTokens: outputTokens)
+    }
+
+    private func expectClose(_ actual: CGFloat, _ expected: CGFloat) {
+        #expect(abs(actual - expected) < 0.0001)
     }
 }

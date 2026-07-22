@@ -8,7 +8,11 @@ import { t } from "../../i18n/index.ts";
 import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
-import type { BoardViewSnapshot, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import type {
+  BoardObserverContext,
+  BoardViewSnapshot,
+  BoardWidgetFrameUrl,
+} from "../../lib/board/view-types.ts";
 
 export type BoardChatDockSize = {
   height: number;
@@ -24,6 +28,7 @@ export type WorkboardCardChipProps = {
 type BoardSessionSurfaceProps = {
   snapshot: BoardViewSnapshot;
   sessions: readonly GatewaySessionRow[];
+  observer?: BoardObserverContext;
   activeTabId: string;
   dock: BoardTab["chatDock"];
   reopenDock: BoardVisibleChatDock;
@@ -166,6 +171,7 @@ function renderBoardView(props: BoardSessionSurfaceProps) {
         .widgetFrameUrl=${props.widgetFrameUrl}
         .callbacks=${props.callbacks}
         .sessions=${props.sessions}
+        .observer=${props.observer}
         .canMutate=${props.canMutate}
         .canGrant=${props.canGrant}
       ></openclaw-board-view>

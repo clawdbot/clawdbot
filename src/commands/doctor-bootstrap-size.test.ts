@@ -67,7 +67,7 @@ describe("noteBootstrapFileSize", () => {
         "Total bootstrap injected chars: 20,000 (13% of max/total 150,000).",
         "Total bootstrap raw chars (before truncation): 25,000.",
         "",
-        "- Tip: tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+        "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       ].join("\n"),
     );
   });

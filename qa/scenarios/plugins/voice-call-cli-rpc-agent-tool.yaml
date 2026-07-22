@@ -2,8 +2,8 @@ title: Voice Call CLI, RPC, agent tool, and realtime consult flow
 
 scenario:
   id: voice-call-cli-rpc-agent-tool
-  surface: voice-call-channel
-  category: voice-call-channel.channel-setup-and-operations
+  surface: voice-call
+  category: voice-call.channel-setup-and-operations
   coverage:
     primary:
       - voice-call.cli-rpc-agent-tool

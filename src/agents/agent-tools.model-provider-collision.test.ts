@@ -62,7 +62,6 @@ describe("applyModelProviderToolPolicy", () => {
     const filtered = testing.applyModelProviderToolPolicy(baseTools, {
       modelCompat: {
         toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-        nativeWebSearchTool: true,
         toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
       },
     });
@@ -74,7 +73,6 @@ describe("applyModelProviderToolPolicy", () => {
     const filtered = testing.applyModelProviderToolPolicy(baseTools, {
       modelCompat: {
         toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-        nativeWebSearchTool: true,
       },
     });
 

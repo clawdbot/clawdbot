@@ -55,6 +55,15 @@ function changeWorkboardSelect(select: Element | null | undefined, value: string
   control.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function selectWorkboardAgent(select: Element | null | undefined, value: string) {
+  const control = select as
+    | (HTMLElement & { onSelect: (value: string) => void })
+    | null
+    | undefined;
+  expect(control).not.toBeNull();
+  control?.onSelect(value);
+}
+
 describe("renderWorkboard", () => {
   it("shows a card dashboard only for linked cards while the plugin is active", () => {
     const host = {};
@@ -1053,11 +1062,17 @@ describe("renderWorkboard", () => {
     );
 
     const toolbarFilters = container.querySelector(".workboard-toolbar__filters");
-    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(3);
+    expect(toolbarFilters?.querySelectorAll(".workboard-select--toolbar")).toHaveLength(2);
     expect(toolbarFilters?.querySelectorAll("select")).toHaveLength(0);
     expect(toolbarFilters?.textContent).toContain("All cards");
     expect(toolbarFilters?.textContent).toContain("All priorities");
-    expect(toolbarFilters?.textContent).toContain("All agents");
+    expect(
+      toolbarFilters
+        ?.querySelector<HTMLElement & { options: Array<{ label: string }> }>(
+          ".workboard-agent-select--toolbar",
+        )
+        ?.options.map((option) => option.label),
+    ).toContain("All agents");
     const priorityFilter = toolbarFilters?.querySelectorAll(".workboard-select--toolbar").item(1);
     expect(priorityFilter?.textContent).toContain("Low");
     expect(priorityFilter?.textContent).toContain("Normal");
@@ -1121,7 +1136,7 @@ describe("renderWorkboard", () => {
     expect(container.querySelectorAll(".workboard-select--toolbar")).toHaveLength(2);
   });
 
-  it("uses labelled Web Awesome selects for Workboard filters", () => {
+  it("uses labelled controls for Workboard filters", () => {
     const host = {};
     const state = getWorkboardState(host);
     state.loaded = true;
@@ -1145,13 +1160,17 @@ describe("renderWorkboard", () => {
         ".workboard-toolbar__filters > wa-select",
       ),
     ];
-    expect(selects).toHaveLength(3);
+    expect(selects).toHaveLength(2);
     expect(selects.map((select) => select.getAttribute("label"))).toEqual([
       "Workboard view",
       "All priorities",
-      "Filter by agent",
     ]);
-    expect(selects.map((select) => select.getAttribute("value"))).toEqual(["all", "all", "all"]);
+    expect(selects.map((select) => select.getAttribute("value"))).toEqual(["all", "all"]);
+    const agentSelect = container.querySelector<
+      HTMLElement & { accessibleLabel: string; value: string }
+    >(".workboard-agent-select--toolbar");
+    expect(agentSelect?.accessibleLabel).toBe("Filter by agent");
+    expect(agentSelect?.value).toBe("all");
     expect(container.querySelector(".workboard-select__trigger")).toBeNull();
   });
 
@@ -2841,12 +2860,18 @@ describe("renderWorkboard", () => {
       container,
     );
 
-    const agentFilter = container.querySelector(".workboard-select--toolbar-agent");
-    expect(agentFilter?.textContent).toContain("Main (default)");
-    expect(agentFilter?.textContent).toContain("Unassigned (uses Main)");
-    expect(agentFilter?.textContent).toContain("workboard-dispatcher (not configured)");
+    const agentFilter = container.querySelector<
+      HTMLElement & { options: Array<{ label: string }>; value: string }
+    >(".workboard-agent-select--toolbar");
+    expect(agentFilter?.options.map((option) => option.label)).toEqual([
+      "All agents",
+      "Unassigned (uses Main)",
+      "Main (default)",
+      "Ops",
+      "workboard-dispatcher (not configured)",
+    ]);
 
-    changeWorkboardSelect(agentFilter, "ops");
+    selectWorkboardAgent(agentFilter, "ops");
     render(
       renderWorkboard({
         host,
@@ -2870,12 +2895,13 @@ describe("renderWorkboard", () => {
 
     expect(container.textContent).not.toContain("Main work");
     expect(container.textContent).toContain("Ops work");
-    expect(container.querySelector(".workboard-select--toolbar-agent")?.textContent).toContain(
-      "Ops",
-    );
+    expect(
+      container.querySelector<HTMLElement & { value: string }>(".workboard-agent-select--toolbar")
+        ?.value,
+    ).toBe("ops");
 
-    changeWorkboardSelect(
-      container.querySelector(".workboard-select--toolbar-agent"),
+    selectWorkboardAgent(
+      container.querySelector(".workboard-agent-select--toolbar"),
       "workboard-dispatcher",
     );
     render(
@@ -2901,9 +2927,10 @@ describe("renderWorkboard", () => {
 
     expect(container.textContent).not.toContain("Ops work");
     expect(container.textContent).toContain("Dispatcher work");
-    expect(container.querySelector(".workboard-select--toolbar-agent")?.textContent).toContain(
-      "workboard-dispatcher (not configured)",
-    );
+    expect(
+      container.querySelector<HTMLElement & { value: string }>(".workboard-agent-select--toolbar")
+        ?.value,
+    ).toBe("workboard-dispatcher");
   });
 
   it("limits assignment choices to configured agents and preserves an unknown current assignee", () => {
@@ -2951,13 +2978,10 @@ describe("renderWorkboard", () => {
     );
 
     const draft = container.querySelector<HTMLElement>(".workboard-draft");
-    const agentSelect = [...(draft?.querySelectorAll<HTMLElement>(".workboard-select") ?? [])].at(
-      2,
+    const agentSelect = draft?.querySelector<HTMLElement & { options: Array<{ label: string }> }>(
+      ".workboard-agent-select",
     );
-    const optionLabels = [
-      ...(agentSelect?.querySelectorAll<HTMLButtonElement>(".workboard-select__option") ?? []),
-    ].map((option) => option.textContent?.trim());
-    expect(optionLabels).toEqual([
+    expect(agentSelect?.options.map((option) => option.label)).toEqual([
       "Unassigned (uses Main)",
       "Main (default)",
       "Ops",
@@ -3541,7 +3565,7 @@ describe("renderWorkboard", () => {
       ...(container
         .querySelector(".workboard-draft")
         ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
-    ].at(3);
+    ].at(2);
     expect(sessionSelect?.getAttribute("value")).toBe("agent:main:archived-session");
     expect(
       sessionSelect?.querySelector('wa-option[value="agent:main:archived-session"]'),
@@ -3585,7 +3609,7 @@ describe("renderWorkboard", () => {
       ...(container
         .querySelector(".workboard-draft")
         ?.querySelectorAll<HTMLElement>(".workboard-select") ?? []),
-    ].at(3);
+    ].at(2);
     const labels = [...(sessionOptions?.querySelectorAll(".workboard-select__option") ?? [])].map(
       (option) => option.textContent?.trim(),
     );

@@ -138,12 +138,10 @@ describe("Gateway startup SecretRef owner isolation", () => {
       async () => {
         await writeConfig({
           ...baseConfig(),
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: { source: "env", provider: "default", id: "MISSING_TTS_KEY" },
-                },
+          tts: {
+            providers: {
+              elevenlabs: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_TTS_KEY" },
               },
             },
           },
@@ -180,7 +178,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
             }),
             expect.objectContaining({
               code: "SECRETS_OWNER_UNAVAILABLE",
-              path: "messages.tts.providers.elevenlabs.apiKey",
+              path: "tts.providers.elevenlabs.apiKey",
             }),
           ]),
         );
@@ -219,12 +217,10 @@ describe("Gateway startup SecretRef owner isolation", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
-              },
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
             },
           },
         },
@@ -308,12 +304,10 @@ describe("Gateway startup SecretRef owner isolation", () => {
                 },
               },
             },
-            messages: {
-              tts: {
-                providers: {
-                  elevenlabs: {
-                    apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
-                  },
+            tts: {
+              providers: {
+                elevenlabs: {
+                  apiKey: { source: "exec", provider: "vault", id: "tts/elevenlabs" },
                 },
               },
             },
@@ -340,7 +334,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
               }),
               expect.objectContaining({
                 code: "SECRETS_OWNER_UNAVAILABLE",
-                path: "messages.tts.providers.elevenlabs.apiKey",
+                path: "tts.providers.elevenlabs.apiKey",
               }),
             ]),
           );
@@ -358,14 +352,16 @@ describe("Gateway startup SecretRef owner isolation", () => {
     await withEnvAsync({ MISSING_MEMORY_KEY: undefined }, async () => {
       await writeConfig({
         ...baseConfig(),
-        agents: {
-          defaults: {
-            memorySearch: {
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_KEY" },
-              },
+        memory: {
+          search: {
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_KEY" },
             },
           },
+        },
+
+        agents: {
+          defaults: {},
         },
       });
 
@@ -399,29 +395,33 @@ describe("Gateway startup SecretRef owner isolation", () => {
     });
   });
 
-  it("reaches /readyz with one cold media model", async () => {
+  it("reaches /readyz with one cold media transport provider", async () => {
     await withEnvAsync({ MISSING_MEDIA_MODEL_VALUE: undefined }, async () => {
       await writeConfig({
         ...baseConfig(),
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "MISSING_MEDIA_MODEL_VALUE",
+              },
+              models: [],
+            },
+          },
+        },
         tools: {
           media: {
+            models: [
+              {
+                provider: "openai",
+                capabilities: ["audio"],
+              },
+            ],
             audio: {
               enabled: true,
-              models: [
-                {
-                  provider: "openai",
-                  request: {
-                    auth: {
-                      mode: "authorization-bearer",
-                      token: {
-                        source: "env",
-                        provider: "default",
-                        id: "MISSING_MEDIA_MODEL_VALUE",
-                      },
-                    },
-                  },
-                },
-              ],
             },
           },
         },
@@ -434,8 +434,8 @@ describe("Gateway startup SecretRef owner isolation", () => {
       expect(ready.status).toBe(200);
       expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
         {
-          ownerKind: "capability",
-          ownerId: "media-model:audio:0",
+          ownerKind: "provider",
+          ownerId: "openai",
           state: "unavailable",
         },
       ]);
@@ -461,7 +461,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
               },
             },
           },
-          list: [{ id: "cold" }],
+          entries: { cold: {} },
         },
       });
 
@@ -513,12 +513,10 @@ describe("Gateway startup SecretRef owner isolation", () => {
               token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
             },
           },
-          messages: {
-            tts: {
-              providers: {
-                elevenlabs: {
-                  apiKey: { source: "env", provider: "default", id: "MISSING_TTS_KEY" },
-                },
+          tts: {
+            providers: {
+              elevenlabs: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_TTS_KEY" },
               },
             },
           },

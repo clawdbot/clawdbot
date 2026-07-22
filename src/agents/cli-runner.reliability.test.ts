@@ -39,6 +39,7 @@ import {
 import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { runSkillResearchAutoCapture } from "../skills/research/autocapture.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   restoreCliRunnerTestDeps,
   runPreparedCliAgent,
@@ -375,6 +376,7 @@ describe("runCliAgent reliability", () => {
     sessionFileEnvSnapshot = undefined;
     resetClaudeLiveSessionsForTest();
     resetDiagnosticEventsForTest();
+    cliBackendsTesting.resetDepsForTest();
     vi.useRealTimers();
   });
 
@@ -1879,7 +1881,7 @@ describe("runCliAgent reliability", () => {
       output: "jsonl" as const,
       input: "stdin" as const,
       modelArg: "--model",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
       sessionMode: "always" as const,
       liveSession: "claude-stdio" as const,
       reliability: {
@@ -4334,22 +4336,23 @@ describe("runCliAgent reliability", () => {
       })}\n`,
       "utf-8",
     );
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: dir,
-          cliBackends: {
-            "codex-cli": {
-              command: "codex",
-              args: ["exec"],
-              output: "text",
-              input: "arg",
-              sessionMode: "existing",
-            },
+    const config: OpenClawConfig = { agents: { defaults: { workspace: dir } } };
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "codex-cli",
+          pluginId: "test-codex",
+          config: {
+            command: "codex",
+            args: ["exec"],
+            output: "text",
+            input: "arg",
+            sessionMode: "existing",
           },
         },
-      },
-    };
+      ],
+    });
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
       runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),

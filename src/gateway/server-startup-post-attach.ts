@@ -44,7 +44,6 @@ const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
-const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 type Awaitable<T> = T | Promise<T>;
 type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -133,21 +132,7 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
 }
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
-  if (cfg.memory?.backend !== "qmd") {
-    return { mode: "off" };
-  }
-  const startup = cfg.memory.qmd?.update?.startup;
-  if (startup === "immediate") {
-    return { mode: "immediate" };
-  }
-  if (startup === "idle") {
-    const rawDelayMs = cfg.memory.qmd?.update?.startupDelayMs;
-    const delayMs =
-      typeof rawDelayMs === "number" && Number.isFinite(rawDelayMs) && rawDelayMs >= 0
-        ? Math.floor(rawDelayMs)
-        : QMD_STARTUP_IDLE_DELAY_MS;
-    return { mode: "idle", delayMs };
-  }
+  void cfg;
   return { mode: "off" };
 }
 

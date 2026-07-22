@@ -304,7 +304,6 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
       ssrfPolicy: {
         allowPrivateNetwork: true,
         allowedHostnames: ["1.1.1.1"],
-        hostnameAllowlist: ["1.1.1.1"],
       },
       waitForNavigationResult: true,
       timeouts: {

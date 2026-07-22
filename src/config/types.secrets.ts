@@ -311,7 +311,6 @@ export type FileSecretProviderConfig = {
   mode?: FileSecretProviderMode;
   timeoutMs?: number;
   maxBytes?: number;
-  allowInsecurePath?: boolean;
 };
 
 export type ManualExecSecretProviderConfig = {
@@ -325,8 +324,6 @@ export type ManualExecSecretProviderConfig = {
   env?: Record<string, string>;
   passEnv?: string[];
   trustedDirs?: string[];
-  allowInsecurePath?: boolean;
-  allowSymlinkCommand?: boolean;
 };
 
 export type PluginIntegrationSecretProviderConfig = {

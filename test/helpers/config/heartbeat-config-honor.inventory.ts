@@ -6,14 +6,14 @@ import type { ConfigHonorInventoryRow } from "./config-honor-audit.js";
 /** Config prefixes audited for heartbeat key coverage. */
 export const HEARTBEAT_CONFIG_PREFIXES = [
   "agents.defaults.heartbeat",
-  "agents.list.*.heartbeat",
+  "agents.entries.*.heartbeat",
 ] as const;
 
 /** Heartbeat config honor inventory consumed by config audit tests. */
 export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
   {
     key: "every",
-    schemaPaths: ["agents.defaults.heartbeat.every", "agents.list.*.heartbeat.every"],
+    schemaPaths: ["agents.defaults.heartbeat.every", "agents.entries.*.heartbeat.every"],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts", "src/agents/acp-spawn.ts"],
     consumerPaths: ["src/infra/heartbeat-runner.ts", "src/agents/acp-spawn.ts"],
@@ -25,7 +25,7 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
   },
   {
     key: "model",
-    schemaPaths: ["agents.defaults.heartbeat.model", "agents.list.*.heartbeat.model"],
+    schemaPaths: ["agents.defaults.heartbeat.model", "agents.entries.*.heartbeat.model"],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts"],
     consumerPaths: ["src/infra/heartbeat-runner.ts"],
@@ -37,7 +37,7 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
   },
   {
     key: "prompt",
-    schemaPaths: ["agents.defaults.heartbeat.prompt", "agents.list.*.heartbeat.prompt"],
+    schemaPaths: ["agents.defaults.heartbeat.prompt", "agents.entries.*.heartbeat.prompt"],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts"],
     consumerPaths: ["src/infra/heartbeat-runner.ts"],
@@ -45,46 +45,10 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
     testPaths: ["src/infra/heartbeat-runner.returns-default-unset.test.ts"],
   },
   {
-    key: "includeSystemPromptSection",
-    schemaPaths: [
-      "agents.defaults.heartbeat.includeSystemPromptSection",
-      "agents.list.*.heartbeat.includeSystemPromptSection",
-    ],
-    typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
-    mergePaths: ["src/agents/heartbeat-system-prompt.ts"],
-    consumerPaths: [
-      "src/agents/heartbeat-system-prompt.ts",
-      "src/agents/embedded-agent-runner/run/attempt.prompt-helpers.ts",
-    ],
-    reloadPaths: ["src/gateway/config-reload-plan.ts"],
-    testPaths: ["src/agents/heartbeat-system-prompt.test.ts"],
-  },
-  {
-    key: "ackMaxChars",
-    schemaPaths: ["agents.defaults.heartbeat.ackMaxChars", "agents.list.*.heartbeat.ackMaxChars"],
-    typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
-    mergePaths: ["src/infra/heartbeat-runner.ts"],
-    consumerPaths: ["src/infra/heartbeat-runner.ts"],
-    reloadPaths: ["src/gateway/config-reload-plan.ts"],
-    testPaths: ["src/infra/heartbeat-runner.respects-ackmaxchars-heartbeat-acks.test.ts"],
-  },
-  {
-    key: "suppressToolErrorWarnings",
-    schemaPaths: [
-      "agents.defaults.heartbeat.suppressToolErrorWarnings",
-      "agents.list.*.heartbeat.suppressToolErrorWarnings",
-    ],
-    typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
-    mergePaths: ["src/infra/heartbeat-runner.ts"],
-    consumerPaths: ["src/infra/heartbeat-runner.ts"],
-    reloadPaths: ["src/gateway/config-reload-plan.ts"],
-    testPaths: ["src/infra/heartbeat-runner.model-override.test.ts"],
-  },
-  {
     key: "timeoutSeconds",
     schemaPaths: [
       "agents.defaults.heartbeat.timeoutSeconds",
-      "agents.list.*.heartbeat.timeoutSeconds",
+      "agents.entries.*.heartbeat.timeoutSeconds",
     ],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts"],
@@ -97,7 +61,10 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
   },
   {
     key: "lightContext",
-    schemaPaths: ["agents.defaults.heartbeat.lightContext", "agents.list.*.heartbeat.lightContext"],
+    schemaPaths: [
+      "agents.defaults.heartbeat.lightContext",
+      "agents.entries.*.heartbeat.lightContext",
+    ],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts"],
     consumerPaths: ["src/infra/heartbeat-runner.ts", "src/agents/bootstrap-files.ts"],
@@ -112,7 +79,7 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
     key: "isolatedSession",
     schemaPaths: [
       "agents.defaults.heartbeat.isolatedSession",
-      "agents.list.*.heartbeat.isolatedSession",
+      "agents.entries.*.heartbeat.isolatedSession",
     ],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts"],
@@ -122,7 +89,7 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
   },
   {
     key: "target",
-    schemaPaths: ["agents.defaults.heartbeat.target", "agents.list.*.heartbeat.target"],
+    schemaPaths: ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts", "src/infra/outbound/targets.ts"],
     consumerPaths: ["src/infra/outbound/targets.ts", "src/infra/heartbeat-runner.ts"],
@@ -134,7 +101,7 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
   },
   {
     key: "to",
-    schemaPaths: ["agents.defaults.heartbeat.to", "agents.list.*.heartbeat.to"],
+    schemaPaths: ["agents.defaults.heartbeat.to", "agents.entries.*.heartbeat.to"],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts", "src/infra/outbound/targets.ts"],
     consumerPaths: ["src/infra/outbound/targets.ts"],
@@ -143,7 +110,7 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
   },
   {
     key: "accountId",
-    schemaPaths: ["agents.defaults.heartbeat.accountId", "agents.list.*.heartbeat.accountId"],
+    schemaPaths: ["agents.defaults.heartbeat.accountId", "agents.entries.*.heartbeat.accountId"],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts", "src/infra/outbound/targets.ts"],
     consumerPaths: ["src/infra/outbound/targets.ts", "src/infra/heartbeat-runner.ts"],
@@ -155,22 +122,13 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
   },
   {
     key: "directPolicy",
-    schemaPaths: ["agents.defaults.heartbeat.directPolicy", "agents.list.*.heartbeat.directPolicy"],
+    schemaPaths: [
+      "agents.defaults.heartbeat.directPolicy",
+      "agents.entries.*.heartbeat.directPolicy",
+    ],
     typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
     mergePaths: ["src/infra/heartbeat-runner.ts", "src/infra/outbound/targets.ts"],
     consumerPaths: ["src/infra/outbound/targets.ts"],
-    reloadPaths: ["src/gateway/config-reload-plan.ts"],
-    testPaths: ["src/infra/heartbeat-runner.returns-default-unset.test.ts"],
-  },
-  {
-    key: "includeReasoning",
-    schemaPaths: [
-      "agents.defaults.heartbeat.includeReasoning",
-      "agents.list.*.heartbeat.includeReasoning",
-    ],
-    typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
-    mergePaths: ["src/infra/heartbeat-runner.ts"],
-    consumerPaths: ["src/infra/heartbeat-runner.ts"],
     reloadPaths: ["src/gateway/config-reload-plan.ts"],
     testPaths: ["src/infra/heartbeat-runner.returns-default-unset.test.ts"],
   },

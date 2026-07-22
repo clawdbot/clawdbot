@@ -1,6 +1,7 @@
 /** Shared config mutations used by interactive and non-interactive onboarding. */
 import fs from "node:fs";
 import path from "node:path";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -53,7 +54,7 @@ export function resolveOnboardingWorkspaceConflict(
     return undefined;
   }
 
-  const hasRoster = Array.isArray(baseConfig.agents?.list) && baseConfig.agents.list.length > 0;
+  const hasRoster = listAgentEntries(baseConfig).length > 0;
   if (!hasRoster && !(configuredWorkspace && hasExistingAgentState(env))) {
     return undefined;
   }
@@ -81,7 +82,7 @@ export function applyLocalSetupWorkspaceConfig(
     workspaceDir,
     options.env,
   );
-  const hasRoster = Array.isArray(baseConfig.agents?.list) && baseConfig.agents.list.length > 0;
+  const hasRoster = listAgentEntries(baseConfig).length > 0;
   const shouldUpdateWorkspace =
     !options.preserveWorkspace &&
     (options.allowWorkspaceChange || (!hasRoster && !workspaceConflict));

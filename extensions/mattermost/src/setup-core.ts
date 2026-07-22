@@ -1,6 +1,6 @@
 // Mattermost plugin module implements setup core behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
+import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAccountNameToChannelSection,
@@ -16,6 +16,11 @@ import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
 import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
 
 const channel = "mattermost" as const;
+
+type MattermostSetupInput = ChannelSetupInput & {
+  botToken?: string;
+  httpUrl?: string;
+};
 
 export function isMattermostConfigured(account: ResolvedMattermostAccount): boolean {
   const tokenConfigured =
@@ -80,25 +85,27 @@ export const mattermostSetupAdapter: ChannelSetupAdapter = {
       },
     ],
     validate: ({ input }) => {
-      const token = input.botToken ?? input.token;
-      const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
-      if (!input.useEnv && (!token || !baseUrl)) {
+      const setupInput = input as MattermostSetupInput;
+      const token = setupInput.botToken ?? setupInput.token;
+      const baseUrl = normalizeMattermostBaseUrl(setupInput.httpUrl);
+      if (!setupInput.useEnv && (!token || !baseUrl)) {
         return "Mattermost requires --bot-token and --http-url (or --use-env).";
       }
-      if (input.httpUrl && !baseUrl) {
+      if (setupInput.httpUrl && !baseUrl) {
         return "Mattermost --http-url must include a valid base URL.";
       }
       return null;
     },
   }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const token = input.botToken ?? input.token;
-    const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
+    const setupInput = input as MattermostSetupInput;
+    const token = setupInput.botToken ?? setupInput.token;
+    const baseUrl = normalizeMattermostBaseUrl(setupInput.httpUrl);
     return applyMattermostSetupConfigPatch({
       cfg,
       accountId,
-      name: input.name,
-      patch: input.useEnv
+      name: setupInput.name,
+      patch: setupInput.useEnv
         ? {}
         : {
             ...(token ? { botToken: token } : {}),

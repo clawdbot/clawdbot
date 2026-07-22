@@ -1,5 +1,4 @@
 // Signal plugin module implements event handler behavior.
-import { setTimeout as delay } from "node:timers/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
@@ -77,11 +76,7 @@ import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
-import {
-  removeReactionSignal,
-  sendReactionSignal,
-  type SignalReactionOpts,
-} from "../send-reactions.js";
+import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
@@ -167,73 +162,11 @@ function resolveSignalStatusReactionEmojis(
 async function finalizeSignalStatusReaction(params: {
   controller: StatusReactionController;
   outcome: "done" | "error";
-  hasFinalResponse: boolean;
-  removeAckAfterReply: boolean;
-  timing: typeof DEFAULT_TIMING;
-  signal?: AbortSignal;
 }): Promise<void> {
-  const waitForHold = async (holdMs: number): Promise<boolean> => {
-    if (params.signal?.aborted) {
-      return false;
-    }
-    try {
-      await delay(holdMs, undefined, { signal: params.signal });
-      return true;
-    } catch (error) {
-      if (
-        params.signal?.aborted &&
-        collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).includes(
-          params.signal.reason,
-        )
-      ) {
-        return false;
-      }
-      throw error;
-    }
-  };
-  const restoreIfAborted = async (): Promise<boolean> => {
-    if (!params.signal?.aborted) {
-      return false;
-    }
-    await params.controller.restoreInitial();
-    return true;
-  };
-
   if (params.outcome === "done") {
     await params.controller.setDone();
-    if (await restoreIfAborted()) {
-      return;
-    }
-    if (params.removeAckAfterReply) {
-      if (!(await waitForHold(params.timing.doneHoldMs))) {
-        await params.controller.restoreInitial();
-        return;
-      }
-      await params.controller.clear();
-    } else {
-      await params.controller.restoreInitial();
-    }
-    return;
-  }
-
-  await params.controller.setError();
-  if (await restoreIfAborted()) {
-    return;
-  }
-  if (params.hasFinalResponse) {
-    if (params.removeAckAfterReply) {
-      if (!(await waitForHold(params.timing.errorHoldMs))) {
-        await params.controller.restoreInitial();
-        return;
-      }
-      await params.controller.clear();
-    } else {
-      await params.controller.restoreInitial();
-    }
-    return;
-  }
-  if (params.removeAckAfterReply) {
-    await waitForHold(params.timing.errorHoldMs);
+  } else {
+    await params.controller.setError();
   }
   await params.controller.restoreInitial();
 }
@@ -361,6 +294,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         rawBody: entry.commandBody,
         commandBody: entry.commandBody,
       },
+      sessionTranscript: { historyLimit: entry.isGroup ? deps.historyLimit : 0 },
       access: {
         ...(entry.isGroup
           ? {
@@ -424,7 +358,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : {}),
     };
     const statusReactionRecipient = entry.isGroup ? "" : entry.senderRecipient;
-    let currentStatusReactionEmoji = ackReaction;
     const statusReactionController =
       statusReactionsConfig?.enabled === true &&
       signalReactionLevel.level !== "off" &&
@@ -440,23 +373,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
                   emoji,
                   signalReactionOpts,
                 );
-                currentStatusReactionEmoji = emoji;
-              },
-              clearReaction: async () => {
-                if (!currentStatusReactionEmoji) {
-                  return;
-                }
-                await removeReactionSignal(
-                  statusReactionRecipient,
-                  statusReactionTimestamp,
-                  currentStatusReactionEmoji,
-                  signalReactionOpts,
-                );
-                currentStatusReactionEmoji = "";
               },
             },
             initialEmoji: ackReaction,
-            emojis: resolveSignalStatusReactionEmojis(statusReactionsConfig.emojis),
+            emojis: resolveSignalStatusReactionEmojis(undefined),
             timing: statusReactionTiming,
             onError: (err) => {
               logAckFailure({
@@ -656,10 +576,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           await finalizeSignalStatusReaction({
             controller: statusReactionController,
             outcome: hasFinalResponse && !hasDeliveryFailure ? "done" : "error",
-            hasFinalResponse,
-            removeAckAfterReply: deps.cfg.messages?.removeAckAfterReply ?? false,
-            timing: statusReactionTiming,
-            signal: sessionInitRetrySignal,
           }).catch((err: unknown) => {
             logVerbose(`signal: status reaction finalize failed: ${String(err)}`);
           });

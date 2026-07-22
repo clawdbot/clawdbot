@@ -7,6 +7,7 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
@@ -21,6 +22,7 @@ type ChatPaneHeaderProps = {
   mergedChrome: boolean;
   title: string;
   session: GatewaySessionRow | undefined;
+  showOwnerChip?: boolean;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -192,6 +194,10 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             >
               ${props.title}
             </button>`}
+      ${renderSessionOwnerChip(
+        props.showOwnerChip ? props.session?.createdBy : undefined,
+        "header",
+      )}
       ${!props.catalog && props.workspaceLabel
         ? html`
             <wa-dropdown

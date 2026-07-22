@@ -26,6 +26,10 @@ import type {
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
 } from "./plugin-entry.js";
+import {
+  buildOpenAICompatibleProviderCatalog,
+  type OpenAICompatibleModelDiscoveryOptions,
+} from "./provider-catalog-live-runtime.js";
 import { buildSingleProviderApiKeyCatalog } from "./provider-catalog-shared.js";
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
@@ -66,6 +70,10 @@ export type SingleProviderPluginCatalogOptions =
        * Allows operator-configured base URLs to override the provider catalog base URL.
        */
       allowExplicitBaseUrl?: boolean;
+      /**
+       * Discovers text/chat models from the provider's OpenAI-compatible model-list endpoint.
+       */
+      liveModelDiscovery?: true | OpenAICompatibleModelDiscoveryOptions;
       run?: never;
       order?: never;
       staticRun?: never;
@@ -86,6 +94,7 @@ export type SingleProviderPluginCatalogOptions =
       buildProvider?: never;
       buildStaticProvider?: never;
       allowExplicitBaseUrl?: never;
+      liveModelDiscovery?: never;
     };
 
 /**
@@ -276,12 +285,26 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
           catalog = {
             order: "simple",
             run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> =>
-              buildSingleProviderApiKeyCatalog({
-                ctx,
-                providerId,
-                buildProvider,
-                ...(provider.catalog.allowExplicitBaseUrl ? { allowExplicitBaseUrl: true } : {}),
-              }),
+              provider.catalog.liveModelDiscovery
+                ? buildOpenAICompatibleProviderCatalog({
+                    ctx,
+                    providerId,
+                    buildProvider,
+                    ...(provider.catalog.allowExplicitBaseUrl
+                      ? { allowExplicitBaseUrl: true }
+                      : {}),
+                    ...(provider.catalog.liveModelDiscovery === true
+                      ? {}
+                      : { modelDiscovery: provider.catalog.liveModelDiscovery }),
+                  })
+                : buildSingleProviderApiKeyCatalog({
+                    ctx,
+                    providerId,
+                    buildProvider,
+                    ...(provider.catalog.allowExplicitBaseUrl
+                      ? { allowExplicitBaseUrl: true }
+                      : {}),
+                  }),
           };
         }
         const staticCatalog: ProviderPluginCatalog | undefined =

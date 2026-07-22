@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import androidx.room.Room
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -10,6 +11,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -45,8 +48,11 @@ class ChatControllerBranchCoordinationTest {
     database.close()
   }
 
-  private fun controller(gateway: ScriptedGateway): ChatController {
-    val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+  private fun controller(
+    gateway: ScriptedGateway,
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
+  ): ChatController {
+    val controllerScope = CoroutineScope(SupervisorJob() + dispatcher)
     controllerScopes += controllerScope
     return ChatController(
       scope = controllerScope,
@@ -166,14 +172,15 @@ class ChatControllerBranchCoordinationTest {
         """{"branches":[{"leafEntryId":"leaf-rewound","headline":"Rewound","messageCount":1,"active":true}]}""",
       )
       gateway.respondChatSend("started")
-      val controller = controller(gateway)
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
       controller.awaitOutboxRestore()
       controller.handleGatewayEvent("health", null)
-      withContext(Dispatchers.Default.limitedParallelism(1)) {
-        withTimeout(5_000) { controller.healthOk.first { it } }
-      }
+      runCurrent()
+      assertTrue(controller.healthOk.value)
 
       assertNull(controller.rewindSessionAtEntryResult("main", "entry-a"))
+      advanceUntilIdle()
       retryHistoryStarted.await()
       assertTrue(controller.sendMessageAwaitAcceptance("queued after rewind", "off", emptyList()))
 
@@ -186,7 +193,10 @@ class ChatControllerBranchCoordinationTest {
       releaseRetryHistory.complete(Unit)
       withContext(Dispatchers.Default.limitedParallelism(1)) {
         withTimeout(5_000) {
-          while (gateway.callCount("chat.send") == 0) kotlinx.coroutines.delay(10)
+          while (gateway.callCount("chat.send") == 0) {
+            runCurrent()
+            kotlinx.coroutines.delay(10)
+          }
         }
       }
 

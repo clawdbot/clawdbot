@@ -32,22 +32,25 @@ export async function verifyReconciledWorkspaceFinal(
 ): Promise<WorkerWorkspaceApplyResult | undefined> {
   if (reconciliation.applyPreparedStagedResult && reconciliation.publishStagedResult) {
     try {
+      // Fence the prepared remote capture before quiescence renewal can enroll late writers.
       await runFinalFenceStep(async () => await reconciliation.verifyStable(), {
         retryableForReclaim: true,
       });
+      // Renew quiescence and freeze any writers that appeared after the prepared capture.
       await runFinalFenceStep(async () => await quiescence.assertActive(), {
         retryableForReclaim: true,
       });
+      // Recheck remote stability after renewal closes the late-writer race.
       await runFinalFenceStep(async () => await reconciliation.verifyStable(), {
         retryableForReclaim: true,
       });
       await reconciliation.applyPreparedStagedResult();
       await reconciliation.verifyLocalStable();
-      // Applying can outlive the lease renewed above. Only publish the candidate
-      // after both owners pass a fresh fence, so restart recovery cannot adopt it early.
+      // Renew after apply so lease expiry cannot race the final publish gate.
       await runFinalFenceStep(async () => await quiescence.assertActive(), {
         retryableForReclaim: false,
       });
+      // Recheck the remote owner after apply before publishing the prepared result.
       await runFinalFenceStep(async () => await reconciliation.verifyStable(), {
         retryableForReclaim: false,
       });

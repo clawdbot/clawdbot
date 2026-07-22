@@ -193,6 +193,7 @@ async function runEmbeddedAgentViaCliBackend(
       agentDir: params.agentDir,
       config: params.config,
       prompt: params.prompt,
+      media: params.media,
       provider: dispatch.provider,
       model: params.model,
       thinkLevel: params.thinkLevel,

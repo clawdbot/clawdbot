@@ -2,10 +2,11 @@ title: Telegram command addressed to another bot
 
 scenario:
   id: telegram-other-bot-command-gating
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - channels.channel-native-commands
   objective: Verify a command addressed to another Telegram bot does not wake OpenClaw.
   successCriteria:
     - The driver sends a native status command addressed to another bot.

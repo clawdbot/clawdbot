@@ -252,15 +252,7 @@ describe("areRuntimeModelRefsEquivalent", () => {
 
     expect(
       areRuntimeModelRefsEquivalent("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7", {
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       }),
     ).toBe(true);
   });

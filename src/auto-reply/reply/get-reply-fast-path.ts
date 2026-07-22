@@ -13,6 +13,7 @@ import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../../infra/env.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
@@ -35,7 +36,8 @@ import type { SessionInitResult } from "./session.js";
 
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
-    env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS === "1" || env.OPENCLAW_STRICT_FAST_REPLY_CONFIG === "0"
+    (isVitestRuntimeEnv(env) && env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS === "1") ||
+    env.OPENCLAW_STRICT_FAST_REPLY_CONFIG === "0"
   );
 }
 
@@ -212,6 +214,9 @@ export function initFastReplySessionState(params: {
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
+    ...((resetTriggered || !existingEntry) && ctx.SessionCreator
+      ? { createdBy: { ...ctx.SessionCreator } }
+      : {}),
     sessionFile,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),

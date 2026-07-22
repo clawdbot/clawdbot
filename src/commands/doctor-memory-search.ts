@@ -547,18 +547,18 @@ function noteRememberAcrossConversationsHealth(params: {
   const conversationRecallSupport = resolveActiveMemoryConversationRecallSupport(params.cfg);
   if (!activeMemoryAvailable) {
     params.noteFn(
-      `Remember across conversations is effectively enabled for agent "${params.agentId}", but the Active Memory plugin is disabled. Enable the plugin or set memorySearch.rememberAcrossConversations to false.`,
+      `Remember across conversations is effectively enabled for agent "${params.agentId}", but the Active Memory plugin is disabled. Enable the plugin or set memory.search.rememberAcrossConversations to false.`,
       "Memory search",
     );
   }
   if (activeMemoryAvailable && !conversationRecallSupport.providerSupported) {
     params.noteFn(
-      `Remember across conversations is effectively enabled for agent "${params.agentId}", but the current memory provider does not support protected private transcript recall. Set memorySearch.rememberAcrossConversations to false or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
+      `Remember across conversations is effectively enabled for agent "${params.agentId}", but the current memory provider does not support protected private transcript recall. Set memory.search.rememberAcrossConversations to false or use that provider's own recall path; advanced Active Memory can still use its recall tools.`,
       "Memory search",
     );
   } else if (activeMemoryAvailable && !conversationRecallSupport.memorySearchAllowed) {
     params.noteFn(
-      `Remember across conversations is effectively enabled for agent "${params.agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memorySearch.rememberAcrossConversations to false.`,
+      `Remember across conversations is effectively enabled for agent "${params.agentId}", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memory.search.rememberAcrossConversations to false.`,
       "Memory search",
     );
   }
@@ -630,7 +630,7 @@ async function noteMemorySearchHealthForAgent(
   if (!resolved) {
     noteFn(
       recallHealth.enabled
-        ? `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memorySearch.rememberAcrossConversations to false.`
+        ? `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memory.search.rememberAcrossConversations to false.`
         : "Memory search is explicitly disabled (enabled: false).",
       "Memory search",
     );
@@ -694,7 +694,7 @@ async function noteMemorySearchHealthForAgent(
     ) {
       noteFn(
         [
-          "QMD memory backend is configured and the default agent resolves memorySearch.sources with sessions,",
+          "QMD memory backend is configured and the default agent resolves memory.search.sources with sessions,",
           "but QMD session transcript export is not enabled (memory.qmd.sessions.enabled is not true).",
           "Session transcript hits will not appear in QMD-backed memory search until QMD session export is enabled.",
           "",
@@ -702,7 +702,7 @@ async function noteMemorySearchHealthForAgent(
           `- Enable QMD session export: ${formatCliCommand(
             "openclaw config set memory.qmd.sessions.enabled true",
           )}`,
-          "- Or remove sessions from the default agent's memorySearch.sources if QMD session recall is not intended.",
+          "- Or remove sessions from the default agent's memory.search.sources if QMD session recall is not intended.",
           "",
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
         ].join("\n"),
@@ -746,7 +746,7 @@ async function noteMemorySearchHealthForAgent(
         `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
         `- Set a local GGUF model path in config`,
         suggestedRemoteProvider
-          ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`
+          ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set memory.search.provider ${suggestedRemoteProvider}`)}`
           : `- Switch to a remote embedding provider in config`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
@@ -765,10 +765,10 @@ async function noteMemorySearchHealthForAgent(
     noteFn(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embeddings endpoint was configured.`,
-        "Set agents.defaults.memorySearch.remote.baseUrl to the /v1 endpoint for your embeddings server.",
+        "Set memory.search.remote.baseUrl to the /v1 endpoint for your embeddings server.",
         "",
         "Fix:",
-        `- ${formatCliCommand("openclaw config set agents.defaults.memorySearch.remote.baseUrl http://127.0.0.1:1234/v1")}`,
+        `- ${formatCliCommand("openclaw config set memory.search.remote.baseUrl http://127.0.0.1:1234/v1")}`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].join("\n"),
@@ -781,10 +781,10 @@ async function noteMemorySearchHealthForAgent(
     noteFn(
       [
         `Memory search provider is set to "${provider}" but no OpenAI-compatible embedding model was configured.`,
-        "Set agents.defaults.memorySearch.model to the embedding model id your server expects.",
+        "Set memory.search.model to the embedding model id your server expects.",
         "",
         "Fix:",
-        `- ${formatCliCommand("openclaw config set agents.defaults.memorySearch.model text-embedding-bge-m3")}`,
+        `- ${formatCliCommand("openclaw config set memory.search.model text-embedding-bge-m3")}`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].join("\n"),
@@ -856,7 +856,7 @@ async function noteMemorySearchHealthForAgent(
       "Fix (pick one):",
       `- Set ${envVar} in your environment`,
       `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
-      `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
+      `- To disable: ${formatCliCommand("openclaw config set memory.search.enabled false")}`,
       "",
       `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
     ].join("\n"),

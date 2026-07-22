@@ -153,11 +153,9 @@ describe("sessions_spawn tool", () => {
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: true,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: true,
           },
         },
       },
@@ -460,6 +458,7 @@ describe("sessions_spawn tool", () => {
         model: "anthropic/claude-sonnet-4-6",
         task: "inspect issue",
         parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
         fork: true,
         cwd: dir,
         worktree: true,
@@ -529,6 +528,7 @@ describe("sessions_spawn tool", () => {
         agentId: "reviewer",
         model: "anthropic/claude-sonnet-4-6",
         parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
       }),
     );
     expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("fork");
@@ -976,7 +976,9 @@ describe("sessions_spawn tool", () => {
       );
       await upsertSessionEntry(
         { agentId: "main", sessionKey: childKey, storePath },
-        { sessionId: "child", updatedAt: 1, parentSessionKey: "agent:main:main" },
+        // Canonical spawn-child shape: sessions.create persists explicit
+        // spawnDepth; parentSessionKey alone is UI threading and adds no depth.
+        { sessionId: "child", updatedAt: 1, spawnDepth: 1, parentSessionKey: "agent:main:main" },
       );
       const callGateway = vi.fn();
       const tool = createSessionsSpawnTool({
@@ -1004,11 +1006,9 @@ describe("sessions_spawn tool", () => {
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: false,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: false,
           },
         },
       },
@@ -1031,11 +1031,9 @@ describe("sessions_spawn tool", () => {
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: true,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: true,
           },
         },
       },

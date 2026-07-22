@@ -45,7 +45,7 @@ export type SandboxBrowserConfig = {
   vncPort: number;
   noVncPort: number;
   headless: boolean;
-  enableNoVnc: boolean;
+  noVncEnabled: boolean;
   allowHostControl: boolean;
   autoStart: boolean;
   autoStartTimeoutMs: number;

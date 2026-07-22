@@ -35,6 +35,7 @@ export function createContext(
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: {
       type: "hello-ok" as const,

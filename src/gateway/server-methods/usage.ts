@@ -63,7 +63,7 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadCombinedSessionStoreForGateway, loadSessionEntry } from "../session-utils.js";
+import { loadCombinedSessionStoreForGateway, loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
@@ -144,7 +144,7 @@ function resolveSessionUsageFileOrRespond(
   sessionId: string;
   sessionFile: string;
 } | null {
-  const { entry, storePath } = loadSessionEntry(key);
+  const { entry, storePath } = loadSessionEntryReadOnly(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
   const parsed = parseAgentSessionKey(key);

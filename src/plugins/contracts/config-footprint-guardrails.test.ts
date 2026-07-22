@@ -149,11 +149,18 @@ describe("config footprint guardrails", () => {
     expect(source).not.toContain("nativeStreaming:");
   });
 
-  it("keeps shared setup input canonical-first", () => {
+  it("keeps Matrix setup input canonical-first after plugin ownership", () => {
+    const source = readSource("extensions/matrix/src/setup-config.ts");
+    const canonicalIndex = source.indexOf("dangerouslyAllowPrivateNetwork?: boolean;");
+    const aliasIndex = source.indexOf("allowPrivateNetwork?: boolean;");
+
+    expect(canonicalIndex).toBeGreaterThanOrEqual(0);
+    expect(aliasIndex).toBeGreaterThan(canonicalIndex);
+  });
+
+  it("keeps retired config aliases out of the shared setup input", () => {
     const source = readSource("src/channels/plugins/types.core.ts");
 
-    expect(source).toContain("dangerouslyAllowPrivateNetwork?: boolean;");
-    expect(source).toContain("allowPrivateNetwork?: boolean;");
     expect(source).not.toContain("streamMode?:");
     expect(source).not.toContain("groupMentionsOnly?:");
     expect(source).not.toContain("perSession?:");

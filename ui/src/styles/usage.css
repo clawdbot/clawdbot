@@ -916,27 +916,6 @@ details.usage-filter-select summary::-webkit-details-marker,
   outline-offset: 2px;
 }
 
-wa-tooltip.usage-summary-tooltip {
-  --max-width: min(280px, calc(100vw - 16px));
-  font-family: var(--font-body);
-  letter-spacing: normal;
-  text-align: center;
-  text-transform: none;
-}
-
-wa-tooltip.usage-summary-tooltip::part(body) {
-  padding: 7px 9px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow: var(--shadow-md);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
 .usage-insights-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
 }

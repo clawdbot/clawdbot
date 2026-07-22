@@ -6,10 +6,10 @@ scenario:
   runtimeParityTier: live-only
   coverage:
     primary:
-      - channels.streaming
+      - agent-runtime.streaming-replies
     secondary:
-      - runtime.fallback-delivery
-      - runtime.delivery
+      - agent-runtime.streaming-replies-fallback-delivery
+      - agent-runtime.streaming-replies-delivery
   objective: Verify channel-visible streaming settles into one coherent final message without token-delta chatter.
   successCriteria:
     - Agent produces a final marker reply.

@@ -186,7 +186,6 @@ describe("security fix", () => {
         signal: { groupPolicy: "open" },
         imessage: { groupPolicy: "open" },
       },
-      logging: { redactSensitive: "off" },
     } satisfies OpenClawConfig;
     const fixed = await runConfigFixScenario({
       prefix: "group-policy",
@@ -194,7 +193,6 @@ describe("security fix", () => {
       channelPlugins: [createWhatsAppConfigFixTestPlugin(["+15551234567"])],
     });
     expect(fixed.res.changes).toEqual([
-      'logging.redactSensitive=off -> "tools"',
       "channels.telegram.groupPolicy=open -> allowlist",
       "channels.whatsapp.groupPolicy=open -> allowlist",
       "channels.discord.groupPolicy=open -> allowlist",

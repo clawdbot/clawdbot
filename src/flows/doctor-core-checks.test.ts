@@ -1,9 +1,10 @@
 // Doctor core checks tests cover core doctor checks and repair hints.
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -638,7 +639,6 @@ describe("CORE_HEALTH_CHECKS", () => {
               command: "/bin/sh",
               args: ["-c", `cat >/dev/null; printf executed > ${JSON.stringify(markerPath)}`],
               jsonOnly: false,
-              allowInsecurePath: true,
             },
           },
         },
@@ -668,54 +668,8 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
     const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
 
-    const findings = await check?.detect({
-      mode: "lint",
-      runtime: { log() {}, error() {}, exit() {} },
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "token",
-            token: {
-              source: "exec",
-              provider: "default",
-              id: "value",
-            },
-          },
-        },
-        secrets: {
-          providers: {
-            default: {
-              source: "exec",
-              command: process.execPath,
-              args: [resolverPath, markerPath],
-              jsonOnly: false,
-              allowInsecurePath: true,
-              allowSymlinkCommand: true,
-            },
-          },
-        },
-      },
-      cwd: tmp,
-      allowExecSecretRefs: true,
-    });
-
-    expect(findings).toEqual([]);
-    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
-  });
-
-  it("reports exec SecretRef failures when gateway auth lint explicitly allows exec checks", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
-    const resolverPath = join(tmp, "fail-token.cjs");
-    await fs.writeFile(
-      resolverPath,
-      ["process.stdin.resume();", "process.stdin.on('end', () => process.exit(12));"].join("\n"),
-      "utf8",
-    );
-    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
-
-    const findings = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, async () => {
-      return await check?.detect({
+    const findings = await withSecureTestNodeCommand(async (command) =>
+      check?.detect({
         mode: "lint",
         runtime: { log() {}, error() {}, exit() {} },
         cfg: {
@@ -734,18 +688,66 @@ describe("CORE_HEALTH_CHECKS", () => {
             providers: {
               default: {
                 source: "exec",
-                command: process.execPath,
-                args: [resolverPath],
+                command,
+                args: [resolverPath, markerPath],
                 jsonOnly: false,
-                allowInsecurePath: true,
-                allowSymlinkCommand: true,
+                trustedDirs: [dirname(command), tmp!],
               },
             },
           },
         },
+        cwd: tmp,
         allowExecSecretRefs: true,
-      });
-    });
+      }),
+    );
+
+    expect(findings).toEqual([]);
+    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
+  });
+
+  it("reports exec SecretRef failures when gateway auth lint explicitly allows exec checks", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
+    const resolverPath = join(tmp, "fail-token.cjs");
+    await fs.writeFile(
+      resolverPath,
+      ["process.stdin.resume();", "process.stdin.on('end', () => process.exit(12));"].join("\n"),
+      "utf8",
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+
+    const findings = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, async () =>
+      withSecureTestNodeCommand(async (command) =>
+        check?.detect({
+          mode: "lint",
+          runtime: { log() {}, error() {}, exit() {} },
+          cfg: {
+            gateway: {
+              mode: "local",
+              auth: {
+                mode: "token",
+                token: {
+                  source: "exec",
+                  provider: "default",
+                  id: "value",
+                },
+              },
+            },
+            secrets: {
+              providers: {
+                default: {
+                  source: "exec",
+                  command,
+                  args: [resolverPath],
+                  jsonOnly: false,
+                  trustedDirs: [dirname(command), tmp!],
+                },
+              },
+            },
+          },
+          allowExecSecretRefs: true,
+        }),
+      ),
+    );
 
     expect(findings).toContainEqual(
       expect.objectContaining({

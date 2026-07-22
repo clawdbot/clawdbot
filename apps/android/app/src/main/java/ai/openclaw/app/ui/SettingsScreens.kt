@@ -1491,6 +1491,9 @@ private fun PhoneCapabilitiesScreen(
           SettingsToggleRow(nativeString("Canvas Status"), nativeString("Show screen-sharing debug state."), Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
+    if (SensitiveFeatureConfig.accessibilityControlEnabled) {
+      FlavorPhoneCapabilitiesSettings(viewModel)
+    }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = nativeString("Location"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -2393,7 +2396,7 @@ internal fun SettingsDetailFrame(
 /**
  * Toggle row model reused by settings sections that render simple on/off controls.
  */
-private data class SettingsToggleRow(
+internal data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
   val icon: ImageVector,
@@ -3096,7 +3099,7 @@ internal fun formatCronTimestamp(timeMs: Long?): String {
 }
 
 @Composable
-private fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
+internal fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
       SettingsToggleListRow(row)

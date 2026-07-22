@@ -63,10 +63,11 @@ the selected profile instead of defining separate lanes. The resulting
 counts and missing coverage IDs; the individual evidence entries remain the
 source of truth for the tests, coverage roles, and results. Taxonomy feature
 coverage IDs are exact proof targets, not aliases: primary scenario coverage
-fulfills matching IDs, secondary coverage stays advisory. Coverage IDs use
-dotted `namespace.behavior` form with lowercase alphanumeric/dash segments;
-profile, surface, and category IDs may still use the existing dashed or dotted
-taxonomy IDs.
+fulfills matching IDs, while secondary coverage stays advisory. Every coverage
+ID is exactly `taxonomy-surface.feature`, using the short surface ID from
+`taxonomy.yaml`. A scenario's separate `surface` field is an execution/reporting
+label (for example, `channel` or `runtime-tool`); it does not define taxonomy
+ownership.
 
 Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 `smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
@@ -74,7 +75,7 @@ Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 ```bash
 pnpm openclaw qa run \
   --qa-profile smoke-ci \
-  --category channel-framework.conversation-routing-and-delivery \
+  --category channels.conversation-routing-and-delivery \
   --provider-mode mock-openai \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
@@ -233,11 +234,11 @@ artifacts flush because Matrix crypto native handles can outlive cleanup; set
 needs the command to return instead.
 
 Each run writes the normal QA Lab artifacts under the selected output
-directory: `qa-suite-report.md`, `qa-suite-summary.json`, `qa-evidence.json`,
-and a redacted `matrix-harness-*/matrix-qa-harness.json` manifest. If cleanup
-fails, run the printed `docker compose ... down --remove-orphans` recovery
-command. On slow runners, increase the no-reply window; on fast CI, a smaller
-window can shorten negative assertions.
+directory: `qa-suite-report.md`, `qa-suite-summary.json`, and
+`qa-evidence.json`. If cleanup fails, run the printed
+`docker compose ... down --remove-orphans` recovery command. On slow runners,
+increase the no-reply window; on fast CI, a smaller window can shorten negative
+assertions.
 
 The scenarios cover transport behavior that unit tests cannot prove end to
 end: mention gating, allow-bot policies, allowlists, top-level and threaded
@@ -1194,7 +1195,9 @@ The minimum adoption bar for a new channel:
    array from `runtime-api.ts`. Keep `runtime-api.ts` light; lazy CLI and
    runner execution should stay behind separate entrypoints. An optional
    `adapterFactory` exposes the transport to shared scenarios without changing
-   the command's existing scenario catalog.
+   the command's existing scenario catalog. Same-channel partitions are serial
+   unless the factory declares that every instance owns isolated credentials or
+   disposable servers, Gateway state, and artifact paths.
 5. Author or adapt YAML scenarios under the themed `qa/scenarios/`
    directories.
 6. Use the generic scenario helpers for new scenarios.

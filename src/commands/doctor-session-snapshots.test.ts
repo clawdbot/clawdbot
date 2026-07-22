@@ -234,29 +234,33 @@ describe("doctor session snapshot stale runtime metadata", () => {
     });
   });
 
-  it("expands home-relative cached bundled skill locations before classifying them", () => {
+  it("uses the OS home for cached OCM paths when OPENCLAW_HOME differs", () => {
     const homeDir = path.join(root, "home");
-    const stalePath = "~/old-runtime/node_modules/openclaw/skills/doctor/SKILL.md";
+    const currentBundledSkillsDir = path.join(homeDir, ".ocm/current/node_modules/openclaw/skills");
+    const expectedPath = path.join(currentBundledSkillsDir, "doctor", "SKILL.md");
+    const currentPath = "~/.ocm/current/node_modules/openclaw/skills/doctor/SKILL.md";
+    const stalePath = "~/.ocm/old/node_modules/openclaw/skills/doctor/SKILL.md";
 
     const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
-      bundledSkillsDir,
-      env: { HOME: homeDir },
+      bundledSkillsDir: currentBundledSkillsDir,
+      env: { HOME: homeDir, OPENCLAW_HOME: path.join(root, "ocm-profile") },
       store: {
-        "agent:home": sessionEntry({
-          skillsSnapshot: {
-            prompt: skillPrompt(stalePath),
-            skills: [{ name: "doctor" }],
-          },
+        "agent:current": sessionEntry({
+          skillsSnapshot: { prompt: skillPrompt(currentPath), skills: [{ name: "doctor" }] },
+        }),
+        "agent:stale": sessionEntry({
+          skillsSnapshot: { prompt: skillPrompt(stalePath), skills: [{ name: "doctor" }] },
         }),
       },
+      pathExists: (filePath) => filePath === expectedPath,
     });
 
     expect(findings).toEqual([
       {
-        sessionKey: "agent:home",
+        sessionKey: "agent:stale",
         field: "skillsSnapshot.prompt",
         cachedPath: stalePath,
-        expectedPath: path.join(bundledSkillsDir, "doctor", "SKILL.md"),
+        expectedPath,
       },
     ]);
   });

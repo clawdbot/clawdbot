@@ -93,6 +93,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     onDone: () => void this.handleWizardDone(),
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
+    sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
   });
 
   override disconnectedCallback() {

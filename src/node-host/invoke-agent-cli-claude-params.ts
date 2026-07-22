@@ -50,13 +50,65 @@ const VALUE_ARGS = new Set([
   "--disallowedTools",
 ]);
 
-const ENV_ALLOWLIST = new Set(["FORCE_COLOR", "LANG", "LC_ALL", "LC_CTYPE", "NO_COLOR", "TERM"]);
+const ENV_ALLOWLIST = new Set([
+  "ANTHROPIC_API_KEY",
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "FORCE_COLOR",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "NO_COLOR",
+  "TERM",
+]);
+const CLEAR_ENV_ALLOWLIST = new Set([
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_API_KEY_OLD",
+  "ANTHROPIC_API_TOKEN",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "ANTHROPIC_UNIX_SOCKET",
+  "CLAUDE_CONFIG_DIR",
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+  "CLAUDE_CODE_OAUTH_SCOPES",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  "CLAUDE_CODE_PLUGIN_CACHE_DIR",
+  "CLAUDE_CODE_PLUGIN_SEED_DIR",
+  "CLAUDE_CODE_REMOTE",
+  "CLAUDE_CODE_USE_COWORK_PLUGINS",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_VERTEX",
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_SDK_DISABLED",
+  "OTEL_TRACES_EXPORTER",
+]);
 
 export type ClaudeCliNodeRunParams = {
   argv: string[];
   stdin?: string;
   cwd?: string;
   env?: Record<string, string>;
+  clearEnv?: string[];
   systemPrompt?: string;
   agentId?: string;
   sessionKey?: string;
@@ -172,6 +224,7 @@ export async function decodeClaudeCliNodeRunParams(
     "stdin",
     "cwd",
     "env",
+    "clearEnv",
     "systemPrompt",
     "agentId",
     "sessionKey",
@@ -234,6 +287,25 @@ export async function decodeClaudeCliNodeRunParams(
       }
       env[key] = requireBoundedString(candidate, `env.${key}`, MAX_ARG_BYTES);
     }
+    if (Object.hasOwn(env, "ANTHROPIC_API_KEY") && Object.hasOwn(env, "CLAUDE_CODE_OAUTH_TOKEN")) {
+      throw new Error("INVALID_REQUEST: exactly one Claude credential may be provided");
+    }
+  }
+  let clearEnv: string[] | undefined;
+  if (value.clearEnv !== undefined) {
+    if (!Array.isArray(value.clearEnv) || value.clearEnv.length > CLEAR_ENV_ALLOWLIST.size) {
+      throw new Error("INVALID_REQUEST: clearEnv must be a bounded array");
+    }
+    clearEnv = [];
+    for (const candidate of value.clearEnv) {
+      const key = requireBoundedString(candidate, "clearEnv entry", MAX_ARG_BYTES);
+      if (!CLEAR_ENV_ALLOWLIST.has(key)) {
+        throw new Error(`INVALID_REQUEST: clearEnv key is not allowed: ${key}`);
+      }
+      if (!clearEnv.includes(key)) {
+        clearEnv.push(key);
+      }
+    }
   }
   return {
     argv,
@@ -245,6 +317,7 @@ export async function decodeClaudeCliNodeRunParams(
     ...(systemRunPlan ? { systemRunPlan: systemRunPlan as SystemRunApprovalPlan } : {}),
     ...(cwd ? { cwd } : {}),
     ...(env ? { env } : {}),
+    ...(clearEnv ? { clearEnv } : {}),
     idleTimeoutMs: validateTimeout(
       value.idleTimeoutMs,
       "idleTimeoutMs",

@@ -252,31 +252,22 @@ function applyLaneConfig(
     },
   };
 
-  const agents = (cfg.agents && typeof cfg.agents === "object" ? cfg.agents : {}) as Record<
-    string,
-    unknown
-  >;
-  const defaults =
-    agents.defaults && typeof agents.defaults === "object"
-      ? (agents.defaults as Record<string, unknown>)
-      : {};
+  const memory =
+    cfg.memory && typeof cfg.memory === "object" ? (cfg.memory as Record<string, unknown>) : {};
   const memorySearch =
-    defaults.memorySearch && typeof defaults.memorySearch === "object"
-      ? (defaults.memorySearch as Record<string, unknown>)
+    memory.search && typeof memory.search === "object"
+      ? (memory.search as Record<string, unknown>)
       : {};
-  cfg.agents = {
-    ...agents,
-    defaults: {
-      ...defaults,
-      memorySearch: {
-        ...memorySearch,
-        enabled: false,
-        sync: {
-          ...(memorySearch.sync && typeof memorySearch.sync === "object" ? memorySearch.sync : {}),
-          onSearch: false,
-          onSessionStart: false,
-          watch: false,
-        },
+  cfg.memory = {
+    ...memory,
+    search: {
+      ...memorySearch,
+      enabled: false,
+      sync: {
+        ...(memorySearch.sync && typeof memorySearch.sync === "object" ? memorySearch.sync : {}),
+        onSearch: false,
+        onSessionStart: false,
+        watch: false,
       },
     },
   };

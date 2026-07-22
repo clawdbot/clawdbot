@@ -132,7 +132,12 @@ describe("plugin-sdk qa-runner-runtime", () => {
 
   it("returns activated runner registrations declared in plugin manifests", async () => {
     const register = vi.fn((qa: Command) => qa);
-    const adapterFactory = { id: "example", matches: vi.fn(), create: vi.fn() };
+    const adapterFactory = {
+      id: "example",
+      isolatesInstances: true,
+      matches: vi.fn(),
+      create: vi.fn(),
+    };
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {

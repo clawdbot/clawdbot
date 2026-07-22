@@ -688,7 +688,7 @@ describe("gateway server chat", () => {
               "openai/gpt-main": {},
             },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
         models: {
           providers: {
@@ -864,7 +864,7 @@ describe("gateway server chat", () => {
                 model: { primary: "openai/gpt-5.5" },
                 models: { "openai/gpt-5.5": {} },
               },
-              list: [{ id: "main", default: true }, { id: "work" }],
+              entries: { main: { default: true }, work: {} },
             },
             auth: {
               order: { openai: ["openai:api", "openai:chatgpt", "openai:expired"] },
@@ -1126,7 +1126,7 @@ describe("gateway server chat", () => {
               "openai/*": {},
             },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
         models: {
           providers: {
@@ -1170,10 +1170,9 @@ describe("gateway server chat", () => {
               "openai/gpt-main": {},
             },
           },
-          list: [
-            { id: "main", default: true },
-            {
-              id: "work",
+          entries: {
+            main: { default: true },
+            work: {
               model: {
                 primary: "minimax/MiniMax-M2.7-highspeed",
               },
@@ -1181,7 +1180,7 @@ describe("gateway server chat", () => {
                 "minimax/MiniMax-M2.7-highspeed": {},
               },
             },
-          ],
+          },
         },
         models: {
           providers: {
@@ -1291,15 +1290,14 @@ describe("gateway server chat", () => {
               "openai/gpt-main": {},
             },
           },
-          list: [
-            { id: "main", default: true },
-            {
-              id: "work",
+          entries: {
+            main: { default: true },
+            work: {
               model: {
                 primary: "minimax/MiniMax-M2.7-highspeed",
               },
             },
-          ],
+          },
         },
         models: {
           providers: {
@@ -5967,7 +5965,7 @@ describe("gateway server chat", () => {
       await writeGatewayConfig({
         session: { scope: "global" },
         agents: {
-          list: [{ id: "main", default: true }, { id: "work" }],
+          entries: { main: { default: true }, work: {} },
         },
       });
       await connectOk(ws);

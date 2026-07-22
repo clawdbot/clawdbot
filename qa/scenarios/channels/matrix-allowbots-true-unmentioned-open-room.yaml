@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-policy
+      - channels.room-allowlist-access-policy
   execution:
     profiles: { "matrix:all": 37, "matrix:transport": 36 }
     kind: flow

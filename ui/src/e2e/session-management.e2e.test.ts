@@ -839,7 +839,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const initialListCount = (await gateway.getRequests("sessions.list")).length;
 
       await gateway.closeLatest(1006, "disconnect proof");
-      await page.locator(".connection-banner").waitFor({ state: "visible", timeout: 10_000 });
       await gateway.deferNext("sessions.list");
       await sidebarRow.waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-sessions-during-reconnect.png");
@@ -848,7 +847,6 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 15_000 })
         .toBeGreaterThan(initialListCount);
-      await page.locator(".connection-banner").waitFor({ state: "detached", timeout: 15_000 });
       await sidebarRow.waitFor({ state: "visible" });
       expect(await sidebarRows.count()).toBe(3);
       for (const otherKey of otherSessionKeys) {

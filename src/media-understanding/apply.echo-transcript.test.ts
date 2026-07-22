@@ -88,10 +88,10 @@ function createAudioConfigWithEcho(opts?: {
   const cfg: OpenClawConfig = {
     tools: {
       media: {
+        models: [{ provider: "groq", capabilities: ["audio"] }],
         audio: {
           enabled: true,
           maxBytes: 1024 * 1024,
-          models: [{ provider: "groq" }],
           echoTranscript: opts?.echoTranscript ?? true,
           ...(opts?.echoFormat !== undefined ? { echoFormat: opts.echoFormat } : {}),
         },

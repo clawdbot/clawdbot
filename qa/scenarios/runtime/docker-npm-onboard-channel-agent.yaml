@@ -2,13 +2,13 @@ title: Docker npm onboard channel agent
 
 scenario:
   id: docker-npm-onboard-channel-agent
-  surface: docker-podman-hosting
-  category: docker-podman-hosting.agent-sandbox-and-tooling
+  surface: containers
+  category: containers.agent-sandbox-and-tooling
   coverage:
     primary:
-      - docker.backed-agent-sandbox-support
+      - containers.docker-backed-agent-sandbox-support
     secondary:
-      - docker.first-run-onboarding
+      - containers.first-run-onboarding
   objective: Verify a package-installed Docker runner can complete non-interactive onboarding, configure a channel, start Gateway-backed agent behavior, and complete a mocked model turn.
   successCriteria:
     - The candidate OpenClaw tarball installs in a clean Docker home.

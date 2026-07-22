@@ -6,7 +6,10 @@ import {
   type SessionObserverHealth,
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
+import {
+  terminalHealthFor,
+  type SessionActivityNoteState,
+} from "../agents/session-activity-notes.js";
 import type {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -34,7 +37,7 @@ type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
 type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
 export type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
-export type SessionObserverState = {
+export type SessionObserverState = SessionActivityNoteState & {
   sessionKey: string;
   sessionId?: string;
   runId: string;
@@ -47,14 +50,7 @@ export type SessionObserverState = {
   revision: number;
   digestCount: number;
   consecutiveFailures: number;
-  noteSequence: number;
   lastDigestNoteSequence: number;
-  notes: Array<{ sequence: number; text: string; bytes: number }>;
-  noteBytes: number;
-  itemStatuses: Map<string, string>;
-  assistantBuffer: string;
-  lastAssistantNote?: string;
-  planProgress?: SessionObserverPlanProgress;
   previousDigest?: SessionObserverDigest;
   preparedPromise?: Promise<PreparedModel>;
   activeController?: AbortController;
@@ -244,7 +240,7 @@ const ModelDigestSchema = z
   })
   .strict();
 
-function normalizeModelString(value: string, maxChars: number): string {
+export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
@@ -288,50 +284,6 @@ export function isTerminalLifecycleEvent(event: AgentEventPayload): boolean {
   return (
     event.stream === "lifecycle" && (event.data.phase === "end" || event.data.phase === "error")
   );
-}
-
-export function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-export function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-export function rememberSessionObserverItemStatus(
-  statuses: Map<string, string>,
-  itemId: string,
-  status: string,
-  limit: number,
-): boolean {
-  if (statuses.get(itemId) === status) {
-    return false;
-  }
-  statuses.delete(itemId);
-  statuses.set(itemId, status);
-  while (statuses.size > limit) {
-    const oldest = statuses.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    statuses.delete(oldest);
-  }
-  return true;
-}
-
-export function terminalHealthFor(event: AgentEventPayload): "done" | "failed" {
-  const phase = event.data.phase;
-  const outcome = buildAgentRunTerminalOutcome({
-    status: phase === "end" ? "ok" : "error",
-    error: event.data.error,
-    stopReason: event.data.stopReason,
-    livenessState: event.data.livenessState,
-    timeoutPhase: event.data.timeoutPhase,
-    providerStarted: event.data.providerStarted,
-    startedAt: event.data.startedAt,
-    endedAt: event.data.endedAt,
-  });
-  return outcome.reason === "completed" ? "done" : "failed";
 }
 
 export async function synthesizeSessionObserverTerminalDigest(params: {
@@ -440,9 +392,9 @@ export function normalizeSessionObserverModelOutput(text: string): {
   if (!result.success) {
     return null;
   }
-  const headline = normalizeModelString(result.data.headline, HEADLINE_MAX_CHARS);
+  const headline = sanitizeSessionObserverModelText(result.data.headline, HEADLINE_MAX_CHARS);
   const assessment = result.data.assessment
-    ? normalizeModelString(result.data.assessment, ASSESSMENT_MAX_CHARS)
+    ? sanitizeSessionObserverModelText(result.data.assessment, ASSESSMENT_MAX_CHARS)
     : undefined;
   if (!headline || (result.data.assessment && !assessment)) {
     return null;

@@ -32,5 +32,10 @@
       "help": "When false, OpenClaw keeps the Amazon Bedrock Mantle plugin available but skips implicit startup discovery. Leave unset for default auto-detect behavior."
     }
   },
-  "providers": ["amazon-bedrock-mantle"]
+  "providers": ["amazon-bedrock-mantle"],
+  "modelCatalog": {
+    "discovery": {
+      "amazon-bedrock-mantle": "refreshable"
+    }
+  }
 }

@@ -259,6 +259,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     mockRunCronFallbackPassthrough();
     const executor = makeExecutor({
       job: makeJob({ delivery: { mode: "none" } }),
+      deliveryRequested: false,
       sourceDelivery: undefined,
       resolvedDelivery: {
         channel: "messagechat",
@@ -273,6 +274,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
     expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.requireExplicitMessageTarget).toBe(false);
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
@@ -284,6 +286,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     mockRunCronFallbackPassthrough();
     const executor = makeExecutor({
       job: makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "123" } }),
+      deliveryRequested: true,
       sourceDelivery: undefined,
       resolvedDelivery: { ok: true, channel: "messagechat", to: "123" },
     });
@@ -294,6 +297,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
     expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(args.terminalReplyExpectation).toBe("required");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -304,6 +308,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     mockRunCronFallbackPassthrough();
     const executor = makeExecutor({
       job: makeJob({ delivery: { mode: "webhook" } }),
+      deliveryRequested: false,
       sourceDelivery: undefined,
       resolvedDelivery: { channel: "messagechat", to: "123" },
     });
@@ -313,6 +318,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.disableMessageTool).toBe(true);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -322,6 +328,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     mockRunCronFallbackPassthrough();
     const executor = makeExecutor({
       job: makeJob({ omitDelivery: true }),
+      deliveryRequested: true,
       sourceDelivery: undefined,
       resolvedDelivery: { channel: "messagechat", to: "123" },
     });
@@ -331,6 +338,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.terminalReplyExpectation).toBe("required");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -360,6 +368,22 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.requireExplicitMessageTarget).toBe(true);
+  });
+
+  it("does not require a terminal reply when announce delivery did not resolve", async () => {
+    mockRunCronFallbackPassthrough();
+    const executor = makeExecutor({
+      job: makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "123" } }),
+      deliveryRequested: true,
+      resolvedDeliveryOk: false,
+      sourceDelivery: undefined,
+      resolvedDelivery: { ok: false, channel: "messagechat", to: "123" },
+    });
+
+    await executor.runPrompt("run a task");
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(getEmbeddedRunArg().terminalReplyExpectation).toBe("optional");
   });
 
   it("still works with a valid sourceDelivery", async () => {

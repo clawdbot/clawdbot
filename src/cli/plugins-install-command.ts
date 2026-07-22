@@ -45,6 +45,8 @@ import {
 import { resolveCatalogOfficialExternalInstallPlan } from "../plugins/official-external-install-trust.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
+import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { formatCliCommand } from "./command-format.js";
@@ -759,12 +761,15 @@ export async function runPluginInstallCommand(params: {
   raw: string;
   opts: InstallSafetyOverrides & {
     acknowledgeClawHubRisk?: boolean;
+    expectedIntegrity?: string;
+    expectedPluginId?: string;
     force?: boolean;
     link?: boolean;
     pin?: boolean;
     marketplace?: string;
   };
   invalidateRuntimeCache?: boolean;
+  clawManaged?: boolean;
   runtime?: RuntimeEnv;
 }) {
   assertConfigWriteAllowedInCurrentMode();
@@ -1215,36 +1220,69 @@ export async function runPluginInstallCommand(params: {
   }
 
   if (clawhubSpec) {
-    const result = await installPluginFromClawHub({
-      ...safetyOverrides,
-      ...resolveClawHubRiskAcknowledgementCliOptions({
-        acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
-        action: "installing",
-      }),
-      mode: installMode,
-      spec: raw,
-      extensionsDir,
-      logger: createPluginInstallLogger(runtime),
-    });
-    if (!result.ok) {
-      if (!isClawHubBlockedCliFailure(result)) {
-        runtime.error(result.error);
-      }
-      return runtime.exit(1);
-    }
-
-    await persistPluginInstall({
-      snapshot,
-      pluginId: result.pluginId,
-      install: {
-        ...buildClawHubPluginInstallRecordFields(result.clawhub),
+    const installFromClawHub = async (
+      installSnapshot = snapshot,
+      installSafetyOverrides = safetyOverrides,
+    ) => {
+      const result = await installPluginFromClawHub({
+        ...installSafetyOverrides,
+        ...resolveClawHubRiskAcknowledgementCliOptions({
+          acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+          action: "installing",
+        }),
+        mode: installMode,
         spec: raw,
-        installPath: result.targetDir,
+        ...(opts.expectedIntegrity ? { expectedIntegrity: opts.expectedIntegrity } : {}),
+        ...(opts.expectedPluginId ? { expectedPluginId: opts.expectedPluginId } : {}),
+        extensionsDir,
+        logger: createPluginInstallLogger(runtime),
+      });
+      if (!result.ok) {
+        if (!isClawHubBlockedCliFailure(result)) {
+          runtime.error(result.error);
+        }
+        return runtime.exit(1);
+      }
+
+      await persistPluginInstall({
+        snapshot: installSnapshot,
+        pluginId: result.pluginId,
+        install: {
+          ...buildClawHubPluginInstallRecordFields(result.clawhub),
+          spec: raw,
+          installPath: result.targetDir,
+        },
+        invalidateRuntimeCache,
+        runtime,
+      });
+      if (!params.clawManaged && result.clawhub.version) {
+        markClawPackageIndependentlyOwned({
+          kind: "plugin",
+          source: "clawhub",
+          ref: result.clawhub.clawhubPackage,
+          version: result.clawhub.version,
+        });
+      }
+    };
+    if (params.clawManaged) {
+      return await installFromClawHub();
+    }
+    return await withClawPackageLifecycleLease(
+      { kind: "plugin", source: "clawhub", ref: clawhubSpec.name },
+      async () => {
+        const leasedSnapshot = await loadConfigForInstall(request).catch((error: unknown) => {
+          runtime.error(formatErrorMessage(error));
+          return null;
+        });
+        if (!leasedSnapshot) {
+          return runtime.exit(1);
+        }
+        return await installFromClawHub(
+          leasedSnapshot,
+          resolveInstallSafetyOverrides({ ...opts, config: leasedSnapshot.config }),
+        );
       },
-      invalidateRuntimeCache,
-      runtime,
-    });
-    return;
+    );
   }
 
   const trustedNpmInstall = resolveOpenClawTrustedNpmPackageInstall(raw);

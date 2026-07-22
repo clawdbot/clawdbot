@@ -2,12 +2,8 @@
 import type { Block, KnownBlock } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { buildSlackAssistantThreadMetadata } from "../context.js";
-import type {
-  SlackMonitorContext,
-  SlackAssistantSuggestedPrompt,
-  SlackAssistantThreadContext,
-} from "../context.js";
+import { buildSlackAssistantThreadMetadata, DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../context.js";
+import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
 
 type SlackAssistantThreadPayload = {
   user_id?: string;
@@ -48,12 +44,6 @@ type SlackAssistantEventRegistrar = {
     handler: SlackAssistantEventHandler<SlackAssistantThreadContextChangedEvent>,
   ): void;
 };
-
-const DEFAULT_ASSISTANT_PROMPTS: SlackAssistantSuggestedPrompt[] = [
-  { title: "What can you do?", message: "What can you help me with?" },
-  { title: "Summarize this channel", message: "Summarize the recent activity in this channel." },
-  { title: "Draft a reply", message: "Help me draft a reply." },
-];
 
 function normalizeAssistantThread(
   event: SlackAssistantThreadStartedEvent | SlackAssistantThreadContextChangedEvent,
@@ -163,11 +153,11 @@ export function registerSlackAssistantEvents(params: {
         return;
       }
       ctx.saveSlackAssistantThreadContext(assistantThread);
-      await ctx.setSlackAssistantSuggestedPrompts({
+      await ctx.setSlackSuggestedPrompts({
         channelId: assistantThread.assistantChannelId,
         threadTs: assistantThread.threadTs,
         title: "Try asking",
-        prompts: DEFAULT_ASSISTANT_PROMPTS,
+        prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
       });
     } catch (err) {
       ctx.runtime.error?.(

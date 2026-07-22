@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
+import type { ControlUiBuildInfo } from "../build-info.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import type { PresenceViewer } from "./viewer-facepile.ts";
 import "./viewer-facepile.ts";
@@ -53,18 +54,32 @@ type ViewerFacepileElement = HTMLElement & {
   presencePayload: unknown;
   selfInstanceId?: string;
   variant: "session" | "footer";
+  buildInfo: ControlUiBuildInfo;
+  gatewayVersion: string | null;
   updateComplete: Promise<boolean>;
+};
+
+const BUILD_INFO: ControlUiBuildInfo = {
+  version: "2026.7.2",
+  commit: "1234567890abcdef1234567890abcdef12345678",
+  commitAt: null,
+  builtAt: "2026-07-20T10:30:00.000Z",
+  branch: "main",
+  dirty: true,
+  buildId: "test",
 };
 
 function mountFooterFacepile() {
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
   facepile.variant = "footer";
   facepile.selfInstanceId = "self-instance";
+  facepile.buildInfo = BUILD_INFO;
+  facepile.gatewayVersion = "2026.7.1";
   facepile.presencePayload = {
     presence: [
       {
         instanceId: "self-instance",
-        user: { id: "00-self", name: "Self User", email: "self@example.test" },
+        user: { id: "z-self", name: "Self User", email: "self@example.test" },
         watchedSessions: [],
       },
       {
@@ -83,41 +98,51 @@ function mountFooterFacepile() {
   return facepile;
 }
 
-it("opens a who's-online roster from the footer facepile", async () => {
+it("shows one footer hover card with every online user and server details", async () => {
   const facepile = mountFooterFacepile();
 
   await vi.waitFor(async () => {
     await facepile.updateComplete;
-    expect(facepile.querySelector("button.viewer-facepile-trigger")).not.toBeNull();
+    expect(facepile.querySelector(".viewer-facepile-trigger")).not.toBeNull();
   });
 
-  facepile.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.click();
+  const tooltip = facepile.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+    "openclaw-tooltip.sidebar-hover-tooltip",
+  );
+  await tooltip?.updateComplete;
+  const trigger = facepile.querySelector<HTMLElement>(".viewer-facepile-trigger");
+  trigger?.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
 
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    const items = [...document.querySelectorAll(".presence-roster-menu__item")];
-    // Everyone online is listed — including self, sorted first and marked.
-    expect(items.map((item) => item.getAttribute("data-viewer-id"))).toEqual([
-      "00-self",
-      "alice",
-      "bob",
-    ]);
-  });
-
-  const menu = document.querySelector(".presence-roster-menu");
-  expect(menu?.querySelector(".presence-roster-menu__title")?.textContent).toContain("3");
-  const rows = [...(menu?.querySelectorAll(".presence-roster-menu__item") ?? [])];
-  expect(rows[0]?.querySelector(".presence-roster-menu__you")?.textContent).toContain("you");
+  expect(
+    tooltip?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,
+  ).toBe(true);
+  const card = facepile.querySelector('.sidebar-presence-hover-card[slot="content"]');
+  expect(card?.querySelector(".sidebar-hover-card__heading")?.textContent).toContain("Online · 3");
+  const rows = [...(card?.querySelectorAll(".sidebar-hover-card__person") ?? [])];
+  expect(card?.querySelector(".sidebar-hover-card__people")?.getAttribute("tabindex")).toBe("0");
+  expect(rows.map((row) => row.getAttribute("data-viewer-id"))).toEqual(["z-self", "alice", "bob"]);
+  expect(rows[0]?.querySelector(".sidebar-hover-card__you")?.textContent).toContain("you");
   // Named users show the email as a subtitle; email-only users don't repeat it.
-  expect(rows[1]?.querySelector(".presence-roster-menu__email")?.textContent).toBe(
+  expect(rows[1]?.querySelector(".sidebar-hover-card__person-email")?.textContent).toBe(
     "alice@example.test",
   );
-  expect(rows[2]?.querySelector(".presence-roster-menu__name")?.textContent?.trim()).toBe(
+  expect(rows[2]?.querySelector(".sidebar-hover-card__person-name")?.textContent?.trim()).toBe(
     "bob@example.test",
   );
-  expect(rows[2]?.querySelector(".presence-roster-menu__email")).toBeNull();
-  // Each row carries the shared avatar element.
+  expect(rows[2]?.querySelector(".sidebar-hover-card__person-email")).toBeNull();
   expect(rows[1]?.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+  expect(card?.textContent).toContain("Server");
+  expect(card?.querySelector(".sidebar-hover-card__summary")?.textContent).toContain(
+    "v2026.7.2 · main · dirty",
+  );
+  expect(
+    card?.querySelector(".sidebar-hover-card__metadata-value--mono")?.textContent?.trim(),
+  ).toBe("1234567890ab");
+  expect(card?.textContent).toContain("2026-07-20T10:30:00.000Z");
+  expect(card?.textContent).toContain("2026.7.1");
+  expect(facepile.querySelector("wa-dropdown")).toBeNull();
+  expect(trigger?.hasAttribute("aria-haspopup")).toBe(false);
+  expect(trigger?.hasAttribute("aria-expanded")).toBe(false);
 });
 
 it("keeps session facepiles as plain non-interactive avatar clusters", async () => {
@@ -139,64 +164,5 @@ it("keeps session facepiles as plain non-interactive avatar clusters", async () 
     expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
   });
   expect(facepile.querySelector("button.viewer-facepile-trigger")).toBeNull();
-});
-
-it("closes the roster when a row is selected", async () => {
-  const facepile = mountFooterFacepile();
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(facepile.querySelector("button.viewer-facepile-trigger")).not.toBeNull();
-  });
-  facepile.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.click();
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(document.querySelector(".presence-roster-menu")).not.toBeNull();
-  });
-
-  document
-    .querySelector(".presence-roster-menu")
-    ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, cancelable: true }));
-
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(document.querySelector(".presence-roster-menu")).toBeNull();
-  });
-});
-
-it("drops a stale open roster when presence empties and does not reopen on return", async () => {
-  const facepile = mountFooterFacepile();
-  const fullPresence = facepile.presencePayload;
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(facepile.querySelector("button.viewer-facepile-trigger")).not.toBeNull();
-  });
-  facepile.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.click();
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(document.querySelector(".presence-roster-menu")).not.toBeNull();
-  });
-
-  // Everyone else disconnects: the facepile (and menu) unmount without a
-  // wa-after-hide, so the open state must clear instead of going stale.
-  facepile.presencePayload = {
-    presence: [
-      {
-        instanceId: "self-instance",
-        user: { id: "00-self", name: "Self User", email: "self@example.test" },
-        watchedSessions: [],
-      },
-    ],
-  };
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(document.querySelector(".presence-roster-menu")).toBeNull();
-  });
-
-  facepile.presencePayload = fullPresence;
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(facepile.querySelector("button.viewer-facepile-trigger")).not.toBeNull();
-  });
-  // Presence returning must not resurrect the previously open menu.
-  expect(document.querySelector(".presence-roster-menu")).toBeNull();
+  expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
 });

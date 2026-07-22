@@ -238,7 +238,7 @@ function resolveVideoGenerationModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
+    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.video,
     providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
 }
@@ -250,7 +250,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.videoGenerationModel));
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.video));
 }
 
 function collectVideoGenerationModelProviderIds(params: {
@@ -314,7 +314,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
   const audioCandidateProviderIds = new Set<string>();
   const explicitProviderIds = collectVideoGenerationModelProviderIds({
     cfg: params.cfg,
-    modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.videoGenerationModel),
+    modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video),
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
 
@@ -952,7 +952,7 @@ export function createVideoGenerateTool(options?: {
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.videoGenerationModel,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.video,
       providerKey: "videoGenerationProviders",
     })
   ) {

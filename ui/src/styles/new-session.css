@@ -73,6 +73,39 @@ openclaw-new-session-page {
   position: relative;
 }
 
+.new-session-page__select--agent openclaw-agent-select {
+  width: auto;
+  max-width: min(40vw, 260px);
+}
+
+.agent-select--compact .agent-select__trigger,
+:root[data-theme-mode="light"] .agent-select--compact .agent-select__trigger {
+  width: auto;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.agent-select--compact .agent-select__trigger:hover:not(:disabled),
+.agent-select--compact .agent-select__trigger[aria-expanded="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.agent-select--compact .agent-select__avatar {
+  width: 18px;
+  height: 18px;
+}
+
+.agent-select--compact .agent-select__label {
+  max-width: min(32vw, 220px);
+}
+
 .new-session-page__trigger {
   display: inline-flex;
   align-items: center;

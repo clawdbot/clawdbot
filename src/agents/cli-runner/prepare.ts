@@ -5,7 +5,6 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../../config/config.js";
-import type { CliBackendConfig } from "../../config/types.agent-defaults.js";
 import {
   assertContextEngineHostSupport,
   buildGenericCliContextEngineHostSupport,
@@ -25,6 +24,7 @@ import {
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
@@ -92,6 +92,7 @@ import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
+import { expandToolGroups } from "../tool-policy.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -120,8 +121,20 @@ import {
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import { resolveLoopbackToolsAllowFromMcpPermissions } from "./tool-policy.js";
-import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+import {
+  OPENCLAW_MCP_TOOL_PREFIX,
+  resolveLoopbackToolsAllowFromMcpPermissions,
+} from "./tool-policy.js";
+import type {
+  CliReusableSession,
+  CliSecretInput,
+  PreparedCliRunContext,
+  RunCliAgentParams,
+} from "./types.js";
+
+type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
+  secretInput?: CliSecretInput;
+};
 
 function resolveClaudeCliContextModelId(modelId: string): string {
   const trimmed = modelId.trim();
@@ -308,7 +321,7 @@ function shouldRefreshAuthProfileForExecution(params: {
   authCredential?: AuthProfileCredential;
 }): boolean {
   return Boolean(
-    params.backendId === "google-gemini-cli" &&
+    (params.backendId === "google-gemini-cli" || params.backendId === "claude-cli") &&
     params.authProfileId &&
     (params.authCredential?.type === "oauth" ||
       params.authCredential?.type === "api_key" ||
@@ -318,9 +331,9 @@ function shouldRefreshAuthProfileForExecution(params: {
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
-  params: RunCliAgentParams,
+  inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
-  const internalParams = params as RunCliAgentPrepareParams;
+  let params = inputParams;
   const started = Date.now();
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
@@ -349,6 +362,49 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  if (params.toolsAllow !== undefined) {
+    if (params.cliToolAvailability !== undefined) {
+      throw new Error(
+        `CLI backend ${backendResolved.id} received conflicting runtime tool policies`,
+      );
+    }
+    const normalizedToolsAllow = expandToolGroups(params.toolsAllow);
+    if (normalizedToolsAllow.includes("*")) {
+      params = { ...params, toolsAllow: undefined };
+    } else {
+      const resolvedAvailability = backendResolved.resolveRuntimeToolAvailability?.({
+        toolsAllow: normalizedToolsAllow,
+      });
+      if (!resolvedAvailability) {
+        throw new Error(
+          `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
+        );
+      }
+      const resolvedMcpPermissions = uniqueStrings(
+        resolvedAvailability.mcp.map((permission) => permission.trim()).filter(Boolean),
+      );
+      const allowedMcpPermissions = new Set(
+        normalizedToolsAllow.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`),
+      );
+      const expandedMcpPermissions = resolvedMcpPermissions.filter(
+        (permission) => !allowedMcpPermissions.has(permission),
+      );
+      if (expandedMcpPermissions.length > 0) {
+        throw new Error(
+          `CLI backend ${backendResolved.id} expanded runtime toolsAllow outside the requested OpenClaw MCP grant: ${expandedMcpPermissions.join(", ")}`,
+        );
+      }
+      params = {
+        ...params,
+        toolsAllow: undefined,
+        cliToolAvailability: {
+          native: [],
+          mcp: resolvedMcpPermissions,
+        },
+      };
+    }
+  }
+  const internalParams = params as RunCliAgentPrepareParams;
   const nodeClaudePlacement = resolveNodeClaudePlacement({
     backendId: backendResolved.id,
     execHost: params.sessionEntry?.execHost,
@@ -360,11 +416,6 @@ export async function prepareCliRunContext(
   ) {
     throw new Error(
       `CLI backend ${backendResolved.id} cannot enforce exact per-run tool availability`,
-    );
-  }
-  if (params.toolsAllow !== undefined) {
-    throw new Error(
-      `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
     );
   }
   const sideQuestionDisablesNativeTools =
@@ -679,8 +730,7 @@ export async function prepareCliRunContext(
     params.cliToolAvailability?.mcp,
   );
   let cleanupPreparedResources: (() => Promise<void>) | undefined;
-  let preparedExecution: Awaited<ReturnType<NonNullable<typeof backendResolved.prepareExecution>>> =
-    undefined;
+  let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
     const mcpClientGrant = mcpLoopbackRuntime
       ? prepareDeps.mintMcpLoopbackClientGrant({
@@ -778,21 +828,20 @@ export async function prepareCliRunContext(
       executionMode,
       env: preparedBackend.env,
     } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
-    preparedExecution = nodeClaudePlacement
-      ? undefined
-      : await backendResolved.prepareExecution?.(
-          (backendResolved.id === "google-gemini-cli"
-            ? {
-                ...prepareExecutionContext,
-                // Private bridge for bundled Gemini CLI. This is intentionally not
-                // part of the public Plugin SDK until a credential-forwarding
-                // contract exists.
-                authCredential,
-              }
-            : prepareExecutionContext) as typeof prepareExecutionContext & {
-            authCredential?: AuthProfileCredential;
-          },
-        );
+    preparedExecution =
+      (await backendResolved.prepareExecution?.(
+        (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
+          ? {
+              ...prepareExecutionContext,
+              // Private bridge for bundled auth-owning CLI backends. This is intentionally not
+              // part of the public Plugin SDK until a credential-forwarding
+              // contract exists.
+              authCredential,
+            }
+          : prepareExecutionContext) as typeof prepareExecutionContext & {
+          authCredential?: AuthProfileCredential;
+        },
+      )) ?? undefined;
     const preparedBackendCleanup =
       cleanupPreparedBackend || preparedExecution?.cleanup
         ? async () => {
@@ -886,6 +935,7 @@ export async function prepareCliRunContext(
       ...(preparedBackendBeforeExecution
         ? { beforeExecution: preparedBackendBeforeExecution }
         : {}),
+      ...(preparedExecution?.secretInput ? { secretInput: preparedExecution.secretInput } : {}),
       ...(mcpClientGrantCapture ? { mcpClientGrantCapture } : {}),
       ...(preparedCleanup ? { cleanup: preparedCleanup } : {}),
     };
@@ -934,6 +984,7 @@ export async function prepareCliRunContext(
             groupChannel: normalizeOptionalMcpContextValue(params.groupChannel ?? undefined),
             groupSpace: normalizeOptionalMcpContextValue(params.groupSpace ?? undefined),
             spawnedBy: normalizeOptionalMcpContextValue(params.spawnedBy ?? undefined),
+            toolsAllow: restrictedLoopbackToolsAllow,
           }).tools
         : [];
     const promptToolNamesHash =

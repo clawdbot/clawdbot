@@ -6,7 +6,7 @@ scenario:
   runtimeParityTier: optional
   coverage:
     primary:
-      - tools.tavily-extract
+      - web-search.html-extraction
   objective: Track tavily_extract parity once the tool is present in the runtime surface.
   successCriteria:
     - If tavily_extract is present, the fixture exercises happy and failure paths.

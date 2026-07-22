@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
@@ -37,6 +38,7 @@ type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
+  media: MediaFact[];
   offloadedRefs: OffloadedRef[];
 };
 
@@ -320,7 +322,7 @@ export async function parseMessageWithAttachments(
   const acceptNonImage = opts?.acceptNonImage !== false;
 
   if (!attachments || attachments.length === 0) {
-    return { message, images: [], imageOrder: [], offloadedRefs: [] };
+    return { message, images: [], imageOrder: [], media: [], offloadedRefs: [] };
   }
 
   const images: ChatImageContent[] = [];
@@ -491,6 +493,11 @@ export async function parseMessageWithAttachments(
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
     images,
     imageOrder,
+    media: offloadedRefs.map((ref) => ({
+      path: ref.path,
+      url: ref.mediaRef,
+      contentType: ref.mimeType,
+    })),
     offloadedRefs,
   };
 }

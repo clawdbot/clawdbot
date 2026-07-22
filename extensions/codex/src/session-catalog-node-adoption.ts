@@ -142,6 +142,7 @@ export function listNodeAdoptedSessionEntries(params: {
   for (const agentId of listSupervisionAgentIds(params.config ?? {})) {
     for (const { entry, sessionKey } of params.runtime.agent.session.listSessionEntries({
       agentId,
+      readOnly: true,
     })) {
       const marker = readNodeSessionMarker(entry);
       const sessionId = entry.sessionId?.trim();

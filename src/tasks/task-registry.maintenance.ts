@@ -15,7 +15,7 @@ import {
 import { resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
-  listSessionEntries,
+  listSessionEntriesReadOnly,
   type SessionEntrySummary,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -100,7 +100,7 @@ type TaskRegistryMaintenanceRuntime = {
   }) => Promise<void>;
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
-  listSessionEntries: typeof listSessionEntries;
+  listSessionEntries: typeof listSessionEntriesReadOnly;
   resolveStorePath: typeof resolveStorePath;
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
@@ -139,7 +139,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession: (sessionKey) =>
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
-  listSessionEntries,
+  listSessionEntries: listSessionEntriesReadOnly,
   resolveStorePath,
   deriveSessionChatTypeFromKey,
   isCronJobActive,

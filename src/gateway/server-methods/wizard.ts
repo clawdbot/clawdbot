@@ -5,6 +5,7 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
+  GatewayErrorDetailCodes,
   validateWizardCancelParams,
   validateWizardNextParams,
   validateWizardStartParams,
@@ -59,7 +60,13 @@ function findWizardSessionOrRespond(params: {
 }): WizardSession | null {
   const session = params.context.wizardSessions.get(params.sessionId);
   if (!session) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"));
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found", {
+        details: { code: GatewayErrorDetailCodes.WIZARD_NOT_FOUND },
+      }),
+    );
     return null;
   }
   return session;

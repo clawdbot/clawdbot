@@ -20,6 +20,13 @@ export const SESSION_OBSERVER_HEALTH_VALUES = [
   "failed",
 ] as const;
 
+/** Stable identity stamped on a session when an operator creates it. */
+export const SessionCreatorIdentitySchema = closedObject({
+  id: NonEmptyString,
+  label: Type.Optional(NonEmptyString),
+});
+export type SessionCreatorIdentity = Static<typeof SessionCreatorIdentitySchema>;
+
 /** Trajectory judgment produced for one observed agent session. */
 export const SessionObserverHealthSchema = Type.Union([
   Type.Literal("on-track"),
@@ -47,6 +54,28 @@ export const SessionObserverDigestSchema = closedObject({
   assessment: Type.Optional(Type.String({ minLength: 1, maxLength: 320 })),
   health: SessionObserverHealthSchema,
   planProgress: Type.Optional(SessionObserverPlanProgressSchema),
+});
+
+/** Asks the observer about one session using its sanitized observation context. */
+export const SessionsObserverAskParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  question: Type.String({ minLength: 1, maxLength: 400 }),
+});
+
+/** Ephemeral observer answer returned only to the requesting operator. */
+export const SessionsObserverAskResultSchema = closedObject({
+  answer: Type.String({ minLength: 1, maxLength: 600 }),
+  digestRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+});
+
+/** Declares whether this connection currently renders session observer output. */
+export const SessionsObserverVisibilityParamsSchema = closedObject({
+  visible: Type.Boolean(),
+});
+
+/** Acknowledges a connection's observer visibility declaration. */
+export const SessionsObserverVisibilityResultSchema = closedObject({
+  ok: Type.Literal(true),
 });
 
 /**
@@ -275,11 +304,16 @@ export const SessionsListParamsSchema = closedObject({
    */
   includeLastMessage: Type.Optional(Type.Boolean()),
   label: Type.Optional(SessionLabelString),
+  /** Filter rows by their permanent creator identity. */
+  creatorId: Type.Optional(NonEmptyString),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
-  /** True lists archived sessions; false or omitted lists active sessions. */
-  archived: Type.Optional(Type.Boolean()),
+  /**
+   * True lists archived sessions; "all" lists archived and active;
+   * false or omitted lists active sessions.
+   */
+  archived: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("all")])),
 });
 
 /** Searches one agent's indexed session transcripts, optionally within selected sessions. */
@@ -737,6 +771,14 @@ export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
 export type SessionObserverHealth = Static<typeof SessionObserverHealthSchema>;
 export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgressSchema>;
 export type SessionObserverDigest = Static<typeof SessionObserverDigestSchema>;
+export type SessionsObserverAskParams = Static<typeof SessionsObserverAskParamsSchema>;
+export type SessionsObserverAskResult = Static<typeof SessionsObserverAskResultSchema>;
+export type SessionsObserverVisibilityParams = Static<
+  typeof SessionsObserverVisibilityParamsSchema
+>;
+export type SessionsObserverVisibilityResult = Static<
+  typeof SessionsObserverVisibilityResultSchema
+>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
 export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;

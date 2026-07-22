@@ -66,21 +66,6 @@ function shouldSkipDiscoveryError(err: unknown): boolean {
   return typeof code === "string" && NON_FATAL_DISCOVERY_ERROR_CODES.has(code);
 }
 
-function legacySessionStoreHasAgentKey(storePath: string, agentId: string): boolean {
-  try {
-    const parsed: unknown = JSON.parse(fsSync.readFileSync(storePath, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return false;
-    }
-    return Object.keys(parsed).some((sessionKey) => {
-      const owner = parseAgentSessionKey(sessionKey)?.agentId;
-      return owner !== undefined && normalizeAgentId(owner) === agentId;
-    });
-  } catch {
-    return false;
-  }
-}
-
 function isWithinRoot(realPath: string, realRoot: string): boolean {
   return realPath === realRoot || realPath.startsWith(`${realRoot}${path.sep}`);
 }
@@ -183,21 +168,24 @@ function resolveValidatedDiscoveredStorePathSync(params: {
 function resolveValidatedExistingSessionStoreTargetSync(
   target: SessionStoreTarget,
 ): SessionStoreTarget | undefined {
+  // Runtime existing-store lookups are SQLite-only; broad discovery remains
+  // available to Doctor/startup migration without making JSON authoritative.
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+    agentId: target.agentId,
+  }).path;
+  if (!sqlitePath) {
+    return undefined;
+  }
   const agentsRoot = resolveAgentsDirFromSessionStorePath(target.storePath);
   if (!agentsRoot) {
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(target.storePath, {
-      agentId: target.agentId,
-    }).path;
-    return fsSync.existsSync(target.storePath) ||
-      Boolean(sqlitePath && fsSync.existsSync(sqlitePath))
-      ? target
-      : undefined;
+    return fsSync.existsSync(sqlitePath) ? target : undefined;
   }
-  const validatedStorePath = resolveValidatedDiscoveredStorePathSync({
-    sessionsDir: path.dirname(target.storePath),
+  return resolveValidatedManagedFilePathSync({
     agentsRoot,
-  });
-  return validatedStorePath ? { ...target, storePath: validatedStorePath } : undefined;
+    filePath: sqlitePath,
+  })
+    ? target
+    : undefined;
 }
 
 function isValidatedRecoveryCandidateSessionsDir(params: {
@@ -394,9 +382,7 @@ export function resolveExistingAgentSessionStoreTargetsSync(
         return [];
       }
     }
-    // The legacy file is authoritative only before its derived SQLite store exists. Once SQLite
-    // exists, even an empty store can represent intentional deletion of the final session row.
-    return legacySessionStoreHasAgentKey(fixedTarget.storePath, requested) ? [fixedTarget] : [];
+    return [];
   }
   const requestedTarget = {
     agentId: requested,
@@ -404,8 +390,14 @@ export function resolveExistingAgentSessionStoreTargetsSync(
   };
   // Directory discovery cannot enumerate arbitrary templates. Keep an existing retired store
   // visible by checking the requested agent's deterministic target alongside discovered stores.
-  const discoveredTargets = resolveAllAgentSessionStoreTargetsSync(cfg, { env }).filter(
-    (target) => normalizeAgentId(target.agentId) === requested,
+  const discoveredTargets = resolveAllAgentSessionStoreTargetsSync(cfg, { env }).flatMap(
+    (target) => {
+      if (normalizeAgentId(target.agentId) !== requested) {
+        return [];
+      }
+      const validated = resolveValidatedExistingSessionStoreTargetSync(target);
+      return validated ? [validated] : [];
+    },
   );
   const validatedRequestedTarget = resolveValidatedExistingSessionStoreTargetSync(requestedTarget);
   return dedupeTargetsBySqliteTarget([

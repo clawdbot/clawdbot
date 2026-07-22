@@ -104,6 +104,10 @@ const SYNCED_PREFS = {
     extract: (value) => (typeof value === "boolean" ? value : undefined),
     local: (settings) => settings.sidebarLiveActivity !== false,
   }),
+  showAdvancedSettings: prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local: (settings) => settings.showAdvancedSettings === true,
+  }),
 } as const;
 
 type SyncedPrefKey = keyof typeof SYNCED_PREFS;

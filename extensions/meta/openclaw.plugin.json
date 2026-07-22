@@ -61,7 +61,7 @@
       }
     },
     "discovery": {
-      "meta": "static"
+      "meta": "refreshable"
     }
   },
   "setup": {

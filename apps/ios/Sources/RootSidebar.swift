@@ -617,8 +617,11 @@ struct RootSidebar: View {
                         .lineLimit(1)
                     // Web-parity subtitle: the work line (repo/branch) names the
                     // session; recency moves to the trailing metadata slot.
-                    if let workSubtitle = ChatSessionSidebarModel.workSubtitle(for: session) {
-                        Text(verbatim: workSubtitle)
+                    if let subtitle = ChatSessionSidebarModel.subtitle(
+                        for: session,
+                        workSubtitle: ChatSessionSidebarModel.workSubtitle(for: session))
+                    {
+                        Text(verbatim: subtitle)
                             .font(OpenClawType.caption2Medium)
                             .foregroundStyle(OpenClawSidebarPalette.muted)
                             .lineLimit(1)

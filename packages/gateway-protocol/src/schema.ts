@@ -16,6 +16,7 @@ export * from "./schema/audit.js";
 export * from "./schema/board.js";
 export * from "./schema/users.js";
 export * from "./schema/channels.js";
+export * from "./schema/channel-pairing.js";
 export * from "./schema/talk-marks.js";
 export * from "./schema/commands.js";
 export * from "./schema/config.js";

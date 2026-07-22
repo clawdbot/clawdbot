@@ -5,9 +5,9 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - runtime.turn-ordering
+      - agent-runtime.session-turn-ordering
     secondary:
-      - channels.group-messages
+      - channels.room-allowlist
   objective: Verify blocked secondary-actor traffic does not poison a later allowlisted driver turn.
   successCriteria:
     - The observer turn remains unanswered.

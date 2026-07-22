@@ -10,12 +10,14 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
-import { REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS } from "./workspace-quiescence-renew-script.js";
+import {
+  REMOTE_WORKSPACE_QUIESCE_JS,
+  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
+  REMOTE_WORKSPACE_RESUME_JS,
+} from "./workspace-quiescence-scripts.js";
 import {
   REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
   REMOTE_WORKSPACE_MANIFEST_JS,
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
 } from "./workspace-sync-scripts.js";
 
 const roots: string[] = [];
@@ -467,9 +469,8 @@ describe("remote workspace manifest script", () => {
         entry.mode = (entry.mode & 0o111) === 0 ? 0o644 : 0o755;
       }
     }
-    const legacyProducerLocale = "en-US";
     legacyCanonical.entries.sort((left, right) =>
-      left.path.localeCompare(right.path, legacyProducerLocale),
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     );
     const acceptedRaw = JSON.stringify(legacyCanonical);
     const acceptedDigest = createHash("sha256").update(acceptedRaw).digest("hex");
@@ -485,7 +486,6 @@ describe("remote workspace manifest script", () => {
         "",
         "resolve",
         acceptedDigest,
-        legacyProducerLocale,
       ],
       { timeoutMs: 10_000, baseEnv: env },
     );

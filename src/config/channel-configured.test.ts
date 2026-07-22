@@ -50,7 +50,7 @@ describe("isChannelConfigured", () => {
         {
           channels: {
             signal: {
-              httpPort: 8080,
+              httpUrl: "http://127.0.0.1:8080",
             },
           },
         },

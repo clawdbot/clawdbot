@@ -316,11 +316,12 @@ type CapturedInstallPolicyRequest = {
 };
 
 function writeAllowingInstallPolicyScript(dir: string) {
+  fs.chmodSync(dir, 0o700);
   const scriptPath = path.join(dir, "allow-policy.cjs");
   const logPath = path.join(dir, "policy-requests.jsonl");
   fs.writeFileSync(
     scriptPath,
-    `
+    `#!${process.execPath}
 const fs = require("node:fs");
 
 let input = "";
@@ -340,11 +341,12 @@ process.stdin.on("end", () => {
 }
 
 function writeBlockingInstallPolicyScript(dir: string) {
+  fs.chmodSync(dir, 0o700);
   const scriptPath = path.join(dir, "block-policy.cjs");
   const logPath = path.join(dir, "policy-requests.jsonl");
   fs.writeFileSync(
     scriptPath,
-    `
+    `#!${process.execPath}
 const fs = require("node:fs");
 
 let input = "";
@@ -377,11 +379,12 @@ process.stdin.on("end", () => {
 }
 
 function writeInstallOnlyBlockingPolicyScript(dir: string) {
+  fs.chmodSync(dir, 0o700);
   const scriptPath = path.join(dir, "block-install-policy.cjs");
   const logPath = path.join(dir, "policy-requests.jsonl");
   fs.writeFileSync(
     scriptPath,
-    `
+    `#!${process.execPath}
 const fs = require("node:fs");
 
 let input = "";
@@ -416,10 +419,9 @@ function configWithInstallPolicy(scriptPath: string, logPath: string): OpenClawC
         enabled: true,
         exec: {
           source: "exec",
-          command: process.execPath,
-          args: [scriptPath],
+          command: scriptPath,
           env: { OPENCLAW_POLICY_LOG: logPath },
-          allowInsecurePath: true,
+          trustedDirs: [path.dirname(scriptPath)],
           timeoutMs: 5000,
           maxOutputBytes: 16 * 1024,
         },

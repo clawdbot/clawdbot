@@ -91,6 +91,7 @@ describe("createApplicationGateway reconnecting snapshot", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -126,6 +127,72 @@ describe("createApplicationGateway reconnecting snapshot", () => {
 
     expect(gateway.snapshot.connected).toBe(false);
     expect(gateway.snapshot.reconnecting).toBe(true);
+  });
+
+  it("publishes a stable offline state only after a sustained disconnect", async () => {
+    vi.useFakeTimers();
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    expect(gateway.snapshot.offlineStable).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(gateway.snapshot.offlineStable).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(gateway.snapshot.offlineStable).toBe(true);
+  });
+
+  it("does not publish offline before the gateway starts", async () => {
+    vi.useFakeTimers();
+    const { gateway } = createStore();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(gateway.snapshot.offlineStable).toBe(false);
+  });
+
+  it("keeps a sub-two-second connection blip quiet", async () => {
+    vi.useFakeTimers();
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    current().opts.onClose?.({ code: 1006, reason: "brief blip", willRetry: true });
+    await vi.advanceTimersByTimeAsync(1_999);
+    current().opts.onHello?.(HELLO);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(gateway.snapshot.offlineStable).toBe(false);
+  });
+
+  it("clears a stable offline state immediately on reconnect", async () => {
+    vi.useFakeTimers();
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(gateway.snapshot.offlineStable).toBe(true);
+
+    current().opts.onHello?.(HELLO);
+
+    expect(gateway.snapshot.offlineStable).toBe(false);
+  });
+
+  it("clears the pending offline timer when stopped", async () => {
+    vi.useFakeTimers();
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+
+    gateway.stop();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(gateway.snapshot.offlineStable).toBe(false);
   });
 
   it("drops back to the gate when the client gives up (credential rejection)", () => {
@@ -243,7 +310,11 @@ describe("createApplicationGateway reconnecting snapshot", () => {
       seq: 2,
       stateVersion: { presence: 2, health: 1 },
     });
-    expect(gateway.snapshot.selfUser).toBeNull();
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      id: "profile-1",
+      name: "Ada Lovelace",
+      avatarUrl: "/api/users/profile-1/avatar?v=3",
+    });
   });
 
   it("clears identity while disconnected", () => {

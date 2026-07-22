@@ -185,6 +185,7 @@ export function resolveSlackRoutingContext(params: {
   channelConfig?: SlackChannelConfigResolved | null;
   seedTopLevelRoomThread?: boolean;
   assistantThreadTs?: string;
+  agentViewThreadTs?: string;
   eventScope?: SlackEventScope;
 }): SlackRoutingContext {
   const {
@@ -198,6 +199,7 @@ export function resolveSlackRoutingContext(params: {
     channelConfig,
     seedTopLevelRoomThread,
     assistantThreadTs,
+    agentViewThreadTs,
     eventScope,
   } = params;
   let route = resolveSlackInitialAgentRoute({
@@ -237,14 +239,14 @@ export function resolveSlackRoutingContext(params: {
       ? seedCandidateThreadId
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  const assistantThreadId = assistantThreadTs;
+  const directAgentThreadId = assistantThreadTs ?? agentViewThreadTs;
   // DM threads are a UI affordance, not a session boundary. Route all DM
   // messages, including thread replies, to the user's main DM session so
-  // the agent sees them as part of the existing conversation. Slack assistant
-  // threads are the exception: Slack treats each assistant thread as its own
-  // conversation and sends the lifecycle context only on assistant events.
+  // the agent sees them as part of the existing conversation. Slack Assistant
+  // View and Agent View threads are the exception: each visible root is its
+  // own conversation.
   const canonicalThreadId = isDirectMessage
-    ? assistantThreadId
+    ? directAgentThreadId
     : isRoomish
       ? roomThreadId
       : isThreadReply

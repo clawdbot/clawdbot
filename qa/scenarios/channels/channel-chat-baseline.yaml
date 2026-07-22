@@ -5,9 +5,9 @@ scenario:
   surface: channel
   coverage:
     primary:
-      - channels.group-messages
+      - channels.mention-gating
     secondary:
-      - channels.qa-channel
+      - channels.mention-required-qa-channel
   objective: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
   successCriteria:
     - Agent replies in the shared channel transcript.

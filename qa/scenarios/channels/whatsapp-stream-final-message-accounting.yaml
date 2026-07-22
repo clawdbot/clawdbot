@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-stream-final-message-accounting
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.outbound-text-sends
   execution:
     profiles: { "whatsapp:mock-default": 28 }
     kind: flow

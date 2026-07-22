@@ -76,7 +76,6 @@ export { resolveProviderEndpoint } from "../agents/provider-attribution.js";
 export {
   applyModelCompatPatch,
   hasToolSchemaProfile,
-  hasNativeWebSearchTool,
   normalizeModelCompat,
   resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,

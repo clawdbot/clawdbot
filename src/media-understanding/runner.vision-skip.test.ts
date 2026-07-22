@@ -136,11 +136,13 @@ describe("runCapability image skip", () => {
     vi.unstubAllEnvs();
   });
 
-  it("skips image understanding when the active model supports vision", async () => {
+  it("skips image understanding for a vision model when preferredModel is dangling", async () => {
     const ctx: MsgContext = { MediaPath: "/tmp/image.png", MediaType: "image/png" };
     const media = normalizeMediaAttachments(ctx);
     const cache = createMediaAttachmentCache(media);
-    const cfg = {} as OpenClawConfig;
+    const cfg = {
+      tools: { media: { image: { preferredModel: "missing/model" } } },
+    } as OpenClawConfig;
 
     try {
       const result = await runCapability({
@@ -299,9 +301,13 @@ describe("runCapability image skip", () => {
         const cfg = {
           tools: {
             media: {
-              image: {
-                models: [{ provider: "openrouter", model: "google/gemini-2.5-flash" }],
-              },
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  capabilities: ["image"],
+                },
+              ],
             },
           },
         } as unknown as OpenClawConfig;
@@ -342,7 +348,19 @@ describe("runCapability image skip", () => {
         fileContents: Buffer.from("image"),
       },
       async ({ ctx, media, cache }) => {
-        const cfg = {} as OpenClawConfig;
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as OpenClawConfig;
 
         const result = await runCapability({
           capability: "image",
@@ -361,9 +379,6 @@ describe("runCapability image skip", () => {
               },
             ],
           ]),
-          config: {
-            models: [{ provider: "openrouter", model: "google/gemini-2.5-flash" }],
-          },
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 
@@ -389,7 +404,20 @@ describe("runCapability image skip", () => {
       },
       async ({ ctx, media, cache }) => {
         let seenPrompt: string | undefined;
-        const cfg = {} as OpenClawConfig;
+        const cfg = {
+          tools: {
+            media: {
+              models: [
+                {
+                  provider: "openrouter",
+                  model: "google/gemini-2.5-flash",
+                  prompt: "entry prompt",
+                  capabilities: ["image"],
+                },
+              ],
+            },
+          },
+        } as OpenClawConfig;
 
         const result = await runCapability({
           capability: "image",
@@ -413,13 +441,6 @@ describe("runCapability image skip", () => {
           ]),
           config: {
             _requestPromptOverride: "Use this request prompt",
-            models: [
-              {
-                provider: "openrouter",
-                model: "google/gemini-2.5-flash",
-                prompt: "entry prompt",
-              },
-            ],
           },
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
@@ -807,9 +828,13 @@ describe("runCapability image skip", () => {
     const cfg = {
       tools: {
         media: {
-          image: {
-            models: [{ provider: "gemini", model: "gemini-3-flash-preview" }],
-          },
+          models: [
+            {
+              provider: "gemini",
+              model: "gemini-3-flash-preview",
+              capabilities: ["image"],
+            },
+          ],
         },
       },
     } as OpenClawConfig;

@@ -3,6 +3,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { isRepoRootRelativeRef } from "./cli-paths.js";
+import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 
@@ -120,13 +121,6 @@ const qaScenarioExecutionSchema = z.union([
   qaFlowScenarioExecutionSchema,
   qaTestFileScenarioExecutionSchema,
 ]);
-
-const qaCoverageIdSchema = z
-  .string()
-  .trim()
-  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
-    message: "coverage ids must use lowercase dotted tokens",
-  });
 
 const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
 

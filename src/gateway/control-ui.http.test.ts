@@ -1101,9 +1101,9 @@ describe("handleControlUiHttpRequest", () => {
           {
             root: { kind: "resolved", path: tmp },
             config: {
-              agents: { defaults: { workspace: tmp, timeFormat: "24" } },
-              gateway: { controlUi: { chatMessageMaxWidth: "min(1280px, 82%)" } },
+              agents: { defaults: { workspace: tmp } },
               ui: {
+                prefs: { chatMessageMaxWidth: "min(1280px, 82%)" },
                 seamColor: "#1A2b3C",
                 assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
               },
@@ -1120,7 +1120,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAgentId).toBe("main");
         expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(parsed.seamColor).toBe("#1A2b3C");
-        expect(parsed.timeFormat).toBe("24");
+        expect(parsed.timeFormat).toBe("auto");
         expect(parsed.terminalEnabled).toBe(false);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);

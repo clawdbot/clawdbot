@@ -54,6 +54,7 @@ export {
   importSqliteSessionRows,
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
+  trimSqliteTranscriptForManualCompact,
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite-transcript-write.js";

@@ -669,14 +669,13 @@ describe("resolveTelegramInboundBody", () => {
     expect(result).toBeNull();
   });
 
-  it("still transcribes when commands.useAccessGroups is false", async () => {
+  it("transcribes when the group sender is authorized", async () => {
     transcribeFirstAudioMock.mockReset();
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
 
     const result = await resolveTelegramBody({
       cfg: {
         channels: { telegram: {} },
-        commands: { useAccessGroups: false },
         messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
         tools: { media: { audio: { enabled: true } } },
       } as never,
@@ -694,7 +693,7 @@ describe("resolveTelegramInboundBody", () => {
       senderId: "46",
       senderUsername: "",
       routeAgentId: undefined,
-      effectiveGroupAllow: normalizeAllowFrom(["999"]),
+      effectiveGroupAllow: normalizeAllowFrom(["46"]),
       effectiveDmAllow: normalizeAllowFrom([]),
       groupConfig: { requireMention: true } as never,
       requireMention: true,
@@ -776,7 +775,6 @@ describe("resolveTelegramInboundBody", () => {
     await resolveTelegramBody({
       cfg: {
         channels: { telegram: {} },
-        commands: { useAccessGroups: false },
         messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
         tools: { media: { audio: { enabled: true, echoTranscript: true } } },
       } as never,
@@ -794,6 +792,7 @@ describe("resolveTelegramInboundBody", () => {
       isGroup: true,
       chatId: -1001234567890,
       senderId: "46",
+      effectiveGroupAllow: normalizeAllowFrom(["46"]),
       groupConfig: { requireMention: true } as never,
       requireMention: true,
       resolvedThreadId: 99,
@@ -862,7 +861,6 @@ describe("resolveTelegramInboundBody", () => {
     const result = await resolveTelegramBody({
       cfg: {
         channels: { telegram: {} },
-        commands: { useAccessGroups: false },
         messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
         tools: { media: { audio: { enabled: true } } },
       } as never,
@@ -879,7 +877,7 @@ describe("resolveTelegramInboundBody", () => {
       chatId: -1001234567892,
       senderId: "46",
       senderUsername: "",
-      effectiveGroupAllow: normalizeAllowFrom(["999"]),
+      effectiveGroupAllow: normalizeAllowFrom(["46"]),
       groupConfig: { requireMention: true } as never,
       requireMention: true,
     });

@@ -80,7 +80,7 @@ export function inspectSlackAccount(params: {
   const enabled = params.cfg.channels?.slack?.enabled !== false && merged.enabled !== false;
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const mode = merged.mode ?? "socket";
-  const identity = merged.identity ?? "bot";
+  const identity = merged.postAs ?? "bot";
   const isHttpMode = mode === "http";
   const isRelayMode = mode === "relay";
 

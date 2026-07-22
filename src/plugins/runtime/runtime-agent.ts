@@ -21,7 +21,8 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   listSessionEntries as listAccessorSessionEntries,
-  loadSessionEntry,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
+  loadSessionEntryReadOnly,
   patchSessionEntry as patchAccessorSessionEntry,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
@@ -51,7 +52,9 @@ type RuntimeSessionStoreReadParams = {
   storePath?: string;
 };
 
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
+type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
+  readOnly?: boolean;
+};
 
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
@@ -104,13 +107,16 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
 }
 
 function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
-  return loadSessionEntry(toSessionAccessScope(params));
+  return loadSessionEntryReadOnly(toSessionAccessScope(params));
 }
 
 function listSessionEntries(
   params: RuntimeSessionStoreListParams = {},
 ): RuntimeSessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
+  const listEntries = params.readOnly
+    ? listAccessorSessionEntriesReadOnly
+    : listAccessorSessionEntries;
+  return listEntries({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined

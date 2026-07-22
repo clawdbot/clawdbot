@@ -119,6 +119,11 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  deviceAuth: {
+    sourcePath: string;
+    sourcePresent: boolean;
+    hasLegacy: boolean;
+  };
   deviceIdentity: LegacyDeviceIdentityDetection;
   mcpOauth: LegacyMcpOAuthDetection;
   restartSentinel?: LegacyRestartSentinelDetection;

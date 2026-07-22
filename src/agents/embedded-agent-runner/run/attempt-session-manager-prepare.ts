@@ -119,6 +119,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
+    skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
     onMessagePersisted: () => {
       input.sessionLockController.refreshAfterOwnedSessionWrite();
     },

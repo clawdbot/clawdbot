@@ -21,6 +21,8 @@ import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarSessionMutationsElement } from "./app-sidebar-session-mutations.ts";
 import {
   loadStoredCollapsedSessionSections,
+  SIDEBAR_SESSION_PAGE_SIZE,
+  storeSidebarSessionStatusFilter,
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
   storeSidebarSessionsShowCron,
@@ -28,6 +30,7 @@ import {
   type SidebarSessionGroupDropTarget,
   type SidebarSessionMutationResult,
   type SidebarSessionMutationScope,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
@@ -483,5 +486,29 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     } catch {
       // Keep the in-memory preference when storage is unavailable.
     }
+  }
+
+  protected setSessionsStatusFilter(statusFilter: SidebarSessionStatusFilter) {
+    if (statusFilter === this.sessionsStatusFilter) {
+      return;
+    }
+    this.sessionsStatusFilter = statusFilter;
+    this.clearSessionSelection();
+    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+    this.childSessionRowsByParent = {};
+    this.loadedChildSessionKeys = new Set();
+    this.failedChildSessionKeys = new Set();
+    this.loadingChildSessionKeys = new Set();
+    this.sessionRowsByAgent = {};
+    if (statusFilter === "active" && this.context) {
+      this.sessionsResult = this.context.sessions.state.result;
+      this.sessionsAgentId = this.context.sessions.state.agentId;
+    }
+    try {
+      storeSidebarSessionStatusFilter(statusFilter);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
+    void this.refreshSidebarSessions();
   }
 }

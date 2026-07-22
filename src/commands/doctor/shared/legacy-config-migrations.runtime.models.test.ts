@@ -10,6 +10,83 @@ import {
   LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS,
 } from "./legacy-config-migrations.runtime.models.js";
 
+describe("model compat catalog ownership migration", () => {
+  const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS.find(
+    (entry) => entry.id === "models.providers.*.models.*.compat->provider-catalog",
+  );
+
+  it("strips matching catalog values and dead keys while preserving divergences", () => {
+    const raw = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              {
+                id: "gpt-5.6",
+                compat: {
+                  supportsReasoningEffort: true,
+                  supportsTemperature: true,
+                  nativeWebSearchTool: true,
+                  requiresMistralToolIds: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    };
+    const changes: string[] = [];
+    const rules = migration?.legacyRules ?? [];
+
+    expect(rules.map((rule) => rule.match?.(raw.models.providers, raw))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    migration?.apply(raw, changes);
+
+    expect(raw.models.providers.openai.models[0]?.compat).toEqual({ supportsTemperature: true });
+    expect(changes).toEqual([
+      "Removed models.providers.openai.models.0.compat catalog/dead overrides: nativeWebSearchTool, requiresMistralToolIds, supportsReasoningEffort.",
+    ]);
+    expect(rules.map((rule) => rule.match?.(raw.models.providers, raw))).toEqual([
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  it("preserves live compat for custom models and custom routes", () => {
+    const raw = {
+      models: {
+        providers: {
+          custom: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:9000/v1",
+            models: [{ id: "local-model", compat: { supportsTools: false } }],
+          },
+          openai: {
+            api: "openai-responses",
+            baseUrl: "http://127.0.0.1:9100/v1",
+            models: [{ id: "gpt-5.6", compat: { supportsReasoningEffort: true } }],
+          },
+        },
+      },
+    };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.models.providers.custom.models[0]?.compat).toEqual({ supportsTools: false });
+    expect(raw.models.providers.openai.models[0]?.compat).toEqual({
+      supportsReasoningEffort: true,
+    });
+    expect(changes).toEqual([]);
+  });
+});
+
 describe("explicit model allow policy migration", () => {
   const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS.find(
     (entry) => entry.id === "agents.defaults.models->agents.defaults.modelPolicy.allow",

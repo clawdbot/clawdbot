@@ -731,23 +731,7 @@ export function startGatewayConfigReloader(opts: {
       await commitReloadBaseline();
       return;
     }
-    if (nextSettings.mode === "restart") {
-      const restartPlan = { ...plan, restartGateway: true };
-      await opts.onConfigChange?.(restartPlan, nextConfig);
-      await prepareRestart(restartPlan, nextConfig, ownership, nextSourceConfig);
-      await commitReloadBaseline();
-      return;
-    }
     if (plan.restartGateway) {
-      if (nextSettings.mode === "hot") {
-        opts.log.warn(
-          `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
-            ", ",
-          )})`,
-        );
-        await commitReloadBaseline({ runtimeApplied: false });
-        return;
-      }
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();

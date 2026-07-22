@@ -161,7 +161,7 @@ export function resolveSandboxBrowserConfig(params: {
     noVncPort:
       agentBrowser?.noVncPort ?? globalBrowser?.noVncPort ?? DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
     headless: agentBrowser?.headless ?? globalBrowser?.headless ?? false,
-    enableNoVnc: agentBrowser?.enableNoVnc ?? globalBrowser?.enableNoVnc ?? true,
+    noVncEnabled: agentBrowser?.noVncEnabled ?? globalBrowser?.noVncEnabled ?? true,
     allowHostControl: agentBrowser?.allowHostControl ?? globalBrowser?.allowHostControl ?? false,
     autoStart: agentBrowser?.autoStart ?? globalBrowser?.autoStart ?? true,
     autoStartTimeoutMs: resolveSandboxBrowserAutoStartTimeoutMs(

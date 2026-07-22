@@ -35,7 +35,7 @@ The prompt is compact, with fixed sections:
 - **Safety**: short guardrail reminder against power-seeking behavior or bypassing oversight.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Control**: prefer the `gateway` tool for config/restart work; do not invent CLI commands.
-- **OpenClaw Self-Update**: inspect config safely with `config.schema.lookup`, patch with `config.patch`, replace the full config with `config.apply`, and run `update.run` only on explicit user request. The agent-facing `gateway` tool refuses to rewrite `tools.exec.ask` / `tools.exec.security`, including legacy `tools.bash.*` aliases that normalize to those protected paths.
+- **OpenClaw Self-Update**: inspect config safely with `config.schema.lookup`, patch with `config.patch`, replace the full config with `config.apply`, and run `update.run` only on explicit user request. The agent-facing `gateway` tool refuses to rewrite `tools.exec.mode`.
 - **Workspace**: working directory (`agents.defaults.workspace`).
 - **Documentation**: local docs/source path and when to read them.
 - **Workspace Files (injected)**: notes that bootstrap files are included below.
@@ -147,7 +147,7 @@ Native Codex turns receive this list as turn-scoped collaboration developer inst
 
 The location can point at a nested skill, such as `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt uses the flat skill name from `SKILL.md` frontmatter.
 
-Eligibility includes skill metadata gates, runtime environment/config checks, and the effective agent skill allowlist when `agents.defaults.skills` or `agents.list[].skills` is configured. Plugin-bundled skills are eligible only when their owning plugin is enabled, letting tool plugins expose deeper operating guides without embedding all of that guidance in every tool description.
+Eligibility includes skill metadata gates, runtime environment/config checks, and the effective agent skill allowlist when `agents.defaults.skills` or `agents.entries.*.skills` is configured. Plugin-bundled skills are eligible only when their owning plugin is enabled, letting tool plugins expose deeper operating guides without embedding all of that guidance in every tool description.
 
 ```xml
 <available_skills>
@@ -162,10 +162,10 @@ Eligibility includes skill metadata gates, runtime environment/config checks, an
 
 This keeps the base prompt small while still enabling targeted skill usage. Sizing is owned by the skills subsystem, separate from generic runtime read/injection sizing:
 
-| Scope     | Skills prompt budget                              | Runtime excerpt budget            |
-| --------- | ------------------------------------------------- | --------------------------------- |
-| Global    | `skills.limits.maxSkillsPromptChars`              | `agents.defaults.contextLimits.*` |
-| Per-agent | `agents.list[].skillsLimits.maxSkillsPromptChars` | `agents.list[].contextLimits.*`   |
+| Scope     | Skills prompt budget                                 | Runtime excerpt budget             |
+| --------- | ---------------------------------------------------- | ---------------------------------- |
+| Global    | `skills.limits.maxSkillsPromptChars`                 | `agents.defaults.contextLimits.*`  |
+| Per-agent | `agents.entries.*.skillsLimits.maxSkillsPromptChars` | `agents.entries.*.contextLimits.*` |
 
 The runtime excerpt budget covers `memory_get`, live tool results, and post-compaction `AGENTS.md` refreshes.
 

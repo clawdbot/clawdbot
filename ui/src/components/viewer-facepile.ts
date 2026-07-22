@@ -1,12 +1,12 @@
 import { html, nothing } from "lit";
-import { property, state } from "lit/decorators.js";
+import { property } from "lit/decorators.js";
 import type { PresenceEntry } from "../api/types.ts";
+import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-import "./menu-surface.ts";
+import { renderSidebarServerDetails } from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
-import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 export type PresenceViewer = {
   id: string;
@@ -173,22 +173,24 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
   }
 }
 
-function renderRosterRow(user: PresenceViewer, isSelf: boolean) {
+function renderPresenceCardRow(user: PresenceViewer, isSelf: boolean) {
   const label = presenceViewerLabel(user);
   // The email doubles as the label when no display name exists; repeating it
   // as a subtitle would just echo the same line.
   const subtitle = user.email && user.email !== label ? user.email : undefined;
-  return html`<wa-dropdown-item class="presence-roster-menu__item" data-viewer-id=${user.id}>
-    <openclaw-viewer-avatar slot="icon" .user=${user} variant="footer"></openclaw-viewer-avatar>
-    <span class="presence-roster-menu__text">
-      <span class="presence-roster-menu__name"
+  return html`<div class="sidebar-hover-card__person" data-viewer-id=${user.id}>
+    <openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>
+    <span class="sidebar-hover-card__person-text">
+      <span class="sidebar-hover-card__person-name"
         >${label}${isSelf
-          ? html` <span class="presence-roster-menu__you">(${t("presence.you")})</span>`
+          ? html` <span class="sidebar-hover-card__you">(${t("presence.you")})</span>`
           : nothing}</span
       >
-      ${subtitle ? html`<span class="presence-roster-menu__email">${subtitle}</span>` : nothing}
+      ${subtitle
+        ? html`<span class="sidebar-hover-card__person-email">${subtitle}</span>`
+        : nothing}
     </span>
-  </wa-dropdown-item>`;
+  </div>`;
 }
 
 class ViewerFacepile extends OpenClawLightDomContentsElement {
@@ -197,87 +199,8 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sessionKey?: string;
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
   @property() variant: "session" | "footer" = "session";
-
-  @state() private rosterPosition: { x: number; y: number } | null = null;
-
-  private openRoster(event: MouseEvent) {
-    const trigger = event.currentTarget;
-    if (!(trigger instanceof HTMLElement)) {
-      return;
-    }
-    const rect = trigger.getBoundingClientRect();
-    this.rosterPosition = { x: rect.left, y: rect.top };
-  }
-
-  private focusRosterTrigger() {
-    this.querySelector<HTMLButtonElement>("button.viewer-facepile-trigger")?.focus();
-  }
-
-  protected override willUpdate() {
-    if (!this.rosterPosition) {
-      return;
-    }
-    // A presence update can unmount the footer facepile (everyone else left)
-    // while the roster is open. The dropdown is then removed without hiding,
-    // so wa-after-hide never fires — clear the open state here or the menu
-    // would remount at stale coordinates when presence returns.
-    const projection = projectPresencePayload(this.presencePayload, this.selfInstanceId);
-    const available =
-      this.variant === "footer" &&
-      !this.sessionKey &&
-      projection.users.some((user) => user.id !== projection.selfUserId);
-    if (!available) {
-      this.rosterPosition = null;
-    }
-  }
-
-  private renderRosterMenu(roster: readonly PresenceViewer[], selfUserId: string | undefined) {
-    const position = this.rosterPosition;
-    if (!position) {
-      return nothing;
-    }
-    return html`<openclaw-menu-surface>
-      <wa-dropdown
-        class="presence-roster-menu"
-        .open=${true}
-        placement="top-start"
-        .distance=${4}
-        aria-label=${t("presence.rosterTitle")}
-        @wa-select=${(event: CustomEvent) => {
-          // Rows are informational; selecting one just dismisses the menu.
-          // Close explicitly — preventDefault also cancels the dropdown's own
-          // select-and-hide behavior — and hand focus back to the trigger so
-          // a keyboard activation does not strand focus on the body.
-          event.preventDefault();
-          this.rosterPosition = null;
-          this.focusRosterTrigger();
-        }}
-        @keydown=${(event: KeyboardEvent) =>
-          trackDropdownKeyboardDismissal(event, () => this.focusRosterTrigger())}
-        @wa-after-hide=${(event: Event) => {
-          // The dropdown's own trigger is a hidden throwaway anchor, so restore
-          // focus to the visible facepile button on keyboard dismissal.
-          const keyboard = consumeDropdownKeyboardDismissal(event);
-          this.rosterPosition = null;
-          if (keyboard) {
-            this.focusRosterTrigger();
-          }
-        }}
-      >
-        <button
-          slot="trigger"
-          type="button"
-          tabindex="-1"
-          aria-hidden="true"
-          style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-        ></button>
-        <div class="presence-roster-menu__title" role="presentation">
-          ${t("presence.rosterTitle")} · ${roster.length}
-        </div>
-        ${roster.map((user) => renderRosterRow(user, user.id === selfUserId))}
-      </wa-dropdown>
-    </openclaw-menu-surface>`;
-  }
+  @property({ attribute: false }) buildInfo: ControlUiBuildInfo = CONTROL_UI_BUILD_INFO;
+  @property({ attribute: false }) gatewayVersion: string | null = null;
 
   override render() {
     const projection = projectPresencePayload(this.presencePayload, this.selfInstanceId);
@@ -299,41 +222,69 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
       data-viewer-count=${users.length}
       aria-label=${users.map(presenceViewerLabel).join(", ")}
     >
-      ${visible.map((user) => {
-        const label = presenceViewerLabel(user);
-        return html`<openclaw-tooltip .content=${label}>
-          <openclaw-viewer-avatar .user=${user} .variant=${this.variant}></openclaw-viewer-avatar>
-        </openclaw-tooltip>`;
-      })}
+      ${visible.map((user) =>
+        this.variant === "footer"
+          ? html`<openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>`
+          : html`<openclaw-tooltip .content=${presenceViewerLabel(user)}>
+              <openclaw-viewer-avatar .user=${user} variant="session"></openclaw-viewer-avatar>
+            </openclaw-tooltip>`,
+      )}
       ${overflow.length > 0
-        ? html`<openclaw-tooltip .content=${overflow.map(presenceViewerLabel).join("\n")}>
-            <span
+        ? this.variant === "footer"
+          ? html`<span
               class="viewer-avatar viewer-avatar--overflow"
               aria-label=${overflow.map(presenceViewerLabel).join(", ")}
               >+${overflow.length}</span
-            >
-          </openclaw-tooltip>`
+            >`
+          : html`<openclaw-tooltip .content=${overflow.map(presenceViewerLabel).join("\n")}>
+              <span
+                class="viewer-avatar viewer-avatar--overflow"
+                aria-label=${overflow.map(presenceViewerLabel).join(", ")}
+                >+${overflow.length}</span
+              >
+            </openclaw-tooltip>`
         : nothing}
     </span>`;
     if (this.variant !== "footer") {
       return facepile;
     }
-    // The footer cluster opens the who's-online roster. Self sorts first so
-    // your own row anchors the list; everyone else keeps the projection order.
+    // Self anchors the hover card; everyone else keeps the projection order.
     const roster = [...projection.users].toSorted((a, b) =>
       a.id === projection.selfUserId ? -1 : b.id === projection.selfUserId ? 1 : 0,
     );
-    return html`<button
-        type="button"
-        class="viewer-facepile-trigger"
-        aria-label=${t("presence.rosterLabel")}
-        aria-haspopup="menu"
-        aria-expanded=${this.rosterPosition !== null}
-        @click=${(event: MouseEvent) => this.openRoster(event)}
-      >
-        ${facepile}
-      </button>
-      ${this.renderRosterMenu(roster, projection.selfUserId)}`;
+    return html`
+      <openclaw-tooltip class="sidebar-hover-tooltip">
+        <span
+          class="viewer-facepile-trigger"
+          role="group"
+          tabindex="0"
+          aria-label=${t("presence.rosterLabel")}
+        >
+          ${facepile}
+        </span>
+        <div slot="content" class="sidebar-hover-card sidebar-presence-hover-card">
+          <section class="sidebar-hover-card__region">
+            <div class="sidebar-hover-card__heading">
+              ${t("presence.rosterTitle")} · ${roster.length}
+            </div>
+            <div
+              class="sidebar-hover-card__people"
+              tabindex="0"
+              aria-label=${`${t("presence.rosterTitle")} · ${roster.length}`}
+            >
+              ${roster.map((user) =>
+                renderPresenceCardRow(user, user.id === projection.selfUserId),
+              )}
+            </div>
+          </section>
+          <div class="sidebar-hover-card__divider" role="separator"></div>
+          <section class="sidebar-hover-card__region">
+            <div class="sidebar-hover-card__heading">${t("presence.serverRegion")}</div>
+            ${renderSidebarServerDetails(this.buildInfo, this.gatewayVersion)}
+          </section>
+        </div>
+      </openclaw-tooltip>
+    `;
   }
 }
 

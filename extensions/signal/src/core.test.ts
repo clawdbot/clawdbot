@@ -32,6 +32,7 @@ import {
   resolveSignalReplyContextWithPersistence,
 } from "./reply-authors.js";
 import {
+  buildSignalSetupPatch,
   createSignalCliPathTextInput,
   normalizeSignalAccountInput,
   signalDmPolicy,
@@ -59,6 +60,20 @@ describe("looksLikeUuid", () => {
 });
 
 describe("signal sender identity", () => {
+  it("brackets IPv6 hosts in setup-derived HTTP URLs", () => {
+    expect(buildSignalSetupPatch({ httpHost: "::1", httpPort: "9090" })).toMatchObject({
+      httpUrl: "http://[::1]:9090",
+      autoStart: true,
+    });
+  });
+
+  it("disables local daemon ownership for an explicit external HTTP URL", () => {
+    expect(buildSignalSetupPatch({ httpUrl: "http://signal.example:9090" })).toMatchObject({
+      httpUrl: "http://signal.example:9090",
+      autoStart: false,
+    });
+  });
+
   it("prefers sourceNumber over sourceUuid and keeps the uuid as an alias", () => {
     const sender = resolveSignalSender({
       sourceNumber: " +15550001111 ",

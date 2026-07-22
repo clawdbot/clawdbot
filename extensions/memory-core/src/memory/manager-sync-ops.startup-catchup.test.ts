@@ -212,6 +212,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return this.sessionsDirty;
   }
 
+  markFullSessionRetry(): void {
+    this.sessionsDirty = true;
+    this.sessionsFullRetryDirty = true;
+  }
+
   startTranscriptListener(): void {
     this.ensureSessionListener();
   }
@@ -386,6 +391,14 @@ describe("session startup catch-up", () => {
     await expect(harness.catchUp()).resolves.toEqual([session.marker]);
     expect(harness.getDirtyArchiveFiles()).toEqual([session.marker]);
     expect(harness.isSessionsDirty()).toBe(true);
+    expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+  });
+
+  it("schedules a full retry when invalidated sessions no longer exist", async () => {
+    const harness = new SessionStartupCatchupHarness([]);
+    harness.markFullSessionRetry();
+
+    await expect(harness.catchUp()).resolves.toEqual([]);
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
 

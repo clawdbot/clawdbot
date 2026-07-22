@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover chat behavior.
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -21,6 +22,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatRunStartup: null,
     chatSideChatTurns: [],
     chatSideResultTerminalRuns: new Set<string>(),
     chatThinkingLevel: null,
@@ -391,6 +393,95 @@ describe("handleChatGatewayEvent", () => {
   it("returns null when payload is missing", () => {
     const state = createState();
     expect(handleChatGatewayEvent(state, undefined)).toBe(null);
+  });
+
+  it("adopts startup status only for the queued local run before its ACK", () => {
+    const state = createState({
+      chatQueue: [
+        {
+          id: "queued-1",
+          text: "hello",
+          createdAt: 1,
+          sendRunId: "run-1",
+          sendState: "sending",
+        },
+      ],
+      sessionKey: "main",
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-other",
+        sessionKey: "main",
+        state: "status",
+        phase: "preparing_workspace",
+      }),
+    ).toBeNull();
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatRunStartup).toBeNull();
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "status",
+        phase: "preparing_workspace",
+      }),
+    ).toBe("status");
+    expect(state.chatRunId).toBe("run-1");
+    expect(state.chatRunStartup).toEqual({
+      state: "status",
+      runId: "run-1",
+      phase: "preparing_workspace",
+    });
+  });
+
+  it("shows startup status until the first chat delta and ignores late status", () => {
+    const state = createState({
+      chatRunId: "run-1",
+      chatStream: "",
+      sessionKey: "main",
+    });
+    const status: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "status",
+      phase: "preparing_context",
+    };
+
+    expect(handleChatGatewayEvent(state, status)).toBe("status");
+    expect(state.chatRunStartup).toEqual({
+      state: "status",
+      runId: "run-1",
+      phase: "preparing_context",
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-other",
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Other reply",
+      }),
+    ).toBeNull();
+    expect(state.chatRunStartup).toEqual({
+      state: "status",
+      runId: "run-1",
+      phase: "preparing_context",
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        deltaText: "Hello",
+      }),
+    ).toBe("delta");
+    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
+
+    expect(handleChatGatewayEvent(state, status)).toBe("status");
+    expect(state.chatRunStartup).toEqual({ state: "activity", runId: "run-1" });
   });
 
   it("returns null when sessionKey does not match and no active run is in flight", () => {

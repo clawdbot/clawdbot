@@ -198,7 +198,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   }
 
   try {
-    const storePath = resolveCronStorePath(params.cfg.cron?.store);
+    const storePath = resolveCronStorePath();
     const store = await loadCronStore(storePath);
     let cronChanged = false;
     for (const job of store.jobs) {

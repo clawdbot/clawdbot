@@ -4,7 +4,6 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictInteger, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
@@ -35,6 +34,7 @@ import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
 import { formatZonedTimestamp } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
+import type { MatrixSetupInput } from "./setup-config.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
@@ -301,7 +301,7 @@ async function addMatrixAccount(params: {
     throw new Error("Matrix account setup is unavailable.");
   }
 
-  const input: ChannelSetupInput = {
+  const input: MatrixSetupInput = {
     name: params.name,
     avatarUrl: params.avatarUrl,
     homeserver: params.homeserver,

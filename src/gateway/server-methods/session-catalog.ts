@@ -4,6 +4,8 @@ import {
   ErrorCodes,
   errorShape,
   type SessionCatalog,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
   type SessionsCatalogListParams,
@@ -22,6 +24,7 @@ import { bindPluginSessionConversation } from "../../plugins/session-conversatio
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -155,6 +158,32 @@ function catalogResult(
   return result;
 }
 
+function projectCatalogHostCreators(
+  host: SessionCatalogHost,
+  agentId: string,
+  creatorBySessionKey: Map<string, SessionCatalogSession["createdBy"]>,
+): SessionCatalogHost {
+  return {
+    ...host,
+    sessions: host.sessions.map(({ createdBy: _providerCreatedBy, ...session }) => {
+      // Catalog providers do not own creator identity; the persisted session entry does.
+      const sessionKey = session.sessionKey;
+      let createdBy: SessionCatalogSession["createdBy"];
+      if (sessionKey && creatorBySessionKey.has(sessionKey)) {
+        createdBy = creatorBySessionKey.get(sessionKey);
+      } else {
+        createdBy = sessionKey
+          ? loadSessionEntryReadOnly(sessionKey, { agentId }).entry?.createdBy
+          : undefined;
+        if (sessionKey) {
+          creatorBySessionKey.set(sessionKey, createdBy);
+        }
+      }
+      return createdBy ? { ...session, createdBy: { ...createdBy } } : session;
+    }),
+  };
+}
+
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.list": async ({ params, respond, context, client }) => {
     if (
@@ -199,6 +228,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     const search = normalizeSessionCatalogSearch(request.search);
     const progressId = request.progressId;
     const progressConnId = progressId && client?.connId ? client.connId : undefined;
+    const creatorBySessionKey = new Map<string, SessionCatalogSession["createdBy"]>();
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
@@ -212,7 +242,12 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
                 {
                   progressId,
                   agentId: resolvedAgent.agentId,
-                  catalog: catalogResult(provider, [host], undefined, createSession),
+                  catalog: catalogResult(
+                    provider,
+                    [projectCatalogHostCreators(host, resolvedAgent.agentId, creatorBySessionKey)],
+                    undefined,
+                    createSession,
+                  ),
                 },
                 new Set([progressConnId]),
                 { dropIfSlow: true },
@@ -227,7 +262,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
             ...(onHost ? { onHost } : {}),
           });
-          return catalogResult(provider, hosts, undefined, createSession);
+          return catalogResult(
+            provider,
+            hosts.map((host) =>
+              projectCatalogHostCreators(host, resolvedAgent.agentId, creatorBySessionKey),
+            ),
+            undefined,
+            createSession,
+          );
         } catch (error) {
           return catalogResult(provider, [], catalogError(error), createSession);
         }

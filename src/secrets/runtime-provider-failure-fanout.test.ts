@@ -101,9 +101,7 @@ describe("provider-scoped SecretRef failure fan-out", () => {
             },
           },
         },
-        messages: {
-          tts: { providers: { elevenlabs: { apiKey: input.ttsRef } } },
-        },
+        tts: { providers: { elevenlabs: { apiKey: input.ttsRef } } },
       }),
       env: { PATH: process.env.PATH ?? "" },
       includeAuthStoreRefs: false,
@@ -112,7 +110,7 @@ describe("provider-scoped SecretRef failure fan-out", () => {
     });
 
     expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(input.modelRef);
-    expect(snapshot.config.messages?.tts?.providers?.elevenlabs?.apiKey).toEqual(input.ttsRef);
+    expect(snapshot.config.tts?.providers?.elevenlabs?.apiKey).toEqual(input.ttsRef);
     expect(snapshot.degradedOwners).toMatchObject([
       {
         ownerKind: "provider",

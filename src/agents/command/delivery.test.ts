@@ -387,9 +387,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
   it("renders response prefix templates with the selected runtime model", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: {
-          responsePrefix: "[{modelFull}]",
-        },
+        channels: { slack: { responsePrefix: "[{modelFull}]" } },
       } as OpenClawConfig,
       deps: {} as CliDeps,
       runtime: { log: vi.fn() } as never,
@@ -1005,7 +1003,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
   it("dedupes sent text after applying the delivery response prefix", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: { responsePrefix: "Bot:" },
+        channels: { slack: { responsePrefix: "Bot:" } },
       } as OpenClawConfig,
       deps: {} as CliDeps,
       runtime: { log: vi.fn(), error: vi.fn() } as never,
@@ -1040,7 +1038,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
     const delivered = await deliverAgentCommandResult({
       cfg: {
-        messages: { responsePrefix: "[{modelFull}]" },
+        channels: { slack: { responsePrefix: "[{modelFull}]" } },
       } as OpenClawConfig,
       deps: {} as CliDeps,
       runtime: { log: vi.fn(), error: vi.fn() } as never,

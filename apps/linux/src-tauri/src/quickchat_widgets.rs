@@ -218,7 +218,15 @@ impl QuickChatWidgetState {
             }
         }
         let labels = self.view_labels()?;
-        let (retained, cleanup_error) = Self::close_views(app, &labels, false);
+        if !labels.is_empty() {
+            app.get_webview_window(QUICKCHAT_LABEL)
+                .ok_or_else(|| "Quick Chat window is unavailable.".to_string())?
+                .hide()
+                .map_err(|error| {
+                    format!("Could not hide Quick Chat before renderer cleanup: {error}")
+                })?;
+        }
+        let (retained, cleanup_error) = Self::close_views(app, &labels, true);
         self.store_view_labels(retained)?;
         if let Some(error) = cleanup_error {
             return Err(error);

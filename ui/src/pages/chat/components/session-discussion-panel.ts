@@ -4,8 +4,6 @@ import type {
   SessionDiscussionInfo,
   SessionDiscussionState,
 } from "../../../../../packages/gateway-protocol/src/index.js";
-import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 
@@ -14,6 +12,7 @@ export type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDis
 export type SessionDiscussionStateListener = (
   sessionKey: string,
   discussionState: SessionDiscussionState,
+  openUrl: string | null,
 ) => void;
 
 function resolveDiscussionUrl(value: string | undefined): string | null {
@@ -79,7 +78,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
       return;
     }
     this.info = info;
-    this.onStateChange?.(requestKey, info.state);
+    this.onStateChange?.(requestKey, info.state, resolveDiscussionUrl(info.openUrl));
   }
 
   private async refresh(): Promise<void> {
@@ -145,24 +144,6 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
     const openUrl = resolveDiscussionUrl(info.openUrl);
     return html`
       <div class="session-discussion__open">
-        <div class="session-discussion__header">
-          <span>${t("chat.sessionDiscussion.opened")}</span>
-          ${openUrl
-            ? html`
-                <openclaw-tooltip .content=${t("chat.sessionDiscussion.openExternal")}>
-                  <a
-                    class="btn btn--ghost btn--icon session-discussion__external"
-                    href=${openUrl}
-                    target="_blank"
-                    rel="noopener"
-                    aria-label=${t("chat.sessionDiscussion.openExternal")}
-                  >
-                    ${icons.externalLink}
-                  </a>
-                </openclaw-tooltip>
-              `
-            : nothing}
-        </div>
         ${embedUrl
           ? html`
               <iframe
@@ -173,7 +154,12 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
               ></iframe>
             `
           : html`<div class="session-discussion__empty">
-              ${t("chat.sessionDiscussion.unavailable")}
+              <span>${t("chat.sessionDiscussion.unavailable")}</span>
+              ${openUrl
+                ? html`<a class="session-link" href=${openUrl} target="_blank" rel="noopener">
+                    ${t("chat.sessionDiscussion.openExternal")}
+                  </a>`
+                : nothing}
             </div>`}
       </div>
     `;

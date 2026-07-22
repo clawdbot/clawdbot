@@ -3158,7 +3158,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
       await gateway.setOnline(false);
-      await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+      await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
 
       const prompt = "send this when the Gateway returns";
       const attachmentName = "offline-proof.txt";
@@ -3301,7 +3301,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           return proof.attachment || proof.prompt || proof.runId === runId;
         })
         .toBe(false);
-      await page.locator("openclaw-connection-banner").waitFor({ state: "detached" });
+      await page.locator(".agent-chat__offline-hint").waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/03-online-delivered.png`, fullPage: true });

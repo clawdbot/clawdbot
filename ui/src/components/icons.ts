@@ -311,6 +311,7 @@ export const icons = {
   `,
   arrowDown: html` <svg viewBox="0 0 24 24"><path d="M12 5v14m7-7-7 7-7-7" /></svg> `,
   arrowUp: html` <svg viewBox="0 0 24 24"><path d="M12 19V5m-7 7 7-7 7 7" /></svg> `,
+  chevronUp: html` <svg viewBox="0 0 24 24"><path d="m18 15-6-6-6 6" /></svg> `,
   arrowLeft: html`
     <svg viewBox="0 0 24 24">
       <path d="m12 19-7-7 7-7" />

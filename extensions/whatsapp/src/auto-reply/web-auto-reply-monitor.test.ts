@@ -201,10 +201,10 @@ function makeOwnerGroupConfig() {
   });
 }
 
-function makeInboundCfg(messagePrefix = "") {
+function makeInboundCfg(responsePrefix = "") {
   return {
     agents: { defaults: { workspace: "/tmp/openclaw" } },
-    channels: { whatsapp: { messagePrefix } },
+    channels: { whatsapp: { responsePrefix } },
   } as never;
 }
 
@@ -811,7 +811,7 @@ describe("buildInboundLine", () => {
     expect(line).toContain("[/Replying]");
   });
 
-  it("applies the WhatsApp messagePrefix when configured", () => {
+  it("applies the WhatsApp responsePrefix when configured", () => {
     const line = buildInboundLine({
       cfg: makeInboundCfg("[PFX]"),
       agentId: "main",

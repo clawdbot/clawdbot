@@ -6,6 +6,12 @@ import {
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
+import {
+  projectMediaFacts,
+  resolveMediaFacts,
+  type MediaFact,
+  type MediaFactInput,
+} from "../media/media-facts.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
@@ -66,38 +72,24 @@ export function resolvePersistedUserTurnText(value: string | null | undefined): 
   return normalized;
 }
 
-function mediaTypeForTranscript(media: PersistedUserTurnMediaInput): string {
+function mediaTypeForTranscript(media: PersistedUserTurnMediaInput, mediaPath?: string): string {
   return (
     normalizeOptionalText(media.contentType) ??
     normalizeOptionalText(media.kind) ??
+    mimeTypeFromFilePath(mediaPath) ??
     "application/octet-stream"
   );
 }
 
-function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput):
-  | {
-      path: string;
-      type: string;
-    }
-  | undefined {
-  const pathLocal = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
-  if (!pathLocal) {
-    return undefined;
+function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput): MediaFactInput {
+  const rawPath = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
+  if (!rawPath) {
+    return {};
   }
   return {
-    path: pathLocal,
-    type: mediaTypeForTranscript(media),
+    path: resolveTranscriptMediaPath(rawPath, normalizeOptionalText(media.workspaceDir)),
+    contentType: mediaTypeForTranscript(media, rawPath),
   };
-}
-
-function normalizeOptionalTextArray(
-  values: readonly (string | null | undefined)[] | null | undefined,
-): (string | undefined)[] {
-  // Map each entry to a normalized string or undefined — do NOT compact with
-  // .filter(Boolean). The writer pads holes with "" to keep parallel Media*
-  // arrays (MediaPaths / MediaUrls / MediaTypes) index-aligned, so compaction
-  // here would shift later entries onto the wrong attachment.
-  return values?.map(normalizeOptionalText) ?? [];
 }
 
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
@@ -126,66 +118,71 @@ export function buildPersistedUserTurnMediaInputsFromFields(
     return [];
   }
 
-  const mediaFields = fields as PersistedUserTurnMediaFieldSource;
-  const paths = normalizeOptionalTextArray(mediaFields.MediaPaths);
-  const urls = normalizeOptionalTextArray(mediaFields.MediaUrls);
-  const types = normalizeOptionalTextArray(mediaFields.MediaTypes);
-  const singlePath = normalizeOptionalText(mediaFields.MediaPath);
-  const singleUrl = normalizeOptionalText(mediaFields.MediaUrl);
-  const singleType = normalizeOptionalText(mediaFields.MediaType);
-  const workspaceDir = normalizeOptionalText(mediaFields.MediaWorkspaceDir);
-  const mediaCount = Math.max(paths.length, urls.length, singlePath || singleUrl ? 1 : 0);
-  const media: PersistedUserTurnMediaInput[] = [];
-
-  for (let index = 0; index < mediaCount; index += 1) {
-    const rawPath = paths[index] ?? (index === 0 ? singlePath : undefined);
-    const mediaPath = rawPath ? resolveTranscriptMediaPath(rawPath, workspaceDir) : undefined;
-    const url = urls[index] ?? (index === 0 ? singleUrl : undefined);
+  const facts = resolveMediaFacts(fields as unknown as Parameters<typeof resolveMediaFacts>[0]);
+  const normalizedMedia = facts.map((fact) => {
+    const rawPath = normalizeOptionalText(fact.path);
+    const mediaPath = rawPath
+      ? resolveTranscriptMediaPath(rawPath, normalizeOptionalText(fact.workspaceDir))
+      : undefined;
+    const url = normalizeOptionalText(fact.url);
     if (!mediaPath && !url) {
-      continue;
+      return {};
     }
-    media.push({
-      ...(mediaPath ? { path: mediaPath } : {}),
-      ...(url ? { url } : {}),
-      contentType: resolveTranscriptMediaType({
-        explicitType: types[index] ?? (index === 0 ? singleType : undefined),
-        mediaPath,
-        mediaUrl: url,
-      }),
+    const contentType = resolveTranscriptMediaType({
+      explicitType: normalizeOptionalText(fact.contentType),
+      mediaPath,
+      mediaUrl: url,
     });
-  }
-
-  return media;
+    const media: PersistedUserTurnMediaInput = { contentType };
+    if (mediaPath) {
+      media.path = mediaPath;
+    }
+    if (url) {
+      media.url = url;
+    }
+    if (!contentType && fact.kind) {
+      media.kind = fact.kind;
+    }
+    return media;
+  });
+  return normalizedMedia.some((entry) => entry.path || entry.url) ? normalizedMedia : [];
 }
 
-export function buildLateMediaAttachedText(message: AgentMessage): string | undefined {
-  const text = (
-    readOpenClawMessageMeta(message)?.lateMedia === true
-      ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
-      : []
-  )
-    .map((entry) => `[media attached: ${entry.path ?? entry.url}]`)
+export function buildLateMediaAttachedProjection(message: AgentMessage): {
+  text?: string;
+  media: MediaFact[];
+} {
+  const isLateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
+  const entries = isLateMedia
+    ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
+    : [];
+  const text = entries
+    .flatMap((entry) => {
+      const mediaRef = entry.path ?? entry.url;
+      return mediaRef ? [`[media attached: ${mediaRef}]`] : [];
+    })
     .join("\n");
-  return text || undefined;
+  const media = isLateMedia
+    ? resolveMediaFacts(message as unknown as Parameters<typeof resolveMediaFacts>[0]).filter(
+        (entry) => entry.path || entry.url,
+      )
+    : [];
+  return { ...(text ? { text } : {}), media };
 }
 
 function buildPersistedUserTurnMediaFields(
   media: readonly PersistedUserTurnMediaInput[] | null | undefined,
 ): PersistedUserTurnMediaFields {
-  const entries = Array.isArray(media) ? media : [];
-  const normalized = entries
-    .map(normalizeMediaEntryForTranscript)
-    .filter((entry): entry is { path: string; type: string } => entry !== undefined);
-  const paths = normalized.map((entry) => entry.path);
-  if (paths.length === 0) {
+  const normalized = (Array.isArray(media) ? media : []).map(normalizeMediaEntryForTranscript);
+  const projected = projectMediaFacts(normalized, "aligned");
+  if (!projected.MediaPaths?.some(Boolean)) {
     return {};
   }
-  const types = normalized.map((entry) => entry.type);
   return {
-    MediaPath: paths[0],
-    MediaPaths: paths,
-    MediaType: types[0],
-    MediaTypes: types,
+    ...(projected.MediaPath ? { MediaPath: projected.MediaPath } : {}),
+    MediaPaths: projected.MediaPaths,
+    ...(projected.MediaType ? { MediaType: projected.MediaType } : {}),
+    MediaTypes: projected.MediaTypes ?? [],
   };
 }
 

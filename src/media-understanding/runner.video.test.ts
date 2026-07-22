@@ -57,9 +57,16 @@ describe("runCapability video provider wiring", () => {
           },
           tools: {
             media: {
+              models: [
+                {
+                  provider: "moonshot",
+                  model: "kimi-k2.5",
+                  maxChars: 80,
+                  capabilities: ["video"],
+                },
+              ],
               video: {
                 enabled: true,
-                models: [{ provider: "moonshot", model: "kimi-k2.5", maxChars: 80 }],
               },
             },
           },
@@ -108,18 +115,19 @@ describe("runCapability video provider wiring", () => {
           },
           tools: {
             media: {
+              models: [
+                {
+                  provider: "moonshot",
+                  model: "kimi-k2.5",
+                  baseUrl: "https://entry.example/v1",
+                  headers: { "X-Entry": "3" },
+                  capabilities: ["video"],
+                },
+              ],
               video: {
                 enabled: true,
                 baseUrl: "https://config.example/v1",
                 headers: { "X-Config": "2" },
-                models: [
-                  {
-                    provider: "moonshot",
-                    model: "kimi-k2.5",
-                    baseUrl: "https://entry.example/v1",
-                    headers: { "X-Entry": "3" },
-                  },
-                ],
               },
             },
           },
@@ -361,9 +369,7 @@ describe("runCapability video provider wiring", () => {
           },
           tools: {
             media: {
-              video: {
-                models: [{ provider: "moonshot" }],
-              },
+              models: [{ provider: "moonshot", capabilities: ["video"] }],
             },
           },
         } as unknown as OpenClawConfig;
@@ -419,9 +425,9 @@ describe("runCapability video provider wiring", () => {
           },
           tools: {
             media: {
+              models: [{ provider: "openai", model: "video-model", capabilities: ["video"] }],
               video: {
                 enabled: true,
-                models: [{ provider: "openai", model: "video-model" }],
               },
             },
           },

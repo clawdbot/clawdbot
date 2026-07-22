@@ -392,6 +392,7 @@ export function startGatewayEventSubscriptions(params: {
   };
 
   return {
+    sessionObserver,
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,

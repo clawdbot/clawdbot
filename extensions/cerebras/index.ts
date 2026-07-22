@@ -39,6 +39,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildCerebrasProvider,
       buildStaticProvider: buildCerebrasProvider,
+      liveModelDiscovery: true,
     },
   },
 });

@@ -639,7 +639,7 @@ describe("secrets apply", () => {
     const coderStorePath = resolveAuthProfileDatabasePath(coderAgentDir);
     await writeJsonFile(fixture.configPath, {
       agents: {
-        list: [{ id: "coder", agentDir: coderAgentDir }],
+        entries: { coder: { agentDir: coderAgentDir } },
       },
     });
     const plan: SecretsApplyPlan = {
@@ -681,10 +681,10 @@ describe("secrets apply", () => {
     const secondStorePath = resolveAuthProfileDatabasePath(secondAgentDir);
     await writeJsonFile(fixture.configPath, {
       agents: {
-        list: [
-          { id: "first", agentDir: firstAgentDir },
-          { id: "second", agentDir: secondAgentDir },
-        ],
+        entries: {
+          first: { agentDir: firstAgentDir },
+          second: { agentDir: secondAgentDir },
+        },
       },
     });
     const firstState = {
@@ -755,10 +755,10 @@ describe("secrets apply", () => {
       registerResolvedAgentDir({ agentId: "second", agentDir: secondAgentDir });
       await writeJsonFile(fixture.configPath, {
         agents: {
-          list: [
-            { id: "first", agentDir: firstAgentDir },
-            { id: "second", agentDir: secondAgentDir },
-          ],
+          entries: {
+            first: { agentDir: firstAgentDir },
+            second: { agentDir: secondAgentDir },
+          },
         },
       });
       const initialStore: AuthProfileStore = {
@@ -1196,22 +1196,23 @@ describe("secrets apply", () => {
     );
   });
 
-  it("applies array-indexed targets for agent memory search", async () => {
+  it("applies keyed targets for agent memory search", async () => {
     await fs.writeFile(
       fixture.configPath,
       `${JSON.stringify(
         {
           agents: {
-            list: [
-              {
-                id: "main",
-                memorySearch: {
-                  remote: {
-                    apiKey: "sk-memory-plaintext", // pragma: allowlist secret
+            entries: {
+              main: {
+                memory: {
+                  search: {
+                    remote: {
+                      apiKey: "sk-memory-plaintext", // pragma: allowlist secret
+                    },
                   },
                 },
               },
-            ],
+            },
           },
         },
         null,
@@ -1227,9 +1228,9 @@ describe("secrets apply", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "agents.list[].memorySearch.remote.apiKey",
-          path: "agents.list.0.memorySearch.remote.apiKey",
-          pathSegments: ["agents", "list", "0", "memorySearch", "remote", "apiKey"],
+          type: "agents.entries.*.memory.search.remote.apiKey",
+          path: "agents.entries.main.memory.search.remote.apiKey",
+          pathSegments: ["agents", "entries", "main", "memory", "search", "remote", "apiKey"],
           ref: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
         },
       ],
@@ -1246,16 +1247,21 @@ describe("secrets apply", () => {
       env: fixture.env,
     })) as {
       agents?: {
-        list?: Array<{
-          memorySearch?: {
-            remote?: {
-              apiKey?: unknown;
+        entries?: Record<
+          string,
+          {
+            memory?: {
+              search?: {
+                remote?: {
+                  apiKey?: unknown;
+                };
+              };
             };
-          };
-        }>;
+          }
+        >;
       };
     };
-    expect(nextConfig.agents?.list?.[0]?.memorySearch?.remote?.apiKey).toEqual({
+    expect(nextConfig.agents?.entries?.main?.memory?.search?.remote?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "MEMORY_REMOTE_API_KEY",

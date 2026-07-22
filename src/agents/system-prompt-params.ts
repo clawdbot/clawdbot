@@ -62,7 +62,7 @@ export function buildSystemPromptParams(params: {
     cwd: params.cwd,
   });
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+  const userTimeFormat = resolveUserTimeFormat(undefined);
   const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
   return {
     runtimeInfo: {

@@ -476,10 +476,7 @@ export function prepareTtsRequest(params: {
   const cfg = params.override
     ? {
         ...params.cfg,
-        messages: {
-          ...params.cfg.messages,
-          tts: mergeDeep(params.cfg.messages?.tts ?? {}, params.override) as TtsConfig,
-        },
+        tts: mergeDeep(params.cfg.tts ?? {}, params.override) as TtsConfig,
       }
     : params.cfg;
   const config = resolveTtsConfig(cfg);

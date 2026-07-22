@@ -595,12 +595,6 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
   color: var(--muted);
 }
 
-.settings-sidebar__footer-status {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .settings-sidebar__footer-version {
   margin-left: auto;
   flex-shrink: 0;
@@ -1729,32 +1723,35 @@ html.openclaw-native-macos
   color: var(--text);
 }
 
-.sidebar-view-archived {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: -2px 10px 2px;
-  padding: 5px 0;
-  border: 0;
-  background: transparent;
+.sidebar-session-empty-hint {
+  display: block;
+  padding: 4px 10px 10px;
   color: var(--muted);
   font-size: 11px;
-  text-align: left;
 }
 
-.sidebar-view-archived:hover,
-.sidebar-view-archived:focus-visible {
-  color: var(--text);
+.sidebar-session--archived {
+  opacity: 0.62;
 }
 
-.sidebar-view-archived svg {
-  width: 12px;
-  height: 12px;
+.sidebar-session--archived:hover,
+.sidebar-session--archived.sidebar-recent-session--active,
+.sidebar-session--archived.sidebar-recent-session--selected {
+  opacity: 0.82;
+}
+
+.sidebar-session__archive-glyph {
+  display: inline-flex;
+  margin-right: 5px;
+  vertical-align: -2px;
+}
+
+.sidebar-session__archive-glyph svg {
+  width: 11px;
+  height: 11px;
   stroke: currentColor;
   fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke-width: 1.8px;
 }
 
 .sidebar-recent-session--dragging {
@@ -1930,13 +1927,20 @@ html.openclaw-native-macos
   margin-left: -5px;
 }
 
+.viewer-facepile > openclaw-viewer-avatar:not(:first-child) .viewer-avatar,
+.viewer-facepile > .viewer-avatar:not(:first-child) {
+  margin-left: -5px;
+}
+
 .viewer-avatar > img,
 .viewer-avatar > span {
   width: 100%;
   height: 100%;
 }
 
-.viewer-avatar__fallback {
+/* Two classes on purpose: `.viewer-avatar > span` below sets display and
+   outranks a lone class, which showed image + initials side by side. */
+.viewer-avatar > .viewer-avatar__fallback {
   display: none;
 }
 
@@ -1991,120 +1995,12 @@ html.openclaw-native-macos
   border: none;
   border-radius: var(--radius-full);
   background: none;
-  cursor: pointer;
+  cursor: default;
 }
 
 .viewer-facepile-trigger:hover,
 .viewer-facepile-trigger:focus-visible {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
-}
-
-/* Long rosters scroll inside the popup instead of growing past the viewport.
-   Chrome matches the sidebar's other fixed menus (customize/session menus). */
-.presence-roster-menu::part(menu) {
-  min-width: 232px;
-  max-width: 288px;
-  max-height: min(340px, 60vh);
-  overflow-y: auto;
-  padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
-}
-
-.presence-roster-menu__title {
-  padding: 6px 8px 4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-/* Rows are informational people entries, not checkbox menu items: drop Web
-   Awesome's checkmark gutter and item metrics so title, avatars, and text
-   share one left edge with the rest of the app's menus. */
-.presence-roster-menu__item {
-  padding: 6px 8px;
-  border-radius: var(--radius-md);
-}
-
-.presence-roster-menu__item:hover,
-.presence-roster-menu__item:focus-visible {
-  outline: none;
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-}
-
-.presence-roster-menu__item::part(checkmark) {
-  display: none;
-}
-
-.presence-roster-menu__item::part(label) {
-  display: flex;
-  align-items: center;
-}
-
-/* Roster avatars grow to two-line row scale. The circle clips via the child
-   image/initials instead of the wrapper so the online badge can overflow.
-   The avatar-to-text gap lives here: Web Awesome's icon-slot margin targets
-   the slotted openclaw-viewer-avatar host, which is display:contents and
-   therefore generates no box for the margin to apply to. */
-.presence-roster-menu__item .viewer-avatar {
-  width: 26px;
-  height: 26px;
-  margin-inline-end: 10px;
-  overflow: visible;
-  border: none;
-  font-size: 10px;
-}
-
-.presence-roster-menu__item .viewer-avatar > img,
-.presence-roster-menu__item .viewer-avatar > span {
-  border-radius: var(--radius-full);
-}
-
-/* Everyone listed is online; the dot restates the header at a glance. */
-.presence-roster-menu__item .viewer-avatar::after {
-  content: "";
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 8px;
-  height: 8px;
-  border: 2px solid var(--bg-elevated);
-  border-radius: var(--radius-full);
-  background: var(--ok);
-}
-
-.presence-roster-menu__text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  line-height: 1.3;
-}
-
-.presence-roster-menu__name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.presence-roster-menu__you {
-  color: var(--muted);
-  font-weight: 400;
-}
-
-.presence-roster-menu__email {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-  font-size: 11px;
 }
 
 .sidebar-recent-session__name {
@@ -2991,17 +2887,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   object-fit: cover;
 }
 
-.sidebar-agent-card__presence {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 10px;
-  height: 10px;
-  border-radius: var(--radius-full);
-  border: 2px solid var(--sidebar-bg);
-  background: var(--danger);
-}
-
 .sidebar-agent-card__text {
   display: flex;
   flex-direction: column;
@@ -3153,6 +3038,131 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   margin-left: 1px;
 }
 
+openclaw-tooltip.sidebar-hover-tooltip {
+  --openclaw-tooltip-max-width: min(340px, calc(100vw - 24px));
+}
+
+.sidebar-hover-card {
+  width: min(320px, calc(100vw - 44px));
+  max-width: 100%;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.sidebar-hover-card__region {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sidebar-hover-card__heading {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebar-hover-card__people {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: min(240px, 45vh);
+  overflow-y: auto;
+}
+
+.sidebar-hover-card__person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sidebar-hover-card__person .viewer-avatar {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-color: var(--card);
+  font-size: 9px;
+}
+
+.sidebar-hover-card__person-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar-hover-card__person-name,
+.sidebar-hover-card__person-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-hover-card__person-name {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.sidebar-hover-card__you,
+.sidebar-hover-card__person-email {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.sidebar-hover-card__person-email {
+  font-size: 11px;
+}
+
+.sidebar-hover-card__divider {
+  height: 1px;
+  margin: 10px 0;
+  background: color-mix(in srgb, var(--border-strong) 68%, transparent);
+}
+
+.sidebar-hover-card__server-details {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sidebar-hover-card__summary {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sidebar-hover-card__metadata {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+
+.sidebar-hover-card__metadata-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.sidebar-hover-card__metadata-row dt {
+  color: var(--muted);
+}
+
+.sidebar-hover-card__metadata-row dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.sidebar-hover-card__metadata-value--mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .sidebar-footer-bar__identity {
   display: inline-flex;
   align-items: center;
@@ -3194,12 +3204,30 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   gap: 5px;
   flex: none;
   padding: 3px 7px;
+  border: none;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   color: var(--danger);
+  cursor: pointer;
+  font-family: inherit;
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
+}
+
+.sidebar-footer-bar__status:hover {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
+.sidebar-footer-bar__status:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-footer-bar__status-detail {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.72;
 }
 
 .sidebar-footer-bar__status-dot {
@@ -3919,21 +3947,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   to {
     opacity: 1;
   }
-}
-
-/* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */
-.sidebar-agent-section__avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
-  color: var(--text-strong);
-  font-size: 11px;
-  font-weight: 600;
-  flex: none;
 }
 
 .sidebar-recent-session--draft {

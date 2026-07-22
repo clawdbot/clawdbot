@@ -2,12 +2,21 @@
 import { once } from "node:events";
 import http from "node:http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it } from "vitest";
 import { downloadVydraAsset } from "./shared.js";
 
 describe("downloadVydraAsset", () => {
+  installPinnedHostnameTestHooks();
+
   let server: http.Server | undefined;
   const dripTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  const requestPolicyFor = (url: string, allowPrivateNetwork = false) => ({
+    allowPrivateNetwork,
+    headers: new Headers(),
+    headerOrigin: new URL(url).origin,
+  });
 
   afterEach(async () => {
     for (const timer of dripTimers) {
@@ -71,6 +80,7 @@ describe("downloadVydraAsset", () => {
         timeoutMs,
         fetchFn: fetch,
         maxBytes: 1024 * 1024,
+        requestPolicy: requestPolicyFor(`http://127.0.0.1:${port}`, true),
       }),
     ).rejects.toThrow(`Vydra image download timed out after ${timeoutMs}ms`);
     const elapsedMs = performance.now() - startedAt;
@@ -95,6 +105,7 @@ describe("downloadVydraAsset", () => {
         timeoutMs,
         fetchFn: fetch,
         maxBytes: 1024 * 1024,
+        requestPolicy: requestPolicyFor(`http://127.0.0.1:${port}`, true),
       }),
     ).rejects.toThrow(`Vydra image download timed out after ${timeoutMs}ms`);
     const elapsedMs = performance.now() - startedAt;
@@ -117,6 +128,7 @@ describe("downloadVydraAsset", () => {
           },
         ),
       maxBytes: 1024 * 1024,
+      requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
 
     expect(result).toMatchObject({
@@ -137,6 +149,7 @@ describe("downloadVydraAsset", () => {
       timeoutMs: 250,
       fetchFn: async () => new Response(null, { status: 304 }),
       maxBytes: 1024 * 1024,
+      requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
 
     expect(result).toMatchObject({ name: "ProviderHttpError", status: 304, statusCode: 304 });
@@ -160,6 +173,7 @@ describe("downloadVydraAsset", () => {
           },
         ),
       maxBytes: 1024 * 1024,
+      requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
     }).catch((error: unknown) => error);
 
     expect(result).toMatchObject({
@@ -168,6 +182,28 @@ describe("downloadVydraAsset", () => {
       statusCode: 502,
       requestId: "req-vydra-broken-body",
     });
+  });
+
+  it("preserves successful response body errors before the deadline", async () => {
+    const result = await downloadVydraAsset({
+      url: "https://cdn.vydra.example/generated/test.png",
+      kind: "image",
+      timeoutMs: 250,
+      fetchFn: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error("broken success body"));
+            },
+          }),
+          { status: 200 },
+        ),
+      maxBytes: 1024 * 1024,
+      requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
+    }).catch((error: unknown) => error);
+
+    expect(result).toBeInstanceOf(Error);
+    expect(result).toMatchObject({ message: "broken success body" });
   });
 
   it("does not bound a dripping body when only chunk idle timeout is used", async () => {

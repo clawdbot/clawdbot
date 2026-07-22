@@ -937,13 +937,12 @@ describe("parseSystemAgentOperation", () => {
     mockConfig.setConfig({
       agents: {
         defaults: { model: { primary: "anthropic/global-default" } },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             default: true,
             model: { primary: "anthropic/work-default" },
           },
-        ],
+        },
       },
     });
     const { runtime } = createSystemAgentTestRuntime();
@@ -952,8 +951,8 @@ describe("parseSystemAgentOperation", () => {
       expect(requireRecord(agents.defaults, "defaults").model).toEqual({
         primary: "anthropic/global-default",
       });
-      const list = agents.list as Array<{ id: string; model: unknown }>;
-      expect(list.find((agent) => agent.id === "work")?.model).toEqual({
+      const entries = agents.entries as Record<string, { model: unknown }>;
+      expect(entries.work?.model).toEqual({
         primary: "openai/gpt-5.5",
       });
       return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 9 };
@@ -969,8 +968,8 @@ describe("parseSystemAgentOperation", () => {
     expect(requireRecord(agents.defaults, "defaults").model).toEqual({
       primary: "anthropic/global-default",
     });
-    const list = agents.list as Array<{ id: string; model: unknown }>;
-    expect(list.find((agent) => agent.id === "work")?.model).toEqual({
+    const entries = agents.entries as Record<string, { model: unknown }>;
+    expect(entries.work?.model).toEqual({
       primary: "openai/gpt-5.5",
     });
   });

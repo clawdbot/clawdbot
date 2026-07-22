@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -401,7 +402,7 @@ async function appendVoiceTranscript(params: {
     if (record.origin !== params.origin) {
       throw new Error("voice session origin does not allow this transcript source");
     }
-    const sessionEntry = loadSessionEntry({
+    const sessionEntry = loadSessionEntryReadOnly({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
     });
@@ -531,7 +532,10 @@ async function deliverMutationDigestOnce(
   if (!text) {
     return;
   }
-  const entry = loadSessionEntry({ agentId: record.agentId, sessionKey: record.sessionKey });
+  const entry = loadSessionEntryReadOnly({
+    agentId: record.agentId,
+    sessionKey: record.sessionKey,
+  });
   const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
   if (!target.channel || target.channel === "webchat" || !target.to) {
     return;

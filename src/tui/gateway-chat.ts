@@ -29,7 +29,6 @@ import {
 } from "../gateway/call.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
-import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -482,16 +481,7 @@ async function resolveGatewayConnection(
     ...(urlOverride ? { url: urlOverride } : {}),
     ...(activeLocalGatewayPort ? { localPortOverride: activeLocalGatewayPort } : {}),
   }).url;
-  const allowInsecureLocalOperatorUi = (() => {
-    if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
-      return false;
-    }
-    try {
-      return isLoopbackHost(new URL(url).hostname);
-    } catch {
-      return false;
-    }
-  })();
+  const allowInsecureLocalOperatorUi = false;
 
   if (urlOverride) {
     return {

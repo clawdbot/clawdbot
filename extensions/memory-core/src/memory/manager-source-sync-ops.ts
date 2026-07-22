@@ -14,7 +14,6 @@ import {
   buildFileEntry,
   listMemoryFiles,
   MEMORY_INDEX_FTS_TABLE,
-  MEMORY_INDEX_VECTOR_TABLE,
   runWithConcurrency,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
@@ -30,7 +29,6 @@ import type {
   MemorySyncProgressState,
 } from "./manager-sync-base.js";
 
-const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const SESSION_SYNC_YIELD_EVERY = 10;
 const SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES = 128;
@@ -60,12 +58,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const deleteChunksByPathAndSource = this.db.prepare(
       `DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`,
     );
-    const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
-        ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
-          )
-        : null;
     const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
@@ -113,11 +105,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           continue;
         }
         deleteFileByPathAndSource.run(stale.path, "memory");
-        if (deleteVectorRowsByPathAndSource) {
-          try {
-            deleteVectorRowsByPathAndSource.run(stale.path, "memory");
-          } catch {}
-        }
+        this.deleteVectorRowsForSource(stale.path, "memory");
         deleteChunksByPathAndSource.run(stale.path, "memory");
         if (deleteFtsRowsByPathAndSource) {
           try {
@@ -190,12 +178,6 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const deleteChunksByPathAndSource = this.db.prepare(
       `DELETE FROM memory_index_chunks WHERE path = ? AND source = ?`,
     );
-    const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
-        ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
-          )
-        : null;
     const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
@@ -254,11 +236,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const yieldAfterSessionFile = createSessionSyncYield(files.length);
     const deleteIndexedSessionPath = (memoryPath: string) => {
       deleteFileByPathAndSource.run(memoryPath, "sessions");
-      if (deleteVectorRowsByPathAndSource) {
-        try {
-          deleteVectorRowsByPathAndSource.run(memoryPath, "sessions");
-        } catch {}
-      }
+      this.deleteVectorRowsForSource(memoryPath, "sessions");
       deleteChunksByPathAndSource.run(memoryPath, "sessions");
       if (deleteFtsRowsByPathAndSource) {
         try {

@@ -96,7 +96,6 @@ describe("worker environment service", () => {
           development: {
             provider: "fake",
             settings: { region: "test" },
-            lifetime: { idleTimeoutMinutes: 10 },
           },
         },
       },
@@ -311,7 +310,6 @@ describe("worker environment service", () => {
           profileSnapshot: {
             install: "bundle",
             settings: { region: "test" },
-            lifetime: { idleTimeoutMinutes: 10 },
           },
         });
         getDevelopmentProfile().settings = { region: "mutated" };

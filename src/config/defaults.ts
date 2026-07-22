@@ -489,20 +489,7 @@ export function applyCronDefaults(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  const logging = cfg.logging;
-  if (!logging) {
-    return cfg;
-  }
-  if (logging.redactSensitive) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    logging: {
-      ...logging,
-      redactSensitive: "tools",
-    },
-  };
+  return cfg;
 }
 
 function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {

@@ -1,7 +1,10 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
-import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  ChatEvent,
+  ChatRunStartupPhase,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -53,7 +56,7 @@ import {
   isRestartRecoveryLifecycleEvent,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryReadOnly } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
@@ -74,6 +77,18 @@ export type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+
+function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
+  switch (value) {
+    case "preparing_workspace":
+    case "provisioning_environment":
+    case "preparing_context":
+    case "starting_model":
+      return value;
+    default:
+      return undefined;
+  }
+}
 
 function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
   const data = payload.data;
@@ -111,15 +126,7 @@ function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown 
 }
 
 function resolveHeartbeatAckMaxChars(): number {
-  try {
-    const cfg = getRuntimeConfig();
-    return Math.max(
-      0,
-      cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-    );
-  } catch {
-    return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-  }
+  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 function resolveHeartbeatContext(runId: string, sourceRunId?: string) {
@@ -436,7 +443,7 @@ export function createAgentEventHandler({
     event: AgentEventPayload,
   ): { suppress: boolean } => {
     try {
-      const { entry } = loadSessionEntry(sessionKey, {
+      const { entry } = loadSessionEntryReadOnly(sessionKey, {
         ...(agentId ? { agentId } : {}),
         clone: false,
       });
@@ -1268,7 +1275,7 @@ export function createAgentEventHandler({
       return runVerbose ?? "off";
     }
     try {
-      const { cfg, entry } = loadSessionEntry(sessionKey);
+      const { cfg, entry } = loadSessionEntryReadOnly(sessionKey);
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
       const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
       const sessionChangedAfterRunStarted =
@@ -1413,6 +1420,25 @@ export function createAgentEventHandler({
         steps,
         ...(explanation ? { explanation } : {}),
       });
+    }
+    if (evt.stream === "run_status") {
+      const phase = readChatRunStartupPhase(evt.data?.phase);
+      if (phase && chatLink && isControlUiVisible && sessionKey && !isAborted) {
+        const payload = {
+          runId: clientRunId,
+          sessionKey,
+          ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
+          ...(spawnedBy && { spawnedBy }),
+          seq: evt.seq,
+          state: "status" as const,
+          phase,
+        } satisfies ChatEvent;
+        sendChatPayload(sessionKey, payload, {
+          agentId: sessionAgentId,
+          controlUiVisible: true,
+          dropIfSlow: true,
+        });
+      }
     }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";

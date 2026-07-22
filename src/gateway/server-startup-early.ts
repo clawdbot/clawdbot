@@ -57,7 +57,7 @@ export async function startGatewayPluginDiscovery(params: {
         ? { enabled: true, fingerprintSha256: params.gatewayTls.fingerprintSha256 }
         : undefined,
       gatewayDirectReachable: params.gatewayDirectReachable,
-      wideAreaDiscoveryEnabled: params.cfgAtStart.discovery?.wideArea?.enabled === true,
+      wideAreaDiscoveryEnabled: Boolean(params.cfgAtStart.discovery?.wideArea?.domain?.trim()),
       wideAreaDiscoveryDomain: params.cfgAtStart.discovery?.wideArea?.domain,
       tailscaleMode: params.tailscaleMode,
       mdnsMode: params.cfgAtStart.discovery?.mdns?.mode,

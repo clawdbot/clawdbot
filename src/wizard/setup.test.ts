@@ -31,6 +31,7 @@ type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoi
 type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuthChoice;
 type VerifySetupInferenceConfig =
   typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
+type ConfigureGatewayForSetup = typeof import("./setup.gateway-config.js").configureGatewayForSetup;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const keepCurrentAuthChoice = vi.hoisted(() => "__keep-current" as const);
@@ -63,7 +64,7 @@ const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
 const configureGatewayForSetup = vi.hoisted(() =>
-  vi.fn(async (args) => ({
+  vi.fn<ConfigureGatewayForSetup>(async (args) => ({
     nextConfig: args.nextConfig,
     settings: {
       port: args.localPort ?? 18789,
@@ -2102,6 +2103,99 @@ describe("runSetupWizard", () => {
       },
       "gateway setup params",
     );
+  });
+
+  it("persists explicit classic quickstart gateway options without printing the password", async () => {
+    const password = ["classic", "password", "placeholder"].join("-");
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+    readConfigFileSnapshot.mockResolvedValueOnce(
+      configSnapshot({
+        gateway: {
+          port: 19111,
+          bind: "loopback",
+          auth: { mode: "token", token: "stored-token" },
+          tailscale: { mode: "off", resetOnExit: false },
+        },
+      }),
+    );
+    replaceConfigFile.mockClear();
+    configureGatewayForSetup.mockImplementationOnce(async (args) => ({
+      nextConfig: {
+        ...args.nextConfig,
+        gateway: {
+          ...args.nextConfig.gateway,
+          port: args.quickstartGateway.port,
+          bind: args.quickstartGateway.bind,
+          auth: {
+            ...args.nextConfig.gateway?.auth,
+            mode: args.quickstartGateway.authMode,
+            password: args.quickstartGateway.password,
+          },
+          tailscale: {
+            ...args.nextConfig.gateway?.tailscale,
+            mode: args.quickstartGateway.tailscaleMode,
+            resetOnExit: args.quickstartGateway.tailscaleResetOnExit,
+          },
+        },
+      },
+      settings: {
+        port: args.quickstartGateway.port,
+        bind: args.quickstartGateway.bind,
+        authMode: args.quickstartGateway.authMode,
+        gatewayToken: undefined,
+        tailscaleMode: args.quickstartGateway.tailscaleMode,
+        tailscaleResetOnExit: args.quickstartGateway.tailscaleResetOnExit,
+      },
+    }));
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        gatewayPort: 19001,
+        gatewayBind: "lan",
+        gatewayAuth: "password",
+        gatewayPassword: password,
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const gatewaySetup = getMockCallArg(configureGatewayForSetup, 0, 0, "gateway setup");
+    expect(requireRecord(gatewaySetup, "gateway setup").quickstartGateway).toMatchObject({
+      port: 19001,
+      bind: "lan",
+      authMode: "password",
+      password,
+    });
+    expect(
+      persistedWizardConfigs().some(
+        (config) =>
+          config.gateway?.port === 19001 &&
+          config.gateway.bind === "lan" &&
+          config.gateway.auth?.mode === "password" &&
+          config.gateway.auth.password === password,
+      ),
+    ).toBe(true);
+
+    const visibleOutput = [
+      ...getWizardNoteCalls(note).flat(),
+      ...((runtime.log as unknown as ReturnType<typeof vi.fn>).mock.calls.flat() as unknown[]),
+      ...((runtime.error as unknown as ReturnType<typeof vi.fn>).mock.calls.flat() as unknown[]),
+    ].join("\n");
+    expect(visibleOutput).toContain("19001");
+    expect(visibleOutput).not.toContain("Keeping your current gateway settings:");
+    expect(visibleOutput).not.toContain(password);
   });
 
   it("shows the resolved gateway port in quickstart for fresh envs", async () => {

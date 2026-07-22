@@ -421,16 +421,14 @@ openclaw models list
   <Accordion title="Embeddings for memory search">
     Bedrock can also serve as the embedding provider for
     [memory search](/concepts/memory-search). This is configured separately from the
-    inference provider -- set `agents.defaults.memorySearch.provider` to `"bedrock"`:
+    inference provider -- set `memory.search.provider` to `"bedrock"`:
 
     ```json5
     {
-      agents: {
-        defaults: {
-          memorySearch: {
-            provider: "bedrock",
-            model: "amazon.titan-embed-text-v2:0", // default
-          },
+      memory: {
+        search: {
+          provider: "bedrock",
+          model: "amazon.titan-embed-text-v2:0", // default
         },
       },
     }

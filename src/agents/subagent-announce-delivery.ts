@@ -16,6 +16,7 @@ import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-load
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
@@ -247,9 +248,7 @@ function resolveRequesterSessionActivity(requesterSessionKey: string) {
 }
 
 function resolveDirectAnnounceTransientRetryDelaysMs() {
-  return process.env.OPENCLAW_TEST_FAST === "1"
-    ? ([8, 16, 32] as const)
-    : ([5_000, 10_000, 20_000] as const);
+  return isFastTestRuntimeEnv() ? ([8, 16, 32] as const) : ([5_000, 10_000, 20_000] as const);
 }
 
 // Backoff schedule for re-attempting an active-requester steer while the run is
@@ -257,7 +256,7 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
 // schedule is used than for transient delivery errors. Total wait stays well
 // within the announce delivery timeout, and the loop also stops on cancellation.
 function resolveCompactionSteerRetryDelaysMs() {
-  return process.env.OPENCLAW_TEST_FAST === "1"
+  return isFastTestRuntimeEnv()
     ? ([8, 16, 32, 64] as const)
     : ([1_000, 2_000, 4_000, 8_000] as const);
 }
@@ -2059,8 +2058,7 @@ async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal &&
       isSubagentCompletion &&
       !hasVisibleGatewayAgentPayload(directAnnounceResponse) &&
-      !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse) &&
-      !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
+      !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse)
     ) {
       const textDelivery = await deliverTextCompletionDirect({
         cfg,
@@ -2085,7 +2083,8 @@ async function sendSubagentAnnounceDirectly(params: {
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
       !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse) &&
-      !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
+      (!hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse) ||
+        subagentDirectMessageCompletionRequiresMessageTool)
     ) {
       if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
         return {

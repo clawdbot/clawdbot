@@ -238,6 +238,7 @@ source "$OPENCLAW_PR_GATES_SH"
 
 enter_worktree() { :; }
 checkout_prep_branch() { :; }
+refresh_prep_branch_for_reviewed_head() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
 normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }
@@ -289,6 +290,7 @@ source "$OPENCLAW_PR_GATES_SH"
 
 enter_worktree() { :; }
 checkout_prep_branch() { :; }
+refresh_prep_branch_for_reviewed_head() { :; }
 bootstrap_deps_if_needed() { :; }
 require_artifact() { [ -s "$1" ]; }
 normalize_pr_changelog_entries() { printf 'normalize\\n' >>"$OPENCLAW_TEST_CALLS"; }

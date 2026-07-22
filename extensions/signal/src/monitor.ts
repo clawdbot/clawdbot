@@ -596,8 +596,15 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     const configPath =
       normalizeOptionalString(opts.configPath) ??
       normalizeOptionalString(accountInfo.config.configPath);
-    const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
-    const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
+    const daemonUrl = new URL(baseUrl);
+    const daemonHostname = daemonUrl.hostname;
+    const httpHost =
+      opts.httpHost ??
+      (daemonHostname.startsWith("[") && daemonHostname.endsWith("]")
+        ? daemonHostname.slice(1, -1)
+        : daemonHostname);
+    const httpPort =
+      opts.httpPort ?? Number(daemonUrl.port || (daemonUrl.protocol === "https:" ? 443 : 80));
     daemonHandle = spawnSignalDaemon({
       cliPath,
       ...(configPath ? { configPath } : {}),

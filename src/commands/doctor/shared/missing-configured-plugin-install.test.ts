@@ -1118,12 +1118,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
-        agents: {
-          defaults: {
-            memorySearch: {
-              provider: "local",
-            },
+        memory: {
+          search: {
+            provider: "local",
           },
+        },
+
+        agents: {
+          defaults: {},
         },
       },
       env: {},
@@ -4487,12 +4489,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
-        messages: {
-          tts: {
-            provider: "gradium",
-            providers: {
-              inworld: {},
-            },
+        tts: {
+          provider: "gradium",
+          providers: {
+            inworld: {},
           },
         },
         tools: {
@@ -4602,9 +4602,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       cfg: {
         tools: {
           media: {
-            audio: {
-              models: [{ provider: "groq", model: "whisper-large-v3-turbo" }],
-            },
+            models: [
+              {
+                provider: "groq",
+                model: "whisper-large-v3-turbo",
+                capabilities: ["audio"],
+              },
+            ],
           },
         },
       },

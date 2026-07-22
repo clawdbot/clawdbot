@@ -41,6 +41,8 @@ vi.mock("../session-utils.js", async () => {
       loadCombinedSessionStoreForGatewayMock(...args),
     loadSessionEntry: (...args: unknown[]) =>
       loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadSessionEntryReadOnly: (...args: unknown[]) =>
+      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
   };
 });
 

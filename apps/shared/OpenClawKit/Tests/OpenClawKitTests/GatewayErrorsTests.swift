@@ -300,6 +300,45 @@ struct GatewayErrorsTests {
         #expect(problem?.pauseReconnect == true)
     }
 
+    @Test func `TLS pin storage failure stays retryable`() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinStorageUnavailable,
+                host: "gateway.example.com",
+                storeKey: "gateway.example.com:443",
+                expectedFingerprint: nil,
+                observedFingerprint: "observed",
+                systemTrustOk: true),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsCertificateUnavailable)
+        #expect(problem?.retryable == true)
+        #expect(problem?.pauseReconnect == false)
+        #expect(problem?.actionLabel == "Retry")
+    }
+
+    @Test func `TLS authority mismatch pauses reconnect`() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .authorityMismatch,
+                host: "redirect.example.com",
+                storeKey: "gateway.example.com:443",
+                expectedFingerprint: "expected",
+                observedFingerprint: nil,
+                systemTrustOk: false,
+                port: 443),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsCertificateUntrusted)
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+        #expect(problem?.actionLabel == "Check certificate")
+    }
+
     @Test func `untrusted TLS mismatch cannot be recovered in app`() {
         let error = GatewayTLSValidationError(
             failure: GatewayTLSValidationFailure(

@@ -1658,6 +1658,7 @@ describe("plugins cli install", () => {
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     );
     expect(record.clawpackSize).toBe(4096);
+    expect(readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(runtimeLogsContain("Installed plugin: demo")).toBe(true);
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();

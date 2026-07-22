@@ -22,7 +22,7 @@ import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessio
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -348,7 +348,7 @@ async function toSessionFileEntry(
 }
 
 function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
-  const loaded = loadSessionEntry(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
   if (!loaded.entry?.sessionId) {
     return { ...loaded, agentId: undefined, root: undefined, fileRoot: undefined };
   }

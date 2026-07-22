@@ -1016,7 +1016,7 @@ function redactAppSpecificPasswords(text: string): string {
 function resolveConfigRedaction(): RedactOptions {
   const cfg = readLoggingConfig();
   return {
-    mode: normalizeMode(cfg?.redactSensitive),
+    mode: DEFAULT_REDACT_MODE,
     patterns: cfg?.redactPatterns,
   };
 }

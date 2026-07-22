@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import { i18n } from "../../i18n/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderSkills } from "./view.ts";
 
@@ -115,11 +116,12 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
 }
 
 describe("renderSkills", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     while (dialogRestores.length > 0) {
       dialogRestores.pop()?.();
     }
+    await i18n.setLocale("en");
   });
 
   it("renders the agent selector and routes agent changes", async () => {
@@ -139,22 +141,55 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    const selector = container.querySelector<HTMLSelectElement>('select[name="skills-agent"]');
+    const selector = container.querySelector<
+      HTMLElement & {
+        options: Array<{ value: string; label: string; badge?: string }>;
+        value: string;
+        onSelect: (value: string) => void;
+        updateComplete: Promise<boolean>;
+      }
+    >('openclaw-agent-select[name="skills-agent"]');
     const filter = container.querySelector<HTMLInputElement>('input[name="skills-filter"]');
-    expect(selector).toBeInstanceOf(HTMLSelectElement);
+    expect(selector).toBeInstanceOf(HTMLElement);
     expect(filter).toBeInstanceOf(HTMLInputElement);
-    expect(normalizeText(selector!.closest("label")!)).toContain("Agent");
+    await selector?.updateComplete;
+    expect(normalizeText(selector!.closest(".plugins-field")!)).toContain("Agent");
     expect(normalizeText(filter!.closest("label")!)).toContain("Search");
     expect(selector?.value).toBe("research");
-    expect(Array.from(selector!.options).map((option) => option.textContent?.trim())).toEqual([
-      "Main (default)",
-      "Research",
+    expect(selector?.options.map((option) => [option.label, option.badge])).toEqual([
+      ["Main (default)", undefined],
+      ["Research", undefined],
     ]);
+    expect(
+      selector?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar"),
+    ).toBe("R");
 
-    selector!.value = "main";
-    selector!.dispatchEvent(new Event("change", { bubbles: true }));
+    selector?.onSelect("main");
 
     expect(onAgentChange).toHaveBeenCalledWith("main");
+  });
+
+  it("localizes the default-agent label", async () => {
+    await i18n.setLocale("de");
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    render(renderSkills(createProps()), container);
+    const selector = container.querySelector<
+      HTMLElement & {
+        options: Array<{ value: string; label: string }>;
+        updateComplete: Promise<boolean>;
+      }
+    >('openclaw-agent-select[name="skills-agent"]');
+    await selector?.updateComplete;
+
+    expect(selector?.options.find((option) => option.value === "main")?.label).toBe(
+      "Main (Standard)",
+    );
+    expect(selector?.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
+      "Standard",
+    );
   });
 
   it("renders skill groups as open collapsible sections with heading summaries", async () => {
@@ -219,7 +254,9 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     expect(
-      container.querySelector<HTMLSelectElement>('select[name="skills-agent"]')?.disabled,
+      container.querySelector<HTMLElement & { disabled: boolean }>(
+        'openclaw-agent-select[name="skills-agent"]',
+      )?.disabled,
     ).toBe(true);
     const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Refresh",

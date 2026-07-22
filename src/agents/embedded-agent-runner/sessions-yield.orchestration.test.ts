@@ -3,7 +3,6 @@
  * with no pending tool calls, so the parent session is idle when subagent
  * results arrive.
  */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -12,6 +11,7 @@ import {
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
+  resetRunOverflowCompactionHarnessMocks,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import { isEmbeddedAgentRunActive, queueEmbeddedAgentMessageWithOutcome } from "./runs.js";
@@ -25,7 +25,7 @@ describe("sessions_yield orchestration", () => {
   });
 
   beforeEach(() => {
-    mockedRunEmbeddedAttempt.mockReset();
+    resetRunOverflowCompactionHarnessMocks();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
   });
 
@@ -82,9 +82,10 @@ describe("sessions_yield orchestration", () => {
 
     // clientToolCalls wins — tool_calls stopReason, pendingToolCalls populated
     expect(result.meta.stopReason).toBe("tool_calls");
-    const pendingToolCalls = expectDefined(result.meta.pendingToolCalls, "pending tool calls");
-    expect(pendingToolCalls).toHaveLength(1);
-    expect(expectDefined(pendingToolCalls[0], "hosted tool call").name).toBe("hosted_tool");
+    expect(result.meta.pendingToolCalls).toHaveLength(1);
+    const hostedToolCall = expectDefined(result.meta.pendingToolCalls![0], "hosted tool call");
+    expect(hostedToolCall.name).toBe("hosted_tool");
+    expect(result.payloads).toBeUndefined();
   });
 
   it("preserves order across multiple client tool calls in one attempt (#52288)", async () => {
@@ -108,17 +109,61 @@ describe("sessions_yield orchestration", () => {
     });
 
     expect(result.meta.stopReason).toBe("tool_calls");
-    const pendingToolCalls = expectDefined(result.meta.pendingToolCalls, "pending tool calls");
-    expect(pendingToolCalls).toHaveLength(3);
-    expect(pendingToolCalls.map((c) => c.name)).toEqual([
+    expect(result.meta.pendingToolCalls).toHaveLength(3);
+    expect(result.meta.pendingToolCalls!.map((c) => c.name)).toEqual([
       "create_graph",
       "activate_graph",
       "get_status",
     ]);
-    expect(
-      JSON.parse(expectDefined(pendingToolCalls[0], "first pending tool call").arguments),
-    ).toEqual({
+    const firstCall = expectDefined(result.meta.pendingToolCalls![0], "first pending tool call");
+    expect(JSON.parse(firstCall.arguments)).toEqual({
       nodes: ["a", "b"],
+    });
+  });
+
+  describe("yield with continuation evidence", () => {
+    it("yield with accepted spawn — diagnostic suppressed", async () => {
+      // Regression: a yielded turn with an accepted spawn must NOT emit the
+      // diagnostic — the spawned subagent will produce results.
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: null,
+          yieldDetected: true,
+          assistantTexts: [],
+          acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "child-key" }],
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        runId: "run-yield-accepted-spawn-suppressed",
+      });
+
+      // Accepted spawn is continuation evidence → no diagnostic payload
+      expect(result.payloads).toBeUndefined();
+      expect(result.meta.stopReason).toBe("end_turn");
+      expect(result.meta.yielded).toBe(true);
+    });
+
+    it("yield with async started tool — diagnostic suppressed", async () => {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: null,
+          yieldDetected: true,
+          assistantTexts: [],
+          toolMetas: [{ toolName: "my_async_tool", asyncStarted: true }],
+        }),
+      );
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        runId: "run-yield-async-tool-suppressed",
+      });
+
+      // Async tool activity is continuation evidence → no diagnostic payload
+      expect(result.payloads).toBeUndefined();
+      expect(result.meta.stopReason).toBe("end_turn");
+      expect(result.meta.yielded).toBe(true);
     });
   });
 
@@ -133,5 +178,79 @@ describe("sessions_yield orchestration", () => {
     // Neither clientToolCall nor yieldDetected → stopReason is undefined
     expect(result.meta.stopReason).toBeUndefined();
     expect(result.meta.pendingToolCalls).toBeUndefined();
+  });
+
+  it("emits diagnostic payload when yieldDetected has no continuation evidence", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        yieldDetected: true,
+        assistantTexts: [],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-yield-no-continuation",
+    });
+
+    // yieldDetected without any continuation source → diagnostic payload
+    expect(result.payloads).toHaveLength(1);
+    const diagnosticPayload = expectDefined(result.payloads![0], "diagnostic payload");
+    expect(diagnosticPayload.text).toBe(
+      "⚠️ Turn yielded without a continuation source. Send a message to resume.",
+    );
+    // stopReason is still end_turn (yield semantics preserved)
+    expect(result.meta.stopReason).toBe("end_turn");
+    // No pending tool calls
+    expect(result.meta.pendingToolCalls).toBeUndefined();
+  });
+
+  it("whitespace-only delivery text does not suppress diagnostic", async () => {
+    // Normalized helpers filter whitespace-only text — yield still parks
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        yieldDetected: true,
+        assistantTexts: [],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["   "],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-yield-whitespace-delivery",
+    });
+
+    // Whitespace-only delivery is not committed delivery → diagnostic emitted
+    expect(result.payloads).toHaveLength(1);
+    const wsPayload = expectDefined(result.payloads![0], "whitespace diagnostic payload");
+    expect(wsPayload.text).toBe(
+      "⚠️ Turn yielded without a continuation source. Send a message to resume.",
+    );
+  });
+
+  it("empty spawn array does not suppress diagnostic", async () => {
+    // An explicit empty spawn array is not a valid continuation
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        yieldDetected: true,
+        assistantTexts: [],
+        acceptedSessionSpawns: [],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-yield-empty-spawn",
+    });
+
+    expect(result.payloads).toHaveLength(1);
+    const emptySpawnPayload = expectDefined(result.payloads![0], "empty spawn diagnostic payload");
+    expect(emptySpawnPayload.text).toBe(
+      "⚠️ Turn yielded without a continuation source. Send a message to resume.",
+    );
   });
 });

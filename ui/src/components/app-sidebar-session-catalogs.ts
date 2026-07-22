@@ -101,6 +101,7 @@ type SessionCatalogGroupsParams = {
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
+  creatorId?: string | null;
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
   onToggleProjectGrouping: () => void;
@@ -167,7 +168,15 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const sectionId = `catalog:${catalog.id}`;
     const collapsed = params.collapsedSections.has(sectionId);
     const hosts = catalog.hosts;
-    const visibleHosts = hosts.filter((host) => host.sessions.length > 0);
+    const visibleHosts: SessionCatalogHost[] = [];
+    for (const host of hosts) {
+      const sessions = host.sessions.filter(
+        (session) => !params.creatorId || session.createdBy?.id === params.creatorId,
+      );
+      if (sessions.length > 0) {
+        visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
+      }
+    }
     const rows = visibleHosts.flatMap((host) =>
       host.sessions.map((session) => ({ host, session })),
     );

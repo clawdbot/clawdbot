@@ -7,6 +7,7 @@ import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_SECRETREF_ENV_MARKER_PREFIX } from "../config/types.secrets.js";
 import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-env-marker.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import "./doctor-tool-result-cap-advice.js";
 import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
@@ -972,7 +973,7 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(ctx.cfg.meta?.lastTouchedVersion).toBe("2026.5.16-beta.4");
-    expect(ctx.cfg.meta?.lastTouchedAt).toEqual(expect.any(String));
+    expect(readConfigMachineState<string>("config.lastTouchedAt")).toEqual(expect.any(String));
   });
 
   it("checks command owner configuration before final config writes", () => {
@@ -1057,7 +1058,7 @@ describe("doctor health contributions", () => {
       mode: "lint",
       allowExecSecretRefs: true,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    } as const;
+    } as unknown as Parameters<typeof runDoctorLintChecks>[0];
 
     await expect(runDoctorLintChecks(ctx, { checks: [check] })).resolves.toMatchObject({
       checksRun: 0,
@@ -2102,7 +2103,7 @@ describe("doctor health contributions", () => {
       expect.objectContaining({
         checkId: "core/doctor/memory-search",
         severity: "warning",
-        path: "agents.defaults.memorySearch.provider",
+        path: "memory.search.provider",
         message: 'Memory search provider is set to "openai" but no API key was found.',
         fixHint: expect.stringContaining("OPENAI_API_KEY"),
       }),
@@ -2375,7 +2376,7 @@ describe("doctor health contributions", () => {
       cfg: { cron: { store: "/tmp/openclaw-cron/jobs.json" } },
       mode: "lint",
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    } as const;
+    } as unknown as Parameters<typeof runDoctorLintChecks>[0];
     const checks = [cronStoreCheck!];
 
     await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({

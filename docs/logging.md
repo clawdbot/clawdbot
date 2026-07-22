@@ -283,7 +283,7 @@ OTLP log records, persisted session transcript text, or Control UI tool
 event payloads (tool start args, partial/final result payloads, derived
 exec output, and patch summaries):
 
-- `logging.redactSensitive`: `off` | `tools` (default: `tools`)
+- Sensitive-value redaction is always enabled.
 - `logging.redactPatterns`: list of regex strings that replaces the default set for log/transcript output. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
 
 File logs and session transcripts stay JSONL, but matching secret values are
@@ -295,13 +295,9 @@ The built-in defaults cover common API credentials and payment-credential field
 names such as card number, CVC/CVV, shared payment token, and payment credential
 when they appear as JSON fields, URL parameters, CLI flags, or assignments.
 
-`logging.redactSensitive: "off"` only disables this general log/transcript
-policy. OpenClaw still redacts safety-boundary payloads that can be shown to UI
-clients, support bundles, diagnostics observers, approval prompts, or agent
-tools. Examples include Control UI tool-call events, `sessions_history` output,
-diagnostics support exports, provider error observations, exec approval command
-display, and Gateway WebSocket protocol logs. Custom `logging.redactPatterns`
-can still add project-specific patterns on those surfaces.
+OpenClaw also redacts safety-boundary payloads shown to UI clients, support
+bundles, diagnostics observers, approval prompts, or agent tools. Custom
+`logging.redactPatterns` can add project-specific patterns on those surfaces.
 
 ## Diagnostics and OpenTelemetry
 

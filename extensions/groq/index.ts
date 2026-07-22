@@ -7,11 +7,21 @@ import {
 // Groq plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { groqMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const GROQ_DEFAULT_MODEL_REF = "groq/llama-3.3-70b-versatile";
 const GROQ_DEFAULT_MODEL_ID = "llama-3.3-70b-versatile";
 const GROQ_FALLBACK_MAX_TOKENS = 1_024;
+
+function buildGroqCatalogProvider() {
+  return buildManifestModelProviderConfig({
+    providerId: "groq",
+    catalog: manifest.modelCatalog.providers.groq,
+  });
+}
 
 function hasWireMaxTokens(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -166,6 +176,19 @@ export default definePluginEntry({
           },
         }),
       ],
+      catalog: {
+        order: "simple",
+        run: (ctx) =>
+          buildOpenAICompatibleProviderCatalog({
+            ctx,
+            providerId: "groq",
+            buildProvider: buildGroqCatalogProvider,
+          }),
+      },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({ provider: buildGroqCatalogProvider() }),
+      },
       wrapStreamFn: (ctx) =>
         wrapGroqOversizedRequestRecovery(
           ctx.streamFn,

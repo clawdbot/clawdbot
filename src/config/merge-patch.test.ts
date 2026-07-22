@@ -14,7 +14,7 @@ describe("applyMergePatch", () => {
     };
     const patch = {
       agents: {
-        list: [{ id: "primary", memorySearch: { extraPaths: ["/tmp/memory.md"] } }],
+        list: [{ id: "primary", memory: { search: { extraPaths: ["/tmp/memory.md"] } } }],
       },
     };
     return { base, patch };
@@ -27,7 +27,7 @@ describe("applyMergePatch", () => {
       agents?: { list?: Array<{ id?: string; workspace?: string }> };
     };
     expect(merged.agents?.list).toEqual([
-      { id: "primary", memorySearch: { extraPaths: ["/tmp/memory.md"] } },
+      { id: "primary", memory: { search: { extraPaths: ["/tmp/memory.md"] } } },
     ]);
   });
 
@@ -41,7 +41,7 @@ describe("applyMergePatch", () => {
         list?: Array<{
           id?: string;
           workspace?: string;
-          memorySearch?: { extraPaths?: string[] };
+          memory?: { search?: { extraPaths?: string[] } };
         }>;
       };
     };
@@ -49,7 +49,7 @@ describe("applyMergePatch", () => {
     const primary = merged.agents?.list?.find((entry) => entry.id === "primary");
     const secondary = merged.agents?.list?.find((entry) => entry.id === "secondary");
     expect(primary?.workspace).toBe("/tmp/one");
-    expect(primary?.memorySearch?.extraPaths).toEqual(["/tmp/memory.md"]);
+    expect(primary?.memory?.search?.extraPaths).toEqual(["/tmp/memory.md"]);
     expect(secondary?.workspace).toBe("/tmp/two");
   });
 
@@ -61,12 +61,12 @@ describe("applyMergePatch", () => {
       replaceArrayPaths: new Set(["agents.list"]),
     }) as {
       agents?: {
-        list?: Array<{ id?: string; memorySearch?: { extraPaths?: string[] } }>;
+        list?: Array<{ id?: string; memory?: { search?: { extraPaths?: string[] } } }>;
       };
     };
 
     expect(merged.agents?.list).toEqual([
-      { id: "primary", memorySearch: { extraPaths: ["/tmp/memory.md"] } },
+      { id: "primary", memory: { search: { extraPaths: ["/tmp/memory.md"] } } },
     ]);
   });
 

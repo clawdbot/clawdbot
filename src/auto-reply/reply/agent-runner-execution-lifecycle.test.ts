@@ -86,6 +86,8 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
 
   it("freezes abort ownership only after model fallback settles", async () => {
     const { replyOperation, freezeAbortMock } = createMockReplyOperation();
+    const followupRun = createFollowupRun();
+    followupRun.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       expect(freezeAbortMock).not.toHaveBeenCalled();
       await params.run("anthropic", "claude").catch(() => undefined);
@@ -108,11 +110,15 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     await runAgentTurnWithFallback({
-      ...createMinimalRunAgentTurnParams(),
+      ...createMinimalRunAgentTurnParams({ followupRun }),
       replyOperation,
     });
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+    expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.media)).toEqual([
+      followupRun.media,
+      followupRun.media,
+    ]);
     expect(freezeAbortMock).toHaveBeenCalledTimes(1);
   });
 
@@ -436,6 +442,7 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.clientCaps = ["tool-events", "inline-widgets"];
+    followupRun.media = [{ path: "/tmp/cli.png", contentType: "image/png" }];
     const typingSignals = createMockTypingSignaler();
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
@@ -452,6 +459,7 @@ describe("runAgentTurnWithFallback: run lifecycle and ownership", () => {
       provider: "codex-cli",
       model: "gpt-5.4",
       clientCaps: ["tool-events", "inline-widgets"],
+      media: followupRun.media,
     });
   });
 

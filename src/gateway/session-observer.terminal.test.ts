@@ -19,6 +19,33 @@ afterEach(() => {
 });
 
 describe("session observer terminal, persistence, synthesis, and races", () => {
+  it("persists and broadcasts terminal synthesis with no visible connections", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(30_000);
+    const storedDigest = persistedLiveDigest();
+    const readSession = vi.fn(() => ({
+      sessionId: "session-id",
+      updatedAt: 1_000,
+      observerDigest: storedDigest,
+    }));
+    const harness = createHarness({ visible: false, readSession });
+
+    harness.observer.handleEvent(
+      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 30_000 } }),
+    );
+    await flushObserver();
+
+    expect(harness.completeModel).not.toHaveBeenCalled();
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
+      "session.observer",
+      expect.objectContaining({ health: "done" }),
+      harness.subscribers.get("agent:main:session-1"),
+      { dropIfSlow: true },
+    );
+    harness.observer.dispose();
+  });
+
   it.each([
     { phase: "end", expected: "done" },
     { phase: "error", expected: "failed" },

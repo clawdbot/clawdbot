@@ -83,7 +83,7 @@ stage:
 }
 ```
 
-For a single agent, use `agents.list[].tools.alsoAllow: ["browser"]`.
+For a single agent, use `agents.entries.*.tools.alsoAllow: ["browser"]`.
 `tools.subagents.tools.allow: ["browser"]` alone is not enough because sub-agent
 policy is applied after profile filtering.
 

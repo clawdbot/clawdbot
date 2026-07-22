@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-approval-exec-group-reaction-native
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.approver-target-resolution
   execution:
     kind: flow
     channel: whatsapp

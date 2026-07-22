@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-and-identity
+      - matrix.encryption-setup
   execution:
     profiles: { "matrix:all": 85, "matrix:e2ee-cli": 1 }
     kind: flow

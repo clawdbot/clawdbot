@@ -20,7 +20,7 @@ enum AppleReviewDemoMode {
 
 enum ScreenshotFixtureMode {
     static let gatewayName = "OpenClaw Gateway"
-    static let gatewayAddress = "Mac Studio on local network"
+    static let gatewayAddress = "Gateway on local network"
     static let gatewayID = "screenshot-fixture-gateway"
 
     static var agents: [AgentSummary] {

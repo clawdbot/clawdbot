@@ -13,7 +13,9 @@ function installZodDefaultLocale(): void {
 installZodDefaultLocale();
 
 export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((cfg, ctx) => {
-  const agents = cfg.agents?.list ?? [];
+  const agents = Object.entries(cfg.agents?.entries ?? {}).map(([id, entry]) =>
+    Object.assign({ id }, entry),
+  );
   if (agents.length === 0) {
     return;
   }
@@ -35,7 +37,7 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["bindings", idx, "agentId"],
-          message: `Unknown agent id "${agentId}" (not in agents.list).`,
+          message: `Unknown agent id "${agentId}" (not in agents.entries).`,
         });
       }
     }
@@ -58,7 +60,7 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["broadcast", peerId, idx],
-          message: `Unknown agent id "${agentId}" (not in agents.list).`,
+          message: `Unknown agent id "${agentId}" (not in agents.entries).`,
         });
       }
     }

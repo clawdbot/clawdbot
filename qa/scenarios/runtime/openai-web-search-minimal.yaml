@@ -6,10 +6,10 @@ scenario:
   coverage:
     secondary:
       - plugins.web-search-and-fetch
-      - runtime.reasoning-and-cache-controls
+      - agent-runtime.reasoning-and-cache-controls
       - web-search.openai-native-web-search
       - web-search.model-and-filter-routing
-      - tools.web-search
+      - web-search.web-search-exposure
   objective: Verify the OpenAI web_search minimal-reasoning E2E client distinguishes successful grounded turns from provider schema rejection.
   successCriteria:
     - Reject mode accepts the expected raw OpenAI schema rejection and the gateway schema wrapper.

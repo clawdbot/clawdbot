@@ -79,7 +79,7 @@ describe("Anthropic plugin manifest", () => {
   });
 
   it("resolves both official Claude Haiku 4.5 API identifiers from the static catalog", () => {
-    expect(manifest.modelCatalog?.discovery?.anthropic).toBe("static");
+    expect(manifest.modelCatalog?.discovery?.anthropic).toBe("refreshable");
 
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
     for (const id of ["claude-haiku-4-5", "claude-haiku-4-5-20251001"]) {

@@ -6,22 +6,13 @@ import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
-import type {
-  AuditConfig,
-  DiagnosticsConfig,
-  LoggingConfig,
-  SessionConfig,
-  WebConfig,
-} from "./types.base.js";
+import type { AuditConfig, DiagnosticsConfig, LoggingConfig, SessionConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
-import type { CliConfig } from "./types.cli.js";
 import type { CloudWorkersConfig } from "./types.cloud-workers.js";
-import type { CommitmentsConfig } from "./types.commitments.js";
 import type { CronConfig } from "./types.cron.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
-import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type { BroadcastConfig, CommandsConfig, MessagesConfig } from "./types.messages.js";
@@ -30,8 +21,8 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
-import type { SystemAgentConfig } from "./types.system-agent.js";
 import type { ToolsConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 
 /** One persisted suppression for a known security audit finding. */
@@ -75,8 +66,6 @@ export type SecurityConfig = {
       env?: Record<string, string>;
       passEnv?: string[];
       trustedDirs?: string[];
-      allowInsecurePath?: boolean;
-      allowSymlinkCommand?: boolean;
     };
   };
 };
@@ -88,18 +77,15 @@ export type SurfaceConfigEntry = {
 
 /** Top-level OpenClaw config as read from user/project config files. */
 export type OpenClawConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  audit?: AuditConfig;
   /** JSON schema URL used by editors and generated config files. */
   $schema?: string;
   meta?: {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;
-    /** ISO timestamp when this config was last written. */
-    lastTouchedAt?: string;
     /** One-time doctor migrations already applied to this config. */
-    migrations?: {
-      /** Legacy default/per-agent model-map restrictions were preserved or confirmed unrestricted. */
-      modelPolicyAllowlist?: true;
-    };
+    migrations?: { modelPolicyAllowlist?: true };
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
@@ -128,33 +114,20 @@ export type OpenClawConfig = {
     accessMode?: "full" | "guarded";
     /** Offer installed-application plugin and skill recommendations during onboarding. */
     appRecommendations?: boolean;
-    /** Last setup wizard completion timestamp. */
     lastRunAt?: string;
-    /** OpenClaw version used by the last completed wizard run. */
     lastRunVersion?: string;
-    /** Git commit used by the last completed wizard run, when available. */
     lastRunCommit?: string;
-    /** Command that invoked the last wizard run. */
     lastRunCommand?: string;
-    /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
-    /** Model whose lean-mode default is owned by inference onboarding. */
     localModelLeanAutoModel?: string;
-    /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
     securityAcknowledgedAt?: string;
   };
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
-  /** Metadata-only agent activity audit ledger settings. */
-  audit?: AuditConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
-  /** CLI defaults and command-specific settings. */
-  cli?: CliConfig;
-  /** System-agent rescue/maintenance integration settings. */
-  systemAgent?: SystemAgentConfig;
   update?: {
     /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
     channel?: "stable" | "extended-stable" | "beta" | "dev";
@@ -203,14 +176,16 @@ export type OpenClawConfig = {
       chatFollowUpMode?: "steer" | "queue";
       /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
       sidebarEntries?: string[];
+      /** Maximum chat message width CSS value. */
+      chatMessageMaxWidth?: string;
       /** Show live agent activity beneath running Control UI sidebar sessions. */
       sidebarLiveActivity?: boolean;
+      /** Expand advanced settings in schema-driven Control UI forms. */
+      showAdvancedSettings?: boolean;
     };
   };
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
-  /** Marketplace feed and local package source profile configuration. */
-  marketplaces?: MarketplacesConfig;
   /** Skill loading and bundled skill configuration. */
   skills?: SkillsConfig;
   /** Plugin registry/install/runtime configuration. */
@@ -229,30 +204,26 @@ export type OpenClawConfig = {
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  media?: {
-    /** Preserve original uploaded filenames when storing inbound media. */
-    preserveFilenames?: boolean;
+  attachments?: {
     /** Optional retention window for persisted inbound media cleanup. */
     ttlHours?: number;
   };
   /** Message formatting, delivery, and action settings. */
   messages?: MessagesConfig;
+  /** Shared text-to-speech defaults. Agent and channel overrides layer over this config. */
+  tts?: TtsConfig;
   /** Chat command settings. */
   commands?: CommandsConfig;
   /** Human approval workflow settings. */
   approvals?: ApprovalsConfig;
   /** Session keying, reset, maintenance, send-policy, and thread-binding settings. */
   session?: SessionConfig;
-  /** Web runtime settings, including WhatsApp web transport controls. */
-  web?: WebConfig;
   /** Channel defaults, built-in channel sections, and plugin-owned channel config. */
   channels?: ChannelsConfig;
   /** Cron schedule and retention settings. */
   cron?: CronConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
-  /** Commitment/reminder extraction settings. */
-  commitments?: CommitmentsConfig;
   /** Runtime hook registration and queue behavior. */
   hooks?: HooksConfig;
   /** Network discovery and service advertisement settings. */
@@ -261,7 +232,7 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
-  /** Opt-in cloud-worker provider profiles and stored lifetime policy. */
+  /** Opt-in cloud-worker provider profiles. */
   cloudWorkers?: CloudWorkersConfig;
   /** Memory indexing/search configuration. */
   memory?: MemoryConfig;

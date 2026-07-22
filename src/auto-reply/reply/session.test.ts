@@ -4478,7 +4478,9 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         Provider: "telegram",
         Surface: "telegram",
       },
-      cfg: { session: { store: storePath, idleMinutes: 1 } } as OpenClawConfig,
+      cfg: {
+        session: { store: storePath, reset: { mode: "idle", idleMinutes: 1 } },
+      } as OpenClawConfig,
       commandAuthorized: true,
     });
     const replaceSession = runExclusiveSessionStoreWrite(storePath, async () => {

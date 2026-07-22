@@ -94,7 +94,7 @@ function createCommonChannelAccountShape<
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     streaming: (options.streaming ?? CommonStreamingSchema) as TStreaming,
-    heartbeat: ChannelHeartbeatVisibilitySchema,
+    heartbeatVisibility: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
     mediaMaxMb: (options.mediaMaxMb ?? CommonMediaMaxMbSchema) as TMediaMaxMb,

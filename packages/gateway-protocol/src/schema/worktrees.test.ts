@@ -49,6 +49,12 @@ describe("managed worktree protocol schemas", () => {
 
   it("accepts branch listing payloads and snapshot errors", () => {
     expect(validateWorktreesBranchesParams({ repoRoot: "/repo" })).toBe(true);
+    expect(
+      validateWorktreesBranchesParams({ repoRoot: "/repo", includeRepositoryStatus: true }),
+    ).toBe(true);
+    expect(
+      validateWorktreesBranchesParams({ repoRoot: "/repo", includeRepositoryStatus: false }),
+    ).toBe(true);
     expect(validateWorktreesBranchesParams({})).toBe(false);
     expect(
       Value.Check(WorktreesBranchesResultSchema, {
@@ -58,8 +64,27 @@ describe("managed worktree protocol schemas", () => {
         ],
         defaultBranch: "main",
         headBranch: "feature",
+        repositoryStatus: "git",
       }),
     ).toBe(true);
+    expect(
+      Value.Check(WorktreesBranchesResultSchema, {
+        branches: [],
+        repositoryStatus: "not_git",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(WorktreesBranchesResultSchema, {
+        branches: [],
+        repositoryStatus: "unavailable",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(WorktreesBranchesResultSchema, {
+        branches: [],
+        repositoryStatus: "unknown",
+      }),
+    ).toBe(false);
     expect(
       Value.Check(WorktreesRemoveResultSchema, {
         removed: true,

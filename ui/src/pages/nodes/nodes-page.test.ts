@@ -50,6 +50,7 @@ function gatewaySnapshot(
   return {
     client,
     connected,
+    offlineStable: false,
     reconnecting: !connected,
     hello: null,
     assistantAgentId: null,
@@ -63,6 +64,7 @@ function gateway(client: GatewayBrowserClient | null): ApplicationContext["gatew
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: false,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,

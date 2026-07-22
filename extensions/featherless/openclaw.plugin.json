@@ -72,7 +72,7 @@
       }
     },
     "discovery": {
-      "featherless": "static"
+      "featherless": "refreshable"
     }
   },
   "configSchema": {

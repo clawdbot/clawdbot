@@ -4,9 +4,8 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
-import type { MemoryQmdIndexPath } from "./types.memory.js";
 import type { ConfiguredProviderRequest } from "./types.provider-request.js";
-import type { SecretInput } from "./types.secrets.js";
+export type { MemorySearchConfig } from "./types.memory.js";
 
 export type MediaUnderstandingScopeMatch = {
   /** Channel/provider id to match before running media or link understanding. */
@@ -85,6 +84,8 @@ export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
 export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Enable media understanding when models are configured. */
   enabled?: boolean;
+  /** Prefer a matching shared model entry. */
+  preferredModel?: string;
   /** Optional scope gating for understanding. */
   scope?: MediaUnderstandingScopeConfig;
   /** Default max bytes to send. */
@@ -117,6 +118,9 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   echoFormat?: string;
 };
 
+/** Per-capability defaults and policy. Models live only in tools.media.models. */
+export type MediaUnderstandingCapabilityConfig = Omit<MediaUnderstandingConfig, "models">;
+
 export type LinkModelConfig = {
   /** Use a CLI command for link processing. */
   type?: "cli";
@@ -142,13 +146,13 @@ export type LinkToolsConfig = {
 };
 
 export type MediaToolsConfig = {
-  /** Shared model list applied across image/audio/video. */
+  /** Canonical model list for image/audio/video, selected by capability tags. */
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
-  image?: MediaUnderstandingConfig;
-  audio?: MediaUnderstandingConfig;
-  video?: MediaUnderstandingConfig;
+  image?: MediaUnderstandingCapabilityConfig;
+  audio?: MediaUnderstandingCapabilityConfig;
+  video?: MediaUnderstandingCapabilityConfig;
 };
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
@@ -221,30 +225,21 @@ export type SwarmConfig =
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
-export type ToolPolicyConfig = {
-  /** Exact tool names allowed after the selected profile is applied. */
+export type ToolAllowDenyPolicyConfig = {
+  /** Exact tool names allowed in this policy scope. */
   allow?: string[];
-  /**
-   * Additional allowlist entries merged into the effective allowlist.
-   *
-   * Intended for additive configuration (e.g., "also allow lobster") without forcing
-   * users to replace/duplicate an existing allowlist or profile.
-   */
+  /** Additional allowlist entries merged into the inherited policy. */
   alsoAllow?: string[];
-  /** Exact tool names denied after allow/profile expansion; deny wins. */
+  /** Exact tool names denied after allow expansion; deny wins. */
   deny?: string[];
+};
+
+export type ToolPolicyConfig = ToolAllowDenyPolicyConfig & {
   /** Built-in profile used as the base policy before allow/deny merges. */
   profile?: ToolProfileId;
 };
 
-export type GroupToolPolicyConfig = {
-  /** Sender-specific allowlist entries merged into the group tool policy. */
-  allow?: string[];
-  /** Additional allowlist entries merged into allow. */
-  alsoAllow?: string[];
-  /** Sender-specific deny entries; deny wins over allow/profile policy. */
-  deny?: string[];
-};
+export type GroupToolPolicyConfig = ToolAllowDenyPolicyConfig;
 
 export const TOOLS_BY_SENDER_KEY_TYPES = ["channel", "id", "e164", "username", "name"] as const;
 export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
@@ -292,9 +287,9 @@ export type ExecToolConfig = {
   host?: "auto" | "sandbox" | "gateway" | "node";
   /** Normalized exec policy mode. Prefer this over raw security/ask knobs. */
   mode?: "deny" | "allowlist" | "ask" | "auto" | "full";
-  /** Exec security mode (default: full; sandbox host defaults to deny). */
+  /** Legacy exec security mode retained when no canonical mode can preserve policy. */
   security?: "deny" | "allowlist" | "full";
-  /** Exec ask mode (default: off). */
+  /** Legacy exec ask mode retained when no canonical mode can preserve policy. */
   ask?: "off" | "on-miss" | "always";
   /** Default node binding for exec.host=node (node id/name). */
   node?: string;
@@ -323,7 +318,7 @@ export type ExecToolConfig = {
   /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs?: number;
   /** Default timeout (seconds) before auto-killing exec commands. */
-  timeoutSec?: number;
+  timeoutSeconds?: number;
   /** Emit a running notice (ms) when approval-backed exec runs long (default: 10000, 0 = off). */
   approvalRunningNoticeMs?: number;
   /** How long to keep finished sessions in memory (ms). */
@@ -402,154 +397,7 @@ export type AgentToolsConfig = {
   /** Message tool configuration for this agent. */
   message?: MessageToolsConfig;
   sandbox?: {
-    tools?: {
-      allow?: string[];
-      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
-      alsoAllow?: string[];
-      deny?: string[];
-    };
-  };
-};
-
-export type MemorySearchConfig = {
-  /** Enable vector memory search (default: true). */
-  enabled?: boolean;
-  /** Use relevant context from this agent's other private conversations. */
-  rememberAcrossConversations?: boolean;
-  /** Sources to index and search (default: ["memory"]). */
-  sources?: Array<"memory" | "sessions">;
-  /** Extra paths to include in memory search (directories or .md files). */
-  extraPaths?: string[];
-  /** Optional QMD-specific extra collections for cross-agent search. */
-  qmd?: {
-    /** Additional QMD collections appended for this agent's search scope. */
-    extraCollections?: MemoryQmdIndexPath[];
-  };
-  /** Optional multimodal file indexing for selected extra paths. */
-  multimodal?: {
-    /** Enable image/audio embeddings from extraPaths. */
-    enabled?: boolean;
-    /** Which non-text file types to index. */
-    modalities?: Array<"image" | "audio" | "all">;
-    /** Max bytes allowed per multimodal file before it is skipped. */
-    maxFileBytes?: number;
-  };
-  /** Experimental memory search settings. */
-  experimental?: {
-    /** Enable session transcript indexing (experimental, default: false). */
-    sessionMemory?: boolean;
-  };
-  /** Memory embedding provider adapter id. */
-  provider?: string;
-  remote?: {
-    baseUrl?: string;
-    apiKey?: SecretInput;
-    headers?: Record<string, string>;
-    /** Max concurrent non-batch embedding tasks during indexing. Useful for slower local providers such as Ollama. */
-    nonBatchConcurrency?: number;
-    batch?: {
-      /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
-      enabled?: boolean;
-      /** Wait for batch completion (default: true). */
-      wait?: boolean;
-      /** Max concurrent batch jobs (default: 2). */
-      concurrency?: number;
-      /** Poll interval in ms (default: 5000). */
-      pollIntervalMs?: number;
-      /** Timeout in minutes (default: 60). */
-      timeoutMinutes?: number;
-    };
-  };
-  /** Fallback memory embedding provider adapter id when embeddings fail. */
-  fallback?: string;
-  /** Embedding model id (remote) or alias (local). */
-  model?: string;
-  /** Optional provider-specific embedding input_type for query and document requests. */
-  inputType?: string;
-  /** Optional provider-specific embedding input_type for query-time memory search. */
-  queryInputType?: string;
-  /** Optional provider-specific embedding input_type for document/index embeddings. */
-  documentInputType?: string;
-  /**
-   * Gemini embedding-2 models only: output vector dimensions.
-   * Supported values today are 768, 1536, and 3072.
-   */
-  outputDimensionality?: number;
-  /** Local embedding settings (node-llama-cpp). */
-  local?: {
-    /** GGUF model path or hf: URI. */
-    modelPath?: string;
-    /** Optional cache directory for local models. */
-    modelCacheDir?: string;
-    /**
-     * Context window size for the local embedding context (default: 4096).
-     * Use `"auto"` to defer to node-llama-cpp, which picks up to the model's
-     * trained maximum — not recommended for 8B+ models.
-     */
-    contextSize?: number | "auto";
-  };
-  /** Index storage configuration. */
-  store?: {
-    driver?: "sqlite";
-    fts?: {
-      /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
-      tokenizer?: "unicode61" | "trigram";
-    };
-    vector?: {
-      /** Enable sqlite-vec extension for vector search (default: true). */
-      enabled?: boolean;
-      /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
-      extensionPath?: string;
-    };
-    cache?: {
-      /** Enable embedding cache (default: true). */
-      enabled?: boolean;
-      /** Optional max cache entries per provider/model. */
-      maxEntries?: number;
-    };
-  };
-  /** Sync behavior. */
-  sync?: {
-    onSessionStart?: boolean;
-    onSearch?: boolean;
-    watch?: boolean;
-    /**
-     * Timeout in seconds for inline embedding batches during memory indexing.
-     * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
-     */
-    embeddingBatchTimeoutSeconds?: number;
-    sessions?: {
-      /** Minimum appended bytes before session transcripts are reindexed. */
-      deltaBytes?: number;
-      /** Minimum appended JSONL lines before session transcripts are reindexed. */
-      deltaMessages?: number;
-      /** Force session reindex after compaction-triggered transcript updates (default: true). */
-      postCompactionForce?: boolean;
-    };
-  };
-  /** Query behavior. */
-  query?: {
-    maxResults?: number;
-    minScore?: number;
-    hybrid?: {
-      /** Enable hybrid BM25 + vector search (default: true). */
-      enabled?: boolean;
-      /** Optional MMR re-ranking for result diversity. */
-      mmr?: {
-        /** Enable MMR re-ranking (default: false). */
-        enabled?: boolean;
-      };
-      /** Optional temporal decay to boost recency in hybrid scoring. */
-      temporalDecay?: {
-        /** Enable temporal decay (default: false). */
-        enabled?: boolean;
-      };
-    };
-  };
-  /** Index cache behavior. */
-  cache?: {
-    /** Cache chunk embeddings in SQLite (default: true). */
-    enabled?: boolean;
+    tools?: ToolAllowDenyPolicyConfig;
   };
 };
 
@@ -675,21 +523,11 @@ export type ToolsConfig = {
   sessions_spawn?: SessionsSpawnToolsConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
-    tools?: {
-      allow?: string[];
-      /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */
-      alsoAllow?: string[];
-      deny?: string[];
-    };
+    tools?: ToolAllowDenyPolicyConfig;
   };
   /** Sandbox tool policy defaults (deny wins). */
   sandbox?: {
-    tools?: {
-      allow?: string[];
-      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
-      alsoAllow?: string[];
-      deny?: string[];
-    };
+    tools?: ToolAllowDenyPolicyConfig;
   };
   /** Experimental tool flags. */
   experimental?: {

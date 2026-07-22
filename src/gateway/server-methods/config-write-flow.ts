@@ -158,11 +158,8 @@ function resolveConfigRestartRequirement(params: {
   if (reloadSettings.mode === "off") {
     return { requiresRestart: true, scheduleDirectRestart: true };
   }
-  if (reloadSettings.mode === "restart") {
-    return { requiresRestart: true, scheduleDirectRestart: false };
-  }
   if (plan.restartGateway) {
-    return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
+    return { requiresRestart: true, scheduleDirectRestart: false };
   }
   return { requiresRestart: false, scheduleDirectRestart: false };
 }

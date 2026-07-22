@@ -1,5 +1,6 @@
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -149,7 +150,9 @@ function applySystemAgentModelSelectionWithModules(
   const agentId = targetAgentId ?? agentScope.resolveDefaultAgentId(nextConfig);
   if (
     targetAgentId &&
-    !nextConfig.agents?.list?.some((entry) => normalizeAgentId(entry.id) === targetAgentId)
+    !Object.keys(nextConfig.agents?.entries ?? {}).some(
+      (entryId) => normalizeAgentId(entryId) === targetAgentId,
+    )
   ) {
     throw new Error(`Could not resolve configured agent "${targetAgentId}".`);
   }
@@ -172,7 +175,12 @@ function applySystemAgentModelSelectionWithModules(
     nextConfig.agents.defaults.models = defaultModels;
   }
 
-  let agent = nextConfig.agents.list?.find((entry) => normalizeAgentId(entry.id) === agentId);
+  nextConfig.agents.entries ??= {};
+  const agentEntryKey =
+    Object.keys(nextConfig.agents.entries).find(
+      (entryId) => normalizeAgentId(entryId) === agentId,
+    ) ?? agentId;
+  let agent = nextConfig.agents.entries[agentEntryKey];
   if (writesAgent) {
     if (!agent) {
       throw new Error(`Could not resolve configured default agent "${agentId}".`);
@@ -184,8 +192,8 @@ function applySystemAgentModelSelectionWithModules(
 
   if (params.agentRuntimeId) {
     if (!agent) {
-      agent = { id: agentId, default: true };
-      nextConfig.agents.list = [...(nextConfig.agents.list ?? []), agent];
+      agent = { default: true };
+      nextConfig.agents.entries[agentEntryKey] = agent;
     }
     const agentModels = { ...agent.models };
     const agentKey = modelConfig.upsertCanonicalModelConfigEntry(agentModels, target);
@@ -372,8 +380,7 @@ export async function applySystemAgentSetup(
   const { configureGatewayForSetup } = await import("../wizard/setup.gateway-config.js");
   const buildSetupCandidate = async (currentBaseConfig: OpenClawConfig) => {
     const workspaceConflict = resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
-    const currentHasRoster =
-      Array.isArray(currentBaseConfig.agents?.list) && currentBaseConfig.agents.list.length > 0;
+    const currentHasRoster = listAgentEntries(currentBaseConfig).length > 0;
     const allowWorkspaceWrite =
       params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
     let setupBaseConfig = currentBaseConfig;
@@ -390,7 +397,7 @@ export async function applySystemAgentSetup(
     if (currentHasRoster) {
       setupBaseConfig = {
         ...setupBaseConfig,
-        agents: { ...setupBaseConfig.agents, list: currentBaseConfig.agents?.list },
+        agents: { ...setupBaseConfig.agents, entries: currentBaseConfig.agents?.entries },
       };
     }
     const preserveWorkspace =

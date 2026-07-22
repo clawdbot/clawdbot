@@ -31,8 +31,10 @@ type MockNodeCommandPolicyParams = {
 type MockNodeConfig = {
   gateway?: {
     nodes?: {
-      allowCommands?: string[];
-      denyCommands?: string[];
+      commands?: {
+        allow?: string[];
+        deny?: string[];
+      };
     };
   };
 };
@@ -778,7 +780,7 @@ describe("node.invoke APNs wake path", () => {
 
   it("allows an armed computer.act command for write-scoped operators", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
-      gateway: { nodes: { allowCommands: ["computer.act"] } },
+      gateway: { nodes: { commands: { allow: ["computer.act"] } } },
     });
     mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set(["computer.act"]));
     const nodeRegistry = {
@@ -838,7 +840,7 @@ describe("node.invoke APNs wake path", () => {
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toBe(
-      'node command not allowed: "sms.search" requires explicit gateway.nodes.allowCommands opt-in',
+      'node command not allowed: "sms.search" requires explicit gateway.nodes.commands.allow opt-in',
     );
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
@@ -907,7 +909,7 @@ describe("node.invoke APNs wake path", () => {
 
   it("distinguishes explicit command denials from missing opt-ins", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
-      gateway: { nodes: { denyCommands: ["sms.search"] } },
+      gateway: { nodes: { commands: { deny: ["sms.search"] } } },
     });
     mocks.isNodeCommandAllowed.mockReturnValue({
       ok: false,
@@ -933,7 +935,7 @@ describe("node.invoke APNs wake path", () => {
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toBe(
-      'node command not allowed: "sms.search" is blocked by gateway.nodes.denyCommands',
+      'node command not allowed: "sms.search" is blocked by gateway.nodes.commands.deny',
     );
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
@@ -1167,13 +1169,13 @@ describe("node.invoke APNs wake path", () => {
     mockDirectWakeConfig("mac-node-policy-reload");
 
     let runtimeConfig: MockNodeConfig = {
-      gateway: { nodes: { allowCommands: ["computer.act"] } },
+      gateway: { nodes: { commands: { allow: ["computer.act"] } } },
     };
     const admissionConfig = runtimeConfig;
     mocks.getRuntimeConfig.mockImplementation(() => runtimeConfig);
     mocks.resolveNodeCommandAllowlist.mockImplementation((cfg) => {
-      const allowlist = new Set(cfg.gateway?.nodes?.allowCommands ?? []);
-      for (const command of cfg.gateway?.nodes?.denyCommands ?? []) {
+      const allowlist = new Set(cfg.gateway?.nodes?.commands?.allow ?? []);
+      for (const command of cfg.gateway?.nodes?.commands?.deny ?? []) {
         allowlist.delete(command);
       }
       return allowlist;
@@ -1208,7 +1210,7 @@ describe("node.invoke APNs wake path", () => {
     });
     setTimeout(() => {
       runtimeConfig = {
-        gateway: { nodes: { denyCommands: ["computer.act"] } },
+        gateway: { nodes: { commands: { deny: ["computer.act"] } } },
       };
       connected = true;
     }, 300);
@@ -1219,7 +1221,7 @@ describe("node.invoke APNs wake path", () => {
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toBe(
-      'node command not allowed: "computer.act" is blocked by gateway.nodes.denyCommands',
+      'node command not allowed: "computer.act" is blocked by gateway.nodes.commands.deny',
     );
     expectRecordFields(call[2]?.details, "error details", {
       reason: "command not allowlisted",
@@ -1235,13 +1237,13 @@ describe("node.invoke APNs wake path", () => {
     mockDirectWakeConfig("mac-node-policy-grant");
 
     let runtimeConfig: MockNodeConfig = {
-      gateway: { nodes: { denyCommands: ["computer.act"] } },
+      gateway: { nodes: { commands: { deny: ["computer.act"] } } },
     };
     const admissionConfig = runtimeConfig;
     mocks.getRuntimeConfig.mockImplementation(() => runtimeConfig);
     mocks.resolveNodeCommandAllowlist.mockImplementation((cfg) => {
-      const allowlist = new Set(cfg.gateway?.nodes?.allowCommands ?? []);
-      for (const command of cfg.gateway?.nodes?.denyCommands ?? []) {
+      const allowlist = new Set(cfg.gateway?.nodes?.commands?.allow ?? []);
+      for (const command of cfg.gateway?.nodes?.commands?.deny ?? []) {
         allowlist.delete(command);
       }
       return allowlist;
@@ -1276,7 +1278,7 @@ describe("node.invoke APNs wake path", () => {
     });
     setTimeout(() => {
       runtimeConfig = {
-        gateway: { nodes: { allowCommands: ["computer.act"] } },
+        gateway: { nodes: { commands: { allow: ["computer.act"] } } },
       };
       connected = true;
     }, 300);
@@ -1287,7 +1289,7 @@ describe("node.invoke APNs wake path", () => {
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toBe(
-      'node command not allowed: "computer.act" is blocked by gateway.nodes.denyCommands',
+      'node command not allowed: "computer.act" is blocked by gateway.nodes.commands.deny',
     );
     expectRecordFields(call[2]?.details, "error details", {
       reason: "command not allowlisted",

@@ -2,8 +2,8 @@ title: Active Talk agent-run control boundaries
 
 scenario:
   id: active-talk-agent-run-status
-  surface: voice-and-realtime-talk
-  category: voice-and-realtime-talk.realtime-talk-sessions
+  surface: voice
+  category: voice.realtime-talk-sessions
   coverage:
     primary:
       - voice.active-talk-agent-run-status

@@ -252,6 +252,15 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   backfillTranscriptMutationWatermarks(db);
 }
 
+function ensureAdditiveSessionEntryColumns(db: DatabaseSync): void {
+  const columns = readSqliteTableColumns(db, "session_entries");
+  if (columns && !columns.has("created_by_json")) {
+    // This nullable projection is safe for older readers and intentionally
+    // stays outside the schema-version migration ladder.
+    db.exec("ALTER TABLE session_entries ADD COLUMN created_by_json TEXT;");
+  }
+}
+
 /** Backfill one generation token without copying or rewriting transcript rows. */
 function migrateSessionTranscriptGenerations(db: DatabaseSync, previousVersion: number): void {
   if (previousVersion >= 13) {
@@ -513,6 +522,7 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       dropLegacySessionTranscriptSearchSchema(db);
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
+      ensureAdditiveSessionEntryColumns(db);
       db.exec(
         previousVersion === OPENCLAW_AGENT_SCHEMA_VERSION
           ? OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL

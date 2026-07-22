@@ -30,10 +30,6 @@ export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPat
     configPath?: string;
     /** Optional full base URL for signal-cli HTTP daemon. */
     httpUrl?: string;
-    /** HTTP host for signal-cli daemon (default 127.0.0.1). */
-    httpHost?: string;
-    /** HTTP port for signal-cli daemon (default 8080). */
-    httpPort?: number;
     /** signal-cli binary path (default: signal-cli). */
     cliPath?: string;
     /** Auto-start signal-cli daemon (default: true if httpUrl not set). */

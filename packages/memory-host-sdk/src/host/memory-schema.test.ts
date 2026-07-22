@@ -71,7 +71,7 @@ describe("memory index schema", () => {
           id: 1,
           path: "MEMORY.md",
           source: "memory",
-          hash: "file-hash",
+          hash: "",
           mtime: 10.75,
           size: 20,
         },
@@ -277,6 +277,47 @@ describe("memory index schema", () => {
       ).toEqual([
         { path: "shared.md", source: "memory", hash: "memory-hash" },
         { path: "shared.md", source: "sessions", hash: "session-hash" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rebuilds body FTS after indexing while hybrid search is disabled", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+      db.exec(`
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-before', 'before.md', 'memory', 1, 1, 'before-hash', 'fts-only',
+          'before body', '[]', 1
+        );
+        INSERT INTO memory_index_chunks_fts
+          (text, id, path, source, model, start_line, end_line)
+        VALUES ('before body', 'chunk-before', 'before.md', 'memory', 'fts-only', 1, 1);
+      `);
+
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_chunks_fts'",
+          )
+          .get(),
+      ).toBeUndefined();
+      db.exec(`
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-disabled', 'disabled.md', 'memory', 1, 1, 'disabled-hash', 'fts-only',
+          'disabled body', '[]', 2
+        );
+      `);
+
+      expect(
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+      ).toBe(true);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts ORDER BY id").all()).toEqual([
+        { id: "chunk-before", text: "before body" },
+        { id: "chunk-disabled", text: "disabled body" },
       ]);
     } finally {
       db.close();
@@ -831,95 +872,6 @@ describe("memory index schema", () => {
           )
           .get(),
       ).toEqual({ name: "memory_index_paths_fts_after_delete" });
-    } finally {
-      db.close();
-    }
-  });
-
-  it("leaves unrelated generic tables untouched", () => {
-    const db = new DatabaseSync(":memory:");
-    try {
-      db.exec(`
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, owner TEXT);
-        CREATE TABLE files (
-          path TEXT PRIMARY KEY,
-          source TEXT NOT NULL,
-          hash TEXT NOT NULL,
-          mtime INTEGER NOT NULL,
-          size INTEGER NOT NULL
-        );
-        CREATE TABLE chunks (
-          id TEXT PRIMARY KEY,
-          path TEXT NOT NULL,
-          source TEXT NOT NULL,
-          start_line INTEGER NOT NULL,
-          end_line INTEGER NOT NULL,
-          hash TEXT NOT NULL,
-          model TEXT NOT NULL,
-          text TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-      `);
-
-      ensureMemoryIndexSchema({
-        db,
-        cacheEnabled: false,
-        ftsEnabled: false,
-      });
-
-      expect(
-        db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks') ORDER BY name",
-          )
-          .all(),
-      ).toEqual([{ name: "chunks" }, { name: "files" }, { name: "meta" }]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("keeps legacy tables when canonical rows conflict", () => {
-    const db = new DatabaseSync(":memory:");
-    try {
-      db.exec(`
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE files (
-          path TEXT PRIMARY KEY,
-          source TEXT NOT NULL DEFAULT 'memory',
-          hash TEXT NOT NULL,
-          mtime INTEGER NOT NULL,
-          size INTEGER NOT NULL
-        );
-        CREATE TABLE chunks (
-          id TEXT PRIMARY KEY,
-          path TEXT NOT NULL,
-          source TEXT NOT NULL DEFAULT 'memory',
-          start_line INTEGER NOT NULL,
-          end_line INTEGER NOT NULL,
-          hash TEXT NOT NULL,
-          model TEXT NOT NULL,
-          text TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-        CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        INSERT INTO meta VALUES ('memory_index_meta_v1', 'legacy');
-        INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', 'canonical');
-      `);
-
-      expect(() =>
-        ensureMemoryIndexSchema({
-          db,
-          cacheEnabled: false,
-          ftsEnabled: false,
-        }),
-      ).toThrow("legacy memory meta rows conflict");
-      expect(db.prepare("SELECT value FROM meta").get()).toEqual({ value: "legacy" });
-      expect(db.prepare("SELECT value FROM memory_index_meta").get()).toEqual({
-        value: "canonical",
-      });
     } finally {
       db.close();
     }

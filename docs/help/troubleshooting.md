@@ -56,7 +56,7 @@ Common causes:
   shell, and runtime work).
 - `tools.profile: "full"` removes profile restrictions; limit to trusted
   operator-controlled agents.
-- Per-agent `agents.list[].tools` overrides narrow or expand the root profile
+- Per-agent `agents.entries.*.tools` overrides narrow or expand the root profile
   for one agent.
 
 Change the profile, restart or reload the Gateway, then recheck with

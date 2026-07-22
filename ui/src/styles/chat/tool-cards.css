@@ -837,6 +837,21 @@
   padding: 0;
 }
 
+.chat-tool-card__preview-image-button {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.chat-tool-card__preview-image-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .chat-tool-card__preview-frame {
   display: block;
   width: 100%;
@@ -1371,8 +1386,10 @@
 /* Seeded stance variants (see stanceClass in chat-working-indicator.ts): the
    southpaw claws mirrored, the flurry snips double-time, the spin does a
    fake-3D turntable revolve while snipping, the shadowbox brings back the
-   full jab-jab-cross combo with the pow star, and the rarest backflip throws
-   a single in-place somersault per cycle. */
+   full jab-jab-cross combo with the pow star, the backflip throws a single
+   in-place somersault, the zen breathes through one long meditative snip,
+   the drummer rocks a two-beat rhythm, and the rarest peekaboo ducks away
+   and pops back wide open. */
 .chat-reading-indicator--southpaw {
   transform: scaleX(-1);
 }
@@ -1402,6 +1419,39 @@
 
 .chat-reading-indicator--backflip svg {
   animation-name: chatWorkingClawBackflip;
+}
+
+.chat-reading-indicator--zen {
+  --claw-cycle: 6s;
+}
+
+.chat-reading-indicator--zen svg {
+  animation-name: chatWorkingClawZenBreath;
+  animation-timing-function: ease-in-out;
+}
+
+.chat-reading-indicator--zen svg .claw-icon__jaw {
+  animation-name: chatWorkingClawZenSnip;
+}
+
+.chat-reading-indicator--drummer {
+  --claw-cycle: 1.2s;
+}
+
+.chat-reading-indicator--drummer svg {
+  animation-name: chatWorkingClawDrumRock;
+}
+
+.chat-reading-indicator--drummer svg .claw-icon__jaw {
+  animation-name: chatWorkingClawDrumHit;
+}
+
+.chat-reading-indicator--peekaboo svg {
+  animation-name: chatWorkingClawPeekaboo;
+}
+
+.chat-reading-indicator--peekaboo svg .claw-icon__jaw {
+  animation-name: chatWorkingClawPeekabooJaw;
 }
 
 @keyframes chatWorkingClawSpin {
@@ -1434,6 +1484,143 @@
   78%,
   100% {
     transform: translateY(0) rotate(-360deg);
+  }
+}
+
+/* Zen: one long meditative cycle — a slow scale breath, then a single
+   deliberate snip on the exhale. Scale keeps it perfectly in place. */
+@keyframes chatWorkingClawZenBreath {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  30% {
+    transform: scale(1.08);
+  }
+
+  55% {
+    transform: scale(1);
+  }
+}
+
+@keyframes chatWorkingClawZenSnip {
+  0%,
+  60% {
+    transform: rotate(-10deg);
+  }
+
+  70% {
+    transform: rotate(-24deg);
+  }
+
+  76% {
+    transform: rotate(2deg);
+  }
+
+  86%,
+  100% {
+    transform: rotate(-10deg);
+  }
+}
+
+/* Drummer: two-beat rock — the body tilts left then right and the jaw hits
+   on each tilt peak. Rotation only, no travel. */
+@keyframes chatWorkingClawDrumRock {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+
+  15% {
+    transform: rotate(-8deg);
+  }
+
+  30% {
+    transform: rotate(0deg);
+  }
+
+  55% {
+    transform: rotate(8deg);
+  }
+
+  70% {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes chatWorkingClawDrumHit {
+  0%,
+  100% {
+    transform: rotate(-10deg);
+  }
+
+  10% {
+    transform: rotate(-20deg);
+  }
+
+  15% {
+    transform: rotate(2deg);
+  }
+
+  25% {
+    transform: rotate(-10deg);
+  }
+
+  50% {
+    transform: rotate(-20deg);
+  }
+
+  55% {
+    transform: rotate(2deg);
+  }
+
+  65% {
+    transform: rotate(-10deg);
+  }
+}
+
+/* Peekaboo: long rest, duck down small with the jaw tucked, hold a beat,
+   then pop back up wide open. Vertical dip only — no lateral travel. */
+@keyframes chatWorkingClawPeekaboo {
+  0%,
+  55% {
+    transform: translateY(0) scale(1);
+  }
+
+  62%,
+  72% {
+    transform: translateY(5px) scale(0.72);
+  }
+
+  78% {
+    transform: translateY(-1.5px) scale(1.06);
+  }
+
+  84%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes chatWorkingClawPeekabooJaw {
+  0%,
+  55% {
+    transform: rotate(-10deg);
+  }
+
+  62%,
+  72% {
+    transform: rotate(-2deg);
+  }
+
+  78% {
+    transform: rotate(-28deg);
+  }
+
+  86%,
+  100% {
+    transform: rotate(-10deg);
   }
 }
 
@@ -1517,20 +1704,8 @@
 /* Hover preview on the status row: the latest tasks in a read-only card. The
    tooltip body is content-sized (width: max-content up to --max-width), so a
    single task stays one compact line instead of a fixed-size panel. */
-wa-tooltip.chat-tasks-status__preview {
-  --max-width: min(360px, calc(100vw - 24px));
-  font-family: var(--font-body);
-}
-
-wa-tooltip.chat-tasks-status__preview::part(body) {
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow: var(--shadow-md);
-  color: var(--text);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.35;
+openclaw-tooltip.chat-tasks-status__preview {
+  --openclaw-tooltip-max-width: min(360px, calc(100vw - 24px));
 }
 
 .chat-tasks-preview {

@@ -5,10 +5,10 @@ scenario:
   surface: image-generation
   coverage:
     primary:
-      - media.image-generation
-      - media.image-generation-delivery
+      - media.generated-image-persistence-and-delivery
+      - media.image-tool-image-generation
     secondary:
-      - channels.qa-channel
+      - channels.qa-channel-outbound
   objective: Verify a generated image is saved as media, reattached on the next turn, and described correctly through the vision path.
   successCriteria:
     - image_generate produces a saved MEDIA artifact.

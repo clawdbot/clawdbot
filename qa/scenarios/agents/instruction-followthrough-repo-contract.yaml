@@ -5,9 +5,9 @@ scenario:
   surface: repo-contract
   coverage:
     primary:
-      - agents.instructions
+      - session-memory.instruction-profile-instructions
     secondary:
-      - runtime.first-action
+      - session-memory.instruction-profile-first-action
   objective: Verify the agent reads repo instruction files first, follows the required tool order, and completes the first feasible action instead of stopping at a plan.
   successCriteria:
     - Agent reads the seeded instruction files before writing the requested artifact.

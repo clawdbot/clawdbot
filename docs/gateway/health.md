@@ -60,7 +60,7 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 
 - `logged out` or status 409-515 -> relink with `openclaw channels logout` then `openclaw channels login`.
 - Gateway unreachable -> start it: `openclaw gateway --port 18789` (use `--force` if the port is busy).
-- No inbound messages -> confirm linked phone is online and the sender is allowed (`channels.whatsapp.allowFrom`); for group chats, ensure allowlist + mention rules match (`channels.whatsapp.groups`, `agents.list[].groupChat.mentionPatterns`).
+- No inbound messages -> confirm linked phone is online and the sender is allowed (`channels.whatsapp.allowFrom`); for group chats, ensure allowlist + mention rules match (`channels.whatsapp.groups`, `agents.entries.*.groupChat.mentionPatterns`).
 
 ## Dedicated "health" command
 

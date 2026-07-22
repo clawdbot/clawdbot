@@ -20,6 +20,8 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
@@ -335,6 +337,7 @@ describe("runMemoryFlushIfNeeded", () => {
   afterEach(async () => {
     setAgentRunnerMemoryTestDeps();
     cliBackendsTesting.resetDepsForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();
     await fs.rm(rootDir, { recursive: true, force: true });
   });
@@ -499,9 +502,6 @@ describe("runMemoryFlushIfNeeded", () => {
       cfg: {
         agents: {
           defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
             compaction: { memoryFlush: {} },
             models: {
               "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
@@ -1157,6 +1157,13 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("skips memory flush for CLI providers", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.cliBackends.push({
+      pluginId: "test-codex-cli",
+      source: "test",
+      backend: { id: "codex-cli", config: { command: "codex" } },
+    });
+    setActivePluginRegistry(registry);
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1165,7 +1172,7 @@ describe("runMemoryFlushIfNeeded", () => {
     };
 
     const result = await runMemoryFlushIfNeeded({
-      cfg: { agents: { defaults: { cliBackends: { "codex-cli": { command: "codex" } } } } },
+      cfg: {},
       followupRun: createTestFollowupRun({ provider: "codex-cli" }),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
       defaultModel: "codex-cli/gpt-5.5",

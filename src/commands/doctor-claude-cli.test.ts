@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
 
@@ -69,7 +70,38 @@ describe("resolveClaudeCliProjectDirForWorkspace", () => {
 
 describe("noteClaudeCliHealth", () => {
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     vi.restoreAllMocks();
+  });
+
+  it("probes the executable registered by the owning backend plugin", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "custom-anthropic",
+            config: { command: "/opt/custom/bin/claude" },
+          },
+        ],
+      });
+      const resolveCommandPath = vi.fn(() => undefined);
+
+      noteClaudeCliHealth(
+        { agents: { defaults: { model: "claude-cli/claude-sonnet-4-6" } } },
+        {
+          homeDir,
+          workspaceDir,
+          noteFn: vi.fn(),
+          store: createStore(),
+          readClaudeCliCredentials: () => null,
+          resolveCommandPath,
+        },
+      );
+
+      expect(resolveCommandPath).toHaveBeenCalledWith("/opt/custom/bin/claude", expect.any(Object));
+    });
   });
 
   it("stays quiet when Claude CLI is not configured or detected", () => {

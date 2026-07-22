@@ -36,6 +36,11 @@ export const DEFAULT_TTS_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
+let machinePrefsPathResolver: () => string | undefined = () => undefined;
+
+export function setTtsMachinePrefsPathResolver(resolver?: () => string | undefined): void {
+  machinePrefsPathResolver = resolver ?? (() => undefined);
+}
 
 export type TtsUserPrefs = {
   tts?: {
@@ -67,12 +72,17 @@ export function normalizeTtsPersonaId(personaId: string | null | undefined): str
 }
 
 function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
+  // Scoped agent paths must win over the migrated machine-wide default.
   if (prefsPath?.trim()) {
     return resolveUserPath(prefsPath.trim());
   }
   const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
   if (envPath) {
     return resolveUserPath(envPath);
+  }
+  const machinePath = machinePrefsPathResolver()?.trim();
+  if (machinePath) {
+    return resolveUserPath(machinePath);
   }
   return path.join(resolveConfigDir(process.env), "settings", "tts.json");
 }
@@ -221,7 +231,7 @@ export function resolveTtsConfig(
     summaryModel: normalizeOptionalString(raw.summaryModel),
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
     providerConfigs: collectDirectProviderConfigEntries(raw),
-    prefsPath: raw.prefsPath,
+    prefsPath: (raw as TtsConfig & { prefsPath?: string }).prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs,
     timeoutMsSource,

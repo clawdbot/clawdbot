@@ -4641,8 +4641,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const runProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Run QA profile",
     );
-    expect(runProfileStep.run).toContain("--concurrency 2");
+    expect(runProfileStep.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("120000");
+    expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
+    const failProfileStep = qaRunJob.steps.find(
+      (step: WorkflowStep) => step.name === "Fail if QA profile failed",
+    );
+    expect(failProfileStep.if).toBe("always()");
     expect(generateJob.needs).toEqual(["validate_selected_ref", "publisher_preflight"]);
     expect(generateJob.if.replace(/\s+/gu, " ")).toBe(
       "${{ always() && needs.validate_selected_ref.result == 'success' && (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') && inputs.qa_evidence_run_id == '' }}",
@@ -4811,11 +4816,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       path: "${{ steps.run_profile.outputs.output_dir }}",
       "if-no-files-found": "error",
     });
-
-    const qaFailStep = qaRunJob.steps.find(
-      (step: WorkflowStep) => step.name === "Fail if QA profile failed",
-    );
-    expect(qaFailStep.if).toBe("always()");
 
     const renderCheckoutStep = publishJob.steps.find(
       (step: WorkflowStep) => step.name === "Checkout selected ref",
@@ -5055,12 +5055,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Build CI manifest",
     );
     const taxonomy = parse(readFileSync("taxonomy.yaml", "utf8")) as {
-      profiles: Array<{ id: string; categoryIds: string[] }>;
+      surfaces: Array<{ id: string; categories: Array<{ id: string }> }>;
     };
-    const smokeProfile = taxonomy.profiles.find((profile) => profile.id === "smoke-ci");
-    if (!smokeProfile) {
-      throw new Error("taxonomy.yaml is missing the smoke-ci profile");
-    }
+    const taxonomyCategoryIds = taxonomy.surfaces.flatMap((surface) =>
+      surface.categories.map((category) => `${surface.id}.${category.id}`),
+    );
     const fastCoreJob = workflow.jobs["checks-fast-core"];
     const runStep = fastCoreJob.steps.find(
       (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
@@ -5083,8 +5082,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
 
     expect(preflightStep.run).not.toContain("qa-smoke-profile");
     expect(preflightStep.run).not.toContain("qa_category");
-    expect(smokeProfile.categoryIds).toHaveLength(30);
-    for (const categoryId of smokeProfile.categoryIds) {
+    expect(taxonomyCategoryIds.length).toBeGreaterThan(0);
+    for (const categoryId of taxonomyCategoryIds) {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
     }
     expect(runStep.run).toContain("bundled-protocol)");

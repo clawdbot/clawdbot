@@ -1,4 +1,5 @@
 import type { BoardOp, BoardSnapshot, BoardWidget } from "@openclaw/gateway-protocol";
+import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 
 export type BoardGrantDecision = "granted" | "rejected";
 export type BoardWidgetAppViewState =
@@ -11,13 +12,19 @@ type BoardStoredWidget = BoardWidget & {
   readOnly?: false | undefined;
 };
 type BoardBuiltinWidget = Omit<BoardWidget, "contentKind"> & {
-  builtin: "swarm";
+  builtin: "observer" | "swarm";
   contentKind: "builtin";
   readOnly: true;
 };
 export type BoardViewWidget = BoardStoredWidget | BoardBuiltinWidget;
 export type BoardViewSnapshot = Omit<BoardSnapshot, "widgets"> & {
   widgets: BoardViewWidget[];
+};
+
+export type BoardObserverContext = {
+  activeRunId: string | null;
+  digests: readonly SessionObserverDigest[];
+  lastReadAt?: number;
 };
 
 export type BoardViewCallbacks = {

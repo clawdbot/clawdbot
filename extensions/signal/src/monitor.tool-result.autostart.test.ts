@@ -134,6 +134,23 @@ describe("monitorSignalProvider autostart", () => {
     );
   });
 
+  it("passes a bare IPv6 bind host from an IPv6 daemon URL", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    const abortController = createAutoAbortController();
+
+    await runMonitorWithMocks({
+      autoStart: true,
+      baseUrl: "http://[::1]:9090",
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    expect(spawnSignalDaemonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ httpHost: "::1", httpPort: 9090 }),
+    );
+  });
+
   it("omits configPath when channels.signal.configPath is blank", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig({ configPath: " " });

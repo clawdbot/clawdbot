@@ -33,21 +33,20 @@ Vendor plugins register capability metadata (which provider supports which media
 
 ## Config
 
-`tools.media` holds a shared model list plus per-capability overrides:
+`tools.media` holds one capability-tagged model list plus small per-capability controls:
 
 ```json5
 {
   tools: {
     media: {
       concurrency: 2, // max concurrent capability runs (default)
-      models: [/* shared list, gate with capabilities */],
-      image: {/* optional overrides */},
-      audio: {
-        /* optional overrides */
-        echoTranscript: true,
-        echoFormat: '📝 "{transcript}"',
-      },
-      video: {/* optional overrides */},
+      models: [
+        { provider: "openai", model: "gpt-4o-mini-transcribe", capabilities: ["audio"] },
+        { provider: "google", model: "gemini-3-flash-preview", capabilities: ["image", "video"] },
+      ],
+      image: { preferredModel: "google/gemini-3-flash-preview" },
+      audio: { enabled: true },
+      video: { enabled: true },
     },
   },
 }
@@ -55,22 +54,21 @@ Vendor plugins register capability metadata (which provider supports which media
 
 Per-capability (`image`/`audio`/`video`) keys:
 
-| Key                                             | Type      | Default                                              | Notes                                                                               |
-| ----------------------------------------------- | --------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `enabled`                                       | `boolean` | auto (`false` disables)                              | Set `false` to turn off auto-detect for this capability                             |
-| `models`                                        | array     | none                                                 | Preferred before the shared `tools.media.models` list                               |
-| `prompt`                                        | `string`  | `"Describe the {media}."` (+ maxChars guidance)      | Image/video only by default                                                         |
-| `maxChars`                                      | `number`  | `500` (image/video), unset (audio)                   | Output is trimmed if the model returns more                                         |
-| `maxBytes`                                      | `number`  | image `10485760`, audio `20971520`, video `52428800` | Oversized media skips to the next model                                             |
-| `timeoutSeconds`                                | `number`  | `60` (image/audio), `120` (video)                    |                                                                                     |
-| `language`                                      | `string`  | unset                                                | Audio transcription hint                                                            |
-| `baseUrl`/`headers`/`providerOptions`/`request` | -         | -                                                    | Provider request overrides; see [Tools and custom providers](/gateway/config-tools) |
-| `attachments`                                   | object    | `{ mode: "first", maxAttachments: 1 }`               | See [Attachment policy](#attachment-policy)                                         |
-| `scope`                                         | object    | unset                                                | Gate by channel/chatType/keyPrefix                                                  |
-| `echoTranscript`                                | `boolean` | `false`                                              | Audio only: echo the transcript back to the chat before agent processing            |
-| `echoFormat`                                    | `string`  | `'📝 "{transcript}"'`                                | Audio only: `{transcript}` placeholder                                              |
+| Key              | Type      | Default                                | Notes                                                                |
+| ---------------- | --------- | -------------------------------------- | -------------------------------------------------------------------- |
+| `enabled`        | `boolean` | auto (`false` disables)                | Set `false` to turn off auto-detect for this capability              |
+| `preferredModel` | `string`  | first compatible entry                 | Prefer `provider/model`, model id, `provider:<id>`, or `cli:command` |
+| `prompt`         | `string`  | capability default                     | Default prompt when an entry does not override it                    |
+| `maxChars`       | `number`  | `500` image/video, unset audio         | Default output limit                                                 |
+| `maxBytes`       | `number`  | 10MB image, 20MB audio, 50MB video     | Default input limit                                                  |
+| `timeoutSeconds` | `number`  | `60` image/audio, `120` video          | Default request timeout                                              |
+| `language`       | `string`  | unset                                  | Audio transcription hint                                             |
+| `scope`          | object    | unset                                  | Gate by channel/chat type/source key                                 |
+| `attachments`    | object    | `{ mode: "first", maxAttachments: 1 }` | Select which matching attachments are processed                      |
+| `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing              |
+| `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
 
-Deepgram-specific options go under `providerOptions.deepgram` (the top-level `deepgram: { detectLanguage, punctuate, smartFormat }` field is deprecated but still read).
+Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured.
 
 ### Model entries
 
@@ -87,7 +85,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
       maxChars: 500,
       maxBytes: 10485760,
       timeoutSeconds: 60,
-      capabilities: ["image"], // optional, for multi-modal shared entries
+      capabilities: ["image"],
       profile: "vision-profile",
       preferredProfile: "vision-fallback",
     }
@@ -119,7 +117,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
 
 ### Provider credentials
 
-Provider media understanding uses the same auth resolution as normal model calls: auth profiles, environment variables, then `models.providers.<providerId>.apiKey`. `tools.media.*.models[]` entries do not accept an inline `apiKey` field.
+Provider media understanding uses the same auth resolution as normal model calls: auth profiles, environment variables, then `models.providers.<providerId>.apiKey`. `tools.media.models[]` entries do not accept an inline `apiKey` field.
 
 ```json5
 {

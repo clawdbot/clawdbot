@@ -1,4 +1,4 @@
-import type { CliBackendConfig } from "../../config/types.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import "./claude-live-session.js";
 
 type BuildClaudeLiveArgsParams = {

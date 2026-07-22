@@ -1,7 +1,7 @@
 import Foundation
-import OpenClawKit
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 private struct MemoryImportWireRequest: Sendable {
     let id: String
@@ -273,6 +273,16 @@ private func makeMemoryImportGateway(
 @Suite(.serialized)
 @MainActor
 struct OnboardingMemoryImportTests {
+    private func withTemporaryStateDir<T>(_ operation: () async throws -> T) async throws -> T {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        return try await DeviceIdentityStore.withStateDirectory(tempDir) {
+            try await operation()
+        }
+    }
+
     @Test func `plan maps planned and already imported memories into an offer`() async throws {
         let url = try #require(URL(string: "ws://memory.test"))
         let gateway = makeMemoryImportGateway(
@@ -401,38 +411,48 @@ struct OnboardingMemoryImportTests {
         #expect(broken.inlineError?.contains("inconsistent") == true)
     }
 
-    @Test func `foreign agent and duplicate provider identities reject the plan`() async throws {
-        let url = try #require(URL(string: "ws://memory.test"))
-        let counter = MemoryImportApplyCounter()
-        let gateway = makeMemoryImportGateway(
-            configProvider: { (url: url, token: nil, password: nil) },
-            responder: { task, request in
-                let payload: String
-                if request.method == "migrations.memory.plan" {
-                    let attempt = await counter.next(for: "plan")
-                    payload = attempt == 1
+    @Test func `foreign agent identity rejects the plan`() async throws {
+        try await self.withTemporaryStateDir {
+            let url = try #require(URL(string: "ws://memory.test"))
+            let gateway = makeMemoryImportGateway(
+                configProvider: { (url: url, token: nil, password: nil) },
+                responder: { task, request in
+                    let payload = request.method == "migrations.memory.plan"
                         ? #"{"agentId":"other","workspace":"/tmp/workspace","providers":[]}"#
-                        : memoryImportDuplicateProviderPlanPayload
-                } else {
-                    payload = "{}"
-                }
-                task.emitReceiveSuccess(.data(memoryImportOK(id: request.id, payload: payload)))
-            })
-        let model = OnboardingMemoryImportModel()
+                        : "{}"
+                    task.emitReceiveSuccess(.data(memoryImportOK(id: request.id, payload: payload)))
+                })
+            let model = OnboardingMemoryImportModel()
 
-        await model.startPlanning(gateway: gateway, agentId: "main")
-        guard case let .failed(agentMessage) = model.phase else {
-            Issue.record("Expected foreign-agent plan failure")
-            return
+            await model.startPlanning(gateway: gateway, agentId: "main")
+            guard case let .failed(message) = model.phase else {
+                Issue.record("Expected foreign-agent plan failure")
+                return
+            }
+            #expect(message.contains("different agent"))
         }
-        #expect(agentMessage.contains("different agent"))
+    }
 
-        await model.startPlanning(gateway: gateway, agentId: "main")
-        guard case let .failed(providerMessage) = model.phase else {
-            Issue.record("Expected duplicate-provider plan failure")
-            return
+    @Test func `duplicate provider identity rejects the plan`() async throws {
+        try await self.withTemporaryStateDir {
+            let url = try #require(URL(string: "ws://memory.test"))
+            let gateway = makeMemoryImportGateway(
+                configProvider: { (url: url, token: nil, password: nil) },
+                responder: { task, request in
+                    let payload = request.method == "migrations.memory.plan"
+                        ? memoryImportDuplicateProviderPlanPayload
+                        : "{}"
+                    task.emitReceiveSuccess(.data(memoryImportOK(id: request.id, payload: payload)))
+                })
+            let model = OnboardingMemoryImportModel()
+
+            await model.startPlanning(gateway: gateway, agentId: "main")
+            guard case let .failed(message) = model.phase else {
+                Issue.record("Expected duplicate-provider plan failure")
+                return
+            }
+            #expect(message.contains("invalid memory provider"))
         }
-        #expect(providerMessage.contains("invalid memory provider"))
     }
 
     @Test func `default agent id feeds the plan request`() async throws {

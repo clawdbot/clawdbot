@@ -145,6 +145,22 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun accessibilityControl_defaultsOffAndPersistsOptIn() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = testPrefs(context)
+
+    assertFalse(prefs.accessibilityControlEnabled.value)
+
+    prefs.setAccessibilityControlEnabled(true)
+
+    assertTrue(prefs.accessibilityControlEnabled.value)
+    assertTrue(plainPrefs.getBoolean("mobileUi.accessibilityControl.enabled", false))
+    assertTrue(testPrefs(context).accessibilityControlEnabled.value)
+  }
+
+  @Test
   fun installedAppsSharing_legacyOptInWithoutDisclosureRequiresReconsent() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)

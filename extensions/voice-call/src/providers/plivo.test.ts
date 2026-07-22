@@ -92,6 +92,50 @@ describe("PlivoProvider", () => {
     expect(callbackMap.get("call-uuid")).toBe("https://voice.openclaw.ai/voice/webhook");
   });
 
+  it("pins call-control transfer URLs to the configured publicUrl path", async () => {
+    const provider = new PlivoProvider(
+      {
+        authId: "MA000000000000000000",
+        authToken: "test-token",
+      },
+      {
+        publicUrl: "https://voice.openclaw.ai/voice/webhook?provider=plivo",
+      },
+    );
+    const apiRequest = vi.fn(async (_params: unknown) => ({}));
+    (
+      provider as unknown as {
+        apiRequest: (params: unknown) => Promise<unknown>;
+      }
+    ).apiRequest = apiRequest;
+
+    provider.parseWebhookEvent({
+      headers: { host: "attacker.example" },
+      rawBody:
+        "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
+      url: "https://attacker.example/admin?provider=plivo&flow=answer&callId=internal-call-id",
+      method: "POST",
+      query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
+    });
+
+    await provider.playTts({
+      callId: "internal-call-id",
+      providerCallId: "call-uuid",
+      text: "How can I help?",
+    });
+
+    expect(apiRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        endpoint: "/Call/call-uuid/",
+        body: expect.objectContaining({
+          aleg_url:
+            "https://voice.openclaw.ai/voice/webhook?provider=plivo&flow=xml-speak&callId=internal-call-id",
+        }),
+      }),
+    );
+  });
+
   it("renders an auto-response as the prompt for the next speech input", async () => {
     const provider = new PlivoProvider({
       authId: "MA000000000000000000",

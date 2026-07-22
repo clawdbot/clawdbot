@@ -21,7 +21,14 @@ describe("portable Claw schema conformance", () => {
     (version) => {
       const result = parseClawManifest({
         ...baseManifest,
-        packages: [{ kind: "skill", source: "clawhub", ref: "demo", version }],
+        packages: [
+          {
+            kind: "skill",
+            source: "clawhub",
+            ref: "demo",
+            version,
+          },
+        ],
       });
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toContainEqual(
@@ -33,7 +40,14 @@ describe("portable Claw schema conformance", () => {
   it("requires canonical ClawHub package names", () => {
     const result = parseClawManifest({
       ...baseManifest,
-      packages: [{ kind: "skill", source: "clawhub", ref: "Demo", version: "1.0.0" }],
+      packages: [
+        {
+          kind: "skill",
+          source: "clawhub",
+          ref: "Demo",
+          version: "1.0.0",
+        },
+      ],
     });
     expect(result.ok).toBe(false);
     expect(result.diagnostics).toContainEqual(

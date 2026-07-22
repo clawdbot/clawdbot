@@ -209,9 +209,9 @@ export function resolveOptionalMediaToolFactoryPlan(params: {
     allowlist: toolAllowlist,
     denylist: toolDenylist,
   });
-  const explicitImageGeneration = hasExplicitToolModelConfig(defaults?.imageGenerationModel);
-  const explicitVideoGeneration = hasExplicitToolModelConfig(defaults?.videoGenerationModel);
-  const explicitMusicGeneration = hasExplicitToolModelConfig(defaults?.musicGenerationModel);
+  const explicitImageGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.image);
+  const explicitVideoGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.video);
+  const explicitMusicGeneration = hasExplicitToolModelConfig(defaults?.mediaModels?.music);
   const explicitPdf = hasExplicitPdfModelConfig(params.config);
   if (params.config?.plugins?.enabled === false) {
     // Optional media tools are plugin/capability backed. Disabling plugins shuts them off even when

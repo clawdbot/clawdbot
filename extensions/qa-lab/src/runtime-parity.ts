@@ -985,6 +985,7 @@ function readRuntimeParitySessionEntries(params: {
     const entries = listSessionEntries({
       agentId: params.agentId,
       env: runtimeParitySessionEnv(params.stateDir),
+      readOnly: true,
     })
       .filter(({ entry }) => readNonEmptyString(entry.sessionId))
       .map(({ entry, sessionKey }) => ({

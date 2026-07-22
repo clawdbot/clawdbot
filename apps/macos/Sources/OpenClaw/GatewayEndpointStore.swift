@@ -77,6 +77,7 @@ actor GatewayEndpointStore {
         let bindMode: String?
         let remoteTransport: SourceTransport
         let directRemoteURL: URL?
+        let remoteTLSFingerprint: String?
         /// Invalidates a suspended SSH lookup when its desired route changes.
         let sshRouteIdentity: SSHRouteIdentity?
     }
@@ -366,12 +367,13 @@ actor GatewayEndpointStore {
         }
 
         let port = deps.localPort()
+        let root = OpenClawConfigFile.loadDict()
         let bind = GatewayEndpointStore.resolveGatewayBindMode(
-            root: OpenClawConfigFile.loadDict(),
+            root: root,
             env: ProcessInfo.processInfo.environment)
-        let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: OpenClawConfigFile.loadDict())
+        let customBindHost = GatewayEndpointStore.resolveGatewayCustomBindHost(root: root)
         let scheme = GatewayEndpointStore.resolveGatewayScheme(
-            root: OpenClawConfigFile.loadDict(),
+            root: root,
             env: ProcessInfo.processInfo.environment)
         let host = GatewayEndpointStore.resolveLocalGatewayHost(
             bindMode: bind,
@@ -396,6 +398,10 @@ actor GatewayEndpointStore {
                 routeRevision: self.endpointRevision)
             self.resolvedEndpoint = GatewayConnection.EndpointSnapshot(
                 config: (url, token, password),
+                tls: GatewayTLSRoute.resolve(
+                    url: url,
+                    connectionMode: .local,
+                    configuredFingerprint: nil),
                 routeAuthority: nil,
                 deviceAuthGatewayID: deviceAuthGatewayID,
                 revision: self.endpointRevision)
@@ -484,11 +490,16 @@ actor GatewayEndpointStore {
         case .local:
             self.cancelRemoteEnsure()
             guard await self.sourceIsCurrent(source, generation: generation) else { return }
+            let url = URL(string: "\(source.scheme)://\(source.localHost):\(source.localPort)")!
             self.setReady(
                 mode: .local,
-                url: URL(string: "\(source.scheme)://\(source.localHost):\(source.localPort)")!,
+                url: url,
                 token: source.token,
                 password: source.password,
+                tls: GatewayTLSRoute.resolve(
+                    url: url,
+                    connectionMode: .local,
+                    configuredFingerprint: nil),
                 deviceAuthGatewayID: source.deviceAuthGatewayID,
                 routeAuthority: nil)
         case .remote:
@@ -507,6 +518,10 @@ actor GatewayEndpointStore {
                     url: url,
                     token: source.token,
                     password: source.password,
+                    tls: GatewayTLSRoute.resolve(
+                        url: url,
+                        connectionMode: .remote,
+                        configuredFingerprint: source.remoteTLSFingerprint),
                     deviceAuthGatewayID: source.deviceAuthGatewayID,
                     routeAuthority: nil)
                 return
@@ -520,11 +535,16 @@ actor GatewayEndpointStore {
             }
             guard await self.sourceIsCurrent(source, generation: generation) else { return }
             self.cancelRemoteEnsure()
+            let url = URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!
             self.setReady(
                 mode: .remote,
-                url: URL(string: "\(source.scheme)://127.0.0.1:\(Int(route.localPort))")!,
+                url: url,
                 token: source.token,
                 password: source.password,
+                tls: GatewayTLSRoute.resolve(
+                    url: url,
+                    connectionMode: .remote,
+                    configuredFingerprint: source.remoteTLSFingerprint),
                 deviceAuthGatewayID: source.deviceAuthGatewayID,
                 routeAuthority: route.generation)
         case .unconfigured:
@@ -679,6 +699,10 @@ actor GatewayEndpointStore {
                 url: url,
                 token: source.token,
                 password: source.password,
+                tls: GatewayTLSRoute.resolve(
+                    url: url,
+                    connectionMode: .remote,
+                    configuredFingerprint: source.remoteTLSFingerprint),
                 deviceAuthGatewayID: source.deviceAuthGatewayID,
                 routeAuthority: nil)
         }
@@ -745,6 +769,10 @@ actor GatewayEndpointStore {
             url: url,
             token: source.token,
             password: source.password,
+            tls: GatewayTLSRoute.resolve(
+                url: url,
+                connectionMode: .remote,
+                configuredFingerprint: source.remoteTLSFingerprint),
             deviceAuthGatewayID: source.deviceAuthGatewayID,
             routeAuthority: route.generation)
     }
@@ -815,6 +843,7 @@ actor GatewayEndpointStore {
         url: URL,
         token: String?,
         password: String?,
+        tls: GatewayTLSRoute?,
         deviceAuthGatewayID: String?,
         routeAuthority: UInt64?) -> GatewayConnection.EndpointSnapshot
     {
@@ -822,6 +851,7 @@ actor GatewayEndpointStore {
             endpoint.config.url != url ||
                 endpoint.config.token != token ||
                 endpoint.config.password != password ||
+                !GatewayTLSRoute.hasSameConnectionIdentity(endpoint.tls, tls) ||
                 endpoint.deviceAuthGatewayID != deviceAuthGatewayID ||
                 endpoint.routeAuthority != routeAuthority
         } ?? true
@@ -830,6 +860,7 @@ actor GatewayEndpointStore {
         }
         let endpoint = GatewayConnection.EndpointSnapshot(
             config: (url, token, password),
+            tls: tls,
             routeAuthority: routeAuthority,
             deviceAuthGatewayID: deviceAuthGatewayID,
             revision: self.endpointRevision)
@@ -842,7 +873,9 @@ actor GatewayEndpointStore {
             routeRevision: self.endpointRevision))
         return endpoint
     }
+}
 
+extension GatewayEndpointStore {
     func maybeFallbackToTailnet(from currentURL: URL) async -> GatewayConnection.EndpointSnapshot? {
         guard let expectedEndpoint = resolvedEndpoint,
               expectedEndpoint.config.url == currentURL
@@ -878,6 +911,10 @@ actor GatewayEndpointStore {
             url: url,
             token: source.token,
             password: source.password,
+            tls: GatewayTLSRoute.resolve(
+                url: url,
+                connectionMode: .local,
+                configuredFingerprint: nil),
             deviceAuthGatewayID: source.deviceAuthGatewayID,
             routeAuthority: nil)
         return self.resolvedEndpoint
@@ -980,6 +1017,7 @@ extension GatewayEndpointStore {
             bindMode: bindMode,
             remoteTransport: SourceTransport(remoteResolution.transport),
             directRemoteURL: remoteResolution.directURL,
+            remoteTLSFingerprint: isRemote ? GatewayRemoteConfig.resolveTLSFingerprint(root: root) : nil,
             sshRouteIdentity: sshRouteIdentity)
         let selectionIsCurrent = await generationIsCurrent(app.generation)
         guard selectionIsCurrent, !Task.isCancelled else {
@@ -997,6 +1035,7 @@ extension GatewayEndpointStore {
                 bindMode: source.bindMode,
                 remoteTransport: .ssh,
                 directRemoteURL: nil,
+                remoteTLSFingerprint: nil,
                 sshRouteIdentity: nil)
         }
         return source

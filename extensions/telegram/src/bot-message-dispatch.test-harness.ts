@@ -573,7 +573,6 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     sendChatActionHandler: { sendChatAction: vi.fn(async () => undefined) },
     ackReactionPromise: null,
     reactionApi: null,
-    removeAckAfterReply: false,
   } as unknown as TelegramMessageContext;
   base.turn = {
     storePath: "/tmp/openclaw/telegram-sessions.json",

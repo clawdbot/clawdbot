@@ -9,10 +9,6 @@ import { normalizeProviderId } from "./model-selection-normalize.js";
 /** Return true when a provider id resolves to a configured or plugin CLI backend. */
 export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   const normalized = normalizeProviderId(provider);
-  const backends = cfg?.agents?.defaults?.cliBackends ?? {};
-  if (Object.keys(backends).some((key) => normalizeProviderId(key) === normalized)) {
-    return true;
-  }
   const cliBackends = resolveRuntimeCliBackends();
   if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
     return true;

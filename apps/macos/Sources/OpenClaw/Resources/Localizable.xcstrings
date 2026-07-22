@@ -3537,6 +3537,142 @@
         }
       }
     },
+    "Active computer detection": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active computer detection"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "活跃电脑检测"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用中電腦偵測"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detecção de computador ativo"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erkennung aktiver Computer"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detección de equipos activos"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクティブなコンピューターの検出"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "활성 컴퓨터 감지"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Détection d'ordinateur actif"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "सक्रिय कंप्यूटर पहचान"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "كشف الحاسوب النشط"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rilevamento computer attivo"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etkin bilgisayar algılama"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Виявлення активного комп'ютера"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deteksi komputer aktif"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wykrywanie aktywnego komputera"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การตรวจจับคอมพิวเตอร์ที่ใช้งานอยู่"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Phát hiện máy tính đang hoạt động"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detectie van actieve computer"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تشخیص رایانه فعال"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Определение активного компьютера"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identifiering av aktiv dator"
+          }
+        }
+      }
+    },
     "Activity": {
       "localizations": {
         "en": {
@@ -7073,138 +7209,138 @@
         }
       }
     },
-    "Allow Voice Wake and audio capture": {
+    "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Allow Voice Wake and audio capture"
+            "value": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation"
           }
         },
         "zh-CN": {
           "stringUnit": {
             "state": "translated",
-            "value": "允许语音唤醒和音频采集"
+            "value": "允许语音唤醒、按键说话、Talk Mode 和 Quick Chat 听写"
           }
         },
         "zh-TW": {
           "stringUnit": {
             "state": "translated",
-            "value": "允許 Voice Wake 和音訊擷取"
+            "value": "允許語音喚醒、按住通話、Talk Mode 及 Quick Chat 聽寫"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Permitir Voice Wake e captura de áudio"
+            "value": "Permitir Voice Wake, push-to-talk, Talk Mode e ditado do Quick Chat"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voice Wake und Audioaufnahme erlauben"
+            "value": "Voice Wake, Push-to-Talk, Talk Mode und Quick-Chat-Diktat erlauben"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Permitir Voice Wake y la captura de audio"
+            "value": "Permitir Voice Wake, pulsar para hablar, Modo de conversación y dictado de Quick Chat"
           }
         },
         "ja-JP": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voice Wake と音声キャプチャを許可"
+            "value": "Voice Wake、プッシュトゥトーク、Talk Mode、Quick Chatのディクテーションを許可"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voice Wake 및 오디오 캡처 허용"
+            "value": "음성 깨우기, 푸시투토크, Talk Mode, 빠른 채팅 받아쓰기를 허용합니다"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Autoriser Voice Wake et la capture audio"
+            "value": "Autoriser Voice Wake, la fonction push-to-talk, le mode Talk et la dictée Quick Chat"
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voice Wake और ऑडियो कैप्चर की अनुमति दें"
+            "value": "Voice Wake, push-to-talk, Talk Mode, और Quick Chat डिक्टेशन की अनुमति दें"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "السماح بالتنبيه الصوتي والتقاط الصوت"
+            "value": "السماح بالتنبيه الصوتي والضغط للتحدث ووضع التحدث والإملاء في Quick Chat"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Consenti Voice Wake e l’acquisizione audio"
+            "value": "Consenti Voice Wake, push-to-talk, Modalità Conversazione e dettatura Quick Chat"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voice Wake ve ses yakalamaya izin ver"
+            "value": "Voice Wake, bas-konuş, Talk Mode ve Quick Chat dikte özelliklerine izin ver"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Дозволити Voice Wake і захоплення аудіо"
+            "value": "Дозволити Voice Wake, push-to-talk, режим розмови та диктування Quick Chat"
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Izinkan Voice Wake dan pengambilan audio"
+            "value": "Izinkan Voice Wake, push-to-talk, Talk Mode, dan dikte Quick Chat"
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Zezwalaj na Voice Wake i przechwytywanie dźwięku"
+            "value": "Zezwól na Wybudzanie głosem, tryb push-to-talk, tryb rozmowy i dyktowanie Quick Chat"
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "อนุญาต Voice Wake และการบันทึกเสียง"
+            "value": "อนุญาต Voice Wake, push-to-talk, Talk Mode และการป้อนตามคำบอกของ Quick Chat"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cho phép Voice Wake và thu âm thanh"
+            "value": "Cho phép Voice Wake, nhấn-để-nói, Talk Mode và đọc chính tả Quick Chat"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voice Wake en audio-opname toestaan"
+            "value": "Sta Voice Wake, push-to-talk, Talk Mode en Quick Chat-dictaat toe"
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "اجازه دادن به Voice Wake و ضبط صدا"
+            "value": "اجازه دادن به Voice Wake، فشار برای صحبت، حالت گفتگو و دیکته Quick Chat"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Разрешить Voice Wake и запись аудио"
+            "value": "Разрешить Voice Wake, push-to-talk, Talk Mode и диктовку Quick Chat"
           }
         },
         "sv": {
           "stringUnit": {
             "state": "translated",
-            "value": "Tillåt Voice Wake och ljudinspelning"
+            "value": "Tillåt röstväckning, tryck-och-prata, Talk Mode och diktering i Quick Chat"
           }
         }
       }
@@ -19993,6 +20129,142 @@
         }
       }
     },
+    "Check": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "检查"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "檢查"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificar"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prüfen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comprobar"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "確認"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "확인"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifier"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "जाँचें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تحقق"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Denetle"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перевірити"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Periksa"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sprawdź"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ตรวจสอบ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kiểm tra"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Controleren"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "بررسی"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверить"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontrollera"
+          }
+        }
+      }
+    },
     "Check OpenClaw status": {
       "localizations": {
         "en": {
@@ -29105,6 +29377,142 @@
         }
       }
     },
+    "Control Terminal for automation actions; other apps request access separately": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Control Terminal for automation actions; other apps request access separately"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "控制 Terminal 以执行自动化操作；其他应用需单独请求访问权限"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "控制 Terminal 以執行自動化動作；其他應用程式須另行請求存取權"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Controle o Terminal para ações de automação; outros apps solicitam acesso separadamente"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terminal für Automatisierungsaktionen steuern; andere Apps fordern Zugriff separat an"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Controla Terminal para acciones de automatización; otras apps solicitan acceso por separado"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自動化アクション用にTerminalを制御します。他のアプリは個別にアクセスを要求します"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "자동화 작업을 위해 Terminal을 제어합니다. 다른 앱은 별도로 액세스를 요청합니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contrôler Terminal pour les actions d'automatisation ; les autres applications demandent l'accès séparément"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "स्वचालन क्रियाओं के लिए Terminal को नियंत्रित करें; अन्य ऐप्स अलग से एक्सेस का अनुरोध करते हैं"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تحكّم في Terminal لإجراءات الأتمتة؛ تطلب التطبيقات الأخرى الوصول بشكل منفصل"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Controlla il Terminale per le azioni di automazione; le altre app richiedono l'accesso separatamente"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otomasyon işlemleri için Terminal'i denetleyin; diğer uygulamalar erişimi ayrıca ister"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Керуйте Terminal для дій автоматизації; інші застосунки запитують доступ окремо"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontrol Terminal untuk tindakan otomatisasi; aplikasi lain meminta akses secara terpisah"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontroluj Terminal dla działań automatyzacji; inne aplikacje żądają dostępu osobno"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ควบคุม Terminal สำหรับการดำเนินการอัตโนมัติ แอปอื่นๆ ขอสิทธิ์การเข้าถึงแยกต่างหาก"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Điều khiển Terminal cho các hành động tự động hóa; các ứng dụng khác yêu cầu quyền truy cập riêng"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bedien Terminal voor automatiseringsacties; andere apps vragen afzonderlijk om toegang"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "کنترل Terminal برای اقدامات خودکارسازی؛ سایر برنامه‌ها دسترسی را جداگانه درخواست می‌کنند"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Управлять Terminal для действий автоматизации; другие приложения запрашивают доступ отдельно"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Styr Terminal för automationsåtgärder; andra appar begär åtkomst separat"
+          }
+        }
+      }
+    },
     "Control UI elements when an action requires it": {
       "localizations": {
         "en": {
@@ -29509,142 +29917,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Styr hur agentens skalkommandon godkänns på denna Mac."
-          }
-        }
-      }
-    },
-    "Control other apps (e.g. Terminal) for automation actions": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Control other apps (e.g. Terminal) for automation actions"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "控制其他 App（例如 Terminal）以执行自动化操作"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "控制其他 App（例如 Terminal）以執行自動化動作"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controlar outros apps (por exemplo, Terminal) para ações de automação"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Andere Apps (z. B. Terminal) für Automatisierungsaktionen steuern"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controlar otras apps (p. ej., Terminal) para acciones de automatización"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "自動化アクションのために他のアプリ（例: Terminal）を制御"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "자동화 작업을 위해 다른 앱(예: Terminal) 제어"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contrôler d’autres apps (par ex. Terminal) pour les actions d’automatisation"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ऑटोमेशन क्रियाओं के लिए अन्य ऐप्स (जैसे Terminal) को नियंत्रित करें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "التحكم في التطبيقات الأخرى (مثل Terminal) لإجراءات الأتمتة"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Controlla altre app (ad es. Terminale) per azioni di automazione"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Otomasyon eylemleri için diğer uygulamaları (örn. Terminal) kontrol et"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Керування іншими застосунками (наприклад, Terminal) для дій автоматизації"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kontrol aplikasi lain (mis. Terminal) untuk tindakan otomatisasi"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sterowanie innymi aplikacjami (np. Terminalem) na potrzeby działań automatyzacji"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ควบคุมแอปอื่น (เช่น Terminal) สำหรับการทำงานอัตโนมัติ"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Điều khiển các ứng dụng khác (ví dụ: Terminal) cho các tác vụ tự động hóa"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Andere apps bedienen (bijv. Terminal) voor automatiseringsacties"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "کنترل برنامه‌های دیگر (مثلاً Terminal) برای اقدامات اتوماسیون"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Управление другими приложениями (например, Terminal) для автоматизированных действий"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Styr andra appar (t.ex. Terminal) för automatiseringsåtgärder"
           }
         }
       }
@@ -62833,138 +63105,138 @@
         }
       }
     },
-    "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.": {
+    "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device."
+            "value": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac."
           }
         },
         "zh-CN": {
           "stringUnit": {
             "state": "translated",
-            "value": "在运行语音命令前监听唤醒短语。识别完全在设备端运行。"
+            "value": "在运行语音命令前监听唤醒短语。唤醒短语识别保持在此 Mac 本地。"
           }
         },
         "zh-TW": {
           "stringUnit": {
             "state": "translated",
-            "value": "在執行語音指令前聆聽喚醒詞。辨識完全在裝置端執行。"
+            "value": "在執行語音指令前先聆聽喚醒詞。喚醒詞辨識保持在此 Mac 上。"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ouça uma frase de ativação antes de executar comandos de voz. O reconhecimento é executado totalmente no dispositivo."
+            "value": "Escute uma frase de ativação antes de executar comandos de voz. O reconhecimento da frase de ativação permanece neste Mac."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vor dem Ausführen von Sprachbefehlen auf eine Weckphrase achten. Die Erkennung erfolgt vollständig auf dem Gerät."
+            "value": "Auf ein Aktivierungswort warten, bevor Sprachbefehle ausgeführt werden. Die Erkennung des Aktivierungsworts bleibt auf diesem Mac."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Escucha una frase de activación antes de ejecutar comandos de voz. El reconocimiento se ejecuta completamente en el dispositivo."
+            "value": "Escucha una frase de activación antes de ejecutar comandos de voz. El reconocimiento de la frase de activación permanece en este Mac."
           }
         },
         "ja-JP": {
           "stringUnit": {
             "state": "translated",
-            "value": "音声コマンドを実行する前にウェイクフレーズを待ち受けます。認識は完全にデバイス上で実行されます。"
+            "value": "音声コマンドを実行する前にウェイクフレーズを待ち受けます。ウェイクフレーズの認識はこのMac上で処理されます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "음성 명령을 실행하기 전에 깨우기 문구를 감지합니다. 인식은 온전히 기기 내에서 실행됩니다."
+            "value": "음성 명령을 실행하기 전에 깨우기 문구를 대기합니다. 깨우기 문구 인식은 이 Mac에서 유지됩니다."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Écouter une phrase de réveil avant d’exécuter des commandes vocales. La reconnaissance s’exécute entièrement sur l’appareil."
+            "value": "Écouter une phrase de réveil avant d'exécuter des commandes vocales. La reconnaissance de la phrase de réveil reste sur ce Mac."
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "वॉइस कमांड चलाने से पहले वेक वाक्यांश सुनें। पहचान पूरी तरह डिवाइस पर ही चलती है।"
+            "value": "वॉइस कमांड चलाने से पहले एक वेक फ़्रेज़ सुनें। वेक-फ़्रेज़ पहचान इस Mac पर ही रहती है।"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "الاستماع إلى عبارة تنبيه قبل تشغيل الأوامر الصوتية. تتم عملية التعرّف بالكامل على الجهاز."
+            "value": "الاستماع لعبارة تنبيه قبل تشغيل الأوامر الصوتية. يبقى التعرف على عبارة التنبيه على هذا الـ Mac."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ascolta una frase di attivazione prima di eseguire i comandi vocali. Il riconoscimento viene eseguito interamente sul dispositivo."
+            "value": "Ascolta una frase di attivazione prima di eseguire i comandi vocali. Il riconoscimento della frase di attivazione resta su questo Mac."
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sesli komutları çalıştırmadan önce bir uyandırma ifadesini dinleyin. Tanıma tamamen cihaz üzerinde çalışır."
+            "value": "Sesli komutları çalıştırmadan önce bir uyandırma ifadesini dinleyin. Uyandırma ifadesi tanıma bu Mac'te kalır."
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Прослуховувати фразу пробудження перед виконанням голосових команд. Розпізнавання виконується повністю на пристрої."
+            "value": "Слухати фразу пробудження перед виконанням голосових команд. Розпізнавання фрази пробудження залишається на цьому Mac."
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dengarkan frasa bangun sebelum menjalankan perintah suara. Pengenalan berjalan sepenuhnya di perangkat."
+            "value": "Dengarkan frasa pembangun sebelum menjalankan perintah suara. Pengenalan frasa pembangun tetap di Mac ini."
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nasłuchuj frazy wybudzania przed uruchomieniem poleceń głosowych. Rozpoznawanie działa w pełni na urządzeniu."
+            "value": "Nasłuchuj frazy wybudzającej przed uruchomieniem poleceń głosowych. Rozpoznawanie frazy wybudzającej pozostaje na tym Macu."
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "ฟังวลีปลุกก่อนเรียกใช้คำสั่งเสียง การรู้จำทำงานบนอุปกรณ์ทั้งหมด"
+            "value": "ฟังวลีปลุกก่อนที่จะเรียกใช้คำสั่งเสียง การจดจำวลีปลุกจะทำงานบน Mac เครื่องนี้"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Lắng nghe cụm từ đánh thức trước khi chạy lệnh thoại. Nhận dạng chạy hoàn toàn trên thiết bị."
+            "value": "Lắng nghe cụm từ đánh thức trước khi chạy lệnh thoại. Nhận dạng cụm từ đánh thức vẫn ở trên máy Mac này."
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Luister naar een wake-zin voordat spraakopdrachten worden uitgevoerd. Herkenning gebeurt volledig op het apparaat."
+            "value": "Luister naar een wekzin voordat spraakopdrachten worden uitgevoerd. Herkenning van de wekzin blijft op deze Mac."
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "پیش از اجرای فرمان‌های صوتی، به عبارت بیدارسازی گوش دهد. تشخیص کاملاً روی دستگاه انجام می‌شود."
+            "value": "پیش از اجرای دستورات صوتی به یک عبارت بیدارباش گوش دهید. تشخیص عبارت بیدارباش روی این Mac باقی می‌ماند."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ожидать фразу активации перед выполнением голосовых команд. Распознавание полностью выполняется на устройстве."
+            "value": "Прослушивать фразу активации перед выполнением голосовых команд. Распознавание фразы активации остаётся на этом Mac."
           }
         },
         "sv": {
           "stringUnit": {
             "state": "translated",
-            "value": "Lyssna efter en väckningsfras innan röstkommandon körs. Igenkänning sker helt på enheten."
+            "value": "Lyssna efter en väckningsfras innan röstkommandon körs. Igenkänning av väckningsfras förblir på denna Mac."
           }
         }
       }
@@ -80513,6 +80785,142 @@
         }
       }
     },
+    "On-device recognition is unavailable for the selected language on this Mac.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On-device recognition is unavailable for the selected language on this Mac."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此 Mac 上所选语言不支持设备端识别。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此 Mac 上所選語言無法使用裝置端辨識。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O reconhecimento no dispositivo não está disponível para o idioma selecionado neste Mac."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Erkennung auf dem Gerät ist für die ausgewählte Sprache auf diesem Mac nicht verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El reconocimiento en el dispositivo no está disponible para el idioma seleccionado en este Mac."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このMacでは、選択した言語のデバイス上での認識を利用できません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 Mac에서는 선택한 언어의 기기 내 인식을 사용할 수 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La reconnaissance sur l'appareil n'est pas disponible pour la langue sélectionnée sur ce Mac."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस Mac पर चयनित भाषा के लिए ऑन-डिवाइस पहचान अनुपलब्ध है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "التعرف على الجهاز غير متوفر للغة المحددة على هذا الـ Mac."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il riconoscimento sul dispositivo non è disponibile per la lingua selezionata su questo Mac."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçili dil için bu Mac'te cihaz üzerinde tanıma kullanılamıyor."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Розпізнавання на пристрої недоступне для вибраної мови на цьому Mac."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pengenalan di perangkat tidak tersedia untuk bahasa yang dipilih di Mac ini."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rozpoznawanie na urządzeniu jest niedostępne dla wybranego języka na tym Macu."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การจดจำบนอุปกรณ์ไม่พร้อมใช้งานสำหรับภาษาที่เลือกบน Mac เครื่องนี้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nhận dạng trên thiết bị không khả dụng cho ngôn ngữ đã chọn trên máy Mac này."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Herkenning op het apparaat is niet beschikbaar voor de geselecteerde taal op deze Mac."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تشخیص روی دستگاه برای زبان انتخاب‌شده روی این Mac در دسترس نیست."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание на устройстве недоступно для выбранного языка на этом Mac."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Igenkänning på enheten är inte tillgänglig för det valda språket på denna Mac."
+          }
+        }
+      }
+    },
     "Onboarding walkthrough": {
       "localizations": {
         "en": {
@@ -94653,6 +95061,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tryck på start, säg ett aktiveringsord och vänta på detektering."
+          }
+        }
+      }
+    },
+    "Privacy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隐私"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隱私權"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacidade"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datenschutz"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacidad"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プライバシー"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "개인정보"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confidentialité"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "गोपनीयता"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الخصوصية"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Privacy"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gizlilik"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Конфіденційність"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privasi"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prywatność"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ความเป็นส่วนตัว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quyền riêng tư"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Privacy"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "حریم خصوصی"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Конфиденциальность"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Integritet"
           }
         }
       }
@@ -118321,6 +118865,142 @@
         }
       }
     },
+    "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分享此 Mac 的空闲时长，以便 OpenClaw 识别您最近使用的 Mac 并路由节点提醒。绝不发送按键、指针位置、应用名称或窗口标题。需要“辅助功能”权限。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分享此 Mac 的閒置時間，讓 OpenClaw 能識別您最近使用的 Mac 並路由節點警示。絕不傳送按鍵、指標位置、應用程式名稱或視窗標題。需要「輔助使用」權限。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartilhe o tempo de inatividade deste Mac para que o OpenClaw possa identificar o Mac que você usou mais recentemente e rotear alertas de nó. Nunca envia teclas, posições do ponteiro, nomes de apps ou títulos de janelas. Requer Acessibilidade."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teile die Leerlaufdauer dieses Macs, damit OpenClaw den zuletzt genutzten Mac identifizieren und Knoten-Benachrichtigungen weiterleiten kann. Es werden niemals Tastenanschläge, Zeigerpositionen, App-Namen oder Fenstertitel gesendet. Erfordert Bedienungshilfen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comparte el tiempo de inactividad de este Mac para que OpenClaw pueda identificar el Mac que usaste más recientemente y enrutar alertas de nodo. Nunca envía teclas, posiciones del puntero, nombres de apps ni títulos de ventana. Requiere Accesibilidad."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このMacのアイドル時間を共有すると、OpenClawが最近使用したMacを識別し、ノードアラートをルーティングできます。キー入力、ポインター位置、アプリ名、ウィンドウタイトルは送信されません。アクセシビリティが必要です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw이 가장 최근에 사용한 Mac을 식별하고 노드 알림을 라우팅할 수 있도록 이 Mac의 유휴 시간을 공유합니다. 키 입력, 포인터 위치, 앱 이름, 창 제목은 절대 전송하지 않습니다. 손쉬운 사용 권한이 필요합니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partagez la durée d'inactivité de ce Mac afin qu'OpenClaw puisse identifier le Mac que vous avez utilisé le plus récemment et acheminer les alertes de nœud. N'envoie jamais les touches, les positions du pointeur, les noms d'applications ni les titres de fenêtres. Nécessite l'Accessibilité."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस Mac की निष्क्रियता अवधि साझा करें ताकि OpenClaw उस Mac की पहचान कर सके जिसे आपने हाल ही में सबसे अधिक उपयोग किया और नोड अलर्ट रूट कर सके। कभी भी कीज़, पॉइंटर स्थिति, ऐप नाम, या विंडो शीर्षक नहीं भेजता। Accessibility आवश्यक है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "شارك مدة خمول هذا الـ Mac حتى يتمكن OpenClaw من تحديد الـ Mac الذي استخدمته مؤخرًا وتوجيه تنبيهات العُقد. لا يرسل أبدًا المفاتيح أو مواضع المؤشر أو أسماء التطبيقات أو عناوين النوافذ. يتطلب إمكانية الوصول."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Condividi la durata di inattività di questo Mac così OpenClaw può identificare il Mac usato più di recente e instradare gli avvisi dei nodi. Non invia mai tasti, posizioni del puntatore, nomi di app o titoli delle finestre. Richiede Accessibilità."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw'un en son kullandığınız Mac'i belirleyip düğüm uyarılarını yönlendirebilmesi için bu Mac'in boşta kalma süresini paylaşın. Tuşları, işaretçi konumlarını, uygulama adlarını veya pencere başlıklarını asla göndermez. Erişilebilirlik gerektirir."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Діліться тривалістю простою цього Mac, щоб OpenClaw міг визначити Mac, який ви використовували останнім, і спрямовувати сповіщення вузлів. Ніколи не надсилає клавіші, позиції вказівника, назви застосунків чи заголовки вікон. Потребує Спеціальні можливості."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bagikan durasi idle Mac ini agar OpenClaw dapat mengidentifikasi Mac yang terakhir Anda gunakan dan merutekan peringatan node. Tidak pernah mengirim tombol, posisi penunjuk, nama aplikasi, atau judul jendela. Memerlukan Accessibility."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Udostępniaj czas bezczynności tego Maca, aby OpenClaw mógł zidentyfikować Maca, którego użyto ostatnio, i kierować alerty węzła. Nigdy nie wysyła klawiszy, pozycji wskaźnika, nazw aplikacji ani tytułów okien. Wymaga Ułatwień dostępu."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "แชร์ระยะเวลาที่ Mac เครื่องนี้ไม่ได้ใช้งาน เพื่อให้ OpenClaw ระบุ Mac ที่คุณใช้ล่าสุดและกำหนดเส้นทางการแจ้งเตือนโหนดได้ ไม่มีการส่งคีย์ ตำแหน่งตัวชี้ ชื่อแอป หรือชื่อหน้าต่าง ต้องใช้การช่วยการเข้าถึง"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chia sẻ thời gian nhàn rỗi của máy Mac này để OpenClaw có thể xác định máy Mac bạn đã dùng gần đây nhất và định tuyến cảnh báo nút. Không bao giờ gửi phím, vị trí con trỏ, tên ứng dụng hay tiêu đề cửa sổ. Yêu cầu Trợ năng."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deel de inactiviteitsduur van deze Mac zodat OpenClaw de Mac kan identificeren die je het meest recent hebt gebruikt en knooppuntwaarschuwingen kan routeren. Verstuurt nooit toetsen, aanwijzerposities, app-namen of venstertitels. Vereist Toegankelijkheid."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "مدت زمان بیکاری این Mac را به اشتراک بگذارید تا OpenClaw بتواند Mac که اخیراً استفاده کرده‌اید را شناسایی کرده و هشدارهای نود را مسیریابی کند. هرگز کلیدها، موقعیت اشاره‌گر، نام برنامه‌ها یا عنوان پنجره‌ها ارسال نمی‌شود. به دسترسی‌پذیری نیاز دارد."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Делитесь временем простоя этого Mac, чтобы OpenClaw мог определить Mac, который вы использовали последним, и направлять оповещения узла. Никогда не отправляет клавиши, положения указателя, названия приложений или заголовки окон. Требуется Универсальный доступ."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dela denna Macs inaktivitetstid så att OpenClaw kan identifiera vilken Mac du använde senast och dirigera nodaviseringar. Skickar aldrig tangenttryckningar, pekarpositioner, appnamn eller fönstertitlar. Kräver Hjälpmedel."
+          }
+        }
+      }
+    },
     "Shell commands allowed": {
       "localizations": {
         "en": {
@@ -125797,6 +126477,142 @@
           "stringUnit": {
             "state": "new",
             "value": "Status"
+          }
+        }
+      }
+    },
+    "Status unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status unavailable"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "状态不可用"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "狀態無法使用"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status indisponível"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estado no disponible"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ステータスを取得できません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "상태를 사용할 수 없음"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Statut indisponible"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "स्थिति अनुपलब्ध"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "الحالة غير متوفرة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stato non disponibile"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durum kullanılamıyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Статус недоступний"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status tidak tersedia"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status niedostępny"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "สถานะไม่พร้อมใช้งาน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trạng thái không khả dụng"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status niet beschikbaar"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "وضعیت در دسترس نیست"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Статус недоступен"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status ej tillgänglig"
           }
         }
       }
@@ -142801,142 +143617,6 @@
         }
       }
     },
-    "Transcribe Voice Wake trigger phrases on-device": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transcribe Voice Wake trigger phrases on-device"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在设备端转录语音唤醒触发短语"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "在裝置上轉錄 Voice Wake 觸發詞組"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transcrever frases de acionamento do Voice Wake no dispositivo"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Auslösephrasen für Voice Wake auf dem Gerät transkribieren"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transcribir frases de activación de Voice Wake en el dispositivo"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice Wake のトリガーフレーズをデバイス上で文字起こし"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "기기 내에서 Voice Wake 트리거 문구 전사"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transcrire les phrases de déclenchement vocal Voice Wake sur l’appareil"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice Wake ट्रिगर वाक्यांशों को डिवाइस पर ट्रांसक्राइब करें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "نسخ عبارات تشغيل Voice Wake على الجهاز"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Trascrivi sul dispositivo le frasi di attivazione vocale"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice Wake tetikleyici ifadelerini cihaz üzerinde yazıya dök"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Транскрибувати тригерні фрази Voice Wake на пристрої"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transkripsikan frasa pemicu Voice Wake di perangkat"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transkrybuj frazy wybudzające głosem na urządzeniu"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ถอดเสียงวลีทริกเกอร์ Voice Wake บนอุปกรณ์"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Phiên âm các cụm từ kích hoạt Voice Wake trên thiết bị"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transcribeer Voice Wake-triggerzinnen op het apparaat"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "عبارت‌های فعال‌سازی صوتی Voice Wake را روی دستگاه رونویسی کنید"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расшифровывать триггерные фразы Voice Wake на устройстве"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transkribera röstaktiveringsfraser på enheten"
-          }
-        }
-      }
-    },
     "Transcribe speech into the message": {
       "localizations": {
         "en": {
@@ -146881,6 +147561,142 @@
         }
       }
     },
+    "Use Apple Speech; passive Voice Wake stays on-device": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Apple Speech; passive Voice Wake stays on-device"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用 Apple Speech；被动语音唤醒保持在设备本地"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "使用 Apple Speech；被動語音喚醒保持在裝置端"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usar Apple Speech; o Voice Wake passivo permanece no dispositivo"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Speech verwenden; passives Voice Wake bleibt auf dem Gerät"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa Apple Speech; el Voice Wake pasivo permanece en el dispositivo"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Speechを使用します。パッシブなVoice Wakeはデバイス上で処理されます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Speech를 사용합니다. 수동 음성 깨우기는 기기에서 유지됩니다"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utiliser Apple Speech ; Voice Wake passif reste sur l'appareil"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Speech का उपयोग करें; निष्क्रिय Voice Wake ऑन-डिवाइस रहता है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "استخدم Apple Speech؛ يبقى التنبيه الصوتي السلبي على الجهاز"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa Apple Speech; Voice Wake passivo resta sul dispositivo"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Speech'i kullan; pasif Voice Wake cihazda kalır"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Використовувати Apple Speech; пасивний Voice Wake залишається на пристрої"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gunakan Apple Speech; Voice Wake pasif tetap di perangkat"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Używaj Apple Speech; pasywne Wybudzanie głosem pozostaje na urządzeniu"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ใช้ Apple Speech; Voice Wake แบบพาสซีฟจะทำงานบนอุปกรณ์"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dùng Apple Speech; Voice Wake thụ động vẫn ở trên thiết bị"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gebruik Apple Speech; passieve Voice Wake blijft op het apparaat"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "استفاده از Apple Speech؛ Voice Wake غیرفعال روی دستگاه باقی می‌ماند"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать Apple Speech; пассивный Voice Wake остаётся на устройстве"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Använd Apple Speech; passiv röstväckning förblir på enheten"
+          }
+        }
+      }
+    },
     "Use Config for account, guild, action, and policy details.": {
       "localizations": {
         "en": {
@@ -149869,6 +150685,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Röstväckning"
+          }
+        }
+      }
+    },
+    "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "语音唤醒需要为所选语言启用设备端识别。按键说话和对话模式仍然可用。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "語音喚醒需要所選語言的裝置端辨識功能。按住通話和通話模式仍可使用。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Despertar por Voz precisa de reconhecimento no dispositivo para o idioma selecionado. Pressionar para falar e o Modo de Conversa continuam disponíveis."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake benötigt die geräteinterne Erkennung für die ausgewählte Sprache. Push-to-Talk und Talk-Modus bleiben verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake necesita reconocimiento en el dispositivo para el idioma seleccionado. La función de pulsar para hablar y el modo de conversación siguen disponibles."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wakeには、選択した言語のオンデバイス認識が必要です。プッシュ・トゥ・トークとTalk Modeは引き続き利用できます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "음성 깨우기는 선택한 언어에 대해 온디바이스 인식이 필요합니다. 푸시투토크와 대화 모드는 계속 사용할 수 있습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'activation vocale nécessite la reconnaissance sur l'appareil pour la langue sélectionnée. L'appui pour parler et le mode conversation restent disponibles."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake को अपनी चयनित भाषा के लिए ऑन-डिवाइस पहचान की आवश्यकता है। Push-to-talk और Talk Mode उपलब्ध रहते हैं।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يحتاج التنبيه الصوتي إلى التعرّف على الجهاز للغة المحددة. يبقى الضغط للتحدث ووضع التحدث متاحين."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake richiede il riconoscimento sul dispositivo per la lingua selezionata. Push-to-talk e Talk Mode restano disponibili."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake, seçili dili için cihaz üzerinde tanıma gerektirir. Bas-konuş ve Konuşma Modu kullanılabilir olmaya devam eder."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Голосовому пробудженню потрібне розпізнавання на пристрої для вибраної мови. Функції push-to-talk та режим розмови залишаються доступними."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake memerlukan pengenalan pada perangkat untuk bahasa yang dipilih. Push-to-talk dan Talk Mode tetap tersedia."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake wymaga rozpoznawania mowy na urządzeniu dla wybranego języka. Naciśnij i mów oraz Tryb rozmowy pozostają dostępne."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake ต้องใช้การจดจำบนอุปกรณ์สำหรับภาษาที่เลือก Push-to-talk และ Talk Mode ยังคงใช้งานได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake cần nhận dạng trên thiết bị cho ngôn ngữ đã chọn. Push-to-talk và Talk Mode vẫn khả dụng."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice Wake heeft on-device herkenning nodig voor de geselecteerde taal. Push-to-talk en Talk Mode blijven beschikbaar."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "بیداری صوتی برای زبان انتخاب‌شده‌اش به تشخیص روی دستگاه نیاز دارد. فشار برای صحبت و حالت گفت‌وگو همچنان در دسترس هستند."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Голосовая активация требует распознавания на устройстве для выбранного языка. Режимы «нажми и говори» и «Разговор» остаются доступными."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Röstväckning kräver igenkänning på enheten för det valda språket. Tryck-för-att-tala och samtalsläge är fortfarande tillgängliga."
           }
         }
       }

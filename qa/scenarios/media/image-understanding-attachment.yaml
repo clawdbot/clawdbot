@@ -5,9 +5,9 @@ scenario:
   surface: image-understanding
   coverage:
     primary:
-      - media.image-understanding
+      - media.image-summary-image-understanding
     secondary:
-      - channels.qa-channel
+      - channels.inbound-routing-qa-channel
   objective: Verify an attached image reaches the agent model and the agent can describe what it sees.
   successCriteria:
     - Agent receives at least one image attachment.

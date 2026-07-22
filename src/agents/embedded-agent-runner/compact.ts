@@ -1344,7 +1344,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       model: effectiveModel,
     });
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
+    const userTimeFormat = resolveUserTimeFormat(undefined);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
     const promptMode =

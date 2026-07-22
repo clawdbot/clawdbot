@@ -61,6 +61,7 @@ function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "research",

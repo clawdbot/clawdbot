@@ -1,11 +1,16 @@
 // Nostr plugin module implements setup adapter behavior.
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
+import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { patchTopLevelChannelConfigSection, splitSetupEntries } from "openclaw/plugin-sdk/setup";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const channel = "nostr" as const;
+
+type NostrSetupInput = ChannelSetupInput & {
+  privateKey?: string;
+  relayUrls?: string;
+};
 
 export function buildNostrSetupPatch(accountId: string, patch: Record<string, unknown>) {
   return {
@@ -43,11 +48,7 @@ export function createNostrSetupAdapter(params: {
         patch: buildNostrSetupPatch(accountId, name?.trim() ? { name: name.trim() } : {}),
       }),
     validateInput: ({ input }) => {
-      const typedInput = input as {
-        useEnv?: boolean;
-        privateKey?: string;
-        relayUrls?: string;
-      };
+      const typedInput = input as NostrSetupInput;
       if (!typedInput.useEnv) {
         const privateKey = typedInput.privateKey?.trim();
         if (!privateKey) {
@@ -63,11 +64,7 @@ export function createNostrSetupAdapter(params: {
       return null;
     },
     applyAccountConfig: ({ cfg, accountId, input }) => {
-      const typedInput = input as {
-        useEnv?: boolean;
-        privateKey?: string;
-        relayUrls?: string;
-      };
+      const typedInput = input as NostrSetupInput;
       const relayResult = typedInput.relayUrls?.trim()
         ? parseRelayUrls(typedInput.relayUrls)
         : { relays: [] };

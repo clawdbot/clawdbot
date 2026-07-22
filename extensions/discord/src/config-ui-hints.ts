@@ -98,14 +98,6 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Spawn Context",
     help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
-  subagentProgress: {
-    label: "Discord Subagent Progress",
-    help: "Show active subagent count reactions and typing on the source message. Default: false.",
-  },
-  "ui.components.accentColor": {
-    label: "Discord Component Accent Color",
-    help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
-  },
   "agentComponents.ttlMs": {
     label: "Discord Component TTL (ms)",
     help: "How long sent Discord component callbacks remain registered. Default is 1800000 (30 minutes); maximum is 86400000 (24 hours).",
@@ -229,7 +221,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",
-    help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
+    help: "Optional TTS overrides for Discord voice playback (merged with tts).",
   },
   "pluralkit.enabled": {
     label: "Discord PluralKit Enabled",
@@ -258,18 +250,6 @@ export const discordChannelConfigUiHints = {
   "autoPresence.minUpdateIntervalMs": {
     label: "Discord Auto Presence Min Update Interval (ms)",
     help: "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes.",
-  },
-  "autoPresence.healthyText": {
-    label: "Discord Auto Presence Healthy Text",
-    help: "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set.",
-  },
-  "autoPresence.degradedText": {
-    label: "Discord Auto Presence Degraded Text",
-    help: "Optional custom status text while runtime/model availability is degraded or unknown (idle).",
-  },
-  "autoPresence.exhaustedText": {
-    label: "Discord Auto Presence Exhausted Text",
-    help: "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
   },
   "guilds.*.presenceEvents": {
     label: "Discord Online Presence Events",

@@ -50,6 +50,11 @@ const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
 const validatePackageExtensionEntriesForInstallMock = vi.fn();
+const markClawPackageIndependentlyOwnedMock = vi.fn();
+const withClawPackageLifecycleLeaseMock = vi.fn(
+  async (_artifact: unknown, operation: () => Promise<unknown>, _options?: unknown) =>
+    await operation(),
+);
 const tempDirs: string[] = [];
 
 vi.mock("./install.js", () => ({
@@ -84,6 +89,19 @@ vi.mock("./clawhub.js", () => ({
     CLAWHUB_DOWNLOAD_BLOCKED: "clawhub_download_blocked",
   },
   installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHubMock(...args),
+}));
+
+vi.mock("../state/claw-package-adoption.js", () => ({
+  markClawPackageIndependentlyOwned: (...args: unknown[]) =>
+    markClawPackageIndependentlyOwnedMock(...args),
+}));
+
+vi.mock("../state/claw-package-lifecycle-lease.js", () => ({
+  withClawPackageLifecycleLease: (
+    artifact: unknown,
+    operation: () => Promise<unknown>,
+    options?: unknown,
+  ) => withClawPackageLifecycleLeaseMock(artifact, operation, options),
 }));
 
 vi.mock("./bundled-sources.js", () => ({
@@ -538,6 +556,12 @@ describe("updateNpmInstalledPlugins", () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
     validatePackageExtensionEntriesForInstallMock.mockReset();
+    markClawPackageIndependentlyOwnedMock.mockReset();
+    withClawPackageLifecycleLeaseMock
+      .mockReset()
+      .mockImplementation(
+        async (_artifact: unknown, operation: () => Promise<unknown>) => await operation(),
+      );
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
       version: "0.9.0",
@@ -4051,27 +4075,41 @@ describe("updateNpmInstalledPlugins", () => {
       },
     });
 
+    const config = createClawHubInstallConfig({
+      pluginId: "demo",
+      installPath: "/tmp/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+    });
+    delete config.plugins?.installs?.demo?.clawhubPackage;
+    config.plugins!.installs!.demo!.resolvedSpec = "clawhub:demo@1.2.3";
+    delete config.plugins?.installs?.demo?.spec;
     const result = await updateNpmInstalledPlugins({
-      config: createClawHubInstallConfig({
-        pluginId: "demo",
-        installPath: "/tmp/demo",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-      }),
+      config,
       pluginIds: ["demo"],
       timeoutMs: 1_800_000,
     });
 
-    expect(clawHubInstallCall()?.spec).toBe("clawhub:demo");
+    expect(clawHubInstallCall()?.spec).toBe("clawhub:demo@1.2.3");
     expect(clawHubInstallCall()?.baseUrl).toBe("https://clawhub.ai");
     expect(clawHubInstallCall()?.expectedPluginId).toBe("demo");
     expect(clawHubInstallCall()?.mode).toBe("update");
     expect(clawHubInstallCall()?.timeoutMs).toBe(1_800_000);
+    expect(withClawPackageLifecycleLeaseMock).toHaveBeenCalledWith(
+      { kind: "plugin", source: "clawhub", ref: "demo" },
+      expect.any(Function),
+      { required: true },
+    );
+    expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
+      kind: "plugin",
+      source: "clawhub",
+      ref: "demo",
+    });
     expectRecordFields(result.config.plugins?.installs?.demo, {
       source: "clawhub",
-      spec: "clawhub:demo",
+      spec: "clawhub:demo@1.2.3",
       installPath: "/tmp/demo",
       version: "1.2.4",
       clawhubPackage: "demo",
@@ -4088,6 +4126,30 @@ describe("updateNpmInstalledPlugins", () => {
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       clawpackSize: 4096,
     });
+  });
+
+  it("records a busy ClawHub lifecycle lease as one plugin update failure", async () => {
+    withClawPackageLifecycleLeaseMock.mockRejectedValueOnce(new Error("package busy"));
+    const result = await updateNpmInstalledPlugins({
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
+      pluginIds: ["demo"],
+    });
+
+    expect(result.outcomes).toContainEqual(
+      expect.objectContaining({
+        pluginId: "demo",
+        status: "error",
+        message: expect.stringContaining("package busy"),
+      }),
+    );
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
   });
 
   it("tries ClawHub beta for default ClawHub specs on beta channel without persisting the beta tag", async () => {

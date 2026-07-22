@@ -5,9 +5,9 @@ scenario:
   surface: telemetry
   coverage:
     primary:
-      - telemetry.otel
+      - observability.otlp-http-traces-otel
     secondary:
-      - harness.qa-lab
+      - observability.otlp-http-traces-qa-lab
   objective: Verify a QA-lab gateway run emits bounded OpenTelemetry traces, metrics, and logs through the diagnostics-otel plugin.
   successCriteria:
     - The diagnostics-otel plugin starts with trace, metric, and log export enabled.

@@ -78,12 +78,17 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
+  return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
+    ?.store;
+}
+
 export async function loadLegacyCronRepairState(params: {
   cfg: OpenClawConfig;
   onlyIfLegacyDetected?: boolean;
   readOnly?: boolean;
 }): Promise<LegacyCronRepairState | null> {
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+  const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
   const quarantinePath = resolveCronQuarantinePath(storePath);
   const legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
   const legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
@@ -298,7 +303,9 @@ export async function repairLegacyCronStoreWithoutPrompt(params: {
   migrateCodexModelRefs?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): Promise<LegacyCronRepairResult> {
-  const storePath = resolveCronJobsStorePath(normalizeOptionalString(params.cfg.cron?.store));
+  const storePath = resolveCronJobsStorePath(
+    normalizeOptionalString(readLegacyCronStorePath(params.cfg)),
+  );
   let state: LegacyCronRepairState | null;
   try {
     state = await loadLegacyCronRepairState({
@@ -323,7 +330,9 @@ export async function repairLegacyCronStoreWithoutPrompt(params: {
 export async function collectCronCodexRuntimePolicyTargetsReadOnly(params: {
   cfg: OpenClawConfig;
 }): Promise<{ targets: CronCodexRuntimePolicyTarget[]; warnings: string[] }> {
-  const storePath = resolveCronJobsStorePath(normalizeOptionalString(params.cfg.cron?.store));
+  const storePath = resolveCronJobsStorePath(
+    normalizeOptionalString(readLegacyCronStorePath(params.cfg)),
+  );
   try {
     const state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
     return {
@@ -345,7 +354,9 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
   cfg: OpenClawConfig;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): Promise<LegacyCronRepairResult> {
-  const storePath = resolveCronJobsStorePath(normalizeOptionalString(params.cfg.cron?.store));
+  const storePath = resolveCronJobsStorePath(
+    normalizeOptionalString(readLegacyCronStorePath(params.cfg)),
+  );
   try {
     const state = await loadLegacyCronRepairState({ cfg: params.cfg });
     return state

@@ -5,9 +5,9 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.streaming
+      - agent-runtime.streaming-replies
     secondary:
-      - runtime.delivery
+      - agent-runtime.streaming-replies-delivery
   objective: Verify streaming channel replies produce visible previews that resolve to one final answer.
   gatewayConfigPatch:
     channels:

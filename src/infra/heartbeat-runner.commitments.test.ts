@@ -29,6 +29,22 @@ import {
   resetSystemEventsForTest,
 } from "./system-events.js";
 
+vi.mock("../commitments/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commitments/config.js")>()),
+  resolveCommitmentsConfig: () => ({
+    enabled: true,
+    maxPerDay: 3,
+    extraction: {
+      debounceMs: 15_000,
+      batchMaxItems: 8,
+      queueMaxItems: 64,
+      confidenceThreshold: 0.72,
+      careConfidenceThreshold: 0.86,
+      timeoutSeconds: 45,
+    },
+  }),
+}));
+
 installHeartbeatRunnerTestRuntime();
 
 type CommitmentTestStore = { version: 1; commitments: CommitmentRecord[] };
@@ -127,7 +143,6 @@ describe("runHeartbeatOnce commitments", () => {
         ...(params?.visibleReplies ? { messages: { visibleReplies: params.visibleReplies } } : {}),
         channels: { telegram: { allowFrom: ["*"] } },
         session: { store: storePath },
-        commitments: { enabled: true },
       };
       await seedSessionStore(storePath, sessionKey, {
         lastChannel: "telegram",
@@ -214,7 +229,6 @@ describe("runHeartbeatOnce commitments", () => {
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
         await fs.writeFile(
           path.join(tmpDir, "HEARTBEAT.md"),
@@ -308,7 +322,6 @@ describe("runHeartbeatOnce commitments", () => {
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
         await seedSessionStore(storePath, sessionKey, {
           lastChannel: "telegram",
@@ -386,7 +399,6 @@ describe("runHeartbeatOnce commitments", () => {
           },
         },
         session: { store: storePath },
-        commitments: { enabled: true },
       };
       await saveCommitmentStore(undefined, {
         version: 1,
@@ -434,7 +446,6 @@ describe("runHeartbeatOnce commitments", () => {
           },
         },
         session: { store: storePath },
-        commitments: { enabled: true },
       };
       await saveCommitmentStore(undefined, {
         version: 1,
@@ -510,7 +521,6 @@ describe("runHeartbeatOnce commitments", () => {
         },
         channels: { telegram: { allowFrom: ["*"] } },
         session: { store: storePath },
-        commitments: { enabled: true },
       };
       await seedSessionStore(storePath, sessionKey, {
         lastChannel: "telegram",
@@ -650,7 +660,6 @@ describe("runHeartbeatOnce commitments", () => {
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
         // HEARTBEAT.md has a tasks block (task ran recently — NOT due) plus extra prose directives.
         await fs.writeFile(
@@ -742,7 +751,6 @@ tasks:
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
         await fs.writeFile(
           path.join(tmpDir, "HEARTBEAT.md"),

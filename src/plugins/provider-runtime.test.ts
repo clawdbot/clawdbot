@@ -352,6 +352,7 @@ describe("provider-runtime", () => {
       wrapProviderSimpleCompletionStreamFn,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+    await import("../agents/ai-transport-runtime-host.js");
     ({ getAiTransportHost } = await import("@openclaw/ai"));
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
@@ -1292,18 +1293,16 @@ describe("provider-runtime", () => {
 
   it("respects the shared GPT-5 prompt overlay personality config", () => {
     const contribution = resolveProviderSystemPromptContribution({
-      provider: "opencode",
+      provider: "openai",
       config: {
-        agents: {
-          defaults: {
-            promptOverlays: {
-              gpt5: { personality: "off" },
-            },
+        plugins: {
+          entries: {
+            openai: { config: { personality: "off" } },
           },
         },
       },
       context: {
-        provider: "opencode",
+        provider: "openai",
         modelId: "gpt-5.4",
         promptMode: "full",
       } as never,

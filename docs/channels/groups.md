@@ -342,15 +342,14 @@ Each fact defaults to enabled when the channel produces it. Set the correspondin
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw", "\\+15555550123"],
           historyLimit: 50,
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -429,7 +428,7 @@ Account-level channel configs can set the same policy under `channels.<channel>.
 <AccordionGroup>
   <Accordion title="Mention gating notes">
     - `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored (with a warning).
-    - Pattern precedence: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group) overrides `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the agent identity name/emoji.
+    - Pattern precedence: `agents.entries.*.groupChat.mentionPatterns` (useful when multiple agents share a group) overrides `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the agent identity name/emoji.
     - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Automatic group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.

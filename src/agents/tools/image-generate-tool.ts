@@ -256,7 +256,7 @@ function resolveImageGenerationModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
+    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.image,
     providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
 }
@@ -268,7 +268,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function hasExplicitImageGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.imageGenerationModel));
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.image));
 }
 
 function resolveAction(args: Record<string, unknown>): "generate" | "list" | "status" {
@@ -914,7 +914,7 @@ export function createImageGenerateTool(options?: {
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.imageGenerationModel,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.image,
       providerKey: "imageGenerationProviders",
     })
   ) {
@@ -954,7 +954,7 @@ export function createImageGenerateTool(options?: {
 
       const model = readStringParam(params, "model");
       const configuredImageGenerationModelConfig = coerceToolModelConfig(
-        cfg.agents?.defaults?.imageGenerationModel,
+        cfg.agents?.defaults?.mediaModels?.image,
       );
       const imageGenerationModelConfig =
         resolveImageGenerationModelConfigForTool({
@@ -1009,7 +1009,7 @@ export function createImageGenerateTool(options?: {
       });
       const imageGenerationCandidates = resolveCapabilityModelCandidates({
         cfg: effectiveCfg,
-        modelConfig: effectiveCfg.agents?.defaults?.imageGenerationModel,
+        modelConfig: effectiveCfg.agents?.defaults?.mediaModels?.image,
         modelOverride: model,
         parseModelRef: parseImageGenerationModelRef,
         agentDir: options?.agentDir,

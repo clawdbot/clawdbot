@@ -111,11 +111,11 @@ export function installChannelActionsContractSuite(params: {
   }
 }
 
-type ChannelSetupContractCase<ResolvedAccount> = {
+type ChannelSetupContractCase<ResolvedAccount, SetupInput extends ChannelSetupInput> = {
   name: string;
   cfg: OpenClawConfig;
   accountId?: string;
-  input: ChannelSetupInput;
+  input: SetupInput;
   expectedAccountId?: string;
   expectedValidation?: string | null;
   beforeTest?: () => void;
@@ -123,9 +123,12 @@ type ChannelSetupContractCase<ResolvedAccount> = {
   assertResolvedAccount?: (account: ResolvedAccount, cfg: OpenClawConfig) => void;
 };
 
-export function installChannelSetupContractSuite<ResolvedAccount>(params: {
+export function installChannelSetupContractSuite<
+  ResolvedAccount,
+  SetupInput extends ChannelSetupInput = ChannelSetupInput,
+>(params: {
   plugin: Pick<ChannelPlugin<ResolvedAccount>, "id" | "config" | "setup">;
-  cases: readonly ChannelSetupContractCase<ResolvedAccount>[];
+  cases: readonly ChannelSetupContractCase<ResolvedAccount, SetupInput>[];
 }) {
   it("exposes the base setup contract", () => {
     expect(params.plugin.setup).toBeDefined();

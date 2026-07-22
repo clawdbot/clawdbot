@@ -183,7 +183,7 @@ const POLICY_FIX_METADATA = [
     "Add the command to gateway node denyCommands or update policy after review.",
     {
       policyPath: ["gateway", "nodes", "denyCommands"],
-      configTargets: ["gateway.nodes.denyCommands"],
+      configTargets: ["gateway.nodes.commands.deny"],
     },
   ),
   m(

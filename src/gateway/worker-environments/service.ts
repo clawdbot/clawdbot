@@ -894,7 +894,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         profileSnapshot: requireWorkerProfile({
           install: profile.install ?? "bundle",
           settings,
-          ...(profile.lifetime ? { lifetime: profile.lifetime } : {}),
         }),
         provisionOperationId: `provision:${digest}`,
       });

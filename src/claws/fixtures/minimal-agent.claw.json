@@ -8,7 +8,10 @@
       "name": "Triage"
     },
     "tools": {
-      "deny": ["exec", "browser"]
+      "deny": [
+        "exec",
+        "browser"
+      ]
     },
     "humanDelay": {
       "mode": "natural"

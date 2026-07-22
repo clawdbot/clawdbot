@@ -362,6 +362,7 @@ beforeEach(() => {
   mocks.cronRemoveAgentJobsTransactional
     .mockReset()
     .mockImplementation(async (_agentId: string, commit: () => Promise<unknown>) => await commit());
+  mocks.loadConfigReturn = {};
   mocks.listAgentEntries.mockImplementation((cfg: unknown) => getAgentList(cfg));
   mocks.findAgentEntryIndex.mockImplementation((list: unknown, agentId?: string) =>
     (Array.isArray(list) ? (list as MockAgentEntry[]) : []).findIndex(
@@ -1252,7 +1253,9 @@ describe("agents.delete", () => {
       isSymbolicLink: () => false,
     } as unknown as import("node:fs").Stats);
     mocks.fsRealpath.mockImplementation(async (pathname: string) => pathname);
-    mocks.loadConfigReturn = {};
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "test-agent", workspace: "/workspace/test-agent" }] },
+    };
     mocks.findAgentEntryIndex.mockReturnValue(0);
     mocks.pruneAgentConfig.mockReturnValue({ config: {}, removedBindings: 2 });
     mocks.movePathToTrash.mockReset().mockResolvedValue("/trashed");

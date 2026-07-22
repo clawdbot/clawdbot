@@ -119,13 +119,9 @@ export function buildMemoryFlushPlan(
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
   const relativePath = `memory/${dateStamp}.md`;
 
-  const promptBase = ensureNoReplyHint(
-    ensureMemoryFlushSafetyHints(defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
-  );
+  const promptBase = ensureNoReplyHint(ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_PROMPT));
   const systemPrompt = ensureNoReplyHint(
-    ensureMemoryFlushSafetyHints(
-      defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
-    ),
+    ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT),
   );
 
   return {

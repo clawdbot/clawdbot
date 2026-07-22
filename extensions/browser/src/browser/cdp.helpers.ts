@@ -108,10 +108,13 @@ function assertDiscoveredCdpEndpointMatchesConfigured(
   configuredUrl: string,
   ssrfPolicy?: SsrFPolicy,
 ): void {
+  const hasExplicitAllowedHostnames = (ssrfPolicy?.allowedHostnames ?? []).some(
+    (hostname) => hostname.trim().length > 0,
+  );
   if (
     !ssrfPolicy ||
-    isPrivateNetworkAllowedByPolicy(ssrfPolicy) ||
-    cdpEndpointAuthority(discoveredUrl) === cdpEndpointAuthority(configuredUrl)
+    cdpEndpointAuthority(discoveredUrl) === cdpEndpointAuthority(configuredUrl) ||
+    (!hasExplicitAllowedHostnames && isPrivateNetworkAllowedByPolicy(ssrfPolicy))
   ) {
     return;
   }

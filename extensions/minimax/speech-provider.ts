@@ -102,7 +102,7 @@ function normalizeMinimaxProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.minimax.apiKey",
+      path: "tts.providers.minimax.apiKey",
     }),
     baseUrl: normalizeMinimaxTtsBaseUrl(
       trimToUndefined(raw?.baseUrl) ??

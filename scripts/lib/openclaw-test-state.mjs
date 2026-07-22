@@ -124,9 +124,8 @@ function scenarioConfig(scenario, options = {}) {
           contextTokens: 64000,
           skills: ["memory"],
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             default: true,
             name: "Main",
             workspace: "~/workspace",
@@ -137,8 +136,7 @@ function scenarioConfig(scenario, options = {}) {
             skills: ["memory"],
             contextTokens: 64000,
           },
-          {
-            id: "ops",
+          ops: {
             name: "Ops",
             workspace: "~/workspace/ops",
             model: {
@@ -146,7 +144,7 @@ function scenarioConfig(scenario, options = {}) {
             },
             fastModeDefault: true,
           },
-        ],
+        },
       },
       skills: {
         allowBundled: ["memory", "openclaw-testing"],

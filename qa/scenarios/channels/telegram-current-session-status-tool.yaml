@@ -2,11 +2,13 @@ title: Telegram current-session status tool context
 
 scenario:
   id: telegram-current-session-status-tool
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [tools.session-status]
-    secondary: [memory.session-key-construction]
+    primary:
+      - gateway.session-apis-session-status
+    secondary:
+      - telegram.session-key-construction
   objective: Verify the session_status tool resolves current to the active Telegram group session.
   successCriteria:
     - The model calls session_status with sessionKey current.

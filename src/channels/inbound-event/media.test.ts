@@ -62,11 +62,13 @@ function buildCanonicalMedia(
     {
       path: "/canonical/voice.ogg",
       url: "https://canonical.test/voice.ogg",
+      workspaceDir: "/canonical/workspace-a",
       ...typeFields[0],
     },
     {
       path: "/canonical/photo.jpg",
       url: "https://canonical.test/photo.jpg",
+      workspaceDir: "/canonical/workspace-b",
       ...typeFields[1],
     },
   ];
@@ -273,6 +275,23 @@ describe("channel inbound media facts", () => {
     ]);
   });
 
+  it("normalizes blank workspace and MIME values before fallbacks apply", () => {
+    expect(
+      resolveMediaFacts({
+        media: [{ path: "rel/staged.png", workspaceDir: "  " }],
+        MediaWorkspaceDir: "/tmp/stage-root",
+      }),
+    ).toEqual([
+      expect.objectContaining({ path: "rel/staged.png", workspaceDir: "/tmp/stage-root" }),
+    ]);
+    expect(resolveMediaFacts({ MediaPath: "/tmp/blob", MediaType: "   " })).toEqual([
+      expect.objectContaining({ path: "/tmp/blob", contentType: undefined }),
+    ]);
+    expect(resolveMediaFacts({ MediaPath: "/tmp/a.png", MediaType: "  image/png  " })).toEqual([
+      expect.objectContaining({ contentType: "image/png", kind: "image" }),
+    ]);
+  });
+
   it.each(mediaMergeMatrix)("merges $name", ({ canonicalMode, legacyMode, typeMode }) => {
     const canonical = buildCanonicalMedia(canonicalMode, typeMode);
     const legacy = buildLegacyMedia(legacyMode, typeMode);
@@ -310,12 +329,17 @@ describe("channel inbound media facts", () => {
           (expectedCount === 1 ? legacy.MediaType : undefined),
       );
       const expectedKind = canonicalFact?.kind ?? kindFromMime(expectedContentType);
+      const expectedWorkspaceDir = canonicalFact?.workspaceDir ?? legacy.MediaWorkspaceDir;
       expect(facts[index]).toMatchObject({
         path: expectedPath,
         url: expectedUrl,
         contentType: expectedContentType,
         kind: expectedKind,
+        ...(expectedWorkspaceDir ? { workspaceDir: expectedWorkspaceDir } : {}),
       });
+      if (!expectedWorkspaceDir) {
+        expect(facts[index]).not.toHaveProperty("workspaceDir");
+      }
     }
   });
 

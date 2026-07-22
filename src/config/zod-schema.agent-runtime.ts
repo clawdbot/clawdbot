@@ -20,6 +20,7 @@ import {
   SecretInputSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
+  TypingModeSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -62,6 +63,11 @@ const AgentEntryEmbeddedAgentConfigSchema = z
   })
   .strict();
 
+const AgentTtsConfigSchema = TtsConfigSchema.unwrap()
+  .extend({ prefsPath: z.string().optional() })
+  .strict()
+  .optional();
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -75,19 +81,14 @@ export const HeartbeatSchema = z
       .optional(),
     model: z.string().optional(),
     session: z.string().optional(),
-    includeReasoning: z.boolean().optional(),
     target: z.string().optional(),
     directPolicy: z.union([z.literal("allow"), z.literal("block")]).optional(),
     to: z.string().optional(),
     accountId: z.string().optional(),
     prompt: z.string().optional(),
-    includeSystemPromptSection: z.boolean().optional(),
-    ackMaxChars: z.number().int().nonnegative().optional(),
-    suppressToolErrorWarnings: z.boolean().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     lightContext: z.boolean().optional(),
     isolatedSession: z.boolean().optional(),
-    skipWhenBusy: z.boolean().optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -247,7 +248,7 @@ const SandboxBrowserSchema = z
     vncPort: z.number().int().positive().optional(),
     noVncPort: z.number().int().positive().optional(),
     headless: z.boolean().optional(),
-    enableNoVnc: z.boolean().optional(),
+    noVncEnabled: z.boolean().optional(),
     allowHostControl: z.boolean().optional(),
     autoStart: z.boolean().optional(),
     autoStartTimeoutMs: z.number().int().positive().optional(),
@@ -530,7 +531,7 @@ const ToolExecBaseShape = {
     .strict()
     .optional(),
   backgroundMs: z.number().int().positive().optional(),
-  timeoutSec: z.number().int().positive().optional(),
+  timeoutSeconds: z.number().int().positive().optional(),
   cleanupMs: z.number().int().positive().optional(),
   notifyOnExit: z.boolean().optional(),
   notifyOnExitEmptySuccess: z.boolean().optional(),
@@ -788,26 +789,16 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    experimental: z
-      .object({
-        sessionMemory: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    experimental: z.object({ sessionMemory: z.boolean().optional() }).strict().optional(),
     provider: z.string().optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
-        nonBatchConcurrency: z.number().int().positive().optional(),
         batch: z
           .object({
             enabled: z.boolean().optional(),
-            wait: z.boolean().optional(),
-            concurrency: z.number().int().positive().optional(),
-            pollIntervalMs: z.number().int().nonnegative().optional(),
-            timeoutMinutes: z.number().int().positive().optional(),
           })
           .strict()
           .optional(),
@@ -823,14 +814,11 @@ export const MemorySearchSchema = z
     local: z
       .object({
         modelPath: z.string().optional(),
-        modelCacheDir: z.string().optional(),
-        contextSize: z.union([z.number().int().positive(), z.literal("auto")]).optional(),
       })
       .strict()
       .optional(),
     store: z
       .object({
-        driver: z.literal("sqlite").optional(),
         fts: z
           .object({
             tokenizer: z.union([z.literal("unicode61"), z.literal("trigram")]).optional(),
@@ -847,45 +835,10 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    sync: z
-      .object({
-        onSessionStart: z.boolean().optional(),
-        onSearch: z.boolean().optional(),
-        watch: z.boolean().optional(),
-        embeddingBatchTimeoutSeconds: z.number().int().positive().optional(),
-        sessions: z
-          .object({
-            deltaBytes: z.number().int().nonnegative().optional(),
-            deltaMessages: z.number().int().nonnegative().optional(),
-            postCompactionForce: z.boolean().optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
     query: z
       .object({
         maxResults: z.number().int().positive().optional(),
         minScore: z.number().min(0).max(1).optional(),
-        hybrid: z
-          .object({
-            enabled: z.boolean().optional(),
-            mmr: z
-              .object({
-                enabled: z.boolean().optional(),
-              })
-              .strict()
-              .optional(),
-            temporalDecay: z
-              .object({
-                enabled: z.boolean().optional(),
-              })
-              .strict()
-              .optional(),
-          })
-          .strict()
-          .optional(),
       })
       .strict()
       .optional(),
@@ -979,15 +932,22 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     skills: z.array(z.string()).optional(),
-    memorySearch: MemorySearchSchema,
+    memory: z
+      .object({
+        search: MemorySearchSchema,
+      })
+      .strict()
+      .optional(),
     humanDelay: HumanDelaySchema.optional(),
-    tts: TtsConfigSchema,
+    typingMode: TypingModeSchema.optional(),
+    typingIntervalSeconds: z.number().int().positive().optional(),
+    tts: AgentTtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
     contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
-    groupChat: GroupChatSchema,
+    groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),
     subagents: z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),

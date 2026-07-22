@@ -25,6 +25,7 @@ type NodeInvokePolicyContext = Parameters<RegisteredNodeInvokePolicy["handle"]>[
 
 const PHONE_CONTROL_STATE_PREFIX = "openclaw-phone-control-test-";
 const WRITE_COMMANDS = ["calendar.add", "contacts.add", "reminders.add", "sms.send"] as const;
+const MOBILE_UI_COMMANDS = ["mobile.ui.observe", "mobile.ui.act"] as const;
 const FRESH_SETUP_DENY_COMMANDS = [
   "calendar.add",
   "computer.act",
@@ -114,11 +115,21 @@ function createPhoneControlConfig(): Record<string, unknown> {
   return {
     gateway: {
       nodes: {
-        allowCommands: [],
-        denyCommands: [...FRESH_SETUP_DENY_COMMANDS],
+        commands: {
+          allow: [],
+          deny: [...FRESH_SETUP_DENY_COMMANDS],
+        },
       },
     },
   };
+}
+
+function getPhoneControlCommands(config: Record<string, unknown>) {
+  return (
+    config.gateway as {
+      nodes?: { commands?: { allow?: string[]; deny?: string[] } };
+    }
+  ).nodes?.commands;
 }
 
 function createMockOpenKeyedStore(params: {
@@ -313,44 +324,83 @@ describe("phone-control plugin", () => {
         gatewayClientScopes: ["operator.admin"],
       });
       const text = res?.text ?? "";
-      const nodes = (
-        getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-      ).nodes;
-      if (!nodes) {
+      const commands = getPhoneControlCommands(getConfig());
+      if (!commands) {
         throw new Error("phone-control command did not persist gateway node config");
       }
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
       expect(text).toContain("armed for 30s");
-      expect(nodes.allowCommands).toEqual([...WRITE_COMMANDS]);
-      expect(nodes.denyCommands).toStrictEqual(["computer.act"]);
+      expect(commands.allow).toEqual([...WRITE_COMMANDS]);
+      expect(commands.deny).toStrictEqual(["computer.act"]);
       expect(text).toContain("sms.send");
     });
   });
 
   it("arms computer.act as the computer group", async () => {
     await withRegisteredPhoneControl(async ({ command, policy, writeConfigFile, getConfig }) => {
-      expect(policy.commands).toStrictEqual(["computer.act"]);
+      expect(policy.commands).toStrictEqual(["computer.act", ...MOBILE_UI_COMMANDS]);
       const res = await command.handler({
         ...createCommandContext("arm computer 30s"),
         channel: "webchat",
         gatewayClientScopes: ["operator.admin"],
       });
       const text = res?.text ?? "";
-      const nodes = (
-        getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-      ).nodes;
-      if (!nodes) {
+      const commands = getPhoneControlCommands(getConfig());
+      if (!commands) {
         throw new Error("phone-control command did not persist gateway node config");
       }
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
-      expect(nodes.allowCommands).toEqual(["computer.act"]);
+      expect(commands.allow).toEqual(["computer.act"]);
       // Arming removes the fresh-setup computer deny while leaving the writes
       // group denied.
-      expect(nodes.denyCommands).toStrictEqual([...WRITE_COMMANDS]);
+      expect(commands.deny).toStrictEqual([...WRITE_COMMANDS]);
       expect(text).toContain("computer.act");
     });
+  });
+
+  it("arms both mobile UI commands as an explicit mobile-ui group", async () => {
+    await withRegisteredPhoneControl(
+      async ({ command, policy, writeConfigFile, getConfig }) => {
+        const res = await command.handler({
+          ...createCommandContext("arm mobile-ui 30s"),
+          channel: "webchat",
+          gatewayClientScopes: ["operator.admin"],
+        });
+        const text = res?.text ?? "";
+        const nodes = (
+          getConfig().gateway as {
+            nodes?: { commands?: { allow?: string[]; deny?: string[] } };
+          }
+        ).nodes;
+        if (!nodes) {
+          throw new Error("phone-control command did not persist gateway node config");
+        }
+
+        expect(writeConfigFile).toHaveBeenCalledTimes(1);
+        expect(nodes.commands?.allow).toEqual([...MOBILE_UI_COMMANDS].toSorted());
+        expect(nodes.commands?.deny).toEqual(["computer.act", ...WRITE_COMMANDS].toSorted());
+        expect(text).toContain("mobile.ui.observe");
+        expect(text).toContain("mobile.ui.act");
+
+        const { ctx, invokeNode } = createPolicyContext(getConfig(), {}, "mobile.ui.observe");
+        await expect(policy.handle(ctx)).resolves.toMatchObject({ ok: true });
+        expect(invokeNode).toHaveBeenCalledTimes(1);
+      },
+      {
+        initialConfig: {
+          gateway: {
+            nodes: {
+              commands: {
+                allow: [],
+                deny: [...FRESH_SETUP_DENY_COMMANDS, ...MOBILE_UI_COMMANDS],
+              },
+            },
+          },
+        },
+      },
+    );
   });
 
   it("persists the preparing lease before widening computer config", async () => {
@@ -369,12 +419,10 @@ describe("phone-control plugin", () => {
           }),
         ).rejects.toThrow("failed to persist temporary arm lease");
 
-        const nodes = (
-          getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-        ).nodes;
+        const commands = getPhoneControlCommands(getConfig());
         expect(writeConfigFile).not.toHaveBeenCalled();
-        expect(nodes?.allowCommands).not.toContain("computer.act");
-        expect(nodes?.denyCommands).toContain("computer.act");
+        expect(commands?.allow).not.toContain("computer.act");
+        expect(commands?.deny).toContain("computer.act");
       },
       { openKeyedStore: store.openKeyedStore },
     );
@@ -393,13 +441,11 @@ describe("phone-control plugin", () => {
           }),
         ).rejects.toThrow("failed to persist temporary arm lease");
 
-        const nodes = (
-          getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-        ).nodes;
+        const commands = getPhoneControlCommands(getConfig());
         expect(writeConfigFile).toHaveBeenCalledTimes(2);
         expect(store.values.size).toBe(0);
-        expect(nodes?.allowCommands).not.toContain("computer.act");
-        expect(nodes?.denyCommands).toContain("computer.act");
+        expect(commands?.allow).not.toContain("computer.act");
+        expect(commands?.deny).toContain("computer.act");
       },
       {
         openKeyedStore: store.openKeyedStore,
@@ -429,13 +475,11 @@ describe("phone-control plugin", () => {
           }),
         ).rejects.toThrow("failed to persist temporary arm lease");
 
-        const nodes = (
-          getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-        ).nodes;
+        const commands = getPhoneControlCommands(getConfig());
         expect(writeConfigFile).toHaveBeenCalledTimes(2);
         expect(store.values.size).toBe(0);
-        expect(nodes?.allowCommands).not.toContain("computer.act");
-        expect(nodes?.denyCommands).toContain("computer.act");
+        expect(commands?.allow).not.toContain("computer.act");
+        expect(commands?.deny).toContain("computer.act");
       },
       { openKeyedStore: store.openKeyedStore },
     );
@@ -451,11 +495,9 @@ describe("phone-control plugin", () => {
           gatewayClientScopes: ["operator.admin"],
         });
 
-        const nodes = (
-          getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-        ).nodes;
-        expect(nodes?.allowCommands).toStrictEqual(["computer.act", "operator.keep"]);
-        expect(nodes?.denyCommands).toStrictEqual([...WRITE_COMMANDS, "operator.block"].toSorted());
+        const commands = getPhoneControlCommands(getConfig());
+        expect(commands?.allow).toStrictEqual(["computer.act", "operator.keep"]);
+        expect(commands?.deny).toStrictEqual([...WRITE_COMMANDS, "operator.block"].toSorted());
       },
       {
         beforeMutateConfig: (draft) => {
@@ -463,13 +505,9 @@ describe("phone-control plugin", () => {
             return;
           }
           injectOperatorEdit = false;
-          const nodes = (
-            draft.gateway as {
-              nodes: { allowCommands: string[]; denyCommands: string[] };
-            }
-          ).nodes;
-          nodes.allowCommands.push("operator.keep");
-          nodes.denyCommands.push("operator.block");
+          const commands = getPhoneControlCommands(draft);
+          commands?.allow?.push("operator.keep");
+          commands?.deny?.push("operator.block");
         },
       },
     );
@@ -519,11 +557,9 @@ describe("phone-control plugin", () => {
             gatewayClientScopes: ["operator.admin"],
           }),
         ).resolves.toMatchObject({ text: expect.stringContaining("disarmed") });
-        const nodes = (
-          getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-        ).nodes;
-        expect(nodes?.allowCommands).not.toContain("computer.act");
-        expect(nodes?.denyCommands).toContain("computer.act");
+        const commands = getPhoneControlCommands(getConfig());
+        expect(commands?.allow).not.toContain("computer.act");
+        expect(commands?.deny).toContain("computer.act");
       } finally {
         releaseTransport.resolve();
       }
@@ -535,8 +571,7 @@ describe("phone-control plugin", () => {
     const initialConfig = {
       gateway: {
         nodes: {
-          allowCommands: ["computer.act"],
-          denyCommands: [...WRITE_COMMANDS],
+          commands: { allow: ["computer.act"], deny: [...WRITE_COMMANDS] },
         },
       },
     };
@@ -569,11 +604,9 @@ describe("phone-control plugin", () => {
           code: "PHONE_CONTROL_DISARMED",
         });
         expect(invokeNode).not.toHaveBeenCalled();
-        const nodes = (
-          getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-        ).nodes;
-        expect(nodes?.allowCommands).not.toContain("computer.act");
-        expect(nodes?.denyCommands).toContain("computer.act");
+        const commands = getPhoneControlCommands(getConfig());
+        expect(commands?.allow).not.toContain("computer.act");
+        expect(commands?.deny).toContain("computer.act");
       });
     } finally {
       vi.useRealTimers();
@@ -598,8 +631,7 @@ describe("phone-control plugin", () => {
     const initialConfig = {
       gateway: {
         nodes: {
-          allowCommands: ["computer.act"],
-          denyCommands: [...WRITE_COMMANDS],
+          commands: { allow: ["computer.act"], deny: [...WRITE_COMMANDS] },
         },
       },
     };
@@ -627,8 +659,7 @@ describe("phone-control plugin", () => {
     const initialConfig = {
       gateway: {
         nodes: {
-          allowCommands: ["computer.act"],
-          denyCommands: [...WRITE_COMMANDS],
+          commands: { allow: ["computer.act"], deny: [...WRITE_COMMANDS] },
         },
       },
     };
@@ -762,11 +793,9 @@ describe("phone-control plugin", () => {
             channel: "webchat",
           });
           expect(finalStatus?.text ?? "").toContain("expires in 30s");
-          const nodes = (
-            getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-          ).nodes;
-          expect(nodes?.allowCommands).toContain("computer.act");
-          expect(nodes?.denyCommands).not.toContain("computer.act");
+          const commands = getPhoneControlCommands(getConfig());
+          expect(commands?.allow).toContain("computer.act");
+          expect(commands?.deny).not.toContain("computer.act");
         },
         { openKeyedStore: store.openKeyedStore },
       );
@@ -788,12 +817,10 @@ describe("phone-control plugin", () => {
         gatewayClientScopes: ["operator.admin"],
       });
 
-      const nodes = (
-        getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-      ).nodes;
+      const commands = getPhoneControlCommands(getConfig());
       expect(writeConfigFile).toHaveBeenCalledTimes(2);
-      expect(nodes?.allowCommands).toStrictEqual([]);
-      expect(nodes?.denyCommands).toStrictEqual([...FRESH_SETUP_DENY_COMMANDS]);
+      expect(commands?.allow).toStrictEqual([]);
+      expect(commands?.deny).toStrictEqual([...FRESH_SETUP_DENY_COMMANDS]);
     });
   });
 
@@ -804,12 +831,10 @@ describe("phone-control plugin", () => {
         channel: "webchat",
         gatewayClientScopes: ["operator.admin"],
       });
-      const nodes = (
-        getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-      ).nodes;
+      const commands = getPhoneControlCommands(getConfig());
 
-      expect(nodes?.allowCommands).not.toContain("computer.act");
-      expect(nodes?.denyCommands).toContain("computer.act");
+      expect(commands?.allow).not.toContain("computer.act");
+      expect(commands?.deny).toContain("computer.act");
       expect(res?.text ?? "").not.toContain("computer.act");
     });
   });
@@ -818,8 +843,7 @@ describe("phone-control plugin", () => {
     const initialConfig = {
       gateway: {
         nodes: {
-          allowCommands: ["computer.act"],
-          denyCommands: [...WRITE_COMMANDS],
+          commands: { allow: ["computer.act"], deny: [...WRITE_COMMANDS] },
         },
       },
     };
@@ -849,14 +873,12 @@ describe("phone-control plugin", () => {
           channel: "webchat",
           gatewayClientScopes: ["operator.admin"],
         });
-        const nodes = (
-          getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
-        ).nodes;
+        const commands = getPhoneControlCommands(getConfig());
         expect(disarm?.text ?? "").toContain("remain active after /phone disarm");
         expect(disarm?.text ?? "").toContain("computer.act");
         expect(writeConfigFile).toHaveBeenCalledTimes(1);
-        expect(nodes?.allowCommands).toStrictEqual(["computer.act"]);
-        expect(nodes?.denyCommands).toStrictEqual([...WRITE_COMMANDS]);
+        expect(commands?.allow).toStrictEqual(["computer.act"]);
+        expect(commands?.deny).toStrictEqual([...WRITE_COMMANDS]);
       },
       { initialConfig },
     );
@@ -877,9 +899,9 @@ describe("phone-control plugin", () => {
         channel: "webchat",
         gatewayClientScopes: ["operator.admin"],
       });
-      const nodes = (getConfig().gateway as { nodes?: { allowCommands?: string[] } }).nodes;
+      const commands = getPhoneControlCommands(getConfig());
       // Disarm must fully remove computer.act despite the re-arm.
-      expect(nodes?.allowCommands ?? []).not.toContain("computer.act");
+      expect(commands?.allow ?? []).not.toContain("computer.act");
     });
   });
 
@@ -1105,8 +1127,7 @@ describe("phone-control plugin", () => {
       let config: Record<string, unknown> = {
         gateway: {
           nodes: {
-            allowCommands: [...WRITE_COMMANDS],
-            denyCommands: [],
+            commands: { allow: [...WRITE_COMMANDS], deny: [] },
           },
         },
       };
@@ -1150,11 +1171,9 @@ describe("phone-control plugin", () => {
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
       expect(removeState).toHaveBeenCalledWith("current");
-      expect(
-        (config.gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }).nodes,
-      ).toEqual({
-        allowCommands: [],
-        denyCommands: [...WRITE_COMMANDS],
+      expect(getPhoneControlCommands(config)).toEqual({
+        allow: [],
+        deny: [...WRITE_COMMANDS],
       });
 
       await service.stop?.({

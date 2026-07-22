@@ -360,7 +360,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(stored.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
-  it("keeps non-ack heartbeat pending delivery without direct replay", async () => {
+  it("clears short heartbeat pending delivery under the fixed ack policy", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-replay-"));
     const storePath = path.join(home, "sessions.json");
     const sessionKey = "agent:main:telegram:123";
@@ -377,7 +377,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         defaults: {
           model: "openai/gpt-5.5",
           workspace: home,
-          heartbeat: { ackMaxChars: 0 },
+          heartbeat: {},
         },
       },
       session: { store: storePath },
@@ -388,8 +388,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     ).resolves.toEqual({ text: "ok" });
 
     const stored = readFastPathSessionEntry(storePath, sessionKey);
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe("HEARTBEAT_OK short");
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
     expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
   });
 

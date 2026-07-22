@@ -95,7 +95,7 @@ export function applyImageGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   imageGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "imageGenerationModel", imageGenerationModelConfig);
+  return applyAgentDefaultModelConfig(cfg, "image", imageGenerationModelConfig);
 }
 
 /**
@@ -105,7 +105,7 @@ export function applyVideoGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   videoGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "videoGenerationModel", videoGenerationModelConfig);
+  return applyAgentDefaultModelConfig(cfg, "video", videoGenerationModelConfig);
 }
 
 /**
@@ -115,7 +115,7 @@ export function applyMusicGenerationModelConfigDefaults(
   cfg: OpenClawConfig | undefined,
   musicGenerationModelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
-  return applyAgentDefaultModelConfig(cfg, "musicGenerationModel", musicGenerationModelConfig);
+  return applyAgentDefaultModelConfig(cfg, "music", musicGenerationModelConfig);
 }
 
 /**
@@ -138,11 +138,20 @@ export function resolveRemoteMediaSsrfPolicy(
 
 function applyAgentDefaultModelConfig(
   cfg: OpenClawConfig | undefined,
-  key: "imageModel" | "imageGenerationModel" | "videoGenerationModel" | "musicGenerationModel",
+  key: "imageModel" | "image" | "video" | "music",
   modelConfig: ToolModelConfig,
 ): OpenClawConfig | undefined {
   if (!cfg) {
     return undefined;
+  }
+  if (key === "imageModel") {
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: { ...cfg.agents?.defaults, imageModel: modelConfig },
+      },
+    };
   }
   return {
     ...cfg,
@@ -150,7 +159,7 @@ function applyAgentDefaultModelConfig(
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        [key]: modelConfig,
+        mediaModels: { ...cfg.agents?.defaults?.mediaModels, [key]: modelConfig },
       },
     },
   };

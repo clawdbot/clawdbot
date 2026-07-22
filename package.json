@@ -14,7 +14,7 @@
     "url": "https://github.com/openclaw/openclaw/issues"
   },
   "license": "MIT",
-  "author": "",
+  "author": "OpenClaw Foundation (https://openclaw.org)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openclaw/openclaw.git"
@@ -1422,6 +1422,7 @@
     "check:deprecated-api-usage": "node scripts/check-deprecated-api-usage.mjs",
     "check:deprecated-jsdoc": "node scripts/check-deprecated-jsdoc.mjs",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links && pnpm docs:map:check",
+    "check:env-var-count": "node scripts/check-env-var-count.mjs",
     "check:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --check",
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:max-lines-ratchet": "node scripts/check-max-lines-ratchet.mjs",
@@ -1600,6 +1601,7 @@
     "plugins:boundary-report:json": "node --import tsx scripts/plugin-boundary-report.ts --json",
     "plugins:boundary-report:summary": "node --import tsx scripts/plugin-boundary-report.ts --summary",
     "plugins:assets:build": "node scripts/bundled-plugin-assets.mjs --phase build",
+    "plugins:assets:check": "node scripts/bundled-plugin-assets.mjs --phase build --check",
     "plugins:assets:copy": "node scripts/bundled-plugin-assets.mjs --phase copy",
     "plugins:inventory:check": "node scripts/generate-plugin-inventory-doc.mjs --check",
     "plugins:inventory:gen": "node scripts/generate-plugin-inventory-doc.mjs --write",

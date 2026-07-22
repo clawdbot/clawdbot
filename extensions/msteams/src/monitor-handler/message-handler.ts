@@ -623,8 +623,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             },
             log,
             deadline: preprocessingDeadline,
-            preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
-              ?.preserveFilenames,
+            preserveFilenames: false,
           }),
       });
     } catch (err) {
@@ -905,6 +904,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         rawBody,
         commandBody,
       },
+      sessionTranscript: { historyLimit: isRoomish ? historyLimit : 0 },
       access: {
         mentions: {
           canDetectMention: !isDirectMessage,

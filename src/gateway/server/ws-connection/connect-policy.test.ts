@@ -96,15 +96,13 @@ describe("ws connect policy", () => {
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
       deviceRaw: deviceRaw("dev-1"),
     });
-    expect(bypass.allowBypass).toBe(true);
-    expect(bypass.device).toBeNull();
+    expect(bypass.device?.id).toBe("dev-1");
 
     const regular = authPolicy({
       isControlUi: false,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
       deviceRaw: deviceRaw("dev-2"),
     });
-    expect(regular.allowBypass).toBe(false);
     expect(regular.device?.id).toBe("dev-2");
   });
 
@@ -143,7 +141,7 @@ describe("ws connect policy", () => {
       "reject-control-ui-insecure-auth",
     );
 
-    // Local Control UI with allowInsecureAuth -> allowed.
+    // The retired insecure-auth flag no longer bypasses device identity locally.
     expectMissingDeviceDecision(
       {
         role: "operator",
@@ -151,7 +149,7 @@ describe("ws connect policy", () => {
         controlUiAuthPolicy: controlUiStrict,
         isLocalClient: true,
       },
-      "allow",
+      "reject-control-ui-insecure-auth",
     );
 
     // Control UI without allowInsecureAuth, even on localhost -> rejected.
@@ -230,14 +228,10 @@ describe("ws connect policy", () => {
         authOk: false,
         hasSharedAuth: false,
       },
-      "allow",
+      "reject-control-ui-insecure-auth",
     );
 
-    // Regression: dangerouslyDisableDeviceAuth bypass must NOT extend to node-role
-    // sessions — the break-glass flag is scoped to operator Control UI only.
-    // A device-less node-role connection must still be rejected even when the flag
-    // is set, to prevent the flag from being abused to admit unauthorized node
-    // registrations.
+    // Retired bypass input cannot admit device-less node-role registrations.
     expectMissingDeviceDecision(
       {
         role: "node",
@@ -247,18 +241,18 @@ describe("ws connect policy", () => {
         authOk: false,
         hasSharedAuth: false,
       },
-      "reject-device-required",
+      "reject-control-ui-insecure-auth",
     );
   });
 
-  test("dangerouslyDisableDeviceAuth skips pairing for operator control-ui only", () => {
+  test("retired device-auth bypass input does not skip pairing", () => {
     const bypass = authPolicy({
       isControlUi: true,
       controlUiConfig: { dangerouslyDisableDeviceAuth: true },
     });
     const strict = authPolicy({ isControlUi: true });
 
-    expectSkipPairing(bypass, "operator", true);
+    expectSkipPairing(bypass, "operator", false);
     expectSkipPairing(bypass, "node", false);
     expectSkipPairing(strict, "operator", false);
     expectSkipPairing(strict, "operator", false, { pairingComplete: true });

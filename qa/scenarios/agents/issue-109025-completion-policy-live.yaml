@@ -5,10 +5,11 @@ scenario:
   surface: subagents
   runtimeParityTier: live-only
   coverage:
+    primary:
+      - agent-runtime.delegated-tool-access
     secondary:
-      - agents.subagents
-      - runtime.delivery
-      - channels.qa-channel
+      - agent-runtime.subagent-turns-subagents
+      - agent-runtime.subagent-turns-delivery
   gatewayConfigPatch:
     tools:
       toolsBySender:

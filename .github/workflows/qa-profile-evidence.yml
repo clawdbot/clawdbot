@@ -289,7 +289,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "120000"
           OPENCLAW_QA_CREDENTIAL_ROLE: ci
           OPENCLAW_QA_CREDENTIAL_SOURCE: convex
         shell: bash
@@ -303,7 +303,7 @@ jobs:
           pnpm openclaw qa run \
             --repo-root . \
             --qa-profile "${QA_PROFILE}" \
-            --concurrency 2 \
+            --concurrency 3 \
             --fast \
             --output-dir "${output_dir}" || qa_exit_code=$?
 

@@ -4,7 +4,7 @@ import { tmpdir as getOsTmpDir } from "node:os";
 import path from "node:path";
 
 /** Preferred shared OpenClaw temp root on POSIX systems when ownership and permissions are safe. */
-export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
+export const DEFAULT_POSIX_TMP_ROOT = "/tmp/openclaw";
 
 type MaybeNodeError = { code?: string };
 
@@ -155,7 +155,7 @@ export function resolvePreferredOpenClawTmpDir(
     return ensureTrustedFallbackDir();
   }
 
-  const preferredDir = POSIX_OPENCLAW_TMP_DIR;
+  const preferredDir = DEFAULT_POSIX_TMP_ROOT;
   const preferredState = resolveDirState(preferredDir);
   if (preferredState === "available") {
     return preferredDir;

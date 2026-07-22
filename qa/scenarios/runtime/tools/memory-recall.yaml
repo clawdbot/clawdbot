@@ -6,7 +6,7 @@ scenario:
   runtimeParityTier: optional
   coverage:
     primary:
-      - tools.memory.recall
+      - session-memory.memory-recall-tool
   objective: Verify memory_recall parity when the memory plugin exposes the tool.
   successCriteria:
     - If memory_recall is present, the fixture exercises happy and failure paths.

@@ -10,6 +10,7 @@ import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
+import { projectMediaFacts } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { MsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
@@ -18,6 +19,7 @@ type CurrentImageAttachment = {
   index: number;
   path: string;
   mediaType: string;
+  workspaceDir?: string;
 };
 
 type OrderedTurnImage = {
@@ -57,7 +59,14 @@ function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment
     const mediaPath = normalizeOptionalString(attachment.path);
     const mediaType = resolveCurrentImageMediaType(attachment.path, attachment.mime);
     if (mediaPath && mediaType) {
-      return [{ index: attachment.index, path: mediaPath, mediaType }];
+      return [
+        {
+          index: attachment.index,
+          path: mediaPath,
+          mediaType,
+          workspaceDir: attachment.workspaceDir,
+        },
+      ];
     }
     return [];
   });
@@ -75,19 +84,15 @@ function createUndescribedImageContext(
   ctx: MsgContext,
   undescribedAttachments: CurrentImageAttachment[],
 ): MsgContext {
-  const first = undescribedAttachments[0];
+  const media = undescribedAttachments.map((attachment) => ({
+    path: attachment.path,
+    contentType: attachment.mediaType,
+    workspaceDir: attachment.workspaceDir,
+  }));
   return {
     ...ctx,
-    media: undescribedAttachments.map((attachment) => ({
-      path: attachment.path,
-      contentType: attachment.mediaType,
-    })),
-    MediaPath: first?.path,
-    MediaUrl: first?.path,
-    MediaType: first?.mediaType,
-    MediaPaths: undescribedAttachments.map((attachment) => attachment.path),
-    MediaUrls: undescribedAttachments.map((attachment) => attachment.path),
-    MediaTypes: undescribedAttachments.map((attachment) => attachment.mediaType),
+    media,
+    ...projectMediaFacts(media),
   };
 }
 

@@ -1,6 +1,9 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 // Raft plugin setup owns only the Raft CLI profile, never Raft credentials.
-import { createPatchedAccountSetupAdapter } from "openclaw/plugin-sdk/setup";
+import {
+  createPatchedAccountSetupAdapter,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/setup";
 import {
   createDetectedBinaryStatus,
   formatDocsLink,
@@ -16,14 +19,22 @@ import {
   type ResolvedRaftAccount,
 } from "./accounts.js";
 
+type RaftSetupInput = ChannelSetupInput & {
+  profile?: string;
+};
+
 const raftSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: RAFT_CHANNEL_ID,
   buildPatch: (input) => {
-    const profile = normalizeOptionalString(input.profile);
+    const profile = normalizeOptionalString((input as RaftSetupInput).profile);
     return profile ? { profile } : {};
   },
   validateInput: ({ cfg, accountId, input }) => {
-    if (normalizeOptionalString(input.profile) ?? resolveRaftAccount({ cfg, accountId }).profile) {
+    const setupInput = input as RaftSetupInput;
+    if (
+      normalizeOptionalString(setupInput.profile) ??
+      resolveRaftAccount({ cfg, accountId }).profile
+    ) {
       return null;
     }
     return "Raft requires a CLI profile.";

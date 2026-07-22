@@ -1,5 +1,8 @@
 /* @vitest-environment jsdom */
+/* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
 
+// The non-isolated runner resets modules between files but preserves customElements.
+// A dedicated jsdom context keeps the registered pane class on this file's module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -10,9 +13,30 @@ import {
 } from "./components/chat-message.ts";
 import * as chatThread from "./components/chat-thread.ts";
 
+const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
+const confirmationOwners = new Set<HTMLElement>();
+
+function createConfirmationOwner() {
+  const owner = document.createElement("span");
+  owner.className = "chat-delete-wrap";
+  const trigger = document.createElement("button");
+  owner.appendChild(trigger);
+  document.body.appendChild(owner);
+  confirmationOwners.add(owner);
+  openChatRewindConfirmation(trigger, vi.fn());
+  return owner;
+}
+
 afterEach(() => {
-  vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  for (const owner of confirmationOwners) {
+    dismissConfirmedActionPopovers(owner);
+    owner.remove();
+  }
+  confirmationOwners.clear();
+  chatThread.resetChatThreadPresentationState();
+  window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
+  vi.unstubAllGlobals();
 });
 
 describe("chat pane presentation teardown", () => {
@@ -33,61 +57,41 @@ describe("chat pane presentation teardown", () => {
       client: {} as GatewayBrowserClient,
       sessions: {} as SessionCapability,
     });
-    const createConfirmationOwner = () => {
-      const owner = document.createElement("span");
-      owner.className = "chat-delete-wrap";
-      const trigger = document.createElement("button");
-      owner.appendChild(trigger);
-      document.body.appendChild(owner);
-      openChatRewindConfirmation(trigger, vi.fn());
-      return { owner, trigger };
-    };
-    window.localStorage.removeItem("openclaw:skip-rewind-confirm");
+    window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
     const paneConfirmation = createConfirmationOwner();
     const siblingConfirmation = createConfirmationOwner();
 
-    try {
-      for (const callback of frameCallbacks.splice(0)) {
-        callback(0);
-      }
-      const captureClickListeners = addDocumentListener.mock.calls.flatMap(
-        ([type, listener, options]) =>
-          type === "click" && options === true && listener ? [listener] : [],
-      );
-      const captureKeydownListeners = addWindowListener.mock.calls.flatMap(
-        ([type, listener, options]) =>
-          type === "keydown" && options === true && listener ? [listener] : [],
-      );
-      expect(captureClickListeners).toHaveLength(2);
-      expect(captureKeydownListeners).toHaveLength(2);
-
-      pane.appendChild(paneConfirmation.owner);
-      pane.disconnectedCallback();
-
-      expect(pane.querySelector(".chat-delete-confirm")).toBeNull();
-      expect(siblingConfirmation.owner.querySelector(".chat-delete-confirm")).not.toBeNull();
-      expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListeners[0], true);
-      expect(removeDocumentListener).not.toHaveBeenCalledWith(
-        "click",
-        captureClickListeners[1],
-        true,
-      );
-      expect(removeWindowListener).toHaveBeenCalledWith(
-        "keydown",
-        captureKeydownListeners[0],
-        true,
-      );
-      expect(removeWindowListener).not.toHaveBeenCalledWith(
-        "keydown",
-        captureKeydownListeners[1],
-        true,
-      );
-    } finally {
-      dismissConfirmedActionPopovers(paneConfirmation.owner);
-      dismissConfirmedActionPopovers(siblingConfirmation.owner);
-      paneConfirmation.owner.remove();
-      siblingConfirmation.owner.remove();
+    for (const callback of frameCallbacks.splice(0)) {
+      callback(0);
     }
+    const captureClickListeners = addDocumentListener.mock.calls.flatMap(
+      ([type, listener, options]) =>
+        type === "click" && options === true && listener ? [listener] : [],
+    );
+    const captureKeydownListeners = addWindowListener.mock.calls.flatMap(
+      ([type, listener, options]) =>
+        type === "keydown" && options === true && listener ? [listener] : [],
+    );
+    expect(captureClickListeners).toHaveLength(2);
+    expect(captureKeydownListeners).toHaveLength(2);
+
+    pane.appendChild(paneConfirmation);
+    pane.disconnectedCallback();
+
+    expect(pane.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(siblingConfirmation.querySelector(".chat-delete-confirm")).not.toBeNull();
+    expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListeners[0], true);
+    expect(removeDocumentListener).not.toHaveBeenCalledWith(
+      "click",
+      captureClickListeners[1],
+      true,
+    );
+    expect(removeWindowListener).toHaveBeenCalledWith("keydown", captureKeydownListeners[0], true);
+    expect(removeWindowListener).not.toHaveBeenCalledWith(
+      "keydown",
+      captureKeydownListeners[1],
+      true,
+    );
   });
 
   it("dismisses the previous session confirmation before switching in place", () => {
@@ -107,13 +111,8 @@ describe("chat pane presentation teardown", () => {
       client: {} as GatewayBrowserClient,
       sessions: {} as SessionCapability,
     });
-    const owner = document.createElement("span");
-    owner.className = "chat-delete-wrap";
-    const trigger = document.createElement("button");
-    owner.appendChild(trigger);
-    document.body.appendChild(owner);
-    window.localStorage.removeItem("openclaw:skip-rewind-confirm");
-    openChatRewindConfirmation(trigger, vi.fn());
+    window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
+    const owner = createConfirmationOwner();
 
     try {
       for (const callback of frameCallbacks.splice(0)) {
@@ -129,14 +128,10 @@ describe("chat pane presentation teardown", () => {
       expect(captureKeydownListener).toBeDefined();
       pane.appendChild(owner);
 
-      const resetPresentation = chatThread.resetChatThreadPresentationState;
       const stopAfterReset = new Error("stop after thread presentation reset");
-      vi.spyOn(chatThread, "resetChatThreadPresentationState").mockImplementation(
-        (paneId, presentationOwner) => {
-          resetPresentation(paneId, presentationOwner);
-          throw stopAfterReset;
-        },
-      );
+      vi.spyOn(pane, "cancelHeaderRename").mockImplementation(() => {
+        throw stopAfterReset;
+      });
 
       expect(() => pane.switchPaneSession("agent:main:next")).toThrow(stopAfterReset);
       expect(owner.querySelector(".chat-delete-confirm")).toBeNull();

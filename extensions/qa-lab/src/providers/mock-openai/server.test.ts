@@ -18,10 +18,14 @@ const QA_EMPTY_RESPONSE_RECOVERY_PROMPT =
   "Empty response continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-RECOVERED-OK.";
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT =
   "Empty response exhaustion QA check: read QA_KICKOFF_TASK.md, then answer with exactly EMPTY-EXHAUSTED-OK.";
+const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT =
+  "Empty response after write recovery QA check: write qa-empty-response-side-effect.txt, then answer with exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK.";
 const QA_REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const QA_EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -6112,7 +6116,7 @@ describe("qa mock openai server", () => {
       model: "gpt-5.6-luna",
       input: [
         makeUserInput(QA_EMPTY_RESPONSE_RECOVERY_PROMPT),
-        makeUserInput(QA_EMPTY_RESPONSE_RETRY_INSTRUCTION),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
         {
           type: "function_call_output",
           output: "QA mission: Understand this OpenClaw repo from source + docs before acting.",
@@ -6161,6 +6165,77 @@ describe("qa mock openai server", () => {
       ],
     });
     expect(secondEmpty.output?.[0]?.content?.[0]?.text).toBe("");
+  });
+
+  it("scripts settled continuation after an empty response from a side-effecting write", async () => {
+    const server = await startMockServer();
+
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT)],
+    });
+    expect(toolPlan).toContain('"name":"write"');
+
+    const toolOutput = {
+      type: "function_call_output" as const,
+      output: "Successfully wrote 27 bytes to qa-empty-response-side-effect.txt",
+    };
+    const emptyPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT), toolOutput],
+    });
+    expect(emptyPayload.output?.[0]?.content?.[0]?.text).toBe("");
+
+    const recoveredPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        toolOutput,
+      ],
+    });
+    expect(outputText(recoveredPayload)).toBe("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
+
+    const cronRecoveredPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(
+          [
+            "Empty response after write recovery QA check: write once, then respond with exact marker: `CRON-EMPTY-WRITE-RECOVERED-OK`.",
+            "This is an unattended scheduled run. If nothing needs doing, reply exactly HEARTBEAT_OK.",
+          ].join("\n\n"),
+        ),
+        makeUserInput(
+          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION}\nRead HEARTBEAT.md if it exists.`,
+        ),
+        toolOutput,
+      ],
+    });
+    expect(outputText(cronRecoveredPayload)).toBe("CRON-EMPTY-WRITE-RECOVERED-OK");
+
+    const laterHeartbeatPayload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        makeUserInput(QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT),
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+        toolOutput,
+        makeUserInput("Read HEARTBEAT.md if it exists."),
+      ],
+    });
+    expect(outputText(laterHeartbeatPayload)).toBe("HEARTBEAT_OK");
   });
 });
 

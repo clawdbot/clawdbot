@@ -1,4 +1,5 @@
 // Slack type declarations define plugin contracts.
+import type { SlackAppContext } from "./agent-context.js";
 export type SlackFile = {
   id?: string;
   name?: string;
@@ -49,6 +50,7 @@ export type SlackMessageEvent = {
   files?: SlackFile[];
   attachments?: SlackAttachment[];
   assistant_thread?: Record<string, unknown>;
+  app_context?: SlackAppContext;
   /**
    * Set by the thread_ts resolver when Slack supplied parent_user_id but the
    * parent thread timestamp could not be recovered.

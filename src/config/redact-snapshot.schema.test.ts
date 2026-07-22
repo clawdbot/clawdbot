@@ -10,38 +10,42 @@ import { buildConfigSchema } from "./schema.js";
 describe("realredactConfigSnapshot_real", () => {
   it("main schema redact works (samples)", () => {
     const snapshot = makeSnapshot({
-      agents: {
-        defaults: {
-          memorySearch: {
-            remote: {
-              apiKey: "1234",
-            },
+      memory: {
+        search: {
+          remote: {
+            apiKey: "1234",
           },
         },
-        list: [
-          {
-            memorySearch: {
-              remote: {
-                apiKey: "6789",
+      },
+
+      agents: {
+        defaults: {},
+        entries: {
+          main: {
+            memory: {
+              search: {
+                remote: {
+                  apiKey: "6789",
+                },
               },
             },
           },
-        ],
+        },
       },
     });
 
     const result = redactConfigSnapshot(snapshot, mainSchemaHints);
     const config = result.config as typeof snapshot.config;
-    expect(config.agents.defaults.memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
+    expect(config.memory.search.remote.apiKey).toBe(REDACTED_SENTINEL);
     expect(
-      expectDefined(config.agents.list[0], "config.agents.list[0] test invariant").memorySearch
-        .remote.apiKey,
+      expectDefined(config.agents.entries.main, "config.agents.entries.main test invariant").memory
+        .search.remote.apiKey,
     ).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
-    expect(restored.agents.defaults.memorySearch.remote.apiKey).toBe("1234");
+    expect(restored.memory.search.remote.apiKey).toBe("1234");
     expect(
-      expectDefined(restored.agents.list[0], "restored.agents.list[0] test invariant").memorySearch
-        .remote.apiKey,
+      expectDefined(restored.agents.entries.main, "restored.agents.entries.main test invariant")
+        .memory.search.remote.apiKey,
     ).toBe("6789");
   });
 

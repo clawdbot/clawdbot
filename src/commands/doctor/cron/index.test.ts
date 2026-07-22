@@ -400,7 +400,7 @@ describe("maybeRepairLegacyCronStore", () => {
             model: { primary: "openai/gpt-5.5", fallbacks: [] },
           },
         },
-      },
+      } as unknown as OpenClawConfig,
       options: {},
       prompter,
     });
@@ -476,7 +476,7 @@ describe("maybeRepairLegacyCronStore", () => {
             model: { primary: "test:opus", fallbacks: [] },
           },
         },
-      },
+      } as unknown as OpenClawConfig,
       options: {},
       prompter: makePrompter(true),
     });
@@ -1779,7 +1779,7 @@ describe("maybeRepairLegacyCronStore", () => {
       }),
     ]);
 
-    const cfg = { cron: { store: storePath } } as OpenClawConfig;
+    const cfg = { cron: { store: storePath } } as unknown as OpenClawConfig;
     await maybeRepairLegacyCronStore({
       cfg,
       options: {},
@@ -1817,7 +1817,7 @@ describe("maybeRepairLegacyCronStore", () => {
       }),
     ]);
 
-    const cfg = { cron: { store: storePath } } as OpenClawConfig;
+    const cfg = { cron: { store: storePath } } as unknown as OpenClawConfig;
     await maybeRepairLegacyCronStore({
       cfg,
       options: {},
@@ -1949,7 +1949,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
     await expect(
       maybeRepairLegacyCronStore({
-        cfg: { cron: { store: storePath } },
+        cfg: { cron: { store: storePath } } as unknown as OpenClawConfig,
         options: {},
         prompter,
       }),

@@ -6,7 +6,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { COHERE_COMMAND_A_PLUS_MODEL_ID } from "./models.js";
-import { buildCohereProvider } from "./provider-catalog.js";
+import { buildCohereProvider, COHERE_LIVE_MODEL_DISCOVERY } from "./provider-catalog.js";
 import { createCohereCompletionsWrapper } from "./stream.js";
 
 const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
@@ -157,6 +157,42 @@ describe("Cohere provider plugin", () => {
         }),
       ],
     });
+  });
+
+  it("normalizes Cohere live catalog rows for chat discovery", () => {
+    expect(COHERE_LIVE_MODEL_DISCOVERY.endpointUrl).toEqual({
+      url: "https://api.cohere.com/v1/models?endpoint=chat&page_size=1000",
+      requireBaseUrl: "https://api.cohere.ai/compatibility/v1",
+    });
+    expect(
+      COHERE_LIVE_MODEL_DISCOVERY.readRows?.({
+        models: [
+          {
+            name: "command-fresh",
+            is_deprecated: false,
+            endpoints: ["chat"],
+            context_length: 256_000,
+          },
+          { name: "command-retired", is_deprecated: true, endpoints: ["chat"] },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "command-fresh",
+        name: "command-fresh",
+        is_deprecated: false,
+        active: true,
+        endpoints: ["chat"],
+        context_length: 256_000,
+      },
+      {
+        id: "command-retired",
+        name: "command-retired",
+        is_deprecated: true,
+        active: false,
+        endpoints: ["chat"],
+      },
+    ]);
   });
 
   it("uses Cohere's OpenAI-compatible completions payload fields", () => {

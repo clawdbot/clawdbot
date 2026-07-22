@@ -54,6 +54,8 @@ export function guardSessionManager(
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
+    /** Finalization keeps core redaction but must not run plugin write hooks. */
+    skipBeforeMessageWriteHooks?: boolean;
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
       runtimeMessage: Extract<AgentMessage, { role: "user" }> | undefined,
@@ -93,7 +95,7 @@ export function guardSessionManager(
     const runtimeUserMessage = runtimeUserMessageByPersistedMessage.get(event.message);
     let message = event.message;
     let changed = false;
-    if (hookRunner?.hasHooks("before_message_write")) {
+    if (!opts?.skipBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")) {
       const result = hookRunner.runBeforeMessageWrite(event, {
         agentId: opts?.agentId,
         sessionKey: opts?.sessionKey,

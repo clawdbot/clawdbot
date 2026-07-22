@@ -5,11 +5,11 @@ scenario:
   surface: telemetry
   coverage:
     primary:
-      - telemetry.prometheus
-      - telemetry.prometheus-authenticated-gateway-export
+      - observability.prometheus-api-auth
+      - observability.prometheus
     secondary:
-      - harness.qa-lab
-      - docker.runtime-validation
+      - observability.prometheus-qa-lab
+      - containers.e2e-plan-runtime-validation
   objective: Verify a QA-lab gateway run emits protected, bounded Prometheus diagnostics metrics through the diagnostics-prometheus plugin.
   successCriteria:
     - The diagnostics-prometheus plugin exposes the protected scrape route.

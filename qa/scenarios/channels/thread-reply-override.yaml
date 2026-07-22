@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
+      - channels.native-threads
   objective: Verify Matrix threadReplies=always converts a top-level inbound message into a native threaded reply.
   gatewayConfigPatch:
     channels:

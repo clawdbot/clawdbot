@@ -952,7 +952,7 @@ export function normalizeLegacyNanoBananaSkill(
     };
   }
 
-  const existingImageGenerationModel = next.agents?.defaults?.imageGenerationModel;
+  const existingImageGenerationModel = next.agents?.defaults?.mediaModels?.image;
   if (existingImageGenerationModel === undefined) {
     next = {
       ...next,
@@ -960,14 +960,15 @@ export function normalizeLegacyNanoBananaSkill(
         ...next.agents,
         defaults: {
           ...next.agents?.defaults,
-          imageGenerationModel: {
-            primary: NANO_BANANA_MODEL,
+          mediaModels: {
+            ...next.agents?.defaults?.mediaModels,
+            image: { primary: NANO_BANANA_MODEL },
           },
         },
       },
     };
     changes.push(
-      `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.imageGenerationModel.primary (${NANO_BANANA_MODEL}).`,
+      `Moved skills.entries.${NANO_BANANA_SKILL_KEY} → agents.defaults.mediaModels.image.primary (${NANO_BANANA_MODEL}).`,
     );
   }
 

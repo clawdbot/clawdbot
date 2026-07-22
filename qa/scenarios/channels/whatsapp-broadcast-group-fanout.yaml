@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-broadcast-group-fanout
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - whatsapp.group-session-keys
   execution:
     profiles: { "whatsapp:mock-default": 3 }
     kind: flow

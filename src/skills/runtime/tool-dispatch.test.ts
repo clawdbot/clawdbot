@@ -63,6 +63,26 @@ describe("resolveSkillDispatchTools", () => {
     expect(args?.nativeChannelId).toBe("native-room-1");
   });
 
+  it("passes unrestricted skill-dispatch tool surfaces to cron jobs", () => {
+    const tools = resolveSkillDispatchTools({
+      message: { surface: "telegram", senderId: "user-1" },
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:user-1",
+      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    const args = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
+    expect(tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec"]);
+    expect(args?.cronCreatorToolAllowlist).toEqual([
+      { name: "read" },
+      { name: "cron" },
+      { name: "exec" },
+    ]);
+  });
+
   it("carries command skill file identity into tool diagnostics", () => {
     resolveSkillDispatchTools({
       message: { surface: "telegram", senderId: "user-1" },

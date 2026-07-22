@@ -6,7 +6,7 @@ scenario:
   runtimeParityTier: optional
   coverage:
     primary:
-      - tools.image-generate
+      - media.image-tool-image-generate
   objective: Verify image_generate preserves arguments and result shape across OpenClaw and Codex.
   successCriteria:
     - Scenario is mock-openai only because live image generation uses async task lifecycle proof outside this direct failure-path fixture.

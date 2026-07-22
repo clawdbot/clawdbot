@@ -38,8 +38,9 @@ describe("runtime context prompt submission", () => {
   it("moves hidden runtime context out of the visible prompt", () => {
     // Hidden context is provider input, not user-authored transcript text; it
     // must be split before persistence and display.
+    const visiblePrompt = "[media attached: /tmp/a.png (image/png)]\nvisible ask";
     const effectivePrompt = [
-      "visible ask",
+      visiblePrompt,
       "",
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
       "secret runtime context",
@@ -49,10 +50,10 @@ describe("runtime context prompt submission", () => {
     expect(
       resolveRuntimeContextPromptParts({
         effectivePrompt,
-        transcriptPrompt: "visible ask",
+        transcriptPrompt: visiblePrompt,
       }),
     ).toEqual({
-      prompt: "visible ask",
+      prompt: visiblePrompt,
       runtimeContext:
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     });

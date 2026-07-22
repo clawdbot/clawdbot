@@ -97,7 +97,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
     ```
 
     `cliBackends` is the runtime ownership list; it lets OpenClaw auto-load the
-    plugin when config or model selection mentions `acme-cli/...`.
+    plugin when model selection or `agentRuntime.id` mentions `acme-cli`.
 
     `setup.cliBackends` is the descriptor-first setup surface. Add it when
     model discovery, onboarding, or status should recognize the backend
@@ -129,17 +129,33 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
         },
         config: {
           command: "acme",
-          args: ["chat", "--json"],
-          output: "json",
-          input: "stdin",
+          args: ["chat", "--output-format", "stream-json", "--prompt", "{prompt}"],
+          resumeArgs: [
+            "chat",
+            "--resume",
+            "{sessionId}",
+            "--output-format",
+            "stream-json",
+            "--prompt",
+            "{prompt}",
+          ],
+          output: "jsonl",
+          resumeOutput: "jsonl",
+          jsonlDialect: "gemini-stream-json",
+          input: "arg",
           modelArg: "--model",
-          sessionArg: "--session",
+          modelAliases: {
+            large: "acme-large-2026",
+            fast: "acme-fast-2026",
+          },
+          sessionArgs: ["--session", "{sessionId}"],
           sessionMode: "existing",
           sessionIdFields: ["session_id", "conversation_id"],
           systemPromptFileArg: "--system-file",
           systemPromptWhen: "first",
           imageArg: "--image",
           imageMode: "repeat",
+          imagePathScope: "workspace",
           reliability: {
             watchdog: {
               fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
@@ -161,16 +177,19 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
     });
     ```
 
-    The backend id must match the manifest `cliBackends` entry. The
-    registered `config` is only the default; user config under
-    `agents.defaults.cliBackends.acme-cli` merges over it at runtime.
+    The backend id must match the manifest `cliBackends` entry. The registered
+    adapter is authoritative plugin code; OpenClaw config selects the backend
+    but does not rewrite its command contract.
 
   </Step>
 </Steps>
 
 ## Config shape
 
-`CliBackendConfig` describes how OpenClaw should launch and parse the CLI:
+`CliBackendConfig` describes how OpenClaw should launch and parse the CLI. The
+worked example above intentionally exercises the same command, resume, JSONL,
+model-alias, session, image, and watchdog fields as the bundled
+`google-gemini-cli` adapter:
 
 | Field                                                     | Use                                                                               |
 | --------------------------------------------------------- | --------------------------------------------------------------------------------- |
@@ -185,7 +204,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 | `env` / `clearEnv`                                        | Extra env vars to inject, or names to strip before launch                         |
 | `modelArg`                                                | Flag used before the model id                                                     |
 | `modelAliases`                                            | Map OpenClaw model ids to CLI-native ids                                          |
-| `sessionArg` / `sessionArgs`                              | How to pass a session id                                                          |
+| `sessionArgs`                                             | How to pass a session id using `{sessionId}`                                      |
 | `sessionMode`                                             | `always`, `existing`, or `none`                                                   |
 | `sessionIdFields`                                         | JSON fields OpenClaw reads from CLI output                                        |
 | `systemPromptArg` / `systemPromptFileArg`                 | System prompt transport                                                           |
@@ -207,7 +226,7 @@ only for behavior that really belongs to the backend.
 
 | Hook                               | Use                                                                         |
 | ---------------------------------- | --------------------------------------------------------------------------- |
-| `normalizeConfig(config, context)` | Rewrite legacy user config after merge                                      |
+| `normalizeConfig(config, context)` | Normalize the registered static adapter with runtime context                |
 | `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort or side-question isolation |
 | `prepareExecution(ctx)`            | Create temporary auth, config, or environment bridges before launch         |
 | `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform                          |
@@ -228,7 +247,7 @@ a backend hook can express the behavior.
 limit selected for the run. Backends that own native compaction can map that
 budget into their CLI-specific launch contract.
 
-`runtimeArtifact` is plugin-owned and is not user-overridable. It is consulted
+`runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
 normal CLI runs do not require it. A backend without this declaration cannot
 mint verified CLI setup authority. A `bundled-package-tree` declaration names
@@ -242,7 +261,7 @@ do not make an external implementation graph safe.
 
 If the same backend also ships a self-contained native executable, list its
 canonical basenames in `nativeExecutableNames`. Other native commands remain
-unverified even when a user overrides the backend command.
+unverified.
 
 `ctx.executionMode` is `"agent"` for normal turns and `"side-question"` for
 ephemeral `/btw` calls. Use it when the CLI needs different one-shot flags,
@@ -254,13 +273,23 @@ requires a no-tools CLI run.
 
 Set `nativeToolMode: "selectable"` only when `resolveExecutionArgs` can disable
 every backend-native tool for an individual run. For those restricted runs,
-`ctx.toolAvailability.native` is an empty tuple and
+`ctx.toolAvailability.native` is the exact backend-native tool list and
 `ctx.toolAvailability.mcp` is the exact host-isolated MCP allowlist. The hook
-must replace conflicting tool flags and return argv that enforces both values;
-OpenClaw calls it once with the final fresh or resume argv and fails closed when
-the backend cannot enforce the restriction. MCP names in this context are safe
-to auto-approve only because the host has already limited the generated MCP
-configuration to those servers and tools.
+must replace conflicting tool flags, disable backend customization surfaces
+that can execute outside those tools, and return argv that enforces both
+values. OpenClaw calls it once with the final fresh or resume argv and fails
+closed when the backend cannot enforce the restriction. MCP names in this
+context are safe to auto-approve only because the host has already limited the
+generated MCP configuration to those servers and tools.
+
+To support OpenClaw runtime caps such as cron `toolsAllow`, also implement
+`resolveRuntimeToolAvailability(ctx)`. OpenClaw passes a normalized,
+group-expanded allowlist and always disables backend-native tools. Return only
+host-isolated MCP names selected from that allowlist. Returning `null` or
+`undefined` keeps the generic runner fail-closed. A backend may omit an allowed
+tool it cannot represent, but must never add authority absent from the
+allowlist. Before minting a grant, the host rejects any returned entry that is
+not the exact `mcp__openclaw__<tool>` name for one of the allowed tools.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 
@@ -314,23 +343,16 @@ its own built-in tool layer that cannot be disabled, set `nativeToolMode:
 tools. If it can disable every native tool per run, use `"selectable"` with the
 `resolveExecutionArgs` contract above.
 
-## User configuration
+## Selecting the backend
 
-Users can override any backend default:
+Users select a standalone backend through its model-ref prefix. A backend that
+declares a canonical `modelProvider` can instead be selected through that
+provider model's `agentRuntime.id`. Adapter mechanics remain in the plugin:
 
 ```json5
 {
   agents: {
     defaults: {
-      cliBackends: {
-        "acme-cli": {
-          command: "/opt/acme/bin/acme",
-          args: ["chat", "--json", "--profile", "work"],
-          modelAliases: {
-            large: "acme-large-2026",
-          },
-        },
-      },
       model: {
         primary: "openai/gpt-5.6-sol",
         fallbacks: ["acme-cli/large"],
@@ -340,8 +362,9 @@ Users can override any backend default:
 }
 ```
 
-Document the minimum override users are likely to need - usually only
-`command` when the binary is outside `PATH`.
+Put credentials in OpenClaw auth profiles or plugin-owned config. Ensure the
+registered command is on the gateway service's `PATH`; deployments that need a
+different path or argv should change or wrap the plugin registration.
 
 ## Verification
 
@@ -369,13 +392,13 @@ MCP, or session-resume behavior.
 <Check>`openclaw.plugin.json` declares `cliBackends` and intentional `activation.onStartup`</Check>
 <Check>`setup.cliBackends` is present when setup/model discovery should see the backend cold</Check>
 <Check>`api.registerCliBackend(...)` uses the same backend id as the manifest</Check>
-<Check>User overrides under `agents.defaults.cliBackends.<id>` still win</Check>
+<Check>The backend model prefix or model-scoped `agentRuntime.id` selects the registration</Check>
 <Check>Session, system prompt, image, and output parser settings match the real CLI contract</Check>
 <Check>Targeted tests and at least one live CLI smoke prove the backend path</Check>
 
 ## Related
 
-- [CLI backends](/gateway/cli-backends) - user configuration and runtime behavior
+- [CLI backends](/gateway/cli-backends) - runtime selection and behavior
 - [Building plugins](/plugins/building-plugins) - package and manifest basics
 - [Plugin SDK overview](/plugins/sdk-overview) - registration API reference
 - [Plugin manifest](/plugins/manifest) - `cliBackends` and setup descriptors

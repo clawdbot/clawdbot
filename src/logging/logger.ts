@@ -21,7 +21,7 @@ import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { appendRegularFileSync } from "../infra/regular-file.js";
 import {
-  POSIX_OPENCLAW_TMP_DIR,
+  DEFAULT_POSIX_TMP_ROOT,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
@@ -35,13 +35,13 @@ import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
 
 function resolveDefaultLogDir(): string {
-  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
+  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT;
 }
 
 function resolveDefaultLogFile(defaultLogDir: string): string {
   return canUseNodeFs()
     ? path.join(defaultLogDir, "openclaw.log")
-    : `${POSIX_OPENCLAW_TMP_DIR}/openclaw.log`;
+    : `${DEFAULT_POSIX_TMP_ROOT}/openclaw.log`;
 }
 
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
@@ -472,12 +472,8 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   };
 }
 
-function isLogRedactionDisabled(): boolean {
-  return readLoggingConfig()?.redactSensitive === "off";
-}
-
 function redactLogRecordForTransport<T extends LogObj>(record: T): T {
-  return isLogRedactionDisabled() ? record : redactSecrets(record);
+  return redactSecrets(record);
 }
 
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
@@ -535,7 +531,7 @@ function resolveSettings(): ResolvedSettings {
     };
   }
 
-  const cfg: OpenClawConfig["logging"] | undefined =
+  const cfg: OpenClawConfig["logging"] | LoggerSettings | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? loadLoggerConfig();
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";

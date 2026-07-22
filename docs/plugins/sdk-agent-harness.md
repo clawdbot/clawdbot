@@ -475,6 +475,64 @@ harnesses. Optional does not mean ignorable for a harness that executes tools:
 without terminal reports, OpenClaw cannot preserve mutating-tool failure truth
 across later tool calls, including quiet heartbeat completion.
 
+### Settled tool finalization
+
+OpenClaw may need one final visible answer after a harness has completed every
+tool call but its native turn ended without assistant text. A harness can opt
+into that recovery by implementing `finalizeSettledTurn({ attempt,
+settledAttempt })`.
+
+The callback is a separate capability, not another ordinary attempt. It must:
+
+- use either the exact restricted native transcript or a complete application
+  transcript frozen through the settled tool-result boundary;
+- expose no tools, permission-grant or user-input capabilities, native execution
+  hooks, agents, skills, memory, scheduling, extensions, or remote control;
+- send only the host-provided finalization prompt; and
+- fail closed if its selected transcript/isolation strategy cannot enforce
+  those restrictions.
+
+OpenClaw invokes the callback once as a terminal sub-operation, outside the
+ordinary attempt and retry loop. A failure ends the run with the
+side-effect-aware incomplete-turn warning; it cannot enter ordinary
+auth/profile rotation, model fallback, context recovery, compaction
+continuation, or hook-requested revision paths. Finalization also skips plugin
+prompt mutation, `before_agent_run`, LLM input/output, terminal revision, and
+`agent_end` hooks. Core diagnostics still record the operation and its failure.
+
+The callback returns `AgentHarnessSettledTurnFinalizationResult`, not an
+ordinary attempt result. Its public fields are limited to the completed
+assistant message, finalization-call usage, transcript-ownership metadata, and
+diagnostic trace. Tool, delivery, media, spawn, lifecycle, replay, session, and
+fallback state cannot cross this result boundary. Unknown fields and assistant
+tool calls fail closed.
+
+A harness that internally reuses its full attempt engine can call
+`projectSettledTurnFinalizationAttemptResult(...)` before returning. The helper
+rejects canonical failure, tool, delivery, replay, and lifecycle evidence, then
+projects only the narrow result. It is defense in depth after native isolation,
+not a substitute for removing the native capability surface.
+
+A projection-backed harness must put the complete context on
+`settledAttempt.settledTurnFinalizationContext` with
+`source: "openclaw-transcript"`. It must capture the active branch after the
+settled turn is mirrored, prove that the current prompt and every current tool
+call/result are present through that boundary, and freeze the resulting message
+array before returning the attempt. The finalizer must reject a missing,
+unsupported, ambiguous, or oversized context. It must not truncate messages,
+drop earlier history, or describe this application transcript as exact native
+history. Harnesses that resume one restricted native session do not need this
+projection field.
+
+Do not implement this callback by calling `runAttempt` with a best-effort
+`disableTools` hint. The harness owner must enforce the complete native
+capability boundary. OpenClaw does not provide a generic fallback because it
+cannot attest that an arbitrary native runtime honored those restrictions.
+
+The callback remains optional for experimental third-party harness
+compatibility. When the selected harness omits it, OpenClaw preserves the
+existing incomplete-turn error instead of risking repeated side effects.
+
 ## Current limitations
 
 - The public import path is generic, but some attempt/result type aliases

@@ -15,8 +15,8 @@ Debugging helpers for streaming output, gateway iteration, and startup profiling
 
 ```text
 /debug show
-/debug set messages.responsePrefix="[openclaw]"
-/debug unset messages.responsePrefix
+/debug set channels.whatsapp.responsePrefix="[openclaw]"
+/debug unset channels.whatsapp.responsePrefix
 /debug reset
 ```
 

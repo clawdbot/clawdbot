@@ -419,6 +419,10 @@ export function shouldPreserveMaintenanceEntry(params: {
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
 }): boolean {
+  // Archived sessions are user-shelved; only an explicit sessions.delete may remove them.
+  if (params.entry?.archivedAt !== undefined) {
+    return true;
+  }
   // A model lock is durable harness ownership, not merely a UI restriction.
   // Evicting the row can strand its native runtime binding and later recreate
   // the same conversation under an incompatible model, so pressure may exceed

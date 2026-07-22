@@ -22,7 +22,6 @@ function createFixture(config: Record<string, unknown>, stateEntries: string[] =
   }
   return {
     HOME: root,
-    OPENCLAW_CONFIG: configPath,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
   };
@@ -72,7 +71,10 @@ describe("pristine startup state", () => {
     expect(canSkipPristineStartupStateMigrations(createFixture({}, ["agents"]))).toBe(false);
     expect(
       canSkipPristineStartupStateMigrations(
-        createFixture({ agents: { defaults: { memorySearch: { provider: "local" } } } }),
+        createFixture({
+          memory: { search: { provider: "local" } },
+          agents: { defaults: {} },
+        }),
       ),
     ).toBe(false);
   });

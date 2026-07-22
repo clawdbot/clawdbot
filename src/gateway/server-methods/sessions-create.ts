@@ -26,8 +26,9 @@ import {
 } from "../session-create-service.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "../session-utils.js";
+import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import { chatHandlers } from "./chat.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -211,7 +212,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !hasInitialTurn &&
         cfg.session?.dmScope === "main"
       ) {
-        const parent = loadSessionEntry(
+        const parent = loadSessionEntryReadOnly(
           parentSessionKey,
           requestedAgent.agentId ? { agentId: requestedAgent.agentId } : undefined,
         );
@@ -328,6 +329,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     ).allowed;
     const created = await createGatewaySession({
       cfg,
+      createdBy: gatewayClientSessionCreator(client),
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
@@ -335,6 +337,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       thinkingLevel: p.thinkingLevel,
       allowExistingModelSelection,
       parentSessionKey: p.parentSessionKey,
+      spawnDepth: p.spawnDepth,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
         ? {

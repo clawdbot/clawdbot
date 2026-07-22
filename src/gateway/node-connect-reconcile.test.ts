@@ -219,7 +219,7 @@ describe("reconcileNodePairingOnConnect", () => {
     });
     const requestPairing = vi.fn();
 
-    // No allowCommands entry (unarmed): the previously approved dangerous
+    // No commands.allow entry (unarmed): the previously approved dangerous
     // surface must reconcile cleanly instead of demanding a pairing upgrade
     // on every reconnect.
     const result = await reconcileNodePairingOnConnect({

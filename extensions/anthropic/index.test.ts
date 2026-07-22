@@ -91,7 +91,7 @@ describe("anthropic provider replay hooks", () => {
     expectFields(backend.config, {
       command: "claude",
       modelArg: "--model",
-      sessionArg: "--session-id",
+      sessionArgs: ["--session-id", "{sessionId}"],
     });
   });
 

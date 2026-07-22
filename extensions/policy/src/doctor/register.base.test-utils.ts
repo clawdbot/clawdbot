@@ -1547,13 +1547,10 @@ describe("registerPolicyDoctorChecks", () => {
         mode: "remote",
         remote: { url: "wss://remote.example.test:18789" },
         controlUi: {
-          allowInsecureAuth: true,
-          dangerouslyDisableDeviceAuth: true,
           dangerouslyAllowHostHeaderOriginFallback: true,
         },
       },
-      logging: { redactSensitive: "off" },
-      diagnostics: { otel: { enabled: true, captureContent: { enabled: true, toolInputs: true } } },
+      diagnostics: { otel: { enabled: true, captureContent: true } },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
@@ -1584,28 +1581,20 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/gateway-remote-enabled",
       repairCtx(configPath, controlUi.config),
     );
-    const redaction = await runPolicyRepairCheck(
-      "policy/data-handling-redaction-disabled",
-      repairCtx(configPath, remote.config),
-    );
     const telemetry = await runPolicyRepairCheck(
       "policy/data-handling-telemetry-content-capture",
-      repairCtx(configPath, redaction.config),
+      repairCtx(configPath, remote.config),
     );
 
     expect([
       ...elevated.changes,
       ...controlUi.changes,
       ...remote.changes,
-      ...redaction.changes,
       ...telemetry.changes,
     ]).toEqual([
       "Set tools.elevated.enabled=false for policy conformance.",
-      "Set gateway.controlUi.allowInsecureAuth=false for policy conformance.",
-      "Set gateway.controlUi.dangerouslyDisableDeviceAuth=false for policy conformance.",
       "Set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=false for policy conformance.",
       "Set gateway.mode=local for policy conformance.",
-      "Set logging.redactSensitive=tools for policy conformance.",
       "Set diagnostics.otel.captureContent=false for policy conformance.",
     ]);
     expect(telemetry.remainingFindings).toEqual([]);
@@ -1615,12 +1604,9 @@ describe("registerPolicyDoctorChecks", () => {
         mode: "local",
         remote: {},
         controlUi: {
-          allowInsecureAuth: false,
-          dangerouslyDisableDeviceAuth: false,
           dangerouslyAllowHostHeaderOriginFallback: false,
         },
       },
-      logging: { redactSensitive: "tools" },
       diagnostics: { otel: { captureContent: false } },
     });
   });
@@ -1770,7 +1756,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
-      gateway: { nodes: { denyCommands: ["mcp.help"] } },
+      gateway: { nodes: { commands: { deny: ["mcp.help"] } } },
     } as unknown as OpenClawConfig;
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
@@ -1787,20 +1773,20 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("policy repair requires review before changing config");
     expect(result.changes).toEqual([
-      "Review required: add system.run to gateway.nodes.denyCommands for policy conformance.",
+      "Review required: add system.run to gateway.nodes.commands.deny for policy conformance.",
     ]);
     expect(result.warnings).toEqual([
-      "Review required: add system.run to gateway.nodes.denyCommands for policy conformance.",
+      "Review required: add system.run to gateway.nodes.commands.deny for policy conformance.",
     ]);
     expect(result.effects).toEqual([
       {
         kind: "config",
         action: "would-append-after-review",
-        target: "gateway.nodes.denyCommands += system.run",
+        target: "gateway.nodes.commands.deny += system.run",
         dryRunSafe: true,
       },
     ]);
-    expect(result.config.gateway?.nodes?.denyCommands).toEqual(["mcp.help"]);
+    expect(result.config.gateway?.nodes?.commands?.deny).toEqual(["mcp.help"]);
     expect(result.remainingFindings).toHaveLength(1);
   });
 

@@ -42,7 +42,7 @@ export function normalizeControlUiChatMessageMaxWidth(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
-/** Validates the constrained CSS width grammar accepted by `gateway.controlUi.chatMessageMaxWidth`. */
+/** Validates the constrained CSS width grammar accepted by `ui.prefs.chatMessageMaxWidth`. */
 export function isValidControlUiChatMessageMaxWidth(value: string): boolean {
   const normalized = normalizeControlUiChatMessageMaxWidth(value);
   if (normalized.length === 0 || normalized.length > CSS_WIDTH_MAX_LENGTH) {

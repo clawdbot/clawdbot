@@ -113,7 +113,7 @@ export function providerHasGenericConfig(params: {
 }): boolean {
   const modelsProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
   const pluginEntries = (params.cfg.plugins?.entries ?? {}) as Record<string, { config?: unknown }>;
-  const ttsProviders = (params.cfg.messages?.tts?.providers ?? {}) as Record<string, unknown>;
+  const ttsProviders = (params.cfg.tts?.providers ?? {}) as Record<string, unknown>;
   const envConfigured = (params.envVars ?? []).some((envVar) =>
     Boolean(process.env[envVar]?.trim()),
   );

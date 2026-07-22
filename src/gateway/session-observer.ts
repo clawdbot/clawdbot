@@ -1,7 +1,16 @@
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import {
+  createSessionActivityNoteState,
+  flushSessionActivityAssistantNote,
+  noteSessionActivityEvent,
+  readFiniteNumber,
+  terminalHealthFor,
+} from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { getAgentRunContext, type AgentEventPayload } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSessionObserverAskRuntime } from "./session-observer-ask.js";
+import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
 import {
   buildSessionObserverPrompt,
   createDormantSessionObserverRun,
@@ -12,15 +21,12 @@ import {
   isTerminalLifecycleEvent,
   markSessionObserverRunSuperseded,
   normalizeSessionObserverModelOutput,
-  readFiniteNumber,
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
-  rememberSessionObserverItemStatus,
   rememberSessionObserverRevisionFloor,
   SESSION_OBSERVER_MODEL_MAX_TOKENS,
   SESSION_OBSERVER_SYSTEM_PROMPT,
   synthesizeSessionObserverTerminalDigest,
-  terminalHealthFor,
 } from "./session-observer-model.js";
 import type {
   DormantSessionObserverRun,
@@ -29,10 +35,6 @@ import type {
   SessionObserverRevisionFloor,
   SessionObserverState,
 } from "./session-observer-model.js";
-import {
-  flushSessionObserverAssistantNote,
-  noteSessionObserverEvent,
-} from "./session-observer-notes.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
 
@@ -42,14 +44,16 @@ const MODEL_TIMEOUT_MS = 10_000;
 const MAX_DIGESTS_PER_RUN = 40;
 const MAX_LIVE_DIGESTS_PER_RUN = MAX_DIGESTS_PER_RUN - 1;
 const MAX_CONSECUTIVE_FAILURES = 2;
-const MAX_ITEM_STATUSES = 160;
 const FINAL_DIGEST_MIN_RUN_MS = 30_000;
 const PERSIST_INTERVAL_MS = 60_000;
 // The Control UI opens at most six live session subscriptions; matching that cap
 // prevents background observer calls from outgrowing the surface consuming them.
 const MAX_CONCURRENT_OBSERVED_SESSIONS = 6;
 
-export function createSessionObserver(deps: SessionObserverDeps) {
+type SessionObserver = SessionObserverService &
+  Pick<ReturnType<typeof createSessionObserverAskRuntime>, "getSnapshot">;
+
+export function createSessionObserver(deps: SessionObserverDeps): SessionObserver {
   const now = deps.now ?? Date.now;
   const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
@@ -63,7 +67,21 @@ export function createSessionObserver(deps: SessionObserverDeps) {
   const revisionFloors = new Map<string, SessionObserverRevisionFloor>();
   const supersededRuns = new Map<string, number>();
   const disabledRuns = new Set<string>();
+  const visibleConnections = new Set<string>();
   let disposed = false;
+  const askRuntime = createSessionObserverAskRuntime({
+    getConfig: deps.getConfig,
+    subscribers: deps.subscribers,
+    states,
+    resolveUtilityModelRef,
+    prepareModel,
+    completeModel,
+    readSession,
+    now,
+    setTimeoutFn,
+    clearTimeoutFn,
+    isDisposed: () => disposed,
+  });
 
   // Narrow run-identity guard shared by persist paths: a digest may still land
   // while its session is unwatched, but never after a newer run replaces it.
@@ -73,7 +91,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
   // Terminal paths that cannot run the model must still retire same-run live
   // health, or idle session rows can display a stale in-progress judgment forever.
   async function synthesizeTerminalDigest(source: {
-    event?: AgentEventPayload;
+    event?: SessionObserverEvent;
     state?: SessionObserverState;
   }) {
     const runId = source.event?.runId ?? source.state?.runId;
@@ -154,18 +172,47 @@ export function createSessionObserver(deps: SessionObserverDeps) {
 
   const hasSubscribers = (sessionKey: string) => deps.subscribers.get(sessionKey).size > 0;
 
+  const hasObserverAudience = (sessionKey: string) => {
+    // Only the Control UI renders these model-backed digests. Fail closed for
+    // undeclared subscribers so TUI and script connections never spend unseen
+    // tokens. Accepted tradeoff: a pre-2026.7 Control UI tab left open across a
+    // gateway upgrade cannot declare visibility and misses live digests until
+    // reload; terminal digests still reach it, and a fail-open default would
+    // re-enable unseen spend for every non-rendering subscriber permanently.
+    for (const connId of deps.subscribers.get(sessionKey)) {
+      if (visibleConnections.has(connId)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const suspendStatesWithoutAudience = () => {
+    // suspendState deletes from `states`; Map iteration tolerates removal of
+    // the entry being visited.
+    for (const state of states.values()) {
+      if (!hasObserverAudience(state.sessionKey)) {
+        suspendState(state);
+      }
+    }
+  };
+
   const markSuperseded = (runId: string, observedAt: number) =>
     markSessionObserverRunSuperseded(supersededRuns, runId, observedAt);
 
   const unsubscribeChanges = deps.subscribers.onChange((sessionKey) => {
     const state = states.get(sessionKey);
-    if (state && !hasSubscribers(sessionKey)) {
+    if (state && !hasObserverAudience(sessionKey)) {
       suspendState(state);
     }
   });
 
   const stateIsCurrent = (state: SessionObserverState) => {
-    if (disposed || states.get(state.sessionKey) !== state || !hasSubscribers(state.sessionKey)) {
+    if (
+      disposed ||
+      states.get(state.sessionKey) !== state ||
+      !hasObserverAudience(state.sessionKey)
+    ) {
       return false;
     }
     const cfg = deps.getConfig();
@@ -174,9 +221,6 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     }
     return resolveUtilityModelRef({ cfg, agentId: state.agentId }) === state.utilityModelRef;
   };
-
-  const rememberItemStatus = (state: SessionObserverState, itemId: string, status: string) =>
-    rememberSessionObserverItemStatus(state.itemStatuses, itemId, status, MAX_ITEM_STATUSES);
 
   const ensurePrepared = async (state: SessionObserverState): Promise<PreparedModel> => {
     state.preparedPromise ??= prepareModel({
@@ -354,7 +398,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     if (state.digestCount >= digestLimit) {
       return;
     }
-    flushSessionObserverAssistantNote(state);
+    flushSessionActivityAssistantNote(state);
     const selectedNotes = pendingNotes(state);
     if (!final && selectedNotes.length < MIN_NOTES_PER_DIGEST) {
       return;
@@ -452,13 +496,10 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     })();
   };
 
-  const admitState = (event: AgentEventPayload): SessionObserverState | undefined => {
+  const admitState = (event: SessionObserverEvent): SessionObserverState | undefined => {
     const sessionKey = event.sessionKey?.trim();
     const agentId = event.agentId?.trim();
-    // Watching is the intentional cost gate: read-scope subscribers are the
-    // operator's own surfaces, and spend stays bounded by the session cap,
-    // digest thresholds, and the sessionObserver/utilityModel kill switches.
-    if (!sessionKey || !agentId || !hasSubscribers(sessionKey)) {
+    if (!sessionKey || !agentId || !hasObserverAudience(sessionKey)) {
       return undefined;
     }
     const cfg = deps.getConfig();
@@ -483,16 +524,12 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     if (dormant) {
       dormantRuns.delete(event.runId);
       const state: SessionObserverState = {
+        ...createSessionActivityNoteState(),
         ...dormant,
         utilityModelRef,
         lastActivityAt: event.ts,
         lastRunAt: now(),
-        noteSequence: 0,
         lastDigestNoteSequence: 0,
-        notes: [],
-        noteBytes: 0,
-        itemStatuses: new Map(),
-        assistantBuffer: "",
         inFlight: false,
         finalPending: false,
       };
@@ -503,6 +540,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     const startedAt =
       readFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? now();
     const state: SessionObserverState = {
+      ...createSessionActivityNoteState(),
       sessionKey,
       sessionId: event.sessionId ?? session?.sessionId,
       runId: event.runId,
@@ -515,12 +553,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
       revision: session?.observerDigest?.revision ?? 0,
       digestCount: 0,
       consecutiveFailures: 0,
-      noteSequence: 0,
       lastDigestNoteSequence: 0,
-      notes: [],
-      noteBytes: 0,
-      itemStatuses: new Map(),
-      assistantBuffer: "",
       previousDigest: session?.observerDigest,
       inFlight: false,
       finalPending: false,
@@ -529,7 +562,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     return state;
   };
 
-  const handleEvent = (event: AgentEventPayload) => {
+  const handleEvent = (event: SessionObserverEvent) => {
     if (disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
       return;
     }
@@ -598,7 +631,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     }
     if (
       state &&
-      (!hasSubscribers(sessionKey) ||
+      (!hasObserverAudience(sessionKey) ||
         deps.getConfig().gateway?.controlUi?.sessionObserver === false)
     ) {
       suspendState(state);
@@ -624,7 +657,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     if (eventStartedAt !== undefined) {
       state.startedAt = Math.min(state.startedAt, eventStartedAt);
     }
-    noteSessionObserverEvent(state, event, rememberItemStatus);
+    noteSessionActivityEvent(state, event);
     if (terminal) {
       state.terminalHealth = terminalHealthFor(event);
       const endedAt = readFiniteNumber(event.data.endedAt) ?? now();
@@ -642,9 +675,25 @@ export function createSessionObserver(deps: SessionObserverDeps) {
 
   return {
     handleEvent,
+    setConnectionVisibility(connId, visible) {
+      if (visible) {
+        visibleConnections.add(connId);
+        return;
+      }
+      visibleConnections.delete(connId);
+      suspendStatesWithoutAudience();
+    },
+    removeConnection(connId) {
+      if (visibleConnections.delete(connId)) {
+        suspendStatesWithoutAudience();
+      }
+    },
+    getSnapshot: askRuntime.getSnapshot,
+    ask: askRuntime.ask,
     dispose() {
       disposed = true;
       unsubscribeChanges();
+      askRuntime.dispose();
       for (const state of states.values()) {
         dropState(state);
       }
@@ -652,6 +701,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
       revisionFloors.clear();
       supersededRuns.clear();
       disabledRuns.clear();
+      visibleConnections.clear();
     },
   };
 }

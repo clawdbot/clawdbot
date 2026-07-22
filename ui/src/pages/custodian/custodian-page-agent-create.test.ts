@@ -22,6 +22,7 @@ function createContext(request: ReturnType<typeof vi.fn>) {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: {
       type: "hello-ok",

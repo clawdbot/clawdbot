@@ -2,7 +2,7 @@
  * Browser config mutation helpers.
  *
  * Persists browser-control credentials and profile config changes through the
- * canonical config writer while preserving port/color allocation rules.
+ * canonical config writer while preserving port allocation rules.
  */
 import { isDeepStrictEqual } from "node:util";
 import { mutateConfigFile } from "../config/config.js";
@@ -20,7 +20,7 @@ import {
   BrowserResourceExhaustedError,
   BrowserValidationError,
 } from "./errors.js";
-import { allocateCdpPort, allocateColor, getUsedColors, getUsedPorts } from "./profiles.js";
+import { allocateCdpPort, getUsedPorts } from "./profiles.js";
 
 type BrowserControlCredential =
   | {
@@ -113,9 +113,6 @@ export async function createBrowserProfileConfig(params: {
         throw new BrowserConflictError(`profile "${params.name}" already exists`);
       }
 
-      const profileColor =
-        params.color ?? allocateColor(getUsedColors(latestProfileSource.profiles));
-
       let nextProfileConfig: BrowserProfileConfig;
       if (params.parsedCdpUrl) {
         try {
@@ -127,14 +124,12 @@ export async function createBrowserProfileConfig(params: {
           cdpUrl: params.parsedCdpUrl,
           ...(params.driver ? { driver: params.driver } : {}),
           ...(params.driver === "existing-session" ? { attachOnly: true } : {}),
-          color: profileColor,
         };
       } else if (params.driver === "existing-session") {
         nextProfileConfig = {
           driver: params.driver,
           attachOnly: true,
           ...(params.userDataDir ? { userDataDir: params.userDataDir } : {}),
-          color: profileColor,
         };
       } else {
         const usedPorts = getUsedPorts(latestProfileSource.profiles);
@@ -151,7 +146,6 @@ export async function createBrowserProfileConfig(params: {
         nextProfileConfig = {
           cdpPort,
           ...(params.driver ? { driver: params.driver } : {}),
-          color: profileColor,
         };
       }
 

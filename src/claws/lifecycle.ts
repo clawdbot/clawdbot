@@ -8,6 +8,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
+import { digestClawMcpServer } from "./mcp.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
@@ -19,6 +20,7 @@ import {
   type ClawDiagnostic,
   type ClawManifest,
   type ClawLocalPrerequisite,
+  type ClawPackage,
   type ClawSourceIdentity,
 } from "./types.js";
 
@@ -42,7 +44,20 @@ type ClawAddPlanContext = {
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
-  existingCronJobIds?: Iterable<string>;
+  existingMcpServers?: Record<string, Record<string, unknown>>;
+  packagePreflight?: (
+    pkg: ClawPackage,
+    workspace: string,
+  ) => Promise<{
+    ok: boolean;
+    action?: "install" | "reuse";
+    integrity?: string;
+    installId?: string;
+    warning?: string;
+    installedVersion?: string;
+    code?: string;
+    message?: string;
+  }>;
 };
 
 function canonicalWorkspacePath(value: string): string {
@@ -217,7 +232,7 @@ export async function buildClawAddPlan(params: {
     kind: "agent",
     id: finalId,
     action: "create",
-    target: `agents.list[${JSON.stringify(finalId)}]`,
+    target: `agents.entries[${JSON.stringify(finalId)}]`,
     details: { ...params.manifest.agent, id: finalId, workspace, expectedState: "absent" },
     blocked: agentBlocked || !AGENT_ID_PATTERN.test(finalId),
   });
@@ -369,20 +384,43 @@ export async function buildClawAddPlan(params: {
   }
 
   for (const pkg of params.manifest.packages) {
-    const diagnostic = blocker(
-      "package_install_unavailable",
-      "$.packages",
-      `Package ${JSON.stringify(`${pkg.kind}:${pkg.ref}@${pkg.version}`)} cannot be preflighted until the package-owner lifecycle slice is available.`,
-    );
-    blockers.push(diagnostic);
+    const preflight = context.packagePreflight
+      ? await context.packagePreflight(pkg, workspace)
+      : {
+          ok: false,
+          code: "package_install_unavailable",
+          message: "Package preflight is unavailable.",
+        };
+    const diagnostic = preflight.ok
+      ? undefined
+      : blocker(
+          preflight.code ?? "package_install_unavailable",
+          "$.packages",
+          preflight.message ?? "Package preflight failed.",
+        );
+    if (diagnostic) {
+      blockers.push(diagnostic);
+    }
     actions.push({
       kind: "package",
       id: `${pkg.kind}:${pkg.ref}`,
       action: "install",
       target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
-      details: { ...pkg, expectedState: "unresolved" },
-      blocked: true,
-      reason: diagnostic.message,
+      digest: preflight.integrity,
+      details: {
+        ...pkg,
+        ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
+        ...(preflight.installId ? { installId: preflight.installId } : {}),
+        ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
+        expectedState: !preflight.ok
+          ? "unresolved"
+          : preflight.action === "reuse"
+            ? "present-exact"
+            : "absent",
+        ownerAction: preflight.action,
+      },
+      blocked: !preflight.ok,
+      ...(diagnostic ? { reason: diagnostic.message } : {}),
     });
     capabilityChanges.push(
       capabilityChange({
@@ -396,7 +434,9 @@ export async function buildClawAddPlan(params: {
           source: pkg.source,
           ref: pkg.ref,
           version: pkg.version,
-          integrity: "unresolved",
+          integrity: preflight.integrity ?? "unresolved",
+          ...(preflight.installId ? { installId: preflight.installId } : {}),
+          ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         },
       }),
     );
@@ -404,13 +444,18 @@ export async function buildClawAddPlan(params: {
 
   const existingMcpServerNames = new Set(context.existingMcpServerNames ?? []);
   for (const [name, server] of Object.entries(params.manifest.mcpServers)) {
-    const blocked = existingMcpServerNames.has(name);
+    const existingServer = context.existingMcpServers?.[name];
+    const exactExisting =
+      existingServer !== undefined &&
+      digestClawMcpServer(existingServer) === digestClawMcpServer(server);
+    const blocked =
+      !exactExisting && (existingMcpServerNames.has(name) || existingServer !== undefined);
     if (blocked) {
       blockers.push(
         blocker(
           "mcp_server_collision",
           `$.mcpServers.${name}`,
-          `MCP server ${JSON.stringify(name)} already exists and will not be overwritten.`,
+          `MCP server ${JSON.stringify(name)} already exists with different or unresolved configuration and will not be overwritten.`,
         ),
       );
     }
@@ -433,7 +478,7 @@ export async function buildClawAddPlan(params: {
       target: `mcp.servers.${name}`,
       details: {
         ...server,
-        expectedState: "absent",
+        expectedState: exactExisting ? "present-exact" : "absent",
         prerequisites: readinessRequirements.filter(
           (requirement) => requirement.mcpServer === name,
         ),
@@ -455,18 +500,8 @@ export async function buildClawAddPlan(params: {
     );
   }
 
-  const existingCronJobIds = new Set(context.existingCronJobIds ?? []);
+  // Strict v1 validation permits only deterministic main or isolated targets.
   for (const job of params.manifest.cronJobs) {
-    const blocked = existingCronJobIds.has(job.id);
-    if (blocked) {
-      blockers.push(
-        blocker(
-          "cron_job_collision",
-          `$.cronJobs.${job.id}`,
-          `Cron job ${JSON.stringify(job.id)} already exists and will not be overwritten.`,
-        ),
-      );
-    }
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -480,7 +515,7 @@ export async function buildClawAddPlan(params: {
           ? { deliveryResolution: "local-channel-state:last" }
           : {}),
       },
-      blocked,
+      blocked: false,
     });
     capabilityChanges.push(
       capabilityChange({

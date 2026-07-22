@@ -14,10 +14,7 @@ import type {
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
-import {
-  projectWorkspaceResultConflict,
-  type WorkerWorkspaceResultConflict,
-} from "./workspace-conflicts.js";
+import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
   WorkerWorkspaceFinalFenceError,
@@ -25,9 +22,11 @@ import {
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
-  deleteStagedWorkerWorkspaceResult,
+  finalizeWorkspaceResultConflicts,
+  settleStagedWorkspaceResult,
+} from "./workspace-result-finalize.js";
+import {
   hasWorkerWorkspaceResultRef,
-  moveStagedWorkerWorkspaceResultToCleanup,
   preparedWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
@@ -372,76 +371,40 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                     sessionKey: current.sessionKey,
                     agentId: current.agentId,
                   }));
-                const retainedWorkspaceResultConflict =
-                  !reconciliation.changed && conflictPaths.length === 0
-                    ? priorWorkspaceResultConflict
-                    : undefined;
-                const supersededConflict =
-                  priorWorkspaceResultConflict &&
-                  !retainedWorkspaceResultConflict &&
-                  (conflictPaths.length === 0 ||
-                    priorWorkspaceResultConflict.stagedResultRef !== recordedStagedResultRef)
-                    ? priorWorkspaceResultConflict
-                    : undefined;
-                if (
-                  supersededConflict &&
-                  supersededConflict.stagedResultRef !== recordedStagedResultRef
-                ) {
-                  await deleteStagedWorkerWorkspaceResult({
-                    root: localPath,
-                    stagedResultRef: supersededConflict.stagedResultRef,
-                  });
-                }
-                if (conflictPaths.length > 0 && recordedStagedResultRef) {
-                  const projectedConflict = projectWorkspaceResultConflict(
-                    conflictPaths,
-                    recordedStagedResultRef,
-                  );
-                  placements.recordWorkspaceResultConflict(reclaimClaim, projectedConflict);
-                  await options.reportWorkspaceResultConflict({
-                    sessionId: current.sessionId,
-                    sessionKey: current.sessionKey,
-                    agentId: current.agentId,
-                    ...projectedConflict,
-                  });
-                } else if (retainedWorkspaceResultConflict) {
-                  // Stopping an unchanged worker is not a later cloud result. Keep the
-                  // already resolved keep-local fence inspectable after placement teardown.
-                  placements.recordWorkspaceResultConflict(
-                    reclaimClaim,
-                    retainedWorkspaceResultConflict,
-                  );
-                } else if (supersededConflict) {
-                  placements.recordWorkspaceResultConflict(reclaimClaim, undefined);
-                  await options.reportWorkspaceResultConflict({
-                    sessionId: current.sessionId,
-                    sessionKey: current.sessionKey,
-                    agentId: current.agentId,
-                    cleared: true,
-                  });
-                }
-                const cleanupRef =
-                  recordedStagedResultRef && conflictPaths.length === 0
-                    ? await moveStagedWorkerWorkspaceResultToCleanup({
-                        root: localPath,
-                        stagedResultRef: recordedStagedResultRef,
-                      })
-                    : undefined;
-                await environments.destroy(current.environmentId);
-                destroyed = true;
-                const completed = placements.completeWorkspaceResultAndReleaseTurn(reclaimClaim, {
-                  reclaim: true,
+                const finalized = await finalizeWorkspaceResultConflicts({
+                  placements,
+                  turnClaim: reclaimClaim,
+                  conflictPaths,
+                  priorConflict: priorWorkspaceResultConflict,
+                  stagedResultRef: recordedStagedResultRef,
+                  // An unchanged stop is not a later cloud result; keep its prior fence inspectable.
+                  retainPriorConflict: !reconciliation.changed,
+                  root: localPath,
+                  report: async (report) =>
+                    await options.reportWorkspaceResultConflict({
+                      sessionId: current.sessionId,
+                      sessionKey: current.sessionKey,
+                      agentId: current.agentId,
+                      ...report,
+                    }),
                 });
-                if (completed.state !== "reclaimed") {
-                  throw new Error("Cloud worker stop did not produce a reclaimed placement");
-                }
-                if (cleanupRef) {
-                  await deleteStagedWorkerWorkspaceResult({
-                    root: localPath,
-                    stagedResultRef: cleanupRef,
-                  }).catch(() => undefined);
-                }
-                return completed;
+                return await settleStagedWorkspaceResult({
+                  placements,
+                  turnClaim: reclaimClaim,
+                  root: localPath,
+                  stagedResultRef: recordedStagedResultRef,
+                  conflictRetained: finalized.conflictRetained,
+                  reclaim: true,
+                  beforeComplete: async () => {
+                    await environments.destroy(current.environmentId);
+                    destroyed = true;
+                  },
+                  validateCompleted: (completed) => {
+                    if (completed.state !== "reclaimed") {
+                      throw new Error("Cloud worker stop did not produce a reclaimed placement");
+                    }
+                  },
+                });
               } finally {
                 if (!destroyed) {
                   await quiescence.resume();

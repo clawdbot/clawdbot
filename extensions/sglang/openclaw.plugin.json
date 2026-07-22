@@ -5,6 +5,11 @@
   },
   "enabledByDefault": true,
   "providers": ["sglang"],
+  "modelCatalog": {
+    "discovery": {
+      "sglang": "refreshable"
+    }
+  },
   "providerRequest": {
     "providers": {
       "sglang": {

@@ -208,7 +208,7 @@ describe("formatInboundEnvelope", () => {
     expect(body).toBe("[WhatsApp Family Chat] Alice: hello");
   });
 
-  it("resolves envelope options from config", () => {
+  it("uses fixed envelope options while preserving the user timezone", () => {
     const options = resolveEnvelopeFormatOptions({
       agents: {
         defaults: {
@@ -220,9 +220,9 @@ describe("formatInboundEnvelope", () => {
       },
     });
     expect(options).toEqual({
-      timezone: "user",
-      includeTimestamp: false,
-      includeElapsed: false,
+      timezone: "Europe/Vienna",
+      includeTimestamp: true,
+      includeElapsed: true,
       userTimezone: "Europe/Vienna",
     });
   });

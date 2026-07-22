@@ -228,6 +228,34 @@ describe("OpenAI-compatible completions params", () => {
     expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
+  it.each([
+    { name: "model compat mapping", reasoningEffort: "low", expected: "high" },
+    { name: "thinkingLevelMap fallback", reasoningEffort: "medium", expected: "xhigh" },
+    { name: "requested effort fallback", reasoningEffort: "high", expected: "high" },
+  ] as const)(
+    "uses $name in the emitted reasoning_effort payload",
+    async ({ reasoningEffort, expected }) => {
+      mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+      const compatibleModel = {
+        ...reasoningModel,
+        provider: "custom-openai-compatible",
+        baseUrl: "https://third-party.test/v1",
+        thinkingLevelMap: { low: "medium", medium: "xhigh" },
+        compat: {
+          supportsReasoningEffort: true,
+          reasoningEffortMap: { low: "high" },
+        },
+      } as unknown as Model<"openai-completions">;
+
+      await streamOpenAICompletions(compatibleModel, context, {
+        apiKey: "sk-test",
+        reasoningEffort,
+      }).result();
+
+      expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({ reasoning_effort: expected });
+    },
+  );
+
   it("configures the OpenAI SDK client with the host-built model fetch", async () => {
     mockOpenAIOptionsRef.options = [];
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];

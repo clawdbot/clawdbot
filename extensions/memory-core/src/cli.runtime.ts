@@ -161,10 +161,7 @@ type LoadedMemoryCommandConfig = {
 };
 
 function getMemoryCommandSecretTargetIds(): Set<string> {
-  return new Set([
-    "agents.defaults.memorySearch.remote.apiKey",
-    "agents.list[].memorySearch.remote.apiKey",
-  ]);
+  return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
 }
 
 async function loadMemoryCommandConfig(commandName: string): Promise<LoadedMemoryCommandConfig> {

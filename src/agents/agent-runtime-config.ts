@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
+import { listAgentEntries } from "./agent-scope.js";
 
 /** Loads runtime/source config and resolves command SecretRefs when the agent path needs them. */
 export async function resolveAgentRuntimeConfig(
@@ -101,16 +102,20 @@ function hasAgentRuntimeSecretRefs(params: {
   if (hasNestedSecretRef(config.models?.providers)) {
     return true;
   }
-  if (hasNestedSecretRef(config.agents?.defaults?.memorySearch?.remote?.apiKey)) {
+  if (hasNestedSecretRef(config.memory?.search?.remote)) {
     return true;
   }
   if (
-    Array.isArray(config.agents?.list) &&
-    config.agents.list.some((agent) => hasNestedSecretRef(agent?.memorySearch?.remote?.apiKey))
+    listAgentEntries(config).some((agent) =>
+      hasNestedSecretRef({
+        memoryRemote: agent.memory?.search?.remote,
+        ttsProviders: agent.tts?.providers,
+      }),
+    )
   ) {
     return true;
   }
-  if (hasNestedSecretRef(config.messages?.tts?.providers)) {
+  if (hasNestedSecretRef(config.tts?.providers)) {
     return true;
   }
   if (hasNestedSecretRef(config.skills?.entries)) {

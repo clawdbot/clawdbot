@@ -9,6 +9,7 @@ import {
   stripPendingPluginInstallRecords,
   unchangedPendingPluginInstallRecordIds,
 } from "../plugins/install-record-commit.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { isPlainObject } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
@@ -18,6 +19,33 @@ import {
   getSecurityNoteTitle,
 } from "./setup.security-note.js";
 import type { QuickstartGatewayDefaults } from "./setup.types.js";
+
+type QuickstartGatewayOptionOverrides = Pick<
+  OnboardOptions,
+  | "gatewayPort"
+  | "gatewayBind"
+  | "gatewayAuth"
+  | "gatewayToken"
+  | "gatewayTokenRefEnv"
+  | "gatewayPassword"
+  | "tailscale"
+  | "tailscaleResetOnExit"
+>;
+
+export function hasQuickstartGatewayOverrides(
+  overrides: QuickstartGatewayOptionOverrides,
+): boolean {
+  return (
+    overrides.gatewayPort !== undefined ||
+    overrides.gatewayBind !== undefined ||
+    overrides.gatewayAuth !== undefined ||
+    overrides.gatewayToken !== undefined ||
+    overrides.gatewayTokenRefEnv !== undefined ||
+    overrides.gatewayPassword !== undefined ||
+    overrides.tailscale !== undefined ||
+    overrides.tailscaleResetOnExit !== undefined
+  );
+}
 
 function mergeWizardConfigValueOntoLatest(current: unknown, base: unknown, next: unknown): unknown {
   if (isDeepStrictEqual(next, base)) {
@@ -171,6 +199,7 @@ function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
 /** Derive quickstart gateway defaults, preserving any existing gateway settings. */
 export function resolveQuickstartGatewayDefaults(
   baseConfig: OpenClawConfig,
+  overrides: QuickstartGatewayOptionOverrides = {},
 ): QuickstartGatewayDefaults {
   const hasExisting =
     typeof baseConfig.gateway?.port === "number" ||
@@ -206,15 +235,33 @@ export function resolveQuickstartGatewayDefaults(
       ? tailscaleRaw
       : "off";
 
+  const explicitAuthMode =
+    overrides.gatewayAuth ??
+    (overrides.gatewayToken !== undefined || overrides.gatewayTokenRefEnv !== undefined
+      ? "token"
+      : overrides.gatewayPassword !== undefined
+        ? "password"
+        : undefined);
+
   return {
     hasExisting,
-    port: resolveGatewayPort(baseConfig),
-    bind,
-    authMode,
-    tailscaleMode,
-    token: baseConfig.gateway?.auth?.token,
-    password: baseConfig.gateway?.auth?.password,
+    port: overrides.gatewayPort ?? resolveGatewayPort(baseConfig),
+    bind: overrides.gatewayBind ?? bind,
+    authMode: explicitAuthMode ?? authMode,
+    tailscaleMode: overrides.tailscale ?? tailscaleMode,
+    token:
+      overrides.gatewayTokenRefEnv !== undefined
+        ? {
+            source: "env",
+            provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
+              preferFirstProviderForSource: true,
+            }),
+            id: overrides.gatewayTokenRefEnv.trim(),
+          }
+        : (overrides.gatewayToken ?? baseConfig.gateway?.auth?.token),
+    password: overrides.gatewayPassword ?? baseConfig.gateway?.auth?.password,
     customBindHost: baseConfig.gateway?.customBindHost,
-    tailscaleResetOnExit: baseConfig.gateway?.tailscale?.resetOnExit ?? false,
+    tailscaleResetOnExit:
+      overrides.tailscaleResetOnExit ?? baseConfig.gateway?.tailscale?.resetOnExit ?? false,
   };
 }

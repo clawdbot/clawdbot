@@ -61,7 +61,7 @@ export function resolveSlackOperationToken(
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("slack", {
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
-    if (slack?.identity === "user") {
+    if (slack?.postAs === "user") {
       const hasUserToken =
         hasConfiguredAccountValue(slack.userToken) ||
         hasConfiguredAccountValue(process.env.SLACK_USER_TOKEN);
@@ -239,7 +239,7 @@ export function resolveSlackAccount(params: {
   );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
-  const identity = merged.identity ?? "bot";
+  const identity = merged.postAs ?? "bot";
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const mode = merged.mode ?? "socket";

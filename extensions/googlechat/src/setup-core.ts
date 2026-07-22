@@ -1,10 +1,18 @@
 // Googlechat plugin module implements setup core behavior.
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import {
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
 } from "openclaw/plugin-sdk/setup-runtime";
 
 const channel = "googlechat" as const;
+
+type GoogleChatSetupInput = ChannelSetupInput & {
+  audienceType?: string;
+  audience?: string;
+  webhookPath?: string;
+  webhookUrl?: string;
+};
 
 export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: channel,
@@ -19,17 +27,18 @@ export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
     ],
   }),
   buildPatch: (input) => {
-    const patch = input.useEnv
+    const setupInput = input as GoogleChatSetupInput;
+    const patch = setupInput.useEnv
       ? {}
-      : input.tokenFile
-        ? { serviceAccountFile: input.tokenFile }
-        : input.token
-          ? { serviceAccount: input.token }
+      : setupInput.tokenFile
+        ? { serviceAccountFile: setupInput.tokenFile }
+        : setupInput.token
+          ? { serviceAccount: setupInput.token }
           : {};
-    const audienceType = input.audienceType?.trim();
-    const audience = input.audience?.trim();
-    const webhookPath = input.webhookPath?.trim();
-    const webhookUrl = input.webhookUrl?.trim();
+    const audienceType = setupInput.audienceType?.trim();
+    const audience = setupInput.audience?.trim();
+    const webhookPath = setupInput.webhookPath?.trim();
+    const webhookUrl = setupInput.webhookUrl?.trim();
     return {
       ...patch,
       ...(audienceType ? { audienceType } : {}),

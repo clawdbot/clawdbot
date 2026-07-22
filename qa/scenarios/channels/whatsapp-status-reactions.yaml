@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-status-reactions
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - channels.reply-message-actions
   execution:
     profiles: { "whatsapp:default": 5, "whatsapp:mock-default": 29 }
     kind: flow

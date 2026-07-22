@@ -307,6 +307,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const entries = registryParams.runtime.agent.session.listSessionEntries({
         ...(agentId ? { agentId } : {}),
         ...(storePath ? { storePath } : {}),
+        readOnly: true,
       });
       for (const { sessionKey, entry } of entries) {
         if (

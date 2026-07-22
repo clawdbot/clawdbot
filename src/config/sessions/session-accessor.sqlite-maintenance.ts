@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
@@ -70,6 +71,10 @@ function hasStaleSqliteSessionEntryCandidate(
       .selectFrom("session_entries")
       .select("session_key")
       .where("updated_at", "<", cutoffMs)
+      .where(
+        /* kysely-allow-raw: archivedAt lives inside the canonical JSON entry, not a SQL column. */
+        sql<boolean>`json_extract(entry_json, '$.archivedAt') IS NULL`,
+      )
       .orderBy("updated_at", "asc"),
   ).rows;
   return rows.some((row) => !preserveKeys?.has(normalizeStoreSessionKey(row.session_key)));

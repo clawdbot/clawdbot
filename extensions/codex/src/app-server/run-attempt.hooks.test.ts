@@ -319,12 +319,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
           otel: {
             enabled: true,
             traces: true,
-            captureContent: {
-              enabled: true,
-              inputMessages: true,
-              outputMessages: true,
-              systemPrompt: true,
-            },
+            captureContent: true,
           },
         },
       } as never;
@@ -354,9 +349,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       const startedContent = diagnosticContentByType.get("model.call.started")?.modelContent;
       expect(JSON.stringify(startedContent?.inputMessages)).toContain("hello");
       expect(JSON.stringify(startedContent?.inputMessages)).not.toContain("existing context");
-      expect(startedContent?.systemPrompt).toContain(
-        "You are a personal agent running inside OpenClaw.",
-      );
+      expect(startedContent?.systemPrompt).toBeUndefined();
       expect(completed).toMatchObject({ callId: expectedCallId, observationUnit: "turn" });
       expect(JSON.stringify(completed)).not.toContain("hello back");
       expect(

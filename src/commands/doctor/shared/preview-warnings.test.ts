@@ -917,7 +917,7 @@ describe("doctor preview warnings", () => {
         tools: {
           profile: "messaging",
           exec: {
-            security: "allowlist",
+            mode: "allowlist",
           },
         },
       },
@@ -942,7 +942,7 @@ describe("doctor preview warnings", () => {
             tools: {
               allow: ["message"],
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
             },
           },
@@ -971,7 +971,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
             },
           },
@@ -1004,7 +1004,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 "openai/gpt-5": {
@@ -1038,7 +1038,7 @@ describe("doctor preview warnings", () => {
             },
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 "openai/gpt-5": {
@@ -1070,7 +1070,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 openai: {
@@ -1098,7 +1098,7 @@ describe("doctor preview warnings", () => {
         profile: "messaging",
         alsoAllow: ["exec", "process"],
         exec: {
-          security: "allowlist",
+          mode: "allowlist",
         },
       },
     });
@@ -1111,7 +1111,7 @@ describe("doctor preview warnings", () => {
       tools: {
         profile: "custom-profile",
         exec: {
-          security: "allowlist",
+          mode: "allowlist",
         },
         byProvider: {
           openai: {
@@ -1125,7 +1125,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 openai: {

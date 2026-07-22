@@ -989,9 +989,9 @@ export async function handleControlUiHttpRequest(
             ? "strict"
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
-      chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
+      chatMessageMaxWidth: config?.ui?.prefs?.chatMessageMaxWidth,
       seamColor: config?.ui?.seamColor,
-      timeFormat: config?.agents?.defaults?.timeFormat,
+      timeFormat: "auto",
       terminalEnabled,
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,

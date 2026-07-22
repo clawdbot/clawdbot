@@ -66,6 +66,7 @@ import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
 import type {
+  MediaAttachment,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
   MediaUnderstandingModelDecision,
@@ -858,11 +859,7 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
-    const audioLanguage =
-      requestOverrides.language ??
-      entry.language ??
-      params.config?.language ??
-      cfg.tools?.media?.audio?.language;
+    const audioLanguage = requestOverrides.language ?? entry.language ?? params.config?.language;
     const audioPrompt =
       requestOverrides.prompt ??
       resolveAudioProviderPrompt({
@@ -1011,11 +1008,12 @@ export async function runCliEntry(params: {
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
   ctx: MsgContext;
-  attachmentIndex: number;
+  attachment: MediaAttachment;
   cache: MediaAttachmentCache;
   config?: MediaUnderstandingConfig;
 }): Promise<MediaUnderstandingOutput | null> {
   const { entry, capability, cfg, ctx } = params;
+  const attachmentIndex = params.attachment.index;
   const command = entry.command?.trim();
   const args = entry.args ?? [];
   if (!command) {
@@ -1029,13 +1027,13 @@ export async function runCliEntry(params: {
     config: params.config,
   });
   const pathResult = await params.cache.getPath({
-    attachmentIndex: params.attachmentIndex,
+    attachmentIndex,
     maxBytes,
     timeoutMs,
   });
   if (capability === "audio") {
     const stat = await fs.stat(pathResult.path);
-    assertMinAudioSize({ size: stat.size, attachmentIndex: params.attachmentIndex });
+    assertMinAudioSize({ size: stat.size, attachmentIndex });
   }
   const outputDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
@@ -1051,7 +1049,15 @@ export async function runCliEntry(params: {
   const templCtx: MsgContext = {
     ...ctx,
     MediaPath: mediaPath,
+    MediaUrl: params.attachment.url ?? params.attachment.path ?? mediaPath,
+    MediaType: params.attachment.mime,
     MediaDir: path.dirname(mediaPath),
+    MediaPaths: undefined,
+    MediaUrls: undefined,
+    MediaTypes: undefined,
+    MediaWorkspaceDir: undefined,
+    MediaTranscribedIndexes: undefined,
+    MediaStaged: undefined,
     OutputDir: outputDir,
     OutputBase: outputBase,
     Prompt: requestOverrides.prompt ?? prompt,
@@ -1101,7 +1107,7 @@ export async function runCliEntry(params: {
     }
     return {
       kind: capability === "audio" ? "audio.transcription" : `${capability}.description`,
-      attachmentIndex: params.attachmentIndex,
+      attachmentIndex,
       text,
       provider: capability === "audio" ? commandBase(command) : "cli",
       model: command,

@@ -138,6 +138,22 @@
   font-size: 0.9em;
 }
 
+.chat-text :where(.markdown-inline-image-button) {
+  display: block;
+  max-width: min(100%, 420px);
+  margin-top: 0.75em;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.chat-text :where(.markdown-inline-image-button:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .chat-text :where(.markdown-inline-image) {
   display: block;
   max-width: min(100%, 420px);
@@ -149,6 +165,10 @@
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--secondary) 70%, transparent);
   object-fit: contain;
+}
+
+.chat-text :where(.markdown-inline-image-button > .markdown-inline-image) {
+  margin-top: 0;
 }
 
 .chat-text :where(:not(pre) > code) {

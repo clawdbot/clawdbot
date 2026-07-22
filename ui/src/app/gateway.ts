@@ -5,9 +5,10 @@ import type { AuthenticatedUser } from "./user-profile.ts";
 export type ApplicationGatewaySnapshot = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  offlineStable: boolean;
   /**
    * Disconnected, but a session existed this page lifetime and the client is
-   * still auto-retrying. The shell stays mounted with an offline banner in
+   * still auto-retrying. The shell stays mounted with offline presentation in
    * this state instead of falling back to the login gate.
    */
   reconnecting: boolean;

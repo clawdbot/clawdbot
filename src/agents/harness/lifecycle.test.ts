@@ -17,7 +17,10 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
-import { runAgentHarnessLifecycleAttempt } from "./lifecycle.js";
+import {
+  runAgentHarnessLifecycleAttempt,
+  runAgentHarnessLifecycleFinalization,
+} from "./lifecycle.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 
 function createAttemptParams(): AgentHarnessAttemptParams {
@@ -46,6 +49,26 @@ function createDiagnosticTrace() {
     traceId: "11111111111111111111111111111111",
     spanId: "2222222222222222",
     traceFlags: "01",
+  };
+}
+
+function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.5",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
   };
 }
 
@@ -151,6 +174,54 @@ describe("AgentHarness lifecycle runner", () => {
 
     expect(attemptResult).toEqual({ ...result, agentHarnessId: "codex" });
     expect(runAttempt).toHaveBeenCalledWith(params);
+  });
+
+  it("runs isolated finalization through the narrow lifecycle contract", async () => {
+    const params = createAttemptParams();
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      pluginId: "codex-plugin",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => createAttemptResult(),
+    };
+    const diagnostics = captureDiagnosticEvents();
+    const result = await runAgentHarnessLifecycleFinalization(harness, params, async () => ({
+      assistant: createFinalAssistant(),
+    }));
+    await flushDiagnosticEvents();
+    diagnostics.unsubscribe();
+
+    expect(result.assistant.content).toEqual([{ type: "text", text: "done" }]);
+    expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+      "harness.run.started",
+      "harness.run.completed",
+    ]);
+  });
+
+  it("reports narrow finalization validation failures in the resolve phase", async () => {
+    const params = createAttemptParams();
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => createAttemptResult(),
+    };
+    const diagnostics = captureDiagnosticEvents();
+    await expect(
+      runAgentHarnessLifecycleFinalization(harness, params, async () => ({
+        assistant: createFinalAssistant(),
+        toolMetas: [],
+      })),
+    ).rejects.toThrow("unsupported result field: toolMetas");
+    await flushDiagnosticEvents();
+    diagnostics.unsubscribe();
+
+    const error = diagnostics.events[1]?.event as
+      | (DiagnosticEventPayload & Record<string, unknown>)
+      | undefined;
+    expect(error?.type).toBe("harness.run.error");
+    expect(error?.phase).toBe("resolve");
   });
 
   it("rejects harnesses that do not advertise required context-engine capabilities", async () => {

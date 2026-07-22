@@ -734,7 +734,6 @@ function sanitizedEnv(
     TMPDIR: process.env.TMPDIR,
     USER: process.env.USER ?? "openclaw-bench",
     npm_config_update_notifier: "false",
-    OPENCLAW_CONFIG: configPath,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
     OPENCLAW_HOME: root,

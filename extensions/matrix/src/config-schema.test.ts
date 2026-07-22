@@ -147,6 +147,7 @@ describe("MatrixConfigSchema SecretInput", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
+          commandText: "status",
         },
         preview: {
           toolProgress: true,

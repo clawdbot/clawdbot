@@ -105,6 +105,6 @@ export function injectTimestamp(message: string, opts?: TimestampInjectionOption
 export function timestampOptsFromConfig(cfg: OpenClawConfig): TimestampInjectionOptions {
   return {
     timezone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
-    includeTimestamp: cfg.agents?.defaults?.envelopeTimestamp !== "off",
+    includeTimestamp: true,
   };
 }

@@ -1,6 +1,10 @@
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import {
+  isValidControlUiChatMessageMaxWidth,
+  normalizeControlUiChatMessageMaxWidth,
+} from "./control-ui-css.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -12,6 +16,7 @@ import {
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
+  TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
@@ -19,16 +24,13 @@ import { BrowserSnapshotDefaultsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import {
   AccessGroupsSchema,
-  CommitmentsSchema,
   LoggingLevelSchema,
-  MarketplacesSchema,
   McpConfigSchema,
   MemorySchema,
   NodeHostSchema,
   PluginEntrySchema,
   SecuritySchema,
   SkillEntrySchema,
-  SystemAgentSchema,
   TalkSchema,
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -39,24 +41,6 @@ export const OpenClawSchemaShape = {
   meta: z
     .strictObject({
       lastTouchedVersion: z.string().optional(),
-      // Accept any string unchanged (backwards-compatible) and coerce numeric Unix
-      // timestamps to ISO strings (agent file edits may write Date.now()).
-      lastTouchedAt: z
-        .union([
-          z.string(),
-          z
-            .number()
-            .transform((n, ctx) => {
-              const d = new Date(n);
-              if (Number.isNaN(d.getTime())) {
-                ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
-                return z.NEVER;
-              }
-              return d.toISOString();
-            })
-            .pipe(z.string()),
-        ])
-        .optional(),
       migrations: z
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
@@ -74,7 +58,7 @@ export const OpenClawSchemaShape = {
         .optional(),
       vars: z.record(z.string(), z.string()).optional(),
     })
-    .catchall(z.string())
+    .strict()
     .optional(),
   wizard: z
     .strictObject({
@@ -111,37 +95,10 @@ export const OpenClawSchemaShape = {
             .optional(),
           sampleRate: z.number().min(0).max(1).optional(),
           flushIntervalMs: z.number().int().nonnegative().optional(),
-          captureContent: z
-            .union([
-              z.boolean(),
-              z.strictObject({
-                enabled: z.boolean().optional(),
-                inputMessages: z.boolean().optional(),
-                outputMessages: z.boolean().optional(),
-                toolInputs: z.boolean().optional(),
-                toolOutputs: z.boolean().optional(),
-                systemPrompt: z.boolean().optional(),
-                toolDefinitions: z.boolean().optional(),
-              }),
-            ])
-            .optional(),
+          captureContent: z.boolean().optional(),
         })
         .optional(),
-      cacheTrace: z
-        .strictObject({
-          enabled: z.boolean().optional(),
-          filePath: z.string().optional(),
-          includeMessages: z.boolean().optional(),
-          includePrompt: z.boolean().optional(),
-          includeSystem: z.boolean().optional(),
-        })
-        .optional(),
-    })
-    .optional(),
-  audit: z
-    .strictObject({
-      enabled: z.boolean().optional(),
-      messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
+      cacheTrace: z.strictObject({ enabled: z.boolean().optional() }).optional(),
     })
     .optional(),
   logging: z
@@ -150,25 +107,16 @@ export const OpenClawSchemaShape = {
       file: z.string().optional(),
       maxFileBytes: z.number().int().positive().optional(),
       consoleLevel: LoggingLevelSchema.optional(),
-      consoleStyle: z
-        .union([z.literal("pretty"), z.literal("compact"), z.literal("json")])
-        .optional(),
-      redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
+      consoleStyle: z.union([z.literal("pretty"), z.literal("json")]).optional(),
       redactPatterns: z.array(z.string()).optional(),
-    })
-    .optional(),
-  cli: z
-    .strictObject({
-      banner: z
+      audit: z
         .strictObject({
-          taglineMode: z
-            .union([z.literal("random"), z.literal("default"), z.literal("off")])
-            .optional(),
+          enabled: z.boolean().optional(),
+          messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
         })
         .optional(),
     })
     .optional(),
-  systemAgent: SystemAgentSchema,
   update: z
     .strictObject({
       channel: z
@@ -193,7 +141,6 @@ export const OpenClawSchemaShape = {
       allowSystemProfileImport: z.boolean().optional(),
       evaluateEnabled: z.boolean().optional(),
       cdpUrl: z.string().optional(),
-      color: z.string().optional(),
       executablePath: z.string().optional(),
       headless: z.boolean().optional(),
       noSandbox: z.boolean().optional(),
@@ -204,7 +151,6 @@ export const OpenClawSchemaShape = {
         .strictObject({
           dangerouslyAllowPrivateNetwork: z.boolean().optional(),
           allowedHostnames: z.array(z.string()).optional(),
-          hostnameAllowlist: z.array(z.string()).optional(),
         })
         .optional(),
       profiles: z
@@ -228,7 +174,6 @@ export const OpenClawSchemaShape = {
               headless: z.boolean().optional(),
               executablePath: z.string().optional(),
               attachOnly: z.boolean().optional(),
-              color: HexColorSchema,
             })
             .refine(
               (value) =>
@@ -287,13 +232,21 @@ export const OpenClawSchemaShape = {
           chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
           chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
           sidebarEntries: z.array(z.string()).optional(),
+          chatMessageMaxWidth: z
+            .string()
+            .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
+            .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
+              message:
+                "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
+            })
+            .optional(),
           sidebarLiveActivity: z.boolean().optional(),
+          showAdvancedSettings: z.boolean().optional(),
         })
         .optional(),
     })
     .optional(),
   secrets: SecretsConfigSchema,
-  marketplaces: MarketplacesSchema,
   auth: z
     .strictObject({
       profiles: z
@@ -349,9 +302,8 @@ export const OpenClawSchemaShape = {
   security: SecuritySchema,
   bindings: BindingsSchema,
   broadcast: BroadcastSchema,
-  media: z
+  attachments: z
     .strictObject({
-      preserveFilenames: z.boolean().optional(),
       ttlHours: z
         .number()
         .int()
@@ -361,13 +313,13 @@ export const OpenClawSchemaShape = {
     })
     .optional(),
   messages: MessagesSchema,
+  tts: TtsConfigSchema,
   commands: CommandsSchema,
   approvals: ApprovalsSchema,
   session: SessionSchema,
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
-      store: z.string().optional(),
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),
@@ -383,14 +335,8 @@ export const OpenClawSchemaShape = {
           includeSkipped: z.boolean().optional(),
           mode: z.enum(["announce", "webhook"]).optional(),
           accountId: z.string().optional(),
-        })
-        .optional(),
-      failureDestination: z
-        .strictObject({
           channel: z.string().optional(),
           to: z.string().optional(),
-          accountId: z.string().optional(),
-          mode: z.enum(["announce", "webhook"]).optional(),
         })
         .optional(),
     })
@@ -428,7 +374,6 @@ export const OpenClawSchemaShape = {
         .optional(),
     })
     .optional(),
-  commitments: CommitmentsSchema,
   hooks: z
     .strictObject({
       enabled: z.boolean().optional(),
@@ -445,17 +390,11 @@ export const OpenClawSchemaShape = {
       internal: InternalHooksSchema,
     })
     .optional(),
-  web: z
-    .strictObject({
-      enabled: z.boolean().optional(),
-    })
-    .optional(),
   channels: ChannelsSchema,
   discovery: z
     .strictObject({
       wideArea: z
         .strictObject({
-          enabled: z.boolean().optional(),
           domain: z.string().optional(),
         })
         .optional(),
@@ -533,7 +472,6 @@ export const OpenClawSchemaShape = {
         })
         .optional(),
       entries: z.record(z.string(), PluginEntrySchema).optional(),
-      bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
     })
     .optional(),
   surfaces: z

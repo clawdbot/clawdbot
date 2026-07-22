@@ -298,6 +298,22 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
   });
 
+  it("skips before_agent_run for settled-turn finalization", async () => {
+    const fixture = createFixture();
+    fixture.input.attempt.operation = "settled-tool-finalization";
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(mocks.beforeAgentRun).not.toHaveBeenCalled();
+    expect(fixture.order).toEqual([
+      "assembly",
+      "context",
+      "google-cache",
+      "dispatch",
+      "stop-steering",
+    ]);
+  });
+
   it("admits the provider prompt when aggregate projection pressure is only heuristic", async () => {
     const fixture = createFixture();
     const preparePromptContext = mocks.preparePromptContext.getMockImplementation();

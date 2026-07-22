@@ -126,6 +126,7 @@ export type UiSettings = {
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
+  showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
@@ -359,6 +360,7 @@ export function loadSettings(): UiSettings {
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     sidebarLiveActivity: true,
+    showAdvancedSettings: false,
     pinnedAgentIds: [],
     textScale: 100,
     composerHoldToRecord: true,
@@ -460,6 +462,10 @@ export function loadSettings(): UiSettings {
         typeof parsed.sidebarLiveActivity === "boolean"
           ? parsed.sidebarLiveActivity
           : defaults.sidebarLiveActivity,
+      showAdvancedSettings:
+        typeof parsed.showAdvancedSettings === "boolean"
+          ? parsed.showAdvancedSettings
+          : defaults.showAdvancedSettings,
       pinnedAgentIds: normalizePinnedAgentIds(parsed.pinnedAgentIds),
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
@@ -583,6 +589,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     navWidth: next.navWidth,
     sidebarEntries: next.sidebarEntries,
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
+    ...(next.showAdvancedSettings === true ? { showAdvancedSettings: true } : {}),
     // Empty pin list is the default; only real pins persist.
     ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
       ? { pinnedAgentIds: next.pinnedAgentIds }

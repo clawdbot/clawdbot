@@ -33,6 +33,12 @@ a workflow fix that the existing parent run cannot consume.
 ## Respect release guardrails
 
 - Do not change version numbers without explicit operator approval.
+- When normal beta/stable release planning includes a backport audit, read
+  `references/backport-discovery.md` before selecting commits. Freeze the
+  release baseline and main SHA, complete the durable candidate ledger, and get
+  approval for its categorized set before mutating the release branch. This
+  audit is required for discovery; it does not authorize optional backports on
+  an already-frozen candidate.
 - Versions use `YYYY.M.PATCH`, where `PATCH` is the sequential release-train number within the month, not the calendar day.
 - Choose a new beta train from stable and beta releases only. Alpha-only tags do not consume or advance the beta/stable patch number. Continue the highest existing unpublished/published beta train with the next `beta.N` when appropriate; otherwise increment the highest stable/beta patch by one and start at `beta.1`.
 - Example: after stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even if automated alpha-only tags such as `2026.6.10-alpha.1` exist.
@@ -211,8 +217,9 @@ prepare-run <PR>`.
 
 When asked to create the initial `.33` extended-stable line or a later
 maintenance patch, read
-`references/extended-stable-backports.md` and follow it before version, tag, or
-publication work. Treat backport discovery and preparation as an ability of
+`references/backport-discovery.md` and
+`references/extended-stable-backports.md` and follow both before version, tag,
+or publication work. Treat backport discovery and preparation as an ability of
 this release skill, not as a separate release workflow.
 
 The backport ability owns the complete mainline inventory, private-security
@@ -228,35 +235,44 @@ Use this path only for the trailing completed month's `.33+` line. Treat
 on pinned current `main` as the exact command and validation contract.
 
 1. Check out the canonical `extended-stable/YYYY.M.33` branch after the
-   approved backport PR lands. Require its tip, root package version, every
-   publishable official plugin version, and intended immutable `vYYYY.M.P` tag
-   to identify one exact release commit.
-2. Create and push `vYYYY.M.P` at that exact branch tip only after version prep
-   and focused backport proof are complete.
-3. Dispatch `openclaw-npm-release.yml` with `preflight_only=true` and
-   `npm_dist_tag=extended-stable` from the canonical branch. Save the successful
-   npm preflight run ID.
-4. Dispatch `full-release-validation.yml` from the same branch with
-   `ref=extended-stable/YYYY.M.33` and `release_profile=stable`. Save the
-   successful exact-head validation run ID and its exact `run_attempt` from
+   approved backport PR lands. Freeze its full 40-character SHA after verifying
+   the root and every publishable official plugin have the intended version. Do
+   not create the final tag yet.
+2. Dispatch `openclaw-npm-release.yml` from that canonical branch with the
+   frozen SHA as `tag`, `preflight_only=true`, and
+   `npm_dist_tag=extended-stable`. A full SHA is a validation-only candidate
+   input; save the successful preflight run ID and SHA.
+3. Run Full Release Validation against the same frozen SHA with the canonical
+   branch as `target_context_ref`. Use
+   `node scripts/full-release-validation-at-sha.mjs --sha <sha> --target-ref extended-stable/YYYY.M.33`
+   so trusted workflow code is pinned independently from the exact product
+   target. Save the successful run ID and its exact `run_attempt` from
    `gh api repos/openclaw/openclaw/actions/runs/<run-id> --jq .run_attempt`.
-5. Dispatch `plugin-npm-release.yml` from the same branch with
+4. If either candidate gate fails or another backport is needed, commit it to
+   the canonical branch, freeze its new SHA, and rerun the affected gates. Do
+   not create, delete, or move a final `vYYYY.M.P` tag for candidate validation.
+5. Only after the candidate gates are green, re-resolve the canonical branch
+   tip and require it still equals the validated SHA. Create and push the
+   immutable final `vYYYY.M.P` tag at that SHA. Never move or delete a final
+   extended-stable tag: a post-tag code change needs a new patch version and a
+   new candidate.
+6. Dispatch `plugin-npm-release.yml` from the same branch with
    `publish_scope=all-publishable`, the full release SHA as `ref`, and
    `npm_dist_tag=extended-stable`. Require complete exact-version and selector
    readback, then save the successful plugin run ID.
-6. Dispatch the real `openclaw-npm-release.yml` publish from the same branch
+7. Dispatch the real `openclaw-npm-release.yml` publish from the same branch
    with the intended tag, `npm_dist_tag=extended-stable`, all three saved run
    IDs, and `full_release_validation_run_attempt=<saved-attempt>`. The workflow
    must publish the exact prepared core tarball and prove the referenced runs
    match the canonical branch and release SHA.
-7. Independently verify the exact core package, every official plugin package,
+8. Independently verify the exact core package, every official plugin package,
    and all `extended-stable` selectors. If only the core selector readback
    fails, use the `openclaw` repair command generated by the core workflow. If
    an official-plugin selector is missing or stale for an already-published
    version, use the approved credential-isolated release tooling for manual
    plugin tag repair; the OIDC source workflow cannot mutate that tag. Never
    republish an immutable version.
-8. Do not create a GitHub Release or publish macOS, Windows, Docker, mobile,
+9. Do not create a GitHub Release or publish macOS, Windows, Docker, mobile,
    website, ClawHub, or private dist-tag artifacts from this path.
 
 ## Keep release channel naming aligned
@@ -781,15 +797,17 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   workflow in `openclaw/openclaw` and the release-ops mac preflight in
   `openclaw/releases` for every release.
 - Treat the `appcast.xml` update on `main` as part of mac release readiness, not an optional follow-up.
-- The workflows remain tag-based. The agent is responsible for making sure
-  preflight runs complete successfully before any publish run starts.
-- Any fix after preflight means a new commit. Delete and recreate the tag and
-  matching GitHub release from the fixed commit, then rerun preflight from
-  scratch before publishing.
-  Exception: never delete or recreate a beta tag whose matching npm package has
-  already been published; increment to the next beta number instead. If only the
-  pushed tag/prerelease exists and npm publish has not happened, recreate that
-  same beta tag at the fixed commit.
+- These tag-recovery rules apply to the regular beta/stable path. The
+  extended-stable path is the pre-tag SHA candidate sequence above: no final
+  tag exists until its npm preflight and Full Release Validation are green.
+- For regular tag-based workflows, make sure preflight completes successfully
+  before any publish run starts. A fix after preflight means a new commit:
+  delete and recreate the unpublished regular tag and matching draft/incomplete
+  GitHub release, then rerun preflight from scratch before publishing.
+  Never delete or recreate a beta tag whose matching npm package has already
+  published; increment to the next beta number instead. If only the pushed
+  beta tag/prerelease exists and npm has not published, recreate that same beta
+  tag at the fixed commit.
 - For stable mac releases, generate the signed `appcast.xml` before uploading
   public release assets so the updater feed cannot lag the published binaries.
 - Serialize stable appcast-producing runs across tags so two releases do not

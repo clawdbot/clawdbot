@@ -1,0 +1,3 @@
+# Distinct OPENCLAW_* names in production source under src, packages, and extensions.
+# Ratchet: lower this number when cleanup removes names; never raise it.
+530

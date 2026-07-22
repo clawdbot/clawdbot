@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
@@ -48,6 +48,10 @@ function createStubChild(pid = 1234) {
   child.stdin = new PassThrough() as ChildProcess["stdin"];
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
+  Object.defineProperty(child, "stdio", {
+    value: [child.stdin, child.stdout, child.stderr],
+    configurable: true,
+  });
   Object.defineProperty(child, "pid", { value: pid, configurable: true });
   Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   Object.defineProperty(child, "exitCode", { value: null, configurable: true, writable: true });
@@ -217,6 +221,94 @@ describe("createChildAdapter", () => {
       expect.objectContaining({ detached: expectedDetached }),
     );
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("writes secret input to an extra descriptor and zeroes the transient buffer", async () => {
+    const { child } = createStubChild();
+    const secretStream = new PassThrough();
+    const chunks: Buffer[] = [];
+    secretStream.on("data", (chunk: Buffer) => {
+      chunks.push(Buffer.from(chunk));
+    });
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, secretStream],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+    const transient = Buffer.from("selected-secret", "utf8");
+
+    await createChildAdapter({
+      argv: ["claude", "-p"],
+      stdinMode: "pipe-open",
+      secretInput: {
+        fd: 3,
+        createData: () => transient,
+      },
+    });
+
+    expect(firstSpawnWithFallbackParams().options?.stdio).toEqual([
+      "pipe",
+      "pipe",
+      "pipe",
+      process.platform === "win32" ? "overlapped" : "pipe",
+    ]);
+    expect(Buffer.concat(chunks).toString("utf8")).toBe("selected-secret");
+    expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
+  });
+
+  it("captures child close while secret input delivery is still pending", async () => {
+    const { child, emitClose } = createStubChild();
+    const secretStream = new Writable({
+      write(_chunk, _encoding, callback) {
+        emitClose(0);
+        setImmediate(callback);
+      },
+    });
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, secretStream],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    const adapter = await createChildAdapter({
+      argv: ["claude", "-p"],
+      stdinMode: "pipe-open",
+      secretInput: {
+        fd: 3,
+        createData: () => Buffer.from("selected-secret"),
+      },
+    });
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+  });
+
+  it("uses overlapped I/O for a Windows secret descriptor", async () => {
+    setPlatform("win32");
+    const { child } = createStubChild();
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, new PassThrough()],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    await createChildAdapter({
+      argv: ["claude.exe", "-p"],
+      secretInput: {
+        fd: 3,
+        createData: () => Buffer.from("secret"),
+      },
+    });
+
+    expect(firstSpawnWithFallbackParams().options?.stdio?.[3]).toBe("overlapped");
   });
 
   it("passes detached:false to signalProcessTree when spawn fell back to no-detach (#71662 follow-up)", async () => {

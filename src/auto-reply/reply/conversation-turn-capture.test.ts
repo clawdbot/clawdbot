@@ -228,7 +228,6 @@ describe("conversation turn capture", () => {
         cfg: {
           ...setup.cfg,
           logging: {
-            redactSensitive: "tools",
             redactPatterns: ["sensitive-reply-[a-z]+"],
           },
         },

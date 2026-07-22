@@ -31,7 +31,7 @@ function resolveSlackSetupAuth(
   account: InspectedSlackAccount,
   credentialValues: SlackSetupCredentialValues,
 ): string | undefined {
-  if (account.config.identity === "user") {
+  if (account.config.postAs === "user") {
     return credentialValues.userToken || account.userToken;
   }
   return credentialValues.botToken || account.botToken;

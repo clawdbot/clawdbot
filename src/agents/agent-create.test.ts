@@ -150,8 +150,10 @@ describe("createAgent", () => {
 
     const result = await createAgent({ name: "researcher", workspace: "/tmp/work" });
 
-    const agents = mocks.persisted.agents as { list?: Array<{ workspace?: string }> } | undefined;
-    expect(agents?.list?.at(-1)?.workspace).toBe("/normalized/work");
+    const agents = mocks.persisted.agents as
+      | { entries?: Record<string, { workspace?: string }> }
+      | undefined;
+    expect(agents?.entries?.researcher?.workspace).toBe("/normalized/work");
     expect(result).toMatchObject({ status: "created", workspace: "/normalized/work" });
   });
 
@@ -166,16 +168,15 @@ describe("createAgent", () => {
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
     expect(mocks.persisted).toMatchObject({
       agents: {
-        list: expect.arrayContaining([
-          {
-            id: "researcher",
+        entries: {
+          researcher: {
             name: "Researcher",
             workspace: "/tmp/work",
             agentDir: "/tmp/agent-researcher",
             model: "openai/gpt-5.5",
             identity: { name: "Researcher", emoji: "🔎" },
           },
-        ]),
+        },
       },
     });
     expect(result).toMatchObject({ status: "created", agentId: "researcher" });
@@ -199,9 +200,9 @@ describe("createAgent", () => {
     expect(mocks.rootWrite).not.toHaveBeenCalled();
     expect(mocks.persisted).toMatchObject({
       agents: {
-        list: expect.arrayContaining([
-          expect.objectContaining({ identity: { name: "researcher" } }),
-        ]),
+        entries: {
+          researcher: expect.objectContaining({ identity: { name: "researcher" } }),
+        },
       },
     });
   });

@@ -67,7 +67,7 @@ Numeric values must be positive integers. OpenClaw bounds
 `1`–`86400`.
 
 You can override Swarm for one configured agent with
-`agents.list[].tools.swarm`. The per-agent object merges over the top-level
+`agents.entries.*.tools.swarm`. The per-agent object merges over the top-level
 `tools.swarm` object.
 
 ## Requirements

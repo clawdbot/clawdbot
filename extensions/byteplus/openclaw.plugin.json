@@ -113,8 +113,8 @@
       }
     },
     "discovery": {
-      "byteplus": "static",
-      "byteplus-plan": "static"
+      "byteplus": "refreshable",
+      "byteplus-plan": "refreshable"
     }
   },
   "providerAuthChoices": [

@@ -21,6 +21,7 @@ import {
   QA_THINKING_VISIBILITY_MAX_PROMPT_RE,
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
+  QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
@@ -49,6 +50,7 @@ import {
   QA_IMAGE_GENERATION_PROMPT_RE,
   QA_REASONING_ONLY_RETRY_NEEDLE,
   QA_EMPTY_RESPONSE_RETRY_NEEDLE,
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE,
   QA_SKILL_WORKSHOP_GIF_PROMPT_RE,
   QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE,
   QA_RELEASE_AUDIT_PROMPT_RE,
@@ -192,7 +194,13 @@ async function buildResponsesPayload(
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
-  const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
+  const hasEmptyResponseRetryInstruction =
+    allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE) ||
+    allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE);
+  const isActiveEmptyResponseSideEffectRecovery =
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
   const canCallMockSubagentTool =
     QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText) ||
     /subagent fanout synthesis check/i.test(allInputText) ||
@@ -358,6 +366,20 @@ async function buildResponsesPayload(
   }
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
+  }
+  if (isActiveEmptyResponseSideEffectRecovery) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      return buildAssistantEvents(
+        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+      );
+    }
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "qa-empty-response-side-effect.txt",
+        content: "side effect completed once\n",
+      });
+    }
+    return buildAssistantEvents("");
   }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");

@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import {
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -20,6 +19,7 @@ import type {
   OAuthCredential,
   TokenCredential,
 } from "../agents/auth-profiles/types.js";
+import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -49,17 +49,7 @@ function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
 }
 
 function resolveClaudeCliCommand(cfg: OpenClawConfig): string {
-  const configured = cfg.agents?.defaults?.cliBackends ?? {};
-  for (const [key, entry] of Object.entries(configured)) {
-    if (normalizeOptionalLowercaseString(key) !== CLAUDE_CLI_PROVIDER) {
-      continue;
-    }
-    const command = normalizeOptionalString(entry?.command);
-    if (command) {
-      return command;
-    }
-  }
-  return "claude";
+  return resolveCliBackendConfig(CLAUDE_CLI_PROVIDER, cfg)?.config.command ?? "claude";
 }
 
 function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
@@ -233,7 +223,7 @@ export function noteClaudeCliHealth(
   if (!commandPath) {
     lines.push(`- Binary: command "${command}" was not found on PATH.`);
     fixHints.push(
-      "- Fix: install Claude CLI or set agents.defaults.cliBackends.claude-cli.command to the real binary path.",
+      "- Fix: install Claude CLI on PATH for the gateway user; custom executable paths belong in a CLI backend plugin registration.",
     );
   }
 

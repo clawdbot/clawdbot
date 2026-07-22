@@ -78,6 +78,7 @@ import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.node.LocationCaptureManager
 import ai.openclaw.app.node.LocationHandler
+import ai.openclaw.app.node.MobileUiHandler
 import ai.openclaw.app.node.MotionHandler
 import ai.openclaw.app.node.NodePresenceAliveBeacon
 import ai.openclaw.app.node.NotificationsHandler
@@ -917,6 +918,9 @@ class NodeRuntime private constructor(
       sms = sms,
     )
 
+  private val mobileUiHandler = MobileUiHandler()
+  private var lastMobileUiConnected = mobileUiHandler.isConnected.value
+
   private val a2uiHandler: A2UIHandler =
     A2UIHandler(
       canvas = canvas,
@@ -940,6 +944,9 @@ class NodeRuntime private constructor(
         voiceWakeManager.isAvailable &&
           hasRecordAudioPermission() &&
           isVoiceWakeWordsReadyForCurrentGateway()
+      },
+      mobileUiAvailable = {
+        SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
       },
       inlineWidgetsAvailable = { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) },
       manualTls = { endpoint ->
@@ -976,6 +983,7 @@ class NodeRuntime private constructor(
       a2uiHandler = a2uiHandler,
       debugHandler = debugHandler,
       callLogHandler = callLogHandler,
+      mobileUiHandler = mobileUiHandler,
       isForeground = { _isForeground.value },
       cameraEnabled = { cameraEnabled.value },
       locationEnabled = { locationMode.value != LocationMode.Off },
@@ -995,6 +1003,9 @@ class NodeRuntime private constructor(
       onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
+      mobileUiAvailable = {
+        SensitiveFeatureConfig.accessibilityControlEnabled && mobileUiHandler.isConnected.value
+      },
     )
 
   /**
@@ -2879,6 +2890,13 @@ class NodeRuntime private constructor(
 
     if (mode == NodeRuntimeMode.Live) {
       invalidateVoiceWakeWordsForGateway()
+      scope.launch {
+        mobileUiHandler.isConnected.collect { connected ->
+          if (connected == lastMobileUiConnected) return@collect
+          lastMobileUiConnected = connected
+          refreshNodeSurfaceAfterSettingsChange()
+        }
+      }
     }
     reconcileVoiceWakeCaptureSuppression()
     voiceWakeManager.setForeground(initialForeground)

@@ -213,7 +213,7 @@
     },
     "discovery": {
       "claude-cli": "static",
-      "anthropic": "static"
+      "anthropic": "refreshable"
     }
   },
   "modelSupport": {

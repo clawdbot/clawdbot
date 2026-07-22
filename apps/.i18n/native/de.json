@@ -7539,6 +7539,16 @@
       "translated": "Antworten"
     },
     {
+      "id": "native.android.6c07db7bdc4b43a4",
+      "source": "Rewind to here",
+      "translated": "Hierher zurückspulen"
+    },
+    {
+      "id": "native.android.c824bdc38278a218",
+      "source": "Fork from here",
+      "translated": "Von hier abzweigen"
+    },
+    {
       "id": "native.android.319b4a29df279bb3",
       "source": "Select text",
       "translated": "Text auswählen"
@@ -7639,14 +7649,19 @@
       "translated": "Gesendet — Zustellung wird bestätigt…"
     },
     {
-      "id": "native.android.15d71d54c0ce946b",
-      "source": "Failed",
-      "translated": "Fehlgeschlagen"
+      "id": "native.android.ac5949efe3cfe48c",
+      "source": "Session branch changed; review and retry this message.",
+      "translated": "Sitzungszweig geändert; überprüfen und diese Nachricht erneut versuchen."
     },
     {
       "id": "native.android.6f734a7527ae9c5a",
       "source": "Failed — $it",
       "translated": "Fehlgeschlagen — $it"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "Fehlgeschlagen"
     },
     {
       "id": "native.android.552a4d6f5110e6a3",
@@ -7997,6 +8012,31 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "Stopp"
+    },
+    {
+      "id": "native.android.be42506226307680",
+      "source": "Switch branch",
+      "translated": "Zweig wechseln"
+    },
+    {
+      "id": "native.android.39ea147abba2af8a",
+      "source": "Untitled branch",
+      "translated": "Unbenannter Zweig"
+    },
+    {
+      "id": "native.android.4e2cbf557e2e3cd6",
+      "source": "Current branch",
+      "translated": "Aktueller Zweig"
+    },
+    {
+      "id": "native.android.d79a4188788ccf49",
+      "source": "Messages: $count",
+      "translated": "Nachrichten: $count"
+    },
+    {
+      "id": "native.android.76e548dffafc9de9",
+      "source": "$count · $updated",
+      "translated": "$count · $updated"
     },
     {
       "id": "native.android.2cb3ec7379426dfe",
@@ -21979,6 +22019,21 @@
       "translated": "Standort"
     },
     {
+      "id": "native.apple.c105a651c5f972b6",
+      "source": "Privacy",
+      "translated": "Datenschutz"
+    },
+    {
+      "id": "native.apple.b98013fb799d4f3c",
+      "source": "Active computer detection",
+      "translated": "Erkennung aktiver Computer"
+    },
+    {
+      "id": "native.apple.870e09824984a9b2",
+      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "Teile die Leerlaufdauer dieses Macs, damit OpenClaw den zuletzt genutzten Mac identifizieren und Knoten-Benachrichtigungen weiterleiten kann. Es werden niemals Tastenanschläge, Zeigerpositionen, App-Namen oder Fenstertitel gesendet. Erfordert Bedienungshilfen."
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "Einrichtung"
@@ -22074,6 +22129,11 @@
       "translated": "Aktualisieren"
     },
     {
+      "id": "native.apple.326e187a6656d8d9",
+      "source": "Check",
+      "translated": "Prüfen"
+    },
+    {
       "id": "native.apple.7b62187659c9925f",
       "source": "Grant",
       "translated": "Erteilen"
@@ -22094,9 +22154,14 @@
       "translated": "Zugriff anfordern"
     },
     {
-      "id": "native.apple.4a4c10ca63e99590",
-      "source": "Control other apps (e.g. Terminal) for automation actions",
-      "translated": "Andere Apps (z. B. Terminal) für Automatisierungsaktionen steuern"
+      "id": "native.apple.5a5689d96828c424",
+      "source": "Status unavailable",
+      "translated": "Status nicht verfügbar"
+    },
+    {
+      "id": "native.apple.2d263648f3916394",
+      "source": "Control Terminal for automation actions; other apps request access separately",
+      "translated": "Terminal für Automatisierungsaktionen steuern; andere Apps fordern Zugriff separat an"
     },
     {
       "id": "native.apple.5f7eb4234f63c4ad",
@@ -22114,14 +22179,14 @@
       "translated": "Bildschirm für Kontext oder Screenshots erfassen"
     },
     {
-      "id": "native.apple.b004145c37a470f8",
-      "source": "Allow Voice Wake and audio capture",
-      "translated": "Voice Wake und Audioaufnahme erlauben"
+      "id": "native.apple.45119f87d3069501",
+      "source": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation",
+      "translated": "Voice Wake, Push-to-Talk, Talk Mode und Quick-Chat-Diktat erlauben"
     },
     {
-      "id": "native.apple.7c8b825829b3924d",
-      "source": "Transcribe Voice Wake trigger phrases on-device",
-      "translated": "Auslösephrasen für Voice Wake auf dem Gerät transkribieren"
+      "id": "native.apple.33f1e220cc7d69e1",
+      "source": "Use Apple Speech; passive Voice Wake stays on-device",
+      "translated": "Apple Speech verwenden; passives Voice Wake bleibt auf dem Gerät"
     },
     {
       "id": "native.apple.37880f3b7ae6c259",
@@ -22754,14 +22819,14 @@
       "translated": "OpenClaw verwendet das lokale Netzwerk, um über LAN, Tailnet oder SSH eine Verbindung zu deinem Remote-OpenClaw-Gateway herzustellen."
     },
     {
-      "id": "native.apple.5db9a976fd1c7fcb",
-      "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
-      "translated": "OpenClaw benötigt das Mikrofon für Voice-Wake-Tests und die Audioerfassung durch den Agenten."
+      "id": "native.apple.0fdd4a93f90c6f95",
+      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenClaw verwendet das Mikrofon für Voice Wake, Push-to-Talk, Talk Mode, Quick-Chat-Diktat und die Audioaufnahme des Agenten."
     },
     {
-      "id": "native.apple.b7aba524ef867e7f",
-      "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
-      "translated": "OpenClaw verwendet Spracherkennung, um deine Voice-Wake-Auslösephrase zu erkennen."
+      "id": "native.apple.44701896858c9029",
+      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenClaw verwendet Apple Speech für Voice Wake, Push-to-Talk, Talk Mode und Quick-Chat-Diktat. Voice Wake bleibt auf dem Gerät."
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
@@ -23624,9 +23689,14 @@
       "translated": "Voice Wake aktivieren"
     },
     {
-      "id": "native.apple.e992b45cdbccdd10",
-      "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
-      "translated": "Vor dem Ausführen von Sprachbefehlen auf eine Weckphrase achten. Die Erkennung erfolgt vollständig auf dem Gerät."
+      "id": "native.apple.e2811fb1981c52f9",
+      "source": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.",
+      "translated": "Auf ein Aktivierungswort warten, bevor Sprachbefehle ausgeführt werden. Die Erkennung des Aktivierungsworts bleibt auf diesem Mac."
+    },
+    {
+      "id": "native.apple.8e55ed92eb632efa",
+      "source": "On-device recognition is unavailable for the selected language on this Mac.",
+      "translated": "Die Erkennung auf dem Gerät ist für die ausgewählte Sprache auf diesem Mac nicht verfügbar."
     },
     {
       "id": "native.apple.475eb587a8accd92",
@@ -23787,6 +23857,11 @@
       "id": "native.apple.d57fd5213daf2a6e",
       "source": "\\(self.friendlyName(for: current)) (System)",
       "translated": "\\(self.friendlyName(for: current)) (System)"
+    },
+    {
+      "id": "native.apple.2565d77dbe6ce76b",
+      "source": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.",
+      "translated": "Voice Wake benötigt die geräteinterne Erkennung für die ausgewählte Sprache. Push-to-Talk und Talk-Modus bleiben verfügbar."
     },
     {
       "id": "native.apple.79db41c7b941a50f",

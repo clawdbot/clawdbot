@@ -173,7 +173,7 @@ Use an agent override when several agents share the same room but only one shoul
 }
 ```
 
-The agent-specific `agents.list[].groupChat.unmentionedInbound` value overrides `messages.groupChat.unmentionedInbound` for that agent.
+The agent-specific `agents.entries.*.groupChat.unmentionedInbound` value overrides `messages.groupChat.unmentionedInbound` for that agent.
 
 ## Visible reply modes
 

@@ -1390,7 +1390,8 @@ struct ChatCommandOutboxStoreTests {
                 lastError: failed.lastError),
             agentID: "Agent-B",
             deliverySessionKey: "agent:agent-b:main",
-            routingContract: "per-sender|main|agent-b") == .updated)
+            routingContract: "per-sender|main|agent-b",
+            replacementID: nil) == .updated)
         let command = try #require(await store.loadCommands().first)
         #expect(command.status == .queued)
         #expect(command.agentID == "agent-b")

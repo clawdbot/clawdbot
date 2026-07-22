@@ -30,23 +30,13 @@ openclaw agent --agent main --message "hi" --model claude-cli/claude-sonnet-4-6
 
 `main` is the default agent id when no explicit agent list is configured; swap in your own agent id otherwise.
 
-If the gateway runs under launchd/systemd with a minimal `PATH`, point at the binary explicitly:
+The gateway service must have the CLI on its `PATH`. If a deployment needs a
+nonstandard executable path or arguments, register that adapter in a
+[CLI backend plugin](/plugins/cli-backend-plugins) instead of putting launch
+mechanics in `openclaw.json`.
 
-```json5
-{
-  agents: {
-    defaults: {
-      cliBackends: {
-        "claude-cli": {
-          command: "/opt/homebrew/bin/claude",
-        },
-      },
-    },
-  },
-}
-```
-
-If you use a bundled CLI backend as the primary message provider on a gateway host, OpenClaw auto-loads the owning bundled plugin when your config references that backend in a model ref or under `agents.defaults.cliBackends`.
+OpenClaw auto-loads an owning bundled plugin when model selection or a
+model-scoped `agentRuntime.id` references its backend.
 
 ## Using it as a fallback
 
@@ -73,45 +63,27 @@ Configured fallbacks remain eligible when the primary provider fails (auth, rate
 
 ## Configuration
 
-All CLI backends live under `agents.defaults.cliBackends`, keyed by provider id (e.g. `claude-cli`, `my-cli`). The provider id becomes the left side of the model ref: `<provider>/<model>`.
+Users choose a registered backend through the model and runtime policy. Keep
+the model ref canonical and select the CLI runtime per model:
 
 ```json5
 {
   agents: {
     defaults: {
-      cliBackends: {
-        "my-cli": {
-          command: "my-cli",
-          args: ["--json"],
-          output: "json",
-          input: "arg",
-          modelArg: "--model",
-          modelAliases: {
-            "claude-opus-4-6": "opus",
-            "claude-sonnet-4-6": "sonnet",
-          },
-          sessionArg: "--session",
-          sessionMode: "existing",
-          sessionIdFields: ["session_id", "conversation_id"],
-          systemPromptArg: "--system",
-          // Dedicated prompt-file flag:
-          // systemPromptFileArg: "--system-file",
-          // Codex-style config-override flag instead:
-          // systemPromptFileConfigArg: "-c",
-          // systemPromptFileConfigKey: "model_instructions_file",
-          systemPromptWhen: "first",
-          imageArg: "--image",
-          imageMode: "repeat",
-          // Opt in only if this backend may reseed invalidated sessions from
-          // bounded raw OpenClaw transcript history before compaction.
-          reseedFromRawTranscriptWhenUncompacted: true,
-          serialize: true,
+      model: "anthropic/claude-opus-4-8",
+      models: {
+        "anthropic/claude-opus-4-8": {
+          agentRuntime: { id: "claude-cli" },
         },
       },
     },
   },
 }
 ```
+
+Credentials remain in OpenClaw auth profiles or the owning plugin's config.
+Command, argv, environment, parsing, session, image, and watchdog mechanics are
+plugin code registered with `api.registerCliBackend(...)`.
 
 ## How it works
 
@@ -126,7 +98,7 @@ All CLI backends live under `agents.defaults.cliBackends`, keyed by provider id 
 CLI backends have two independent limits:
 
 - `agents.defaults.timeoutSeconds` limits the whole agent turn. Normal Gateway turns inherit the 48-hour default; `0` makes the turn budget unlimited. A stored override such as `600` replaces that default.
-- The CLI no-output watchdog stops a subprocess that remains silent. It uses separate fresh/resume profiles under `agents.defaults.cliBackends.<id>.reliability.watchdog` and remains active even when the overall turn budget is unlimited.
+- The CLI no-output watchdog stops a subprocess that remains silent. Each backend plugin owns separate fresh/resume profiles, and the watchdog remains active even when the overall turn budget is unlimited.
 
 Remove a short overall-timeout override to return to the 48-hour default, or set an explicit budget such as 12 hours:
 
@@ -146,7 +118,7 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
-Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.security: "full"` and `tools.exec.ask: "off"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root; OpenClaw still answers Claude's stdio tool-control requests from the configured exec policy. Per-agent `agents.list[].tools.exec` settings override the global `tools.exec` for that agent. Raw backend args may still include `--permission-mode`, but live Claude launches normalize that flag to match the effective policy and host restriction.
+Claude CLI has its own noninteractive permission mode; OpenClaw maps that to the existing exec policy instead of adding Claude-specific config. For OpenClaw-managed Claude live sessions, the effective exec policy is authoritative: YOLO (`tools.exec.mode: "full"`) normally launches Claude with `--permission-mode bypassPermissions`, while a restrictive policy launches it with `--permission-mode default`. Root-run gateways also use `default` because Claude Code rejects bypass mode for root; OpenClaw still answers Claude's stdio tool-control requests from the configured exec policy. Per-agent `agents.entries.*.tools.exec` settings override the global `tools.exec` for that agent. The Anthropic plugin normalizes Claude's permission flags to match the effective policy and host restriction.
 
 The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. This keeps the supported Fable 5 effort levels the same for subscription-backed Claude CLI and API-key routes. `adaptive` removes configured `--effort` flags and supplies no replacement, so Claude Code resolves effective effort from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
 
@@ -160,11 +132,12 @@ openclaw models auth login --provider anthropic --method cli --set-default
 
 Docker installs need Claude Code installed and logged in inside the persisted container home, not only on the host; see [Claude CLI backend in Docker](/install/docker#claude-cli-backend-in-docker).
 
-Set `agents.defaults.cliBackends.claude-cli.command` only when the `claude` binary is not already on `PATH`.
+The gateway service must resolve `claude` on `PATH`. For a nonstandard path,
+register a small wrapper backend plugin.
 
 ## Sessions
 
-- If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`), or `sessionArgs` (placeholder `{sessionId}`) when the id needs to land in multiple flags.
+- If the CLI supports sessions, set `sessionArgs` with a `{sessionId}` placeholder (for example `["--session-id", "{sessionId}"]`).
 - If the CLI uses a resume subcommand with different flags, set `resumeArgs` (replaces `args` when resuming) and optionally `resumeOutput` for non-JSON resumes.
 - `sessionMode`:
   - `always`: always send a session id (new UUID if none stored).
@@ -188,7 +161,7 @@ When a `claude-cli` attempt fails over to a non-CLI candidate in [`agents.defaul
 
 ## Images
 
-If your CLI accepts image paths, set `imageArg`:
+Plugin authors declare image-path support with `imageArg`:
 
 ```json5
 imageArg: "--image",
@@ -202,7 +175,7 @@ OpenClaw writes base64 images to temp files. If `imageArg` is set, those paths a
 - `output: "text"` (default) treats stdout as the final response.
 - `output: "json"` tries to parse JSON and extract text plus a session id.
 - `output: "jsonl"` parses a JSONL stream and extracts the final agent message plus session identifiers when present.
-- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and usage from `stats` when `usage` is missing or empty. The bundled Gemini CLI default uses `stream-json`; old `--output-format json` overrides still use the JSON parser.
+- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and usage from `stats` when `usage` is missing or empty. The bundled Gemini CLI adapter uses `stream-json`.
 
 Input modes:
 
@@ -216,8 +189,8 @@ CLI backend defaults are part of the plugin surface:
 
 - Plugins register them with `api.registerCliBackend(...)`.
 - The backend `id` becomes the provider prefix in model refs.
-- User config in `agents.defaults.cliBackends.<id>` still overrides the plugin default.
-- Backend-specific config cleanup stays plugin-owned through the optional `normalizeConfig` hook.
+- Command, argv, environment, parser, session, and watchdog behavior stays in plugin code.
+- Backend-specific normalization stays plugin-owned through the optional `normalizeConfig` hook.
 
 Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex agent runs use the Codex app-server harness through `openai/*`; OpenClaw no longer registers a bundled `codex-cli` backend.
 
@@ -230,7 +203,7 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | `output`              | `jsonl`                                                                                                                                                                                                       |
 | `input`               | `stdin`                                                                                                                                                                                                       |
 | `modelArg`            | `--model`                                                                                                                                                                                                     |
-| `sessionArg`          | `--session-id`                                                                                                                                                                                                |
+| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
 | `sessionMode`         | `always`                                                                                                                                                                                                      |
 | `imageArg`            | `@`                                                                                                                                                                                                           |
 | `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
@@ -257,10 +230,7 @@ Prerequisite: the local Gemini CLI must be installed and on `PATH` as `gemini` (
 Gemini CLI output notes:
 
 - The default `stream-json` parser reads assistant `message` events, tool events, final `result` usage, and fatal Gemini error events.
-- If you override Gemini args to `--output-format json`, OpenClaw normalizes that backend back to `output: "json"` and reads reply text from the JSON `response` field.
 - Usage falls back to `stats` when `usage` is absent or empty; `stats.cached` normalizes into OpenClaw `cacheRead`, and if `stats.input` is missing, input tokens derive from `stats.input_tokens - stats.cached`.
-
-Override defaults only if needed (most commonly an absolute `command` path).
 
 ## Text transform overlays
 
@@ -303,9 +273,26 @@ When bundle MCP is enabled, OpenClaw:
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config/settings shape;
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
 
+Restricted runs such as cron jobs with `toolsAllow` require an exact
+backend-owned translation. The bundled `claude-cli` backend disables Claude's
+native tools and user, project, and local customizations, including hooks,
+plugins, agents, skills, and `CLAUDE.md`. It then exposes every allowed
+OpenClaw tool through the grant-scoped MCP server. This keeps filesystem,
+process, exec, approval, and sandbox policy inside OpenClaw instead of widening
+authority to Claude's native tools or customization processes. The same MCP
+list is enforced in Claude's generated config and again by the Gateway on tool
+listing and execution. Before minting the grant, core rejects backend
+translations that name any MCP permission outside the original allowlist.
+Backends without an exact translation still fail closed.
+
 If no MCP servers are enabled, OpenClaw still injects a strict config when a backend opts into bundle MCP, so background runs stay isolated.
 
 Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
+
+For `claude-cli`, a compatible selected or ordered OpenClaw OAuth/token profile
+is forwarded to that Claude child. This makes per-agent profiles authoritative
+for the turn while preserving Claude's native host login when no compatible
+profile exists.
 
 ## Reseed history cap
 
@@ -315,18 +302,18 @@ Claude CLI backends scale this cap with the resolved Claude context window inste
 
 ## Limitations
 
-- No direct OpenClaw tool calls: OpenClaw does not inject tool calls into the CLI backend protocol. Backends only see gateway tools when they opt into `bundleMcp: true`.
+- OpenClaw does not inject tool calls into the CLI backend protocol. Backends only see gateway tools when they opt into `bundleMcp: true`.
 - Streaming is backend-specific: some backends stream JSONL, others buffer until exit.
 - Structured outputs depend on the CLI's own JSON format.
 
 ## Troubleshooting
 
-| Symptom               | Fix                                                               |
-| --------------------- | ----------------------------------------------------------------- |
-| CLI not found         | Set `command` to a full path.                                     |
-| Wrong model name      | Use `modelAliases` to map `provider/model` to the CLI's model id. |
-| No session continuity | Ensure `sessionArg` is set and `sessionMode` is not `none`.       |
-| Images ignored        | Set `imageArg` and verify the CLI supports file paths.            |
+| Symptom               | Fix                                                                                            |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| CLI not found         | Put the CLI on the gateway service's `PATH`, or update the owning plugin's registered command. |
+| Wrong model name      | Update the plugin's `modelAliases` mapping.                                                    |
+| No session continuity | Check the plugin's `sessionArgs` and `sessionMode`.                                            |
+| Images ignored        | Check the plugin's `imageArg` and the CLI's file-path support.                                 |
 
 ## Related
 

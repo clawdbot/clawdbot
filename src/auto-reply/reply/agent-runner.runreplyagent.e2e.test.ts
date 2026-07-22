@@ -4491,15 +4491,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       runOverrides: {
         provider: "anthropic",
         model: "claude-opus-4-7",
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       },
     });
     await run();

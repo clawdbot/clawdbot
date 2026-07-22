@@ -31,6 +31,8 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildTogetherProvider,
+      buildStaticProvider: buildTogetherProvider,
+      liveModelDiscovery: true,
     },
     classifyFailoverReason: ({ errorMessage }) =>
       /\bconcurrency limit\b.*\b(?:breached|reached)\b/i.test(errorMessage)

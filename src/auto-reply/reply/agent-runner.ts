@@ -5,7 +5,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
-  resolveAgentConfig,
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -41,6 +40,7 @@ import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-rec
 import {
   loadSessionEntry,
   patchSessionEntry,
+  loadSessionEntryReadOnly,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -1166,7 +1166,7 @@ function refreshSessionEntryFromStore(params: {
     return fallbackEntry;
   }
   try {
-    const latestEntry = loadSessionEntry({
+    const latestEntry = loadSessionEntryReadOnly({
       storePath,
       sessionKey,
     });
@@ -1460,6 +1460,7 @@ export async function runReplyAgent(replyParams: {
         steeringMode: "all",
         isInboundUserMessage: true,
         ...(followupRun.images?.length ? { images: followupRun.images } : {}),
+        ...(followupRun.media?.length ? { media: followupRun.media } : {}),
         ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
         ...(followupRun.run.sourceReplyDeliveryMode
@@ -2956,7 +2957,7 @@ export async function runReplyAgent(replyParams: {
     const coveredByExistingCron =
       hasReminderCommitment && successfulCronAdds === 0
         ? await hasSessionRelatedCronJobs({
-            cronStorePath: cfg.cron?.store,
+            cronStorePath: undefined,
             sessionKey,
           })
         : false;
@@ -4102,14 +4103,7 @@ export async function runReplyAgent(replyParams: {
         }
       }
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
-      const agentId = followupRun.run.agentId;
-      const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
-      const heartbeatAckMaxChars = Math.max(
-        0,
-        heartbeatAgentCfg?.ackMaxChars ??
-          cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-          DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-      );
+      const heartbeatAckMaxChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
       const resolvedPendingText = isHeartbeat
         ? (() => {
             const stripped = stripHeartbeatToken(pendingText, {

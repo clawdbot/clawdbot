@@ -11,7 +11,7 @@ import { conversationIdentityFromMsgContext } from "../../config/sessions/conver
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   appendTranscriptEventSync,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -95,7 +95,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
   const agentId =
     normalizeOptionalString(params.ctx.AgentId) ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const sessionEntry = loadSessionEntry({
+  const sessionEntry = loadSessionEntryReadOnly({
     agentId,
     sessionKey,
     storePath,

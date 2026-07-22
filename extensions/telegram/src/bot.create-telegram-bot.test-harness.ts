@@ -541,7 +541,7 @@ export const getOnHandler = (event: string) => {
 const DEFAULT_TELEGRAM_TEST_CONFIG: OpenClawConfig = {
   agents: {
     defaults: {
-      envelopeTimezone: "utc",
+      userTimezone: "UTC",
     },
   },
   channels: {

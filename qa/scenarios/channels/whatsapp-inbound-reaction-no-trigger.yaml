@@ -3,7 +3,8 @@ scenario:
   id: whatsapp-inbound-reaction-no-trigger
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - channels.message-actions
   execution:
     profiles: { "whatsapp:mock-default": 14 }
     kind: flow

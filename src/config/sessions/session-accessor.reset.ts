@@ -8,6 +8,7 @@ import {
 } from "./session-accessor.entry-mutation.js";
 import {
   listSessionEntries,
+  listSessionEntriesReadOnly,
   replaceSessionEntry,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
@@ -162,7 +163,7 @@ export function loadReplySessionInitializationSnapshot(params: {
   sessionKey: string;
 }): ReplySessionInitializationSnapshot {
   const store = Object.fromEntries(
-    listSessionEntries({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesReadOnly({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),

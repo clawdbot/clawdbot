@@ -2238,7 +2238,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
   gateway startup, transient pending/bootstrap rows are dropped)
 - `nodes/pending.json` / `nodes/paired.json` (retired 2026.7: folded into paired device records at gateway startup)
 - `identity/device.json`
-- `identity/device-auth.json`
+- `identity/device-auth.json` (retired; Doctor-only import into `device_auth_tokens`)
 - `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
 - `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
 - `push/apns-registrations.json` (retired; Doctor-only import into `apns_registrations`)

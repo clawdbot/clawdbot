@@ -116,7 +116,7 @@ export function resolveNodeExecEligibility(params: {
   sandboxAvailable?: boolean;
 }): { canExec: boolean; node?: string } {
   const defaults = resolveExecDefaults(params);
-  const systemRunDenied = params.cfg?.gateway?.nodes?.denyCommands?.some(
+  const systemRunDenied = params.cfg?.gateway?.nodes?.commands?.deny?.some(
     (command) => command.trim() === "system.run",
   );
   return {

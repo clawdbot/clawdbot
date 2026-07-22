@@ -2,11 +2,11 @@ title: Control UI assistant media ticket evidence
 
 scenario:
   id: control-ui-assistant-media-tickets
-  surface: browser-control-ui-and-webchat
-  category: browser-control-ui-and-webchat.webchat-conversations
+  surface: control-ui
+  category: control-ui.webchat-conversations
   coverage:
     primary:
-      - ui.assistant-media-tickets
+      - control-ui.assistant-media-tickets
   objective: Link scoped assistant media ticket e2e coverage to Control UI maturity accounting.
   successCriteria:
     - Gateway metadata requests mint scoped assistant media tickets.

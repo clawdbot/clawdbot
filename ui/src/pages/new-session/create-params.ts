@@ -39,6 +39,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(catalogId ? { catalogId } : {}),
     ...(!catalogId && model ? { model } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
+    ...(customFolder && !execNode ? { cwd: customFolder } : {}),
     ...(draft.worktree
       ? {
           worktree: true,
@@ -49,7 +50,6 @@ export function buildDraftSessionCreateParams(draft: {
           ...(normalizeOptionalString(draft.worktreeName)
             ? { worktreeName: normalizeOptionalString(draft.worktreeName) }
             : {}),
-          ...(customFolder && !execNode ? { cwd: customFolder } : {}),
         }
       : {}),
     ...(execNode ? { execNode, ...(cwd ? { cwd } : {}) } : {}),

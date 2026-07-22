@@ -48,7 +48,7 @@
       }
     },
     "discovery": {
-      "longcat": "static"
+      "longcat": "refreshable"
     }
   },
   "setup": {

@@ -1325,23 +1325,10 @@ export function resolveOfficialExternalPluginInstall(
   };
 }
 
-function resolveOfficialExternalPluginCatalogProfileConfigFromConfig(config?: {
-  marketplaces?: OfficialExternalPluginCatalogProfileConfig;
-}): OfficialExternalPluginCatalogProfileConfig | undefined {
-  return config?.marketplaces;
-}
-
 export async function loadConfiguredHostedOfficialExternalPluginCatalogEntries(
-  config: { marketplaces?: OfficialExternalPluginCatalogProfileConfig } | undefined,
-  params?: Omit<
-    NonNullable<Parameters<typeof loadHostedOfficialExternalPluginCatalogEntries>[0]>,
-    "catalogConfig"
-  >,
+  params?: Parameters<typeof loadHostedOfficialExternalPluginCatalogEntries>[0],
 ): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
-  return await loadHostedOfficialExternalPluginCatalogEntries({
-    ...params,
-    catalogConfig: resolveOfficialExternalPluginCatalogProfileConfigFromConfig(config),
-  });
+  return await loadHostedOfficialExternalPluginCatalogEntries(params);
 }
 
 export function listOfficialExternalPluginCatalogEntries(): OfficialExternalPluginCatalogEntry[] {

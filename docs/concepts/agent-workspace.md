@@ -23,7 +23,7 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 - Default: `~/.openclaw/workspace`
 - If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw/workspace-<profile>`.
 - `OPENCLAW_WORKSPACE_DIR` overrides both of the above when set.
-- Non-default agents (`agents.list[]`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
+- Non-default agents (`agents.entries.*`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
 
 Override in `~/.openclaw/openclaw.json`:
 
@@ -37,7 +37,7 @@ Override in `~/.openclaw/openclaw.json`:
 }
 ```
 
-Per-agent override: `agents.list[].workspace`.
+Per-agent override: `agents.entries.*.workspace`.
 
 `openclaw onboard`, `openclaw configure`, or `openclaw setup` create the workspace and seed the bootstrap files if they are missing.
 
@@ -233,7 +233,7 @@ Suggested `.gitignore` starter:
 
 ## Advanced notes
 
-- Multi-agent routing can use different workspaces per agent via `agents.list[].workspace`. See [Channel routing](/channels/channel-routing) for routing configuration.
+- Multi-agent routing can use different workspaces per agent via `agents.entries.*.workspace`. See [Channel routing](/channels/channel-routing) for routing configuration.
 - If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox workspaces under `agents.defaults.sandbox.workspaceRoot`.
 
 ## Related

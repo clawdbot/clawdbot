@@ -10,6 +10,7 @@ import {
   type BoardCommandEvent,
   type BoardProvider,
 } from "../../lib/board/provider.ts";
+import type { ObserverDigestHistory } from "../../lib/observer-digest.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./chat-pane.ts";
@@ -24,6 +25,7 @@ type TestChatPane = HTMLElement & {
   state: ChatPageHost;
   createSession: () => Promise<boolean>;
   resetConfirmationOpen: boolean;
+  observerDigestHistory: ObserverDigestHistory;
   confirmConversationReset: () => Promise<boolean>;
   settleResetConfirmation: (confirmed: boolean) => void;
   updated: () => void;
@@ -35,7 +37,8 @@ type TestChatPane = HTMLElement & {
   ) => void;
   persistBoardSessionView: (patch: { face?: "chat" | "dashboard"; activeTabId?: string }) => void;
   resolveBoardProvider: () => BoardProvider;
-  resolveBoardView: () => { activeTabId: string; dock: string; face: string };
+  refreshBuiltinBoardSnapshot: () => void;
+  resolveBoardView: () => { activeTabId: string; dock: string; face: string; hasBoard: boolean };
 };
 
 type MockProvider = BoardProvider & { emitCommand(command: BoardCommandEvent["command"]): void };
@@ -93,6 +96,32 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
+  it("adds the observer-only board face without replacing the default chat face", async () => {
+    const pane = createTestPane();
+    pane.boardProvider = nullBoardProvider("agent:main:observer-only");
+    pane.state.sessionKey = "agent:main:observer-only";
+    pane.observerDigestHistory.record({
+      sessionKey: "agent:main:observer-only",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Reviewing the board tests",
+      health: "on-track",
+    });
+
+    pane.refreshBuiltinBoardSnapshot();
+
+    await vi.waitFor(() =>
+      expect(pane.resolveBoardView()).toMatchObject({
+        activeTabId: "builtin-observer",
+        face: "chat",
+        hasBoard: true,
+      }),
+    );
+    pane.persistBoardSessionView({ face: "dashboard" });
+    expect(pane.resolveBoardView().face).toBe("dashboard");
+  });
+
   it("gates New Chat when the current session has a board", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),

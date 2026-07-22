@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSessionObserverModelOutput } from "./session-observer-model.js";
 import {
   createHarness,
+  declareObserverVisibility,
   event,
   flushObserver,
   modelMessage,
@@ -260,6 +261,64 @@ describe("session observer", () => {
     subscribed.observer.dispose();
   });
 
+  it("does not observe for a subscribed connection that never declares visibility", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const harness = createHarness({ visible: false });
+
+    startAndAddToolNotes(harness.observer);
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(harness.prepareModel).not.toHaveBeenCalled();
+    expect(harness.completeModel).not.toHaveBeenCalled();
+    harness.observer.dispose();
+  });
+
+  it("suspends when hidden and resumes on the next event after becoming visible", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const harness = createHarness();
+    startAndAddToolNotes(harness.observer);
+    await vi.advanceTimersByTimeAsync(12_000);
+    await flushObserver();
+    expect(harness.completeModel).toHaveBeenCalledOnce();
+
+    harness.observer.setConnectionVisibility("conn-1", false);
+    for (let index = 0; index < 4; index += 1) {
+      harness.observer.handleEvent(
+        event({ stream: "tool", data: { phase: "start", name: "read", args: { index } } }),
+      );
+    }
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(harness.completeModel).toHaveBeenCalledOnce();
+
+    harness.observer.setConnectionVisibility("conn-1", true);
+    for (let index = 0; index < 4; index += 1) {
+      harness.observer.handleEvent(
+        event({ stream: "tool", data: { phase: "start", name: "read", args: { index } } }),
+      );
+    }
+    await vi.advanceTimersByTimeAsync(12_000);
+    await flushObserver();
+
+    expect(harness.completeModel).toHaveBeenCalledTimes(2);
+    harness.observer.dispose();
+  });
+
+  it("suspends when the last visible connection is removed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const harness = createHarness();
+    startAndAddToolNotes(harness.observer);
+
+    harness.observer.removeConnection("conn-1");
+    await vi.advanceTimersByTimeAsync(12_000);
+
+    expect(harness.observer.getSnapshot("agent:main:session-1").notes).toEqual([]);
+    expect(harness.completeModel).not.toHaveBeenCalled();
+    harness.observer.dispose();
+  });
+
   it("does not observe when the agent has no utility model", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -331,6 +390,7 @@ describe("session observer", () => {
     for (let index = 0; index < 7; index += 1) {
       const sessionKey = `agent:main:session-${index}`;
       harness.subscribers.subscribe(`conn-${index}`, sessionKey)?.commit();
+      declareObserverVisibility(harness.observer, `conn-${index}`);
       vi.setSystemTime(index);
       startAndAddToolNotes(harness.observer, {
         runId: `run-${index}`,
@@ -365,6 +425,7 @@ describe("session observer", () => {
     for (let index = 2; index <= 7; index += 1) {
       const sessionKey = `agent:main:session-${index}`;
       harness.subscribers.subscribe(`conn-${index}`, sessionKey)?.commit();
+      declareObserverVisibility(harness.observer, `conn-${index}`);
       vi.setSystemTime(24_000 + index);
       harness.observer.handleEvent(
         event({
@@ -448,6 +509,7 @@ describe("session observer", () => {
       event({ runId: "run-2", stream: "lifecycle", data: { phase: "start" } }),
     );
     harness.subscribers.subscribe("conn-2", "agent:main:session-1")?.commit();
+    declareObserverVisibility(harness.observer, "conn-2");
     for (let index = 0; index < 4; index += 1) {
       harness.observer.handleEvent(
         event({

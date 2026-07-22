@@ -22,7 +22,25 @@ const runtimeDeps: MusicGenerationRuntimeDeps = {
 };
 
 function runGenerateMusic(params: GenerateMusicParams) {
-  return generateMusic(params, runtimeDeps);
+  const defaults = params.cfg.agents?.defaults as
+    | (NonNullable<OpenClawConfig["agents"]>["defaults"] & {
+        musicGenerationModel?: unknown;
+      })
+    | undefined;
+  const cfg =
+    defaults?.musicGenerationModel !== undefined && defaults.mediaModels?.music === undefined
+      ? {
+          ...params.cfg,
+          agents: {
+            ...params.cfg.agents,
+            defaults: {
+              ...defaults,
+              mediaModels: { ...defaults.mediaModels, music: defaults.musicGenerationModel },
+            },
+          },
+        }
+      : params.cfg;
+  return generateMusic({ ...params, cfg }, runtimeDeps);
 }
 
 describe("music-generation runtime", () => {

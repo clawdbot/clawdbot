@@ -274,9 +274,11 @@ describe("optional media tool factory planning", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          imageGenerationModel: { primary: "image-owner/model" },
-          videoGenerationModel: { primary: "video-owner/model" },
-          musicGenerationModel: { primary: "music-owner/model" },
+          mediaModels: {
+            image: { primary: "image-owner/model" },
+            video: { primary: "video-owner/model" },
+            music: { primary: "music-owner/model" },
+          },
           pdfModel: { primary: "media-owner/model" },
         },
       },
@@ -300,9 +302,11 @@ describe("optional media tool factory planning", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          imageGenerationModel: { primary: "image-owner/model" },
-          videoGenerationModel: { primary: "video-owner/model" },
-          musicGenerationModel: { primary: "music-owner/model" },
+          mediaModels: {
+            image: { primary: "image-owner/model" },
+            video: { primary: "video-owner/model" },
+            music: { primary: "music-owner/model" },
+          },
           pdfModel: { primary: "media-owner/model" },
         },
       },
@@ -341,9 +345,11 @@ describe("optional media tool factory planning", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          imageGenerationModel: { primary: "image-owner/model" },
-          videoGenerationModel: { primary: "video-owner/model" },
-          musicGenerationModel: { primary: "music-owner/model" },
+          mediaModels: {
+            image: { primary: "image-owner/model" },
+            video: { primary: "video-owner/model" },
+            music: { primary: "music-owner/model" },
+          },
           pdfModel: { primary: "media-owner/model" },
         },
       },

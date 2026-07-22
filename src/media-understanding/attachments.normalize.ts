@@ -37,6 +37,7 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
       path: normalizeOptionalString(fact.path),
       url: normalizeOptionalString(fact.url),
       mime: normalizeOptionalString(fact.contentType) ?? fact.kind,
+      workspaceDir: normalizeOptionalString(fact.workspaceDir),
       index,
       alreadyTranscribed: fact.transcribed === true,
     }))

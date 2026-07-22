@@ -34,6 +34,7 @@ type AttemptPromptObservabilityParams = Pick<
   | "messageTo"
   | "modelId"
   | "onExecutionPhase"
+  | "operation"
   | "provider"
   | "runId"
   | "senderId"
@@ -178,7 +179,12 @@ export function observeEmbeddedAttemptPrompt(input: {
     );
   }
 
-  if (!skipPromptSubmission && !input.isRawModelRun && input.hookRunner?.hasHooks("llm_input")) {
+  if (
+    attempt.operation !== "settled-tool-finalization" &&
+    !skipPromptSubmission &&
+    !input.isRawModelRun &&
+    input.hookRunner?.hasHooks("llm_input")
+  ) {
     void input.hookRunner
       .runLlmInput(
         {

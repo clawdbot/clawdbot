@@ -73,9 +73,6 @@ export function shouldIncludeHeartbeatGuidanceForSystemPrompt(params: {
     return false;
   }
   const heartbeat = resolveHeartbeatConfigForSystemPrompt(params.config, agentId);
-  if (heartbeat?.includeSystemPromptSection === false) {
-    return false;
-  }
   return isHeartbeatCadenceEnabled(heartbeat);
 }
 

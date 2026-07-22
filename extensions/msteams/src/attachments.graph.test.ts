@@ -389,7 +389,11 @@ describe("msteams graph attachments", () => {
       },
     );
 
-    expectAttachmentMediaLength(media.media, 0);
+    expectAttachmentMediaLength(media.media, 2);
+    expect(media.media).toEqual([
+      { kind: "document", sourceId: "ref-1" },
+      { kind: "document", sourceId: "ref-1" },
+    ]);
     const calledUrls = fetchMock.mock.calls.map((call) => call[0]);
     const expectedSharesUrl = `${GRAPH_SHARES_URL_PREFIX}${encodeGraphShareId(DEFAULT_SHARE_REFERENCE_URL)}/driveItem/content`;
     expect(calledUrls).toEqual([
@@ -413,7 +417,9 @@ describe("msteams graph attachments", () => {
       { maxBytes: 4 },
     );
 
-    expect(media.media).toStrictEqual([]);
+    expect(media.media).toStrictEqual([
+      { kind: "image", contentType: "image/png", sourceId: "hosted-oversized" },
+    ]);
     expect(saveResponseMediaMock).toHaveBeenCalledTimes(1);
   });
 });

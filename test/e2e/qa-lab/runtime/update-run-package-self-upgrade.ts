@@ -130,8 +130,6 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
         "docs/help/testing-updates-plugins.md",
       ],
       id: SCENARIO_ID,
-      primaryCoverageIds: ["runtime.update-run"],
-      secondaryCoverageIds: ["runtime.gateway-restart", "runtime.package-update"],
       sourcePath: SOURCE_PATH,
       title: "Gateway update.run package self-upgrade",
     },

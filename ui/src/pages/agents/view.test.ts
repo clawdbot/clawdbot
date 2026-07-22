@@ -194,14 +194,14 @@ describe("renderAgents", () => {
       render(renderAgents(createProps()), container);
       const select = container.querySelector("openclaw-agent-select") as
         | (HTMLElement & {
-            agents: Array<{ id: string }>;
+            options: Array<{ value: string }>;
             updateComplete: Promise<boolean>;
           })
         | null;
       expect(select).not.toBeNull();
       await select?.updateComplete;
 
-      expect(select?.agents).toHaveLength(2);
+      expect(select?.options.map((option) => option.value)).toEqual(["alpha", "beta"]);
       expect(select?.querySelector(".agent-select__label")?.textContent?.trim()).toBe("Beta");
     } finally {
       container.remove();

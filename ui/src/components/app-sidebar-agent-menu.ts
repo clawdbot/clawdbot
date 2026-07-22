@@ -6,10 +6,11 @@ import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
+import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { icons, type IconName } from "./icons.ts";
 import {
   consumeDropdownKeyboardDismissal,
@@ -40,7 +41,11 @@ const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 
-type AgentMenuAgent = { id: string; name?: string; identity?: { name?: string; emoji?: string } };
+type AgentMenuAgent = {
+  id: string;
+  name?: string;
+  identity?: { name?: string; emoji?: string; avatar?: string; avatarUrl?: string };
+};
 
 type SidebarAgentMenuParams = {
   position: { x: number; bottom: number } | null;
@@ -129,18 +134,18 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
     approvals === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
     { count: String(approvals) },
   );
-  const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
+  const option = { value: agentId, label, agent };
   return html`
     <wa-dropdown-item
-      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
+      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
       type="checkbox"
       role="menuitemradio"
       aria-checked=${String(active)}
       ${ref((element) => syncDropdownItemRadio(element, active))}
     >
-      <span slot="icon" class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
-      <span class="sidebar-customize-menu__text">${label}</span>
+      <span slot="icon">${renderAgentSelectAvatar(option)}</span>
+      ${renderAgentSelectCopy(option)}
       ${approvals > 0
         ? html`<span
             slot="details"

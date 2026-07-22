@@ -43,10 +43,13 @@ vi.mock("../../globals.js", () => ({
 
 vi.mock("../../config/sessions.js", () => ({
   resolveFreshSessionTotalTokens: vi.fn(),
-  resolveSessionStoreEntry: (params: unknown) => state.resolveSessionStoreEntryMock(params),
   resolveGroupSessionKey: vi.fn(() => null),
   resolveSessionTranscriptPath: vi.fn(),
   updateSessionStore: vi.fn(),
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  resolveSessionEntryFromStore: (params: unknown) => state.resolveSessionStoreEntryMock(params),
 }));
 
 vi.mock("./session-run-accounting.js", () => ({

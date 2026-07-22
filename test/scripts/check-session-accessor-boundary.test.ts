@@ -6,6 +6,7 @@ import {
   findGatewaySessionCreateLifecycleViolations,
   findEmbeddedAgentSessionTargetViolations,
   findMemoryHostSessionCorpusBoundaryViolations,
+  findReadOnlySessionAccessorViolations,
   findSessionAccessorBoundaryViolations,
   findSessionCompactManualTrimBoundaryViolations,
   findSessionAccessorWriteBoundaryViolations,
@@ -21,9 +22,35 @@ import {
   migratedSessionAccessorFiles,
   migratedSessionAccessorWriteFiles,
   migratedTranscriptWriterFiles,
+  readOnlyGatewaySessionAccessorFiles,
 } from "../../scripts/check-session-accessor-boundary.mjs";
 
 describe("session accessor boundary guard", () => {
+  it("keeps Gateway read paths on non-materializing accessors", () => {
+    expect(
+      readOnlyGatewaySessionAccessorFiles.has("src/gateway/server-methods/sessions-read.ts"),
+    ).toBe(true);
+    expect(
+      findReadOnlySessionAccessorViolations(`
+        import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+        listSessionEntries({ storePath });
+        sessionUtils.loadSessionEntry(sessionKey);
+      `),
+    ).toEqual([
+      { line: 2, reason: 'imports materializing session entry accessor "listSessionEntries"' },
+      { line: 2, reason: 'imports materializing session entry accessor "loadSessionEntry"' },
+      { line: 3, reason: 'calls materializing session entry accessor "listSessionEntries"' },
+      { line: 4, reason: 'references materializing session entry accessor "loadSessionEntry"' },
+    ]);
+    expect(
+      findReadOnlySessionAccessorViolations(`
+        import { listSessionEntriesReadOnly, loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+        listSessionEntriesReadOnly({ storePath });
+        sessionUtils.loadSessionEntryReadOnly(sessionKey);
+      `),
+    ).toEqual([]);
+  });
+
   it("ratchets only the files migrated by the session accessor slices", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([

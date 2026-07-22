@@ -5,7 +5,7 @@ import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/targ
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -178,9 +178,9 @@ export async function resolveDeliveryTarget(
       } satisfies SessionEntry)
     : undefined;
   const threadEntry = threadSessionKey
-    ? loadSessionEntry({ agentId, sessionKey: threadSessionKey, storePath })
+    ? loadSessionEntryReadOnly({ agentId, sessionKey: threadSessionKey, storePath })
     : undefined;
-  const mainEntry = loadSessionEntry({ agentId, sessionKey: mainSessionKey, storePath });
+  const mainEntry = loadSessionEntryReadOnly({ agentId, sessionKey: mainSessionKey, storePath });
   const main = storedDeliveryEntry ?? threadEntry ?? mainEntry;
   // True when the cron has no delivery identity of its own (no per-job target, no own
   // sessionKey, no stored/creation delivery context) and therefore fell back to the SHARED

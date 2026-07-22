@@ -13,6 +13,8 @@ export type CodexSessionCatalogSession = {
   threadId: string;
   sessionId?: string;
   name?: string | null;
+  /** Display-only fallback kept separate so title search never scans prompt previews. */
+  fallbackName?: string;
   cwd?: string;
   status: string;
   activeFlags?: string[];

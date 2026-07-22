@@ -3,6 +3,7 @@ import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
@@ -41,6 +42,11 @@ function createEmptyUninstallActions() {
 }
 
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
+let mockHookInstallRecords: Record<string, HookInstallRecord> = {};
+
+export function setHookInstallRecords(records: Record<string, HookInstallRecord>): void {
+  mockHookInstallRecords = structuredClone(records);
+}
 
 function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInstallRecordMap {
   // Tests mutate records freely; clone to keep helper state from leaking across assertions.
@@ -658,6 +664,7 @@ vi.mock("../hooks/install.js", () => ({
 }));
 
 vi.mock("../hooks/installs.js", () => ({
+  readHookInstalls: () => structuredClone(mockHookInstallRecords),
   recordHookInstall: ((
     ...args: Parameters<(typeof import("../hooks/installs.js"))["recordHookInstall"]>
   ) =>
@@ -741,6 +748,7 @@ export function resetPluginsCliTestState() {
   applyPluginUninstallDirectoryRemoval.mockReset();
   updateNpmInstalledPlugins.mockReset();
   updateNpmInstalledHookPacks.mockReset();
+  mockHookInstallRecords = {};
   promptText.mockReset();
   promptYesNo.mockReset();
   installPluginFromGitSpec.mockReset();

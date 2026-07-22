@@ -123,7 +123,7 @@ describe("qwen token plan provider catalog", () => {
     ]);
     expect(provider.models.every((model) => model.reasoning)).toBe(true);
     expect(manifest.modelCatalog.providers["qwen-token-plan"].models).toEqual(provider.models);
-    expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("static");
+    expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("refreshable");
   });
 
   it("uses region-scoped endpoints with the documented GLM 5.2 window", () => {

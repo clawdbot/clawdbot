@@ -3,7 +3,8 @@ scenario:
   id: slack-canary
   surface: channels
   coverage:
-    primary: [channels.group-messages]
+    primary:
+      - slack.runtime-lifecycle
   execution:
     profiles: { "slack:default": 0 }
     kind: flow

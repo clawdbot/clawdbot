@@ -37,11 +37,9 @@ describe("secrets runtime degraded-owner attribution", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            providers: {
-              elevenlabs: { apiKey: TTS_REF },
-            },
+        tts: {
+          providers: {
+            elevenlabs: { apiKey: TTS_REF },
           },
         },
       }),
@@ -61,7 +59,7 @@ describe("secrets runtime degraded-owner attribution", () => {
       expect.objectContaining({
         ownerKind: "capability",
         ownerId: "tts",
-        paths: ["messages.tts.providers.elevenlabs.apiKey"],
+        paths: ["tts.providers.elevenlabs.apiKey"],
         reason: "secret reference was not found",
         degradationState: "cold",
         failureMatched: true,
@@ -74,7 +72,7 @@ describe("secrets runtime degraded-owner attribution", () => {
     ["CHANGED_REF", "cold"],
   ] as const)("classifies unresolved reload ref %s", async (candidateId, expectedState) => {
     const config = (ref: SecretRef) =>
-      asConfig({ messages: { tts: { providers: { elevenlabs: { apiKey: ref } } } } });
+      asConfig({ tts: { providers: { elevenlabs: { apiKey: ref } } } });
     const ref = (id: string): SecretRef => ({ source: "env", provider: "default", id });
     const active = await prepareSecretsRuntimeSnapshot({
       config: config(ref("CURRENT_REF")),
@@ -207,12 +205,10 @@ describe("secrets runtime degraded-owner attribution", () => {
             },
           },
         },
-        messages: {
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "file", provider: "healthy", id: sharedId },
-              },
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "file", provider: "healthy", id: sharedId },
             },
           },
         },
@@ -585,9 +581,7 @@ describe("secrets runtime degraded-owner attribution", () => {
           },
         },
       },
-      messages: {
-        tts: { providers: { elevenlabs: { apiKey: ref } } },
-      },
+      tts: { providers: { elevenlabs: { apiKey: ref } } },
     });
     const authAgentDir = "/tmp/invalid-value-auth-co-owner";
     const authProfileId = "openai:invalid-value";
@@ -641,14 +635,14 @@ describe("secrets runtime degraded-owner attribution", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toContain(
-      "messages.tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
+      "tts.providers.elevenlabs.apiKey resolved to a non-string or empty value.",
     );
     expect(listSecretResolutionErrorOwners(error)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           ownerKind: "capability",
           ownerId: "tts",
-          paths: ["messages.tts.providers.elevenlabs.apiKey"],
+          paths: ["tts.providers.elevenlabs.apiKey"],
           reason: "resolved secret value was invalid",
           degradationState: "cold",
           failureMatched: true,
@@ -689,9 +683,7 @@ describe("secrets runtime degraded-owner attribution", () => {
             },
           },
         },
-        messages: {
-          tts: { providers: { elevenlabs: { apiKey: sharedRef } } },
-        },
+        tts: { providers: { elevenlabs: { apiKey: sharedRef } } },
         skills: {
           entries: {
             healthy: {

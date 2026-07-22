@@ -446,15 +446,7 @@ function normalizeAgentModelConfigForWrite(value: unknown): unknown {
   return mutated ? next : value;
 }
 
-const AGENT_MODEL_CONFIG_KEYS = [
-  "model",
-  "imageModel",
-  "imageGenerationModel",
-  "videoGenerationModel",
-  "musicGenerationModel",
-  "voiceModel",
-  "pdfModel",
-] as const;
+const AGENT_MODEL_CONFIG_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
 
 function normalizeModelConfigPathForWrite(config: unknown, path: string[]): unknown {
   const value = getPathValue(config, path);
@@ -484,6 +476,9 @@ function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]):
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     next = normalizeModelConfigPathForWrite(next, [...path, key]);
   }
+  for (const key of ["image", "video", "music"] as const) {
+    next = normalizeModelConfigPathForWrite(next, [...path, "mediaModels", key]);
+  }
   next = normalizeModelStringPathForWrite(next, [...path, "utilityModel"]);
   next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);
   next = normalizeModelConfigPathForWrite(next, [...path, "subagents", "model"]);
@@ -501,28 +496,30 @@ function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]):
 }
 
 function normalizeAgentListModelRefsForWrite(config: unknown): unknown {
-  const list = getPathValue(config, ["agents", "list"]);
-  if (!Array.isArray(list)) {
+  const entries = getPathValue(config, ["agents", "entries"]);
+  if (!isRecord(entries)) {
     return config;
   }
 
   let mutated = false;
-  const nextList = list.map((agent) => {
-    if (!isRecord(agent)) {
-      return agent;
-    }
+  const nextEntries = Object.fromEntries(
+    Object.entries(entries).map(([agentId, agent]) => {
+      if (!isRecord(agent)) {
+        return [agentId, agent];
+      }
 
-    const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
-      agent: unknown;
-    };
-    if (normalized.agent !== agent) {
-      mutated = true;
-      return normalized.agent;
-    }
-    return agent;
-  });
+      const normalized = normalizeAgentModelRefsAtPathForWrite({ agent }, ["agent"]) as {
+        agent: unknown;
+      };
+      if (normalized.agent !== agent) {
+        mutated = true;
+        return [agentId, normalized.agent];
+      }
+      return [agentId, agent];
+    }),
+  );
 
-  return mutated ? setPathValue(config, ["agents", "list"], nextList) : config;
+  return mutated ? setPathValue(config, ["agents", "entries"], nextEntries) : config;
 }
 
 function normalizeToolsModelRefsForWrite(config: unknown): unknown {

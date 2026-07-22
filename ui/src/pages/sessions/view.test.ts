@@ -37,7 +37,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     limit: "120",
     includeGlobal: false,
     includeUnknown: false,
-    showArchived: false,
+    statusFilter: "active",
     basePath: "",
     searchQuery: "",
     transcriptSearchAvailable: true,
@@ -70,7 +70,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onPageChange: () => undefined,
     onPageSizeChange: () => undefined,
     onRefresh: () => undefined,
-    onArchivedViewChange: () => undefined,
+    onStatusFilterChange: () => undefined,
     onDeleteAllArchived: () => undefined,
     onPatch: () => undefined,
     onToggleSelect: () => undefined,
@@ -214,13 +214,13 @@ describe("sessions view", () => {
     expect(onTranscriptSearch).not.toHaveBeenCalled();
   });
 
-  it("renders an Active and Archived segment", async () => {
+  it("renders Active, Archived, and All status segments", async () => {
     const container = document.createElement("div");
-    const onArchivedViewChange = vi.fn();
+    const onStatusFilterChange = vi.fn();
     render(
       renderSessions({
         ...buildProps(buildMultiResult([])),
-        onArchivedViewChange,
+        onStatusFilterChange,
       }),
       container,
     );
@@ -230,13 +230,36 @@ describe("sessions view", () => {
     expect([...buttons].map((button) => button.textContent?.trim())).toEqual([
       "Active",
       "Archived",
+      "All",
     ]);
     expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
     expect(buttons[1]?.getAttribute("aria-pressed")).toBe("false");
+    expect(buttons[2]?.getAttribute("aria-pressed")).toBe("false");
 
-    buttons[1]?.click();
+    buttons[2]?.click();
 
-    expect(onArchivedViewChange).toHaveBeenCalledWith(true);
+    expect(onStatusFilterChange).toHaveBeenCalledWith("all");
+  });
+
+  it("dims and labels archived rows in the mixed view", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:active", kind: "direct", updatedAt: 2, archived: false },
+            { key: "agent:main:archived", kind: "direct", updatedAt: 1, archived: true },
+          ]),
+        ),
+        statusFilter: "all",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const archivedRow = container.querySelector(".session-data-row--archived");
+    expect(archivedRow?.textContent).toContain("Archived");
+    expect(container.querySelectorAll(".session-data-row--archived")).toHaveLength(1);
   });
 
   it("groups sessions by channel with section headers and no pagination", async () => {
@@ -1310,14 +1333,14 @@ describe("sessions view", () => {
         limit: "",
         includeGlobal: true,
         includeUnknown: true,
-        showArchived: true,
+        statusFilter: "archived",
       }),
       container,
     );
     await Promise.resolve();
 
     const emptyCell = container.querySelector(".data-table-empty-cell");
-    expect(emptyCell?.textContent?.trim()).toBe("No threads found.");
+    expect(emptyCell?.textContent?.trim()).toBe("No archived sessions.");
     expect(emptyCell?.querySelector("button")).toBeNull();
   });
 
@@ -1333,7 +1356,7 @@ describe("sessions view", () => {
         limit: testCase.limit,
         includeGlobal: true,
         includeUnknown: true,
-        showArchived: true,
+        statusFilter: "archived",
       }),
       container,
     );
@@ -1341,7 +1364,7 @@ describe("sessions view", () => {
 
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      testCase.filtered ? "No threads match your filters." : "No threads found.",
+      testCase.filtered ? "No threads match your filters." : "No archived sessions.",
     );
     expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
   });

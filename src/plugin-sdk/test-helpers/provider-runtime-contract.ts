@@ -759,7 +759,6 @@ export function describeVeniceProviderRuntimeContract(load: ProviderRuntimeContr
       });
       const compat = requireRecord(model?.compat, "compat");
       expect(compat.toolSchemaProfile).toBe("xai");
-      expect(compat.nativeWebSearchTool).toBe(true);
       expect(compat.toolCallArgumentsEncoding).toBe("html-entities");
     });
   });

@@ -21,7 +21,7 @@ import {
   optionalString,
 } from "./control-ui-github-api.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryReadOnly } from "./session-utils.js";
 
 const SUCCESS_CACHE_MS = 60_000;
 // Back off refetches while GitHub reports quota exhaustion; the UI keeps
@@ -106,7 +106,7 @@ async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
 async function resolveSessionPullRequestGitContext(
   params: ControlUiSessionPullRequestsParams,
 ): Promise<SessionPullRequestGitContext | null> {
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.sessionKey, {
+  const { cfg, entry, storePath, canonicalKey } = loadSessionEntryReadOnly(params.sessionKey, {
     agentId: params.agentId,
   });
   // Same session/agent scoping as sessions.files.*: a missing entry means an

@@ -270,7 +270,7 @@ export const AGENT_WORKSPACE_POLICY_TOOLS = [
 
 export const IMPLICIT_DEFAULT_ACCOUNT_FIELDS: Readonly<Record<string, readonly string[]>> = {
   discord: ["token"],
-  googlechat: ["serviceAccount", "serviceAccountRef", "serviceAccountFile"],
+  googlechat: ["serviceAccount", "serviceAccountFile"],
   imessage: ["cliPath", "dbPath"],
   "qa-channel": ["baseUrl"],
   qqbot: ["appId", "clientSecret", "clientSecretFile"],

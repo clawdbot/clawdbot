@@ -16,7 +16,7 @@ import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-poli
 import { normalizeChatType } from "../channels/chat-type.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionTotalTokens } from "../config/sessions.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   formatSqliteSessionFileMarker,
@@ -381,7 +381,7 @@ export async function sessionsCommand(
   }
 
   const allRows = targets.flatMap((target) => {
-    return listSessionEntries({ agentId: target.agentId, storePath: target.storePath })
+    return listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
       .filter(({ entry }) => {
         if (activeMinutes === undefined) {
           return true;

@@ -211,6 +211,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
               windowsVerbatimArguments: input.windowsVerbatimArguments,
               input: input.input,
               stdinMode: input.stdinMode,
+              secretInput: input.secretInput,
             });
 
       registry.updateState(runId, "running", { pid: adapter.pid });

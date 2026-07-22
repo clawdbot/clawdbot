@@ -10,9 +10,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
+import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isGatewayRestartDraining,
@@ -51,6 +53,7 @@ import {
   getDeliveryLastError,
   isDeliverySuspended,
 } from "./subagent-delivery-state.js";
+import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -272,7 +275,7 @@ const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 /** Absolute TTL for orphaned pendingLifecycleError / pendingLifecycleTimeout entries. */
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
-const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
+const STALE_ACTIVE_SUBAGENT_GRACE_MS = isFastTestRuntimeEnv() ? 1_000 : 60_000;
 const SUSPENDED_DELIVERY_CRON_EXPIRY_MS = 2 * 60 * 60_000;
 const SUSPENDED_DELIVERY_SUBAGENT_EXPIRY_MS = 6 * 60 * 60_000;
 const SUSPENDED_DELIVERY_INTERACTIVE_EXPIRY_MS = 24 * 60 * 60_000;
@@ -791,7 +794,7 @@ async function terminateAcceptedRestoredCollectorRun(params: {
         return;
       } catch {
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+          const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
           timer.unref?.();
         });
       }
@@ -1145,7 +1148,10 @@ function restoreSubagentRunsOnce() {
           start: async () => {
             const response = await subagentRegistryDeps.callGateway({
               method: "agent",
-              params: launch.request,
+              params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
+              // Restart replay must restore the trusted launch capability; otherwise
+              // the queued child silently falls back to its session/default route.
+              ...(launch.authorization ? { scopes: [ADMIN_SCOPE] } : {}),
               timeoutMs: launch.timeoutMs,
             });
             const gatewayRunId = readGatewayRunId(response) ?? runId;
@@ -1229,7 +1235,7 @@ async function failAndCleanupRestoredQueuedRun(
         }
       }
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+        const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
         timer.unref?.();
       });
     }
@@ -1257,7 +1263,7 @@ async function failAndCleanupRestoredQueuedRun(
       });
     }
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, process.env.OPENCLAW_TEST_FAST === "1" ? 1 : 1_000);
+      const timer = setTimeout(resolve, isFastTestRuntimeEnv() ? 1 : 1_000);
       timer.unref?.();
     });
   }

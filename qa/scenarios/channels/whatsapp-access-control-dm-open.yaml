@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-policy
+      - channels.room-allowlist-access-policy
   objective: Verify dmPolicy open accepts a direct message.
   gatewayConfigPatch:
     channels:

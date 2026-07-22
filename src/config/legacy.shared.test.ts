@@ -1,6 +1,20 @@
 // Covers shared legacy config rule detection helpers.
 import { afterEach, describe, expect, it } from "vitest";
-import { mergeMissing } from "./legacy.shared.js";
+import { mapLegacyAudioTranscription, mergeMissing } from "./legacy.shared.js";
+
+describe("legacy audio transcription migration", () => {
+  it("migrates deprecated input placeholders to the documented singular media path", () => {
+    expect(
+      mapLegacyAudioTranscription({
+        command: ["whisper", "--file", "{input}", "--label={input}"],
+      }),
+    ).toEqual({
+      type: "cli",
+      command: "whisper",
+      args: ["--file", "{{MediaPath}}", "--label={{MediaPath}}"],
+    });
+  });
+});
 
 describe("mergeMissing prototype pollution guard", () => {
   afterEach(() => {

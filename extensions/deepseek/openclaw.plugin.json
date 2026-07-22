@@ -107,7 +107,7 @@
       }
     },
     "discovery": {
-      "deepseek": "static"
+      "deepseek": "refreshable"
     }
   },
   "setup": {

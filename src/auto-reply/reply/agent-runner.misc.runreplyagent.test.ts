@@ -37,16 +37,7 @@ import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-su
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
-  return {
-    agents: {
-      defaults: {
-        cliBackends: {
-          "claude-cli": {},
-          "google-gemini-cli": {},
-        },
-      },
-    },
-  };
+  return {};
 }
 
 function registerCliBackendsForTest(): void {
@@ -137,13 +128,12 @@ vi.mock("../../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
-    isCliProvider: (provider: string, cfg?: OpenClawConfig) => {
+    isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
       const normalized = provider.trim().toLowerCase();
       return (
         normalized === "claude-cli" ||
         normalized === "google-gemini-cli" ||
-        normalized === "codex-cli" ||
-        Boolean(cfg?.agents?.defaults?.cliBackends?.[normalized])
+        normalized === "codex-cli"
       );
     },
   };
@@ -2147,7 +2137,7 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: { agents: { defaults: { cliBackends: { "claude-cli": {} } } } },
+        config: {},
         skillsSnapshot: {},
         provider: "claude-cli",
         model: "opus-4.5",

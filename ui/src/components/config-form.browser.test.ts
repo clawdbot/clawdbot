@@ -211,7 +211,7 @@ describe("config form renderer", () => {
       render(
         renderConfigForm({
           schema: analysis.schema,
-          uiHints: { phone: { presentation: "phone-number" } },
+          uiHints: { phone: { presentation: "phone-number", advanced: false } },
           unsupportedPaths: analysis.unsupportedPaths,
           value: { phone },
           onPatch: vi.fn(),

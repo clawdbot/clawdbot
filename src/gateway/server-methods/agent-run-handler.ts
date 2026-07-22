@@ -23,6 +23,7 @@ import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import { buildAgentSessionPatch } from "./agent-session-patch.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 import { prepareAgentSession } from "./agent-session-prepare.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
@@ -150,6 +151,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     const {
       images,
       imageOrder,
+      media,
       replyTo,
       recipientChannel,
       recipientAccountId,
@@ -295,6 +297,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
             freshEntry === undefined
               ? normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId)
               : undefined,
+          createdBy: gatewayClientSessionCreator(client),
           expectedExistingSessionId,
           hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
           resetPolicy,
@@ -481,6 +484,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       message,
       images,
       imageOrder,
+      media,
       effectiveTranscriptInputText,
       inputProvenance,
       runId,

@@ -986,26 +986,27 @@ describe("ollama setup", () => {
     expect(runtime.log).toHaveBeenCalledWith("Default Ollama model: gemma4:latest");
   });
 
-  it("accepts cloud models in non-interactive mode without pulling", async () => {
-    const fetchMock = createOllamaFetchMock({ tags: [] });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
+  it.each(["kimi-k2.5:cloud", "gpt-oss:120b-cloud"])(
+    "accepts cloud model %s in non-interactive mode without pulling",
+    async (modelId) => {
+      const fetchMock = createOllamaFetchMock({ tags: [] });
+      vi.stubGlobal("fetch", fetchMock);
+      const runtime = createRuntime();
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {},
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: "kimi-k2.5:cloud",
-      },
-      runtime,
-    });
+      const result = await configureOllamaNonInteractive({
+        nextConfig: {},
+        opts: {
+          customBaseUrl: "http://127.0.0.1:11434",
+          customModelId: modelId,
+        },
+        runtime,
+      });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toContain(
-      "kimi-k2.5:cloud",
-    );
-    expect(result.agents?.defaults?.model).toEqual({ primary: "ollama/kimi-k2.5:cloud" });
-  });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(result.models?.providers?.ollama?.models?.map((model) => model.id)).toContain(modelId);
+      expect(result.agents?.defaults?.model).toEqual({ primary: `ollama/${modelId}` });
+    },
+  );
 
   it("exits when Ollama is unreachable", async () => {
     const fetchMock = createOllamaFetchMock({

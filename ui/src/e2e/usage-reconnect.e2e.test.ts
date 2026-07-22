@@ -136,9 +136,8 @@ async function proxyReconnect(
   expectedSocketCount: number,
 ): Promise<void> {
   await gateway.closeLatest(1001, "proxy idle timeout");
-  await page.locator("openclaw-connection-banner").waitFor({ state: "visible" });
   await expect.poll(() => gateway.getSocketCount(), { timeout: 10_000 }).toBe(expectedSocketCount);
-  await page.locator("openclaw-connection-banner").waitFor({ state: "hidden" });
+  expect(await page.locator(".sidebar-footer-bar__status").count()).toBe(0);
 }
 
 async function captureProof(page: Page, name: string): Promise<void> {

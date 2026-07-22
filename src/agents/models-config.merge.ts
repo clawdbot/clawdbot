@@ -5,6 +5,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import { normalizeProviderMapKeys } from "./models-config.providers.keys.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
@@ -104,6 +105,19 @@ export function mergeProviderModels(
       explicitValue: explicitModel.maxTokens,
       implicitValue: implicitModel.maxTokens,
     });
+    const compat = resolveCatalogOwnedModelCompat({
+      catalogRoute: {
+        api: implicitModel.api ?? implicit.api,
+        baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
+      },
+      catalogCompat: implicitModel.compat,
+      configuredRoute: {
+        api: explicitModel.api ?? explicit.api ?? implicitModel.api ?? implicit.api,
+        baseUrl:
+          explicitModel.baseUrl ?? explicit.baseUrl ?? implicitModel.baseUrl ?? implicit.baseUrl,
+      },
+      configuredCompat: explicitModel.compat,
+    });
 
     return Object.assign(
       {},
@@ -115,6 +129,7 @@ export function mergeProviderModels(
       contextWindow === undefined ? {} : { contextWindow },
       contextTokens === undefined ? {} : { contextTokens },
       maxTokens === undefined ? {} : { maxTokens },
+      { compat },
     );
   });
 

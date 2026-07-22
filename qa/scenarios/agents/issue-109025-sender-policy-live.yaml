@@ -5,9 +5,11 @@ scenario:
   surface: subagents
   runtimeParityTier: live-only
   coverage:
+    primary:
+      - agent-runtime.delegated-tool-access
     secondary:
-      - agents.subagents
-      - tools.fs.read
+      - agent-runtime.subagent-turns-subagents
+      - agent-runtime.tool-fs-read
   gatewayConfigPatch:
     tools:
       toolsBySender:

@@ -79,6 +79,7 @@ function createSnapshot(
   return {
     client,
     connected,
+    offlineStable: false,
     reconnecting: !connected,
     hello: {
       type: "hello-ok",

@@ -29,6 +29,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
 
     wa-dialog::part(dialog) {
+      max-width: var(--openclaw-modal-max-width, calc(100vw - 48px));
       max-height: var(--openclaw-modal-max-height, calc(100dvh - 48px));
       padding: 0;
       border: 0;

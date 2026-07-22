@@ -35,6 +35,7 @@ function createContext(): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
     connected: false,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",

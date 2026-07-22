@@ -1906,7 +1906,6 @@ describe("runGatewayUpdate", () => {
     expect(lintEnv).toHaveLength(1);
     expect(lintEnv[0]?.OPENCLAW_LOCAL_CHECK).toBe("1");
     expect(lintEnv[0]?.OPENCLAW_LOCAL_CHECK_MODE).toBe("throttled");
-    expect(lintEnv[0]?.OPENCLAW_OXLINT_SHARDS_SERIAL).toBe("1");
   });
 
   it("retries windows pnpm git installs with --ignore-scripts for dev updates", async () => {

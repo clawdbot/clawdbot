@@ -22,6 +22,7 @@ import { resolveConfiguredProviderFallback } from "./configured-provider-fallbac
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   normalizeConfiguredProviderCatalogModelId,
@@ -706,10 +707,12 @@ function applyModelCatalogMetadata(params: {
     params.entry.params || configuredEntry?.params
       ? { ...params.entry.params, ...configuredEntry?.params }
       : undefined;
-  const nextCompat =
-    params.entry.compat || configuredEntry?.compat
-      ? { ...params.entry.compat, ...configuredEntry?.compat }
-      : undefined;
+  const nextCompat = resolveCatalogOwnedModelCompat({
+    catalogRoute: params.entry,
+    catalogCompat: params.entry.compat,
+    configuredRoute: configuredEntry,
+    configuredCompat: configuredEntry?.compat,
+  });
 
   return {
     ...params.entry,

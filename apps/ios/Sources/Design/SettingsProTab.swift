@@ -85,6 +85,7 @@ struct SettingsProTab: View {
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
+    @State var systemAgentChatStore = IOSSystemAgentChatStore()
     @State private var navigationPath: [SettingsRoute] = []
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?

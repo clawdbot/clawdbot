@@ -60,9 +60,6 @@ function collectConfiguredMediaProviderIds(cfg: OpenClawConfig): Set<string> {
   };
   const media = cfg.tools?.media;
   addModels(media?.models);
-  addModels(media?.image?.models);
-  addModels(media?.audio?.models);
-  addModels(media?.video?.models);
   return ids;
 }
 

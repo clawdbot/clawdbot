@@ -21,6 +21,7 @@ import {
   filterVisibleSessionRows,
   resolveSessionNavigation,
   searchForSession,
+  sessionMatchesArchivedFilter,
 } from "../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -39,20 +40,22 @@ import {
   adoptedCatalogSessionKeys,
   formatSidebarTimestamp,
 } from "./app-sidebar-session-catalogs.ts";
-import { AppSidebarSessionProjectionElement } from "./app-sidebar-session-projection.ts";
+import { AppSidebarSessionOwnershipElement } from "./app-sidebar-session-ownership.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   limitSidebarSessionRows,
+  loadStoredSidebarSessionStatusFilter,
   loadStoredSidebarSessionsGrouping,
   loadStoredSidebarSessionsShowCron,
-  SIDEBAR_AGENT_SESSION_LIST_LIMIT,
   SIDEBAR_SESSION_PAGE_SIZE,
+  SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { isStoppableCloudWorkerPlacement } from "./session-row-badges.ts";
 
 /** Session-row projection, selection, sorting, and agent scope navigation. */
-export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessionProjectionElement {
+export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessionOwnershipElement {
   @state() protected selectedSessionKeys: ReadonlySet<string> = new Set();
   @state() protected expandedChildSessionKeys: ReadonlySet<string> = new Set();
   @state() protected collapsedActiveChildSessionKeys: ReadonlySet<string> = new Set();
@@ -60,6 +63,8 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   @state() protected sessionsGrouping: SidebarSessionsGrouping =
     loadStoredSidebarSessionsGrouping();
   @state() protected sessionsShowCron = loadStoredSidebarSessionsShowCron();
+  @state() protected sessionsStatusFilter: SidebarSessionStatusFilter =
+    loadStoredSidebarSessionStatusFilter();
 
   private sessionSelectionAnchor: string | null = null;
   private collapsedActiveRouteKey: string | null = null;
@@ -127,6 +132,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
       hello: context?.gateway.snapshot.hello,
       showCron: this.sessionsShowCron,
+      archivedFilter: this.sessionsStatusFilter,
       compareSessions: this.compareSidebarSessionRows,
     });
     const highlightCurrentSession = this.activeRouteId === "chat";
@@ -142,6 +148,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       }
       return {
         key: row.key,
+        createdBy: row.createdBy,
         // The sidebar's zone structure already says what forked from what;
         // a "Subagent:" prefix on named threads is noise (other surfaces keep it).
         label: resolveSessionDisplayName(row.key, row, {
@@ -152,11 +159,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
         active: row.key === navigation.activeRowKey,
         visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
-        hasActiveRun: Boolean(row.hasActiveRun),
-        activeRunIds: row.activeRunIds,
+        hasActiveRun: row.archived !== true && Boolean(row.hasActiveRun),
+        activeRunIds: row.archived === true ? undefined : row.activeRunIds,
         modelSelectionLocked: row.modelSelectionLocked === true,
         kind: row.kind,
         pinned: row.pinned === true,
+        archived: row.archived === true,
         icon: row.icon,
         category: normalizeOptionalString(row.category),
         channel: channelInfo.channel,
@@ -175,9 +183,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
         pullRequest: context?.sessions.pullRequestSummary(row.key),
-        unread: row.unread === true,
+        unread: row.archived !== true && row.unread === true,
         lastReadAt: row.lastReadAt,
-        attention: this.resolveSessionAttention(row),
+        attention:
+          row.archived === true ? SIDEBAR_SESSION_NO_ATTENTION : this.resolveSessionAttention(row),
         agentStatusNote: this.resolveSessionAgentStatus(row)?.note,
         observerDigest: row.observerDigest,
         spawnedBy: row.spawnedBy,
@@ -187,7 +196,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         endedAt: row.endedAt,
         runtimeMs: row.runtimeMs,
         runtimeSampledAt,
-        childSessionKeys: row.childSessions ?? [],
+        childSessionKeys: row.archived === true ? [] : (row.childSessions ?? []),
         children: [],
         isChild,
         loadingChildren: this.loadingChildSessionKeys.has(row.key),
@@ -207,6 +216,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
 
   protected selectedAgentIdForSessions(): string {
     return this.getSessionNavigationState().selectedAgentId;
+  }
+
+  protected sidebarSessionStatusFilter(): SidebarSessionStatusFilter {
+    return this.sessionsStatusFilter;
   }
 
   protected readonly selectSession = (sessionKey: string) => {
@@ -237,7 +250,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     const sections = groupSidebarSessionRows(rows, {
       grouping: this.sessionsGrouping,
       knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
-    }).filter((section) => section.id !== "pinned");
+    }).filter(
+      (section) =>
+        section.id !== "pinned" &&
+        !this.hideEmptyCreatorFilteredGroup(section.category, section.rows.length),
+    );
     const expandedRows = sections.flatMap((section) =>
       this.isSessionSectionCollapsed(section.id) ? [] : section.rows,
     );
@@ -412,15 +429,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     this.expandedChildSessionKeys = new Set();
     this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
     context.agentSelection.set(nextAgentId);
-    void context.sessions.refresh({
-      agentId: nextAgentId,
-      limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
-      includeGlobal: true,
-      includeUnknown: true,
-      configuredAgentsOnly: true,
-      includeDerivedTitles: true,
-      force: true,
-    });
+    void this.refreshSidebarSessions(nextAgentId);
   };
 
   protected expandedAgentId(): string {
@@ -453,6 +462,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         hello: this.context?.gateway.snapshot.hello,
       }),
       filterByAgent: true,
+      archivedFilter: "active",
     });
     return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
   }
@@ -481,9 +491,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   }
 
   protected agentChipSubtitle(agentId: string): string {
-    if (!this.connected) {
-      return t("common.offline");
-    }
     const latest = this.latestAgentSessionRow(agentId);
     if (latest?.hasActiveRun) {
       return t("agentChip.working");
@@ -548,6 +555,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
             }),
             filterByAgent: true,
             showCron: this.sessionsShowCron,
+            archivedFilter: this.sessionsStatusFilter,
           }).toSorted(this.compareSidebarSessionRows);
     // The identity card is the main session's entry point; its row leaves the
     // list and its spawned children surface as top-level threads instead.
@@ -571,6 +579,8 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     );
     if (
       lineageRoot &&
+      lineageRoot.archived !== true &&
+      sessionMatchesArchivedFilter(lineageRoot, this.sessionsStatusFilter) &&
       (lineageAgentId === selected || lineageRouteAgentId === selected) &&
       !adopted.has(lineageRoot.key) &&
       !areUiSessionKeysEquivalent(lineageRoot.key, mainSessionKey) &&
@@ -607,7 +617,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     // `adopted` holds only catalog-bound keys (adoptedCatalogSessionKeys), not
     // fetched child rows: a catalog-adopted promoted child intentionally
     // renders as its live row inside the Coding catalog, never as a thread.
-    return projectSessionTree({
+    const projected = projectSessionTree({
       roots: orderedRootRows.filter((row) => !adopted.has(row.key)),
       agentRows: rows,
       childRowsByParent: this.childSessionRowsByParent,
@@ -615,6 +625,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       knownSessionAttention: this.knownSessionAttention(),
       toSidebarSession: navigationState.toSidebarSession,
     });
+    const creatorFacet =
+      rows === this.sessionsResult?.sessions ? this.sessionsResult.creators : undefined;
+    return this.applySessionCreatorFilter(projected, rows, creatorFacet);
   }
 
   /** Canonical main-session key for the selected (or given) agent. */

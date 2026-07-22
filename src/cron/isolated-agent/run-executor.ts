@@ -566,6 +566,12 @@ function createCronPromptExecutor(params: {
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
           allowEmptyAssistantReplyAsSilent,
+          // Cron owns the resolved delivery contract. A valid announce route
+          // still needs a final payload; none, webhook, and invalid routes do not.
+          terminalReplyExpectation:
+            params.deliveryRequested === true && params.resolvedDeliveryOk
+              ? "required"
+              : "optional",
           requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
           disableMessageTool: !sourceDelivery.messageTool.enabled,
           forceMessageTool: sourceDelivery.messageTool.force,

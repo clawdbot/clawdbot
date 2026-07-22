@@ -68,8 +68,6 @@ export type PluginsConfig = {
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
-  /** @deprecated Shipped upgrade marker accepted for old restrictive allowlist configs. */
-  bundledDiscovery?: "compat" | "allowlist";
   /**
    * Internal transient carrier for plugin install records during command flows.
    * This is intentionally omitted from the config schema and must not be

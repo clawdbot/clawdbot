@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
 
@@ -11,12 +12,18 @@ struct ChatSessionSidebarModelTests {
         pinned: Bool? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil,
+        lastReadAt: Double? = nil,
         category: String? = nil,
         parentSessionKey: String? = nil,
         spawnedBy: String? = nil,
         childSessions: [String]? = nil,
         status: String? = nil,
+        lastRunError: String? = nil,
         hasActiveRun: Bool? = nil,
+        activeRunIds: [String]? = nil,
+        agentStatus: OpenClawChatSessionAgentStatus? = nil,
+        observerDigest: OpenClawChatSessionObserverDigest? = nil,
+        endedAt: Double? = nil,
         hasActiveSubagentRun: Bool? = nil) -> OpenClawChatSessionEntry
     {
         OpenClawChatSessionEntry(
@@ -43,12 +50,18 @@ struct ChatSessionSidebarModelTests {
             pinned: pinned,
             archived: archived,
             unread: unread,
+            agentStatus: agentStatus,
+            observerDigest: observerDigest,
+            lastReadAt: lastReadAt,
             parentSessionKey: parentSessionKey,
             spawnedBy: spawnedBy,
             childSessions: childSessions,
             status: status,
+            lastRunError: lastRunError,
             hasActiveRun: hasActiveRun,
-            hasActiveSubagentRun: hasActiveSubagentRun)
+            activeRunIds: activeRunIds,
+            hasActiveSubagentRun: hasActiveSubagentRun,
+            endedAt: endedAt)
     }
 
     @Test func `pinned sessions get their own section, rest sorted by recency`() {
@@ -428,5 +441,239 @@ struct ChatSessionSidebarModelTests {
         #expect(!ChatSessionSidebarModel.canArchiveSession(
             self.entry(key: "agent:main:active", hasActiveSubagentRun: true),
             mainSessionKey: "agent:main:main"))
+    }
+
+    @Test func `observer events require the server run and advance monotonically`() throws {
+        let running = self.entry(
+            key: "agent:main:work",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: [" run-1 "])
+        let revision2 = SessionObserverDigest(
+            sessionkey: running.key,
+            runid: "run-1",
+            revision: 2,
+            updatedat: 200,
+            headline: "Second",
+            health: .onTrack)
+        var sessions = ChatSessionSidebarModel.applying(observerDigest: revision2, to: [running])
+
+        sessions = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: running.key,
+                runid: "run-1",
+                revision: 1,
+                updatedat: 300,
+                headline: "Stale",
+                health: .grinding),
+            to: sessions)
+        sessions = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: running.key,
+                runid: "run-old",
+                revision: 3,
+                updatedat: 400,
+                headline: "Wrong run",
+                health: .stuck),
+            to: sessions)
+
+        #expect(sessions[0].observerDigest?.headline == "Second")
+        #expect(ChatSessionSidebarModel.subtitle(for: sessions[0], workSubtitle: "Work") == "Second")
+
+        sessions = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: .init(
+                sessionKey: running.key,
+                reason: "run-progress",
+                observerDigest: .init(
+                    runId: "run-1",
+                    revision: 3,
+                    updatedAt: 500,
+                    headline: "Projected",
+                    health: "wrapping-up"),
+                status: "running",
+                hasActiveRun: true,
+                activeRunIds: ["run-1"]),
+            to: sessions))
+        #expect(sessions[0].observerDigest?.headline == "Projected")
+    }
+
+    @Test func `run rollover clears a stale digest before the replacement event`() throws {
+        let existing = self.entry(
+            key: "agent:main:work",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-1"],
+            observerDigest: .init(
+                runId: "run-1",
+                revision: 8,
+                updatedAt: 800,
+                headline: "Old run",
+                health: "on-track"))
+        let rolled = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: .init(
+                sessionKey: existing.key,
+                reason: "run-start",
+                status: "running",
+                hasActiveRun: true,
+                activeRunIds: ["run-2"]),
+            to: [existing]))
+
+        #expect(rolled[0].observerDigest == nil)
+
+        let accepted = ChatSessionSidebarModel.applying(
+            observerDigest: SessionObserverDigest(
+                sessionkey: existing.key,
+                runid: "run-2",
+                revision: 1,
+                updatedat: 900,
+                headline: "New run",
+                health: .onTrack),
+            to: rolled)
+        #expect(accepted[0].observerDigest?.headline == "New run")
+    }
+
+    @Test func `unknown session change requests an authoritative refetch`() {
+        let change = OpenClawChatSessionsChangedEvent(
+            sessionKey: "agent:main:new",
+            reason: "created",
+            updatedAt: 200)
+
+        #expect(ChatSessionSidebarModel.applying(
+            sessionChange: change,
+            to: [self.entry(key: "agent:main:existing")]) == nil)
+    }
+
+    @Test func `partial session change preserves observer and status metadata`() throws {
+        let agentStatus = OpenClawChatSessionAgentStatus(
+            note: "Waiting on review",
+            expiresAt: 5000,
+            attention: "hand")
+        let observerDigest = OpenClawChatSessionObserverDigest(
+            runId: "run-1",
+            revision: 3,
+            updatedAt: 300,
+            headline: "Reviewing",
+            health: "waiting-on-user")
+        let existing = self.entry(
+            key: "agent:main:work",
+            updatedAt: 100,
+            status: "running",
+            lastRunError: "Previous warning",
+            hasActiveRun: true,
+            activeRunIds: ["run-1"],
+            agentStatus: agentStatus,
+            observerDigest: observerDigest)
+
+        let updated = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: .init(
+                sessionKey: existing.key,
+                reason: "message",
+                updatedAt: 400),
+            to: [existing]))[0]
+
+        #expect(updated.updatedAt == 400)
+        #expect(updated.agentStatus == agentStatus)
+        #expect(updated.observerDigest == observerDigest)
+        #expect(updated.status == "running")
+        #expect(updated.lastRunError == "Previous warning")
+
+        let cleared = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: .init(
+                sessionKey: existing.key,
+                reason: "clear",
+                agentStatusPresent: true,
+                observerDigestPresent: true,
+                statusPresent: true,
+                lastRunErrorPresent: true),
+            to: [existing]))[0]
+        #expect(cleared.agentStatus == nil)
+        #expect(cleared.observerDigest == nil)
+        #expect(cleared.status == nil)
+        #expect(cleared.lastRunError == nil)
+    }
+
+    @Test func `subtitle precedence keeps attention and status above observer digest`() {
+        let digest = OpenClawChatSessionObserverDigest(
+            runId: "run-1",
+            revision: 1,
+            updatedAt: 200,
+            headline: "Observer",
+            health: "on-track")
+        let agent = OpenClawChatSessionAgentStatus(
+            note: "Agent note",
+            expiresAt: 10000,
+            attention: nil)
+        let session = self.entry(
+            key: "work",
+            updatedAt: 500,
+            lastReadAt: 100,
+            status: "failed",
+            lastRunError: "Needs approval",
+            hasActiveRun: true,
+            activeRunIds: ["run-1"],
+            agentStatus: agent,
+            observerDigest: digest,
+            endedAt: 500)
+
+        #expect(ChatSessionSidebarModel.subtitle(
+            for: session,
+            workSubtitle: "Work",
+            now: 1000) == "Needs approval")
+        #expect(ChatSessionSidebarModel.subtitle(
+            for: self.entry(
+                key: "work",
+                status: "running",
+                hasActiveRun: true,
+                activeRunIds: ["run-1"],
+                agentStatus: agent,
+                observerDigest: digest),
+            workSubtitle: "Work",
+            now: 1000) == "Agent note")
+    }
+
+    @Test func `idle final digest remains until its timestamp is read`() {
+        let digest = OpenClawChatSessionObserverDigest(
+            revision: 3,
+            updatedAt: 2000,
+            headline: "Finished with warnings",
+            health: "done")
+        let unread = self.entry(key: "work", lastReadAt: 1999, observerDigest: digest)
+        let read = self.entry(key: "work", lastReadAt: 2000, observerDigest: digest)
+
+        #expect(ChatSessionSidebarModel.subtitle(for: unread, workSubtitle: "Work") == "Finished with warnings")
+        #expect(ChatSessionSidebarModel.subtitle(for: read, workSubtitle: "Work") == "Work")
+    }
+
+    @Test func `runless terminal digest is idle only and cleared by a later run`() throws {
+        let digest = OpenClawChatSessionObserverDigest(
+            revision: 4,
+            updatedAt: 2000,
+            headline: "Finished",
+            health: "done")
+        var session = self.entry(
+            key: "agent:main:work",
+            lastReadAt: 1000,
+            status: "done",
+            observerDigest: digest)
+
+        #expect(ChatSessionSidebarModel.subtitle(for: session, workSubtitle: "Work") == "Finished")
+        session.status = "running"
+        session.hasActiveRun = true
+        session.activeRunIds = ["run-2"]
+        #expect(ChatSessionSidebarModel.subtitle(for: session, workSubtitle: "Work") == "Work")
+        session.status = "done"
+        session.hasActiveRun = false
+        session.activeRunIds = []
+        #expect(ChatSessionSidebarModel.subtitle(for: session, workSubtitle: "Work") == "Finished")
+
+        let rolled = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: .init(
+                sessionKey: session.key,
+                reason: "run-start",
+                status: "running",
+                hasActiveRun: true,
+                activeRunIds: ["run-2"]),
+            to: [session]))
+        #expect(rolled[0].observerDigest == nil)
     }
 }

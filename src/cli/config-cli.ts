@@ -1059,7 +1059,7 @@ function configApplyHintForPaths(paths: string[], afterConfig: OpenClawConfig): 
   }
   if (plan.hotReasons.length > 0) {
     const { mode } = resolveGatewayReloadSettings(afterConfig);
-    if (mode === "off" || mode === "restart") {
+    if (mode === "off") {
       return RESTART_HINT;
     }
     return HOT_RELOAD_HINT;

@@ -3,14 +3,13 @@ title: Active goal followthrough on bare continue
 scenario:
   id: goal-followthrough-live
   surface: goals
-  category: session-memory-and-context-engine.context-engine
+  category: session-memory.context-engine
   runtimeParityTier: live-only
   coverage:
     primary:
-      - goals.continuance
+      - session-memory.goal-continuance-continuance
     secondary:
-      - goals.context-injection
-      - runtime.first-action
+      - session-memory.goal-continuance-context-injection
   objective: Verify a live model advances the next concrete step of an active multi-step goal on a later bare continue turn.
   successCriteria:
     - The first goal turn acknowledges the staged first step without creating the second-step artifact early.

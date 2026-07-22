@@ -33,9 +33,11 @@ describe("video-generation live-test helpers", () => {
     const cfg = {
       agents: {
         defaults: {
-          videoGenerationModel: {
-            primary: "google/veo-3.1-fast-generate-preview",
-            fallbacks: ["openai/sora-2", "invalid"],
+          mediaModels: {
+            video: {
+              primary: "google/veo-3.1-fast-generate-preview",
+              fallbacks: ["openai/sora-2", "invalid"],
+            },
           },
         },
       },

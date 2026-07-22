@@ -7,7 +7,7 @@ import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-r
 type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
   contextWindowTokens?: number;
-  identifierPolicy?: AgentCompactionIdentifierPolicy;
+  identifierPolicy?: AgentCompactionIdentifierPolicy | "custom";
   identifierInstructions?: string;
   customInstructions?: string;
   /**

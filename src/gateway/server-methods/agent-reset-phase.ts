@@ -21,6 +21,7 @@ import {
   resolveBareSessionResetResult,
   runSessionResetFromAgent,
 } from "./agent-session-reset.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -96,6 +97,7 @@ export async function runAgentResetPhase(params: {
         ? { agentId: params.agentId }
         : {}),
       reason: resetReason,
+      createdBy: gatewayClientSessionCreator(params.client),
       assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
       onCommitted: (commit) => {
         params.setCommittedResetCompletion({

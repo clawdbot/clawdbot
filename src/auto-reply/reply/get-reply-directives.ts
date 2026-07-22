@@ -12,6 +12,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -506,7 +507,7 @@ export async function resolveReplyDirectives(params: {
     : undefined;
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
-    isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
+    isFastTestEnv: isFastTestRuntimeEnv(),
   });
 
   const useFastModelSelection =

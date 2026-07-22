@@ -51,9 +51,9 @@ function createOpenAiAudioCfg(providerOverrides: Record<string, unknown> = {}): 
     },
     tools: {
       media: {
+        models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
         audio: {
           enabled: true,
-          models: [{ provider: "openai", model: "whisper-1" }],
         },
       },
     },
@@ -143,9 +143,9 @@ describe("runCapability proxy fetch passthrough", () => {
             },
             tools: {
               media: {
+                models: [{ provider: "moonshot", model: "kimi-k2.5", capabilities: ["video"] }],
                 video: {
                   enabled: true,
-                  models: [{ provider: "moonshot", model: "kimi-k2.5" }],
                 },
               },
             },

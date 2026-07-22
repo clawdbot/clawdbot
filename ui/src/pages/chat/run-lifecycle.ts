@@ -13,6 +13,7 @@ import {
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 // Control UI chat module implements run lifecycle behavior.
@@ -54,6 +55,7 @@ type RunLifecycleHost = Omit<
   chatRunId?: string | null;
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
+  chatRunStartup?: ChatRunStartupState | null;
   chatSideResultTerminalRuns?: Set<string>;
   compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: TimerHandle | number | null;
@@ -229,6 +231,9 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
     host.knownAgentRunIds?.delete(runId);
   } else {
     host.knownAgentRunIds?.clear();
+  }
+  if (!runId || host.chatRunStartup?.runId === runId) {
+    host.chatRunStartup = null;
   }
   clearTimer(host.compactionClearTimer);
   host.compactionClearTimer = null;

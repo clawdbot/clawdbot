@@ -239,7 +239,7 @@ test.each([
   },
 );
 
-test("sessions.describe reads an unconfigured agent from a fixed legacy store", async () => {
+test("sessions.describe ignores an unconfigured agent found only in a fixed legacy store", async () => {
   const storePath = await configureFixedSessionStore("legacy");
   fs.writeFileSync(
     storePath,
@@ -256,8 +256,13 @@ test("sessions.describe reads an unconfigured agent from a fixed legacy store", 
 
   expect(described).toMatchObject({
     ok: true,
-    payload: { session: { sessionId: "session-ghost-legacy" } },
+    payload: { session: null },
   });
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: UNKNOWN_AGENT_ID,
+  }).path;
+  expect(sqlitePath).toBeDefined();
+  expect(fs.existsSync(sqlitePath!)).toBe(false);
 });
 
 test("sessions.search searches a retired per-agent store without explicit session keys", async () => {

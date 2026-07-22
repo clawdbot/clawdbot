@@ -673,6 +673,7 @@ async function listAdoptedSessionEntries(params: {
   for (const agentId of listSupervisionAgentIds(params.config ?? {})) {
     for (const { entry, sessionKey } of params.runtime.agent.session.listSessionEntries({
       agentId,
+      readOnly: true,
     })) {
       const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
       if (
@@ -1104,7 +1105,9 @@ async function assertNoPendingSupervisionBranch(params: {
   threadId: string;
 }): Promise<void> {
   const adoptedEntries = listSupervisionAgentIds(params.config)
-    .flatMap((agentId) => params.runtime.agent.session.listSessionEntries({ agentId }))
+    .flatMap((agentId) =>
+      params.runtime.agent.session.listSessionEntries({ agentId, readOnly: true }),
+    )
     .filter((candidate) => isAdoptionSessionKeyForThread(candidate.sessionKey, params.threadId));
   for (const adopted of adoptedEntries) {
     if (adopted.entry.initializationPending === true) {
@@ -1218,9 +1221,10 @@ function toGenericCatalogHost(
       const canOpenTerminal =
         isInteractiveThreadSource(session.source) &&
         (local ? localTerminalAvailable : host.canOpenTerminalCodex === true);
+      const name = session.name ?? session.fallbackName;
       return {
         threadId: session.threadId,
-        ...(session.name != null ? { name: session.name } : {}),
+        ...(name ? { name } : {}),
         ...(session.cwd ? { cwd: session.cwd } : {}),
         status: session.status,
         ...(session.createdAt != null ? { createdAt: session.createdAt } : {}),

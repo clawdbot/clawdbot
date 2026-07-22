@@ -135,7 +135,7 @@ describe("runHeartbeatOnce ack handling", () => {
     storePath: string;
     replySpy: HeartbeatReplySpy;
     replyText: string;
-    messages?: Record<string, unknown>;
+    responsePrefix?: string;
     telegramOverrides?: Record<string, unknown>;
   }) {
     const cfg = createHeartbeatConfig({
@@ -146,11 +146,11 @@ describe("runHeartbeatOnce ack handling", () => {
         telegram: {
           token: "test-token",
           allowFrom: ["*"],
-          heartbeat: { showOk: false },
+          heartbeatVisibility: { showOk: false },
+          responsePrefix: params.responsePrefix,
           ...params.telegramOverrides,
         },
       },
-      ...(params.messages ? { messages: params.messages } : {}),
     });
 
     await seedMainSessionStore(params.storePath, cfg, {
@@ -188,7 +188,7 @@ describe("runHeartbeatOnce ack handling", () => {
       channels: {
         whatsapp: {
           allowFrom: ["*"],
-          ...(params.visibility ? { heartbeat: params.visibility } : {}),
+          ...(params.visibility ? { heartbeatVisibility: params.visibility } : {}),
         },
       },
     });
@@ -209,12 +209,12 @@ describe("runHeartbeatOnce ack handling", () => {
     return cfg;
   }
 
-  it("respects ackMaxChars for heartbeat acks", async () => {
+  it("uses the fixed ack budget to suppress short heartbeat acknowledgements", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createWhatsAppHeartbeatConfig({
         tmpDir,
         storePath,
-        heartbeat: { ackMaxChars: 0 },
+        heartbeat: {},
       });
 
       await seedMainSessionStore(storePath, cfg, {
@@ -234,7 +234,7 @@ describe("runHeartbeatOnce ack handling", () => {
         },
       });
 
-      expect(sendWhatsApp).toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
     });
   });
 
@@ -291,7 +291,7 @@ describe("runHeartbeatOnce ack handling", () => {
           telegram: {
             token: "test-token",
             allowFrom: ["*"],
-            heartbeat: { showOk: true },
+            heartbeatVisibility: { showOk: true },
           },
         },
       });
@@ -382,24 +382,24 @@ describe("runHeartbeatOnce ack handling", () => {
     {
       title: "strips responsePrefix before HEARTBEAT_OK detection and suppresses short ack text",
       replyText: "[openclaw] HEARTBEAT_OK all good",
-      messages: { responsePrefix: "[openclaw]" },
+      responsePrefix: "[openclaw]",
       expectedCalls: 0,
     },
     {
       title: "does not strip alphanumeric responsePrefix from larger words",
       replyText: "History check complete",
-      messages: { responsePrefix: "Hi" },
+      responsePrefix: "Hi",
       expectedCalls: 1,
       expectedText: "History check complete",
     },
-  ])("$title", async ({ replyText, messages, expectedCalls, expectedText }) => {
+  ])("$title", async ({ replyText, responsePrefix, expectedCalls, expectedText }) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const { sendTelegram, cfg } = await runTelegramHeartbeatWithDefaults({
         tmpDir,
         storePath,
         replySpy,
         replyText,
-        messages,
+        responsePrefix,
       });
 
       expect(sendTelegram).toHaveBeenCalledTimes(expectedCalls);

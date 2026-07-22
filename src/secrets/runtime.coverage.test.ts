@@ -446,7 +446,7 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
   if (entry.id.startsWith("agents.defaults.")) {
     return entry.id;
   }
-  if (entry.id.startsWith("agents.list[].")) {
+  if (entry.id.startsWith("agents.entries.*.")) {
     return entry.id;
   }
   if (entry.id.startsWith("gateway.auth.")) {
@@ -476,8 +476,8 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
     const scope = segments[2] === "accounts" ? "accounts" : "root";
     return `channels.${channelId}.${scope}`;
   }
-  if (entry.id.startsWith("messages.tts.providers.")) {
-    return "messages.tts.providers";
+  if (entry.id.startsWith("tts.providers.")) {
+    return "tts.providers";
   }
   if (entry.id.startsWith("models.providers.")) {
     return "models.providers";
@@ -583,7 +583,7 @@ function applyConfigForOpenClawTarget(
       addCoveragePluginLoadPath(config, pluginId);
     }
   }
-  if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {
+  if (entry.id === "memory.search.remote.apiKey") {
     setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
   }
   if (entry.id === "gateway.auth.password") {

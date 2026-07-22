@@ -131,6 +131,13 @@ function expectUnauthorizedReply(interaction: MockCommandInteraction) {
   expect(interaction.reply).not.toHaveBeenCalled();
 }
 
+function expectChannelNotAllowedReply(interaction: MockCommandInteraction) {
+  expect(interaction.followUp).toHaveBeenCalledWith({
+    content: "This channel is not allowed.",
+    ephemeral: true,
+  });
+}
+
 describe("Discord native slash commands with commands.allowFrom", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -179,7 +186,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       mutateConfig: (cfg) => {
         cfg.commands = {
           ...cfg.commands,
-          useAccessGroups: false,
         };
       },
     });
@@ -357,12 +363,11 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectUnauthorizedReply(interaction);
   });
 
-  it("rejects guild slash commands outside the Discord allowlist when commands.useAccessGroups is false and commands.allowFrom is not configured", async () => {
+  it("rejects guild slash commands outside the Discord channel allowlist", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       mutateConfig: (cfg) => {
         cfg.commands = {
           ...cfg.commands,
-          useAccessGroups: false,
           allowFrom: undefined,
         };
         cfg.channels = {
@@ -384,7 +389,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       },
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
-    expectUnauthorizedReply(interaction);
+    expectChannelNotAllowedReply(interaction);
   });
 
   it("does not treat open-DM wildcard access as guild command owner authorization", async () => {
@@ -393,7 +398,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       mutateConfig: (cfg) => {
         cfg.commands = {
           ...cfg.commands,
-          useAccessGroups: false,
           allowFrom: undefined,
         };
         cfg.channels = {
@@ -417,7 +421,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       },
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
-    expectUnauthorizedReply(interaction);
+    expectChannelNotAllowedReply(interaction);
   });
 
   it("rejects guild slash commands when commands.allowFrom.discord does not match the sender", async () => {
@@ -434,7 +438,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
       mutateConfig: (cfg) => {
         cfg.commands = {
           ...cfg.commands,
-          useAccessGroups: false,
         };
       },
     });

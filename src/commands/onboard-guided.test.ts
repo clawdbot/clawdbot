@@ -78,7 +78,7 @@ function existingModelCandidate() {
   return {
     kind: "existing-model",
     label: "Current model",
-    detail: "already configured",
+    detail: "acme/workspace-model — already configured",
     modelRef: "acme/workspace-model",
     recommended: false,
     credentials: true,

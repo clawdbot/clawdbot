@@ -67,14 +67,14 @@ describe("resolveCurrentTurnImages", () => {
       await fs.writeFile(imagePath, imageBytes);
       const sharedContext = {
         Body: "caption",
-        MediaPath: imagePath,
-        MediaPaths: [imagePath],
-        MediaType: "image/png",
-        MediaTypes: ["image/png"],
+        media: [{ path: imagePath, contentType: "image/png" }],
       } satisfies MsgContext;
 
       const prepared = await resolveCurrentTurnImages({
-        ctx: { ...sharedContext, MediaWorkspaceDir: stagingRoot },
+        ctx: {
+          ...sharedContext,
+          media: [{ path: imagePath, contentType: "image/png", workspaceDir: stagingRoot }],
+        },
         cfg: {} as OpenClawConfig,
       });
       const runner = await resolveCurrentTurnImages({
@@ -100,11 +100,7 @@ describe("resolveCurrentTurnImages", () => {
       const result = await resolveCurrentTurnImages({
         ctx: {
           Body: "caption",
-          MediaPath: rejectedPath,
-          MediaPaths: [rejectedPath],
-          MediaType: "image/png",
-          MediaTypes: ["image/png"],
-          MediaWorkspaceDir: stagingRoot,
+          media: [{ path: rejectedPath, contentType: "image/png", workspaceDir: stagingRoot }],
         } satisfies MsgContext,
         cfg: {} as OpenClawConfig,
       });

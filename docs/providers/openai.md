@@ -151,7 +151,7 @@ explicit runtime config.
 | Server-side web search    | Native OpenAI Responses tool                                                                  | Yes, when web search is enabled and no other provider is pinned |
 | Images                    | `image_generate`                                                                              | Yes                                                             |
 | Videos                    | `video_generate`                                                                              | Yes                                                             |
-| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                                                     | Yes                                                             |
+| Text-to-speech            | `tts.provider: "openai"` / `tts`                                                              | Yes                                                             |
 | Batch speech-to-text      | `tools.media.audio` / media understanding                                                     | Yes                                                             |
 | Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                                                     | Yes                                                             |
 | Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk `talk.realtime.provider: "openai"` | Yes (OpenAI Platform API key)                                   |
@@ -185,19 +185,17 @@ OpenClaw can use OpenAI, or an OpenAI-compatible embedding endpoint, for
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai",
-        model: "text-embedding-3-small",
-      },
+  memory: {
+    search: {
+      provider: "openai",
+      model: "text-embedding-3-small",
     },
   },
 }
 ```
 
 For OpenAI-compatible endpoints that require asymmetric embedding labels, set
-`queryInputType` and `documentInputType` under `memorySearch`. OpenClaw
+`queryInputType` and `documentInputType` under `memory.search`. OpenClaw
 forwards these as provider-specific `input_type` request fields: query
 embeddings use `queryInputType`; indexed memory chunks and batch indexing use
 `documentInputType`. See the
@@ -736,18 +734,18 @@ compatibility fallback when the shared
 <AccordionGroup>
   <Accordion title="Speech synthesis (TTS)">
     The bundled `openai` plugin registers speech synthesis for the
-    `messages.tts` surface.
+    `tts` surface.
 
     | Setting      | Config path                                            | Default                          |
     | ------------- | --------------------------------------------------------- | ----------------------------------- |
-    | Model        | `messages.tts.providers.openai.model`                  | `gpt-4o-mini-tts`                |
-    | Voice        | `messages.tts.providers.openai.speakerVoice`           | `coral`                          |
-    | Speed        | `messages.tts.providers.openai.speed`                  | (unset)                          |
-    | Instructions | `messages.tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` only)  |
-    | Format       | `messages.tts.providers.openai.responseFormat`         | `opus` for voice notes, `mp3` for files |
-    | API key      | `messages.tts.providers.openai.apiKey`                 | Falls back to `OPENAI_API_KEY`   |
-    | Base URL     | `messages.tts.providers.openai.baseUrl`                | `https://api.openai.com/v1`      |
-    | Extra body   | `messages.tts.providers.openai.extraBody` / `extra_body` | (unset)                        |
+    | Model        | `tts.providers.openai.model`                  | `gpt-4o-mini-tts`                |
+    | Voice        | `tts.providers.openai.speakerVoice`           | `coral`                          |
+    | Speed        | `tts.providers.openai.speed`                  | (unset)                          |
+    | Instructions | `tts.providers.openai.instructions`           | (unset, `gpt-4o-mini-tts` only)  |
+    | Format       | `tts.providers.openai.responseFormat`         | `opus` for voice notes, `mp3` for files |
+    | API key      | `tts.providers.openai.apiKey`                 | Falls back to `OPENAI_API_KEY`   |
+    | Base URL     | `tts.providers.openai.baseUrl`                | `https://api.openai.com/v1`      |
+    | Extra body   | `tts.providers.openai.extraBody` / `extra_body` | (unset)                        |
 
     Available models: `gpt-4o-mini-tts`, `tts-1`, `tts-1-hd`. Available voices:
     `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `fable`, `juniper`,
@@ -759,11 +757,9 @@ compatibility fallback when the shared
 
     ```json5
     {
-      messages: {
-        tts: {
-          providers: {
-            openai: { model: "gpt-4o-mini-tts", speakerVoice: "coral" },
-          },
+      tts: {
+        providers: {
+          openai: { model: "gpt-4o-mini-tts", speakerVoice: "coral" },
         },
       },
     }

@@ -1,9 +1,11 @@
 // Bundled Plugin Assets tests cover bundled plugin assets script behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mjs";
 import {
+  listStaleGeneratedPluginAssets,
   parseBundledPluginAssetArgs,
   readBundledPluginAssetHooks,
 } from "../../scripts/bundled-plugin-assets.mjs";
@@ -169,8 +171,49 @@ describe("bundled plugin assets", () => {
 
   it("parses phase and plugin filters", () => {
     expect(parseBundledPluginAssetArgs(["--phase", "build", "--plugin=canvas"])).toEqual({
+      check: false,
       phase: "build",
       plugins: ["canvas"],
+    });
+  });
+
+  it("parses whole-repo check runs and rejects filtered or copy-phase checks", () => {
+    expect(parseBundledPluginAssetArgs(["--phase", "build", "--check"])).toEqual({
+      check: true,
+      phase: "build",
+      plugins: [],
+    });
+    expect(() => parseBundledPluginAssetArgs(["--phase", "copy", "--check"])).toThrow(
+      "--check requires --phase build",
+    );
+    expect(() =>
+      parseBundledPluginAssetArgs(["--phase", "build", "--check", "--plugin=canvas"]),
+    ).toThrow("--check cannot be combined with --plugin filters");
+  });
+
+  it("reports declared generated outputs that differ from the committed bytes", async () => {
+    await withPluginAssetFixture(async (rootDir) => {
+      const generatedPath = path.join(
+        rootDir,
+        "extensions",
+        "canvas",
+        "assets",
+        "generated-runtime.js",
+      );
+      fs.mkdirSync(path.dirname(generatedPath), { recursive: true });
+      fs.writeFileSync(generatedPath, "export const generated = 1;\n");
+      const git = (...args: string[]) =>
+        execFileSync("git", args, { cwd: rootDir, stdio: ["ignore", "pipe", "pipe"] });
+      git("init", "--quiet");
+      git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".");
+      git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "init");
+
+      expect(listStaleGeneratedPluginAssets({ rootDir })).toEqual([]);
+
+      fs.writeFileSync(generatedPath, "export const generated = 2;\n");
+      expect(listStaleGeneratedPluginAssets({ rootDir })).toEqual([
+        "extensions/canvas/assets/generated-runtime.js",
+      ]);
     });
   });
 });

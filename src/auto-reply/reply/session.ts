@@ -905,6 +905,13 @@ async function initSessionStateAttemptLocked(
   sessionEntry = {
     ...baseEntry,
     sessionId,
+    ...(isNewSession
+      ? ctx.SessionCreator
+        ? { createdBy: { ...ctx.SessionCreator } }
+        : {}
+      : baseEntry?.createdBy
+        ? { createdBy: baseEntry.createdBy }
+        : {}),
     updatedAt: Date.now(),
     sessionStartedAt: isNewSession
       ? now

@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements QA evidence summary behavior.
 import { z } from "zod";
+import { qaCoverageIdSchema } from "./coverage-id.js";
 import { resolveQaEvidenceEnvironment } from "./evidence-environment.js";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
@@ -19,7 +20,6 @@ const qaEvidenceStatusSchema = z.enum(["pass", "fail", "blocked", "skipped"]);
 const nonEmptyStringSchema = z.string().trim().min(1);
 const nullableStringSchema = nonEmptyStringSchema.nullable();
 const qaEvidenceProfileIdSchema = nonEmptyStringSchema;
-const qaEvidenceIdSchema = z.strictObject({ id: nonEmptyStringSchema });
 
 const qaEvidenceProviderSchema = z.strictObject({
   id: nonEmptyStringSchema,
@@ -82,7 +82,8 @@ const qaEvidenceRefSchema = z.strictObject({
   path: nonEmptyStringSchema,
 });
 
-const qaEvidenceCoverageSchema = qaEvidenceIdSchema.extend({
+const qaEvidenceCoverageSchema = z.strictObject({
+  id: qaCoverageIdSchema,
   role: nonEmptyStringSchema,
 });
 

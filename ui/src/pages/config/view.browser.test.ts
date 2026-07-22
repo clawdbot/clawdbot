@@ -3,6 +3,7 @@ import { render } from "lit";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import { renderConfigForm } from "../../components/config-form.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
@@ -68,6 +69,8 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     sidebarLiveActivity: true,
     setSidebarLiveActivity: vi.fn(),
+    showAdvancedSettings: false,
+    setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
     setChatSendShortcut: vi.fn(),
     chatFollowUpMode: undefined,
@@ -132,6 +135,100 @@ describe("config view", () => {
   function normalizedText(container: HTMLElement): string {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
+
+  it("collapses advanced fields per section and supports global or search-driven expansion", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        gateway: {
+          type: "object",
+          properties: {
+            port: { type: "integer", title: "Port" },
+            reload: { type: "string", title: "Reload mode" },
+          },
+        },
+      },
+    };
+    const uiHints = {
+      "gateway.port": { advanced: false },
+      "gateway.reload": { advanced: true },
+    };
+    const setShowAdvancedSettings = vi.fn();
+    const collapsed = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      setShowAdvancedSettings,
+    });
+
+    const details = collapsed.container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-fields",
+    );
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector("summary")?.textContent?.trim()).toBe("Advanced (1)");
+    findButtonByText(collapsed.container, "Show advanced").click();
+    expect(setShowAdvancedSettings).toHaveBeenCalledWith(true);
+
+    const global = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      showAdvancedSettings: true,
+    });
+    const globalDetails = global.container.querySelector<HTMLDetailsElement>(
+      "details.config-advanced-fields",
+    );
+    expect(globalDetails?.open).toBe(true);
+    if (globalDetails) {
+      globalDetails.open = false;
+    }
+    globalDetails?.dispatchEvent(new Event("toggle"));
+    expect(globalDetails?.open).toBe(true);
+    expect(global.props.viewState.expandedAdvancedSections.size).toBe(0);
+
+    const searchHit = renderConfigView({
+      schema,
+      uiHints,
+      formValue: { gateway: { port: 18789, reload: "hybrid" } },
+      activeSection: "gateway",
+      forceAdvancedSection: "gateway",
+    });
+    expect(
+      searchHit.container.querySelector<HTMLDetailsElement>("details.config-advanced-fields")?.open,
+    ).toBe(true);
+
+    const nested = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: {
+          type: "object",
+          properties: {
+            agents: {
+              type: "object",
+              properties: {
+                defaults: {
+                  type: "object",
+                  properties: { tuning: { type: "boolean" } },
+                },
+              },
+            },
+          },
+        },
+        uiHints: { "agents.defaults.tuning": { advanced: true } },
+        value: { agents: { defaults: { tuning: true } } },
+        activeSection: "agents",
+        activeSubsection: "defaults",
+        forceAdvancedSection: "agents",
+        onPatch: vi.fn(),
+      }),
+      nested,
+    );
+    expect(nested.querySelector<HTMLDetailsElement>("details.config-advanced-fields")?.open).toBe(
+      true,
+    );
+  });
 
   function findButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
     const button = Array.from(container.querySelectorAll("button")).find(

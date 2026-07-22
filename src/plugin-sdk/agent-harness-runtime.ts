@@ -50,6 +50,7 @@ export type {
   AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionResult,
+  AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
   AgentHarnessSessionForkFailureCode,
   AgentHarnessSessionForkParams,
@@ -58,6 +59,7 @@ export type {
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
 export { AgentHarnessSessionSupersededError } from "../agents/harness/errors.js";
+export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,

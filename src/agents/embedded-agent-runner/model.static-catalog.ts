@@ -238,7 +238,10 @@ export function createBundledStaticCatalogModelResolver(params?: {
     for (const entry of plan.entries) {
       if (
         entry.discovery !== "static" &&
-        !(params?.includeRuntimeDiscovery && entry.discovery === "runtime")
+        !(
+          params?.includeRuntimeDiscovery &&
+          (entry.discovery === "runtime" || entry.discovery === "refreshable")
+        )
       ) {
         continue;
       }

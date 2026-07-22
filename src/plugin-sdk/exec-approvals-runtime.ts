@@ -3,5 +3,6 @@
 export {
   loadExecApprovals,
   resolveExecApprovalsFromFile,
+  resolveExecModePolicy,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";

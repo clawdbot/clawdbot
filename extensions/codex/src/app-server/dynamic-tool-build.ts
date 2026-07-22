@@ -511,6 +511,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   if (isCodexMemoryFlushRun(params)) {
     return false;
   }
+  if (params.disableTools) {
+    return false;
+  }
   const toolsAllow = includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
   if (toolsAllow === undefined) {
     return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);

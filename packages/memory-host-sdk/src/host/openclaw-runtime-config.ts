@@ -15,7 +15,6 @@ export type {
   MemoryCitationsMode,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
-  MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
   MemorySearchConfig,
   OpenClawConfig,

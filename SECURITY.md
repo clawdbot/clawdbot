@@ -8,6 +8,10 @@ The fastest useful reports show a current, reproducible boundary bypass with dem
 
 Security work is shared across a number of OpenClaw maintainers, including engineers and security researchers from organizations such as NVIDIA and Tencent. See the [maintainer list](CONTRIBUTING.md#maintainers).
 
+## Shared Agents
+
+Anyone who can operate an agent can make it do anything that agent can do. Session ownership, visibility, and presence are usability features, not security boundaries. Turn attribution is best-effort because steering can merge input into an active turn. Use separate agents or separate gateway/host trust boundaries when operators need real isolation.
+
 ## Report a Security Issue
 
 Report vulnerabilities directly to the repository where the issue lives:

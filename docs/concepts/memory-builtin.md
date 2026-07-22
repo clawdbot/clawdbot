@@ -28,11 +28,9 @@ To set a provider explicitly:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai",
-      },
+  memory: {
+    search: {
+      provider: "openai",
     },
   },
 }
@@ -49,14 +47,12 @@ openclaw plugins install @openclaw/llama-cpp-provider
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "local",
-        fallback: "none",
-        local: {
-          modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
-        },
+  memory: {
+    search: {
+      provider: "local",
+      fallback: "none",
+      local: {
+        modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
       },
     },
   },
@@ -79,7 +75,7 @@ openclaw plugins install @openclaw/llama-cpp-provider
 | OpenAI-compatible | `openai-compatible` | Generic `/v1/embeddings` endpoint   |
 | Voyage            | `voyage`            |                                     |
 
-Set `memorySearch.provider` to switch away from OpenAI.
+Set `memory.search.provider` to switch away from OpenAI.
 
 ## How indexing works
 
@@ -98,7 +94,7 @@ OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (400 tokens with
 
 <Info>
 You can also index Markdown files outside the workspace with
-`memorySearch.extraPaths`. See the
+`memory.search.extraPaths`. See the
 [configuration reference](/reference/memory-config#additional-memory-paths).
 </Info>
 
@@ -130,7 +126,7 @@ openclaw memory index --force --agent main
 ```
 
 Both standalone CLI commands and the Gateway use the same `local` provider id.
-Set `memorySearch.provider: "local"` when you want local embeddings.
+Set `memory.search.provider: "local"` when you want local embeddings.
 
 **Stale results?** Run `openclaw memory index --force` to rebuild. The watcher
 may miss changes in rare edge cases.

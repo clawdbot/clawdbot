@@ -23,6 +23,7 @@ import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provi
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
+  buildOpenrouterLiveProvider,
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -312,15 +313,16 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+          const auth = ctx.resolveProviderApiKey(PROVIDER_ID);
+          const apiKey = auth.apiKey;
           if (!apiKey) {
             return null;
           }
           return {
-            provider: {
-              ...buildOpenrouterProvider(),
+            provider: await buildOpenrouterLiveProvider({
               apiKey,
-            },
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
           };
         },
       },

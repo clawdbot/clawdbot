@@ -57,7 +57,7 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
   - Audio sets `{{Transcript}}` and uses the transcript for command parsing so slash commands still work.
   - Video and image descriptions preserve any caption text for command parsing.
   - If the active primary model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image to the model instead.
-- By default only the first matching image/audio/video attachment is processed; set `tools.media.<capability>.attachments` to process multiple attachments.
+- By default only the first matching image/audio/video attachment is processed; use `tools.media.<capability>.attachments` to select multiple attachments.
 
 ## Limits and errors
 
@@ -70,9 +70,10 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 
 **Media understanding caps (transcription/description)**
 
-- Image default: 10MB (`tools.media.image.maxBytes`).
-- Audio default: 20MB (`tools.media.audio.maxBytes`).
-- Video default: 50MB (`tools.media.video.maxBytes`).
+- Image default: 10MB (override with `tools.media.image.maxBytes`, or per
+  `tools.media.models[]` entry with `maxBytes`).
+- Audio default: 20MB (override with `tools.media.audio.maxBytes`, or per entry).
+- Video default: 50MB (override with `tools.media.video.maxBytes`, or per entry).
 - Oversize media skips understanding, but the reply still goes through with the original body.
 
 ## Notes for Tests

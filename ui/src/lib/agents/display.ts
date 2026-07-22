@@ -332,7 +332,7 @@ export function resolveAgentTextAvatar(
 }
 
 export function agentBadgeText(agentId: string, defaultId: string | null) {
-  return defaultId && agentId === defaultId ? "default" : null;
+  return defaultId && agentId === defaultId ? t("agents.default") : null;
 }
 
 export function formatBytes(bytes?: number) {

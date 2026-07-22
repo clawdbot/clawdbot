@@ -305,6 +305,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       pluginBoundMediaFieldsPromise,
       queuedFollowupOwnerKey,
       replyOptionImages,
+      replyOptionMedia,
     } = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
@@ -473,6 +474,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                 },
                 images: replyOptionImages,
                 imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
+                media: replyOptionMedia,
                 thinkingLevelOverride: p.thinking,
                 fastModeOverride: p.fastMode,
                 queueModeOverride: p.queueMode,

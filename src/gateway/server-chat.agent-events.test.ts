@@ -45,8 +45,8 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
   loadGatewaySessionRow: vi.fn(),
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: vi.fn(() => ({
+vi.mock("./session-utils.js", () => {
+  const loadSessionEntry = vi.fn(() => ({
     cfg: {},
     storePath: "/tmp/sessions.json",
     store: {},
@@ -54,8 +54,12 @@ vi.mock("./session-utils.js", () => ({
     canonicalKey: "session-1",
     storeKeys: ["session-1"],
     legacyKey: undefined,
-  })),
-}));
+  }));
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+  };
+});
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
@@ -694,6 +698,40 @@ describe("agent event handler", () => {
       { dropIfSlow: true },
     );
     nowSpy?.mockRestore();
+  });
+
+  it("projects typed run startup status onto the active chat stream", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-startup", {
+      sessionKey: "session-startup",
+      clientRunId: "client-startup",
+      agentId: "main",
+    });
+
+    handler({
+      runId: "run-startup",
+      seq: 1,
+      stream: "run_status",
+      ts: Date.now(),
+      data: { phase: "preparing_context" },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toEqual([
+      [
+        "chat",
+        {
+          runId: "client-startup",
+          sessionKey: "session-startup",
+          agentId: "main",
+          seq: 1,
+          state: "status",
+          phase: "preparing_context",
+        },
+        { dropIfSlow: true, sessionKeys: ["session-startup"] },
+      ],
+    ]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(1);
   });
 
   it("coalesces assistant agent events under the chat delta throttle", () => {
@@ -4543,7 +4581,7 @@ describe("agent event handler", () => {
     expect(payload.sessionKey).toBe("session-from-event");
   });
 
-  it("remaps chat-linked tool runId for non-full verbose payloads", () => {
+  it("remaps chat-linked tool-start runId to the client run before UI delivery", () => {
     const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-tool-remap",
     });
@@ -4564,10 +4602,10 @@ describe("agent event handler", () => {
       stream: "tool",
       ts: Date.now(),
       data: {
-        phase: "result",
+        phase: "start",
         name: "exec",
         toolCallId: "tool-remap-1",
-        result: { content: [{ type: "text", text: "secret" }] },
+        args: { command: "true" },
       },
     });
 
@@ -4614,7 +4652,7 @@ describe("agent event handler", () => {
 
   it("keeps heartbeat alert text in final chat output when remainder exceeds ackMaxChars", () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
-      agents: { defaults: { heartbeat: { ackMaxChars: 10 } } },
+      agents: { defaults: { heartbeat: {} } },
     });
 
     const { broadcast, chatRunState, handler } = createHarness({ now: 3_000 });
@@ -4628,13 +4666,14 @@ describe("agent event handler", () => {
       verboseLevel: "off",
     });
 
+    const alert = `Disk usage crossed 95 percent on /data. ${"Cleanup required. ".repeat(20)}`;
     handler({
       runId: "run-heartbeat-alert",
       seq: 1,
       stream: "assistant",
       ts: Date.now(),
       data: {
-        text: "HEARTBEAT_OK Disk usage crossed 95 percent on /data and needs cleanup now.",
+        text: `HEARTBEAT_OK ${alert}`,
       },
     });
 
@@ -4643,9 +4682,7 @@ describe("agent event handler", () => {
     const payload = expectSingleFinalChatPayload(broadcast) as {
       message?: { content?: Array<{ text?: string }> };
     };
-    expect(payload.message?.content?.[0]?.text).toBe(
-      "Disk usage crossed 95 percent on /data and needs cleanup now.",
-    );
+    expect(payload.message?.content?.[0]?.text).toBe(alert.trim());
   });
 
   describe("spawnedBy enrichment in chat and agent broadcasts", () => {

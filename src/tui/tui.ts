@@ -97,10 +97,8 @@ const OPENCLAW_CLI_WRAPPER_PATH = fileURLToPath(new URL("../../openclaw.mjs", im
 const OPENCLAW_RUN_NODE_SCRIPT_PATH = fileURLToPath(
   new URL("../../scripts/run-node.mjs", import.meta.url),
 );
-const OPENCLAW_DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
-const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
-  new URL("../../dist/entry.mjs", import.meta.url),
-);
+const DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
+const DIST_ENTRY_MJS_PATH = fileURLToPath(new URL("../../dist/entry.mjs", import.meta.url));
 
 const OPENAI_CODEX_PROVIDER = "openai";
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
@@ -146,8 +144,7 @@ export function resolveLocalAuthCliInvocation(params?: {
   hasRunNodeScript?: boolean;
 }): { command: string; args: string[] } {
   const hasDistEntry =
-    params?.hasDistEntry ??
-    (existsSync(OPENCLAW_DIST_ENTRY_JS_PATH) || existsSync(OPENCLAW_DIST_ENTRY_MJS_PATH));
+    params?.hasDistEntry ?? (existsSync(DIST_ENTRY_JS_PATH) || existsSync(DIST_ENTRY_MJS_PATH));
   const hasRunNodeScript = params?.hasRunNodeScript ?? existsSync(OPENCLAW_RUN_NODE_SCRIPT_PATH);
   const command = params?.execPath ?? process.execPath;
   const wrapperPath = params?.wrapperPath ?? OPENCLAW_CLI_WRAPPER_PATH;

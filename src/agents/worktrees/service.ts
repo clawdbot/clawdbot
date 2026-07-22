@@ -10,6 +10,7 @@ import { resolveWorktreeBase } from "./base-ref.js";
 import { lockState, lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import {
   commandError,
+  insideGitCheckout,
   listGitWorktrees,
   pathExists,
   removeEmptyParents,
@@ -107,19 +108,21 @@ function generateName(): string {
   return `wt-${randomBytes(4).toString("hex")}`;
 }
 
-async function resolveRepository(repoRoot: string): Promise<{
+type ResolvedRepository = {
   repoRoot: string;
   sourceRoot: string;
   commonDir: string;
   originUrl: string;
   fingerprint: string;
-}> {
-  const requested = await fs.realpath(repoRoot).catch(() => {
-    throw new Error(`repository does not exist: ${repoRoot}`);
-  });
+};
+
+async function resolveRepositoryFromRealPath(
+  requested: string,
+  requestedLabel: string,
+): Promise<ResolvedRepository> {
   const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"]);
   if (rootResult.code !== 0) {
-    throw new Error(`not a git checkout: ${repoRoot}`);
+    throw new Error(`not a git checkout: ${requestedLabel}`);
   }
   const sourceRoot = await fs.realpath(rootResult.stdout.trim());
   const commonRaw = await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]);
@@ -135,6 +138,13 @@ async function resolveRepository(repoRoot: string): Promise<{
     .digest("hex")
     .slice(0, 16);
   return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
+}
+
+async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> {
+  const requested = await fs.realpath(repoRoot).catch(() => {
+    throw new Error(`repository does not exist: ${repoRoot}`);
+  });
+  return await resolveRepositoryFromRealPath(requested, repoRoot);
 }
 
 async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branch: string) {
@@ -595,8 +605,27 @@ export class ManagedWorktreeService {
    * Base-ref pickers must stay snappy; resolveWorktreeBase() still fetches on create
    * when no explicit ref is chosen.
    */
-  async listRepositoryBranches(repoRoot: string): Promise<ManagedWorktreeBranchesResult> {
-    const repository = await resolveRepository(repoRoot);
+  async listRepositoryBranches(
+    repoRoot: string,
+    options: { includeRepositoryStatus?: boolean } = {},
+  ): Promise<ManagedWorktreeBranchesResult> {
+    let repository: ResolvedRepository;
+    if (options.includeRepositoryStatus) {
+      try {
+        const requested = await fs.realpath(repoRoot);
+        if (!(await fs.stat(requested)).isDirectory()) {
+          return { branches: [], repositoryStatus: "unavailable" };
+        }
+        if (!insideGitCheckout(requested)) {
+          return { branches: [], repositoryStatus: "not_git" };
+        }
+        repository = await resolveRepositoryFromRealPath(requested, repoRoot);
+      } catch {
+        return { branches: [], repositoryStatus: "unavailable" };
+      }
+    } else {
+      repository = await resolveRepository(repoRoot);
+    }
     // Keyed by short branch name; the stored name is always a resolvable base
     // ref, so remote-only branches keep their remote-qualified form
     // (origin/feature-a) instead of a bare name git cannot resolve.
@@ -665,6 +694,7 @@ export class ManagedWorktreeService {
       branches: sorted,
       ...(defaultBranch ? { defaultBranch } : {}),
       ...(headBranch ? { headBranch } : {}),
+      ...(options.includeRepositoryStatus ? { repositoryStatus: "git" as const } : {}),
     };
   }
 

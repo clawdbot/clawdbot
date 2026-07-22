@@ -40,6 +40,7 @@ import {
   markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
 } from "./manager-targeted-sync.js";
+import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
@@ -444,9 +445,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         }
       }
       if (!shouldSyncMemory) {
-        this.dirty = false;
+        this.clearMemoryRetryState();
       }
-
+      const vectorIndexComplete = this.vector.available === true;
       const nextMeta: MemoryIndexMeta = {
         model: this.provider?.model ?? "fts-only",
         provider: this.provider?.id ?? "none",
@@ -487,6 +488,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       });
 
       this.db = originalDb;
+      if (vectorIndexComplete) {
+        // Publish completeness only after the shadow tables committed. A crash
+        // before this point leaves the rebuild marker conservative and retryable.
+        markMemoryVectorIndexClean(originalDb);
+      }
       this.resetVectorState();
       this.fts.available = nextFtsState.available;
       this.fts.loadError = nextFtsState.loadError;

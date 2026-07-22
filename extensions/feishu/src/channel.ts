@@ -641,7 +641,13 @@ function readFirstString(
 const UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
 
 function resolveFeishuMessageActionResponsePrefix(ctx: ChannelMessageActionContext) {
-  const configured = ctx.cfg.messages?.responsePrefix;
+  const channel = ctx.cfg.channels?.feishu as
+    | { responsePrefix?: string; accounts?: Record<string, { responsePrefix?: string }> }
+    | undefined;
+  const configured =
+    (ctx.accountId ? channel?.accounts?.[ctx.accountId]?.responsePrefix : undefined) ??
+    channel?.responsePrefix ??
+    (channel === undefined ? ctx.cfg.messages?.responsePrefix : undefined);
   if (!configured) {
     return undefined;
   }

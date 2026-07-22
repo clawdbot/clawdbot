@@ -55,6 +55,7 @@ function snapshot(
   return {
     client,
     connected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,

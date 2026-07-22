@@ -102,6 +102,27 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `settings OpenClaw destination builds access gate across appearance and type size`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
+        for scheme in [ColorScheme.light, ColorScheme.dark] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let appModel = NodeAppModel()
+                let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+                let root = SettingsProTab(directRoute: .systemAgent)
+                    .environment(AppAppearanceModel())
+                    .environment(appModel)
+                    .environment(appModel.voiceWake)
+                    .environment(gatewayController)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .preferredColorScheme(scheme)
+
+                windows.append(Self.host(root, size: CGSize(width: 393, height: 852)))
+            }
+        }
+    }
+
     @Test @MainActor func `settings pro tab appearance row builds for all preferences`() throws {
         for preference in AppAppearancePreference.allCases {
             let suiteName = "OpenClawTests.appearance.\(preference.rawValue).\(UUID().uuidString)"

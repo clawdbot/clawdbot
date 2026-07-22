@@ -5,6 +5,7 @@ import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/n
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   canonicalOpenAIModelUsesCodexRuntime,
   isBlockedLegacyCodexModelRef,
@@ -108,23 +109,22 @@ function shieldExplicitListedAgentRefsFromDefaultPolicy(params: {
   changes: string[];
   env?: NodeJS.ProcessEnv;
 }): void {
-  for (const [index, agent] of (params.cfg.agents?.list ?? []).entries()) {
+  for (const { agent, agentId, path } of listMutableCodexRouteAgentEntries(params.cfg)) {
     if (!agentExplicitlyReferencesCanonicalModel(agent, params.modelRef)) {
       continue;
     }
-    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
     const runtimeId = resolveCurrentRuntimeIdForCanonicalModel({
       cfg: params.cfg,
       modelRef: params.modelRef,
-      agentId: id,
+      agentId,
       env: params.env,
     });
     if (runtimeId === params.targetRuntimeId) {
       continue;
     }
     setModelRuntimePolicy({
-      agent: agent as MutableRecord,
-      agentPath: `agents.list.${id}`,
+      agent,
+      agentPath: path,
       modelRef: params.modelRef,
       runtimeId,
       changes: params.changes,
@@ -151,8 +151,12 @@ function legacyEntryExplicitNonDefaultRuntimeId(
 }
 
 export function agentIdFromAgentPath(agentPath: string): string | undefined {
-  const prefix = "agents.list.";
-  return agentPath.startsWith(prefix) ? agentPath.slice(prefix.length) : undefined;
+  for (const prefix of ["agents.entries.", "agents.list."]) {
+    if (agentPath.startsWith(prefix)) {
+      return agentPath.slice(prefix.length);
+    }
+  }
+  return undefined;
 }
 
 type PreRepairRuntimePin = {
@@ -229,7 +233,8 @@ function agentModelMapExactRuntimeIdForLegacyRef(params: {
   }
   const agentId = normalizeAgentId(params.agentId);
   const agent = agentId
-    ? (params.cfg.agents?.list ?? []).find((entry) => normalizeAgentId(entry.id) === agentId)
+    ? listMutableCodexRouteAgentEntries(params.cfg).find((entry) => entry.agentId === agentId)
+        ?.agent
     : undefined;
   const modelMaps = [
     asMutableRecord(agent?.models),
@@ -464,17 +469,8 @@ export function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
 export function clearConfigLegacyAgentRuntimePolicies(cfg: OpenClawConfig): string[] {
   const changes: string[] = [];
   clearLegacyAgentRuntimePolicy(asMutableRecord(cfg.agents?.defaults), "agents.defaults", changes);
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const agentRecord = asMutableRecord(agent);
-    if (!agentRecord) {
-      continue;
-    }
-    const id =
-      typeof agentRecord.id === "string" && agentRecord.id.trim()
-        ? agentRecord.id.trim()
-        : String(index);
-    clearLegacyAgentRuntimePolicy(agentRecord, `agents.list.${id}`, changes);
+  for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
+    clearLegacyAgentRuntimePolicy(agent, path, changes);
   }
   return changes;
 }

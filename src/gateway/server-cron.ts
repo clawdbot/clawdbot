@@ -2,7 +2,7 @@
 // plugin hooks, notifications, and cron lifecycle cleanup.
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
@@ -264,16 +264,11 @@ export function buildGatewayCronService(params: {
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const env = params.env ?? process.env;
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store, env);
+  const storePath = resolveCronJobsStorePath(undefined, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
-    Array.isArray(cfg.agents?.list)
-      ? cfg.agents.list.find(
-          (entry) =>
-            entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === agentId,
-        )
-      : undefined;
+    listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
 
   const hasConfiguredAgent = (cfg: OpenClawConfig, agentId: string) =>
     Boolean(findAgentEntry(cfg, agentId));
@@ -1047,7 +1042,7 @@ export function buildGatewayCronService(params: {
           logger: cronLogger,
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
-          globalFailureDestination: params.cfg.cron?.failureDestination,
+          globalFailureDestination: params.cfg.cron?.failureAlert,
         });
       }
     },

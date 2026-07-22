@@ -16,6 +16,8 @@ import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalentForHost } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
+import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
+import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
 import {
   isDefaultChatLanding,
   locationsMatch,
@@ -336,16 +338,16 @@ export function bootstrapApplication(): ApplicationRuntime {
           bootstrapToken: startup.pendingBootstrapToken ?? "",
         }
       : null;
-  let lastConfigRefreshClient: GatewayBrowserClient | null = null;
-  const stopConfigRefresh = gateway.subscribe((snapshot) => {
+  let lastPostConnectClient: GatewayBrowserClient | null = null;
+  const stopPostConnect = gateway.subscribe((snapshot) => {
     if (!snapshot.connected || !snapshot.client) {
-      lastConfigRefreshClient = null;
+      lastPostConnectClient = null;
       return;
     }
-    if (lastConfigRefreshClient === snapshot.client) {
+    if (lastPostConnectClient === snapshot.client) {
       return;
     }
-    lastConfigRefreshClient = snapshot.client;
+    lastPostConnectClient = snapshot.client;
     void config.refresh({
       auth: {
         hello: snapshot.hello,
@@ -353,6 +355,10 @@ export function bootstrapApplication(): ApplicationRuntime {
         password: gateway.connection.password,
       },
     });
+    void sendSessionObserverVisibility(
+      snapshot.client,
+      loadChatObserverDisplayPreference() !== "off",
+    ).catch(() => undefined);
   });
   const routeLocation = (routeId: RouteId, options?: ApplicationNavigationOptions) => {
     const location = locationForRoute(routeId, basePath);
@@ -454,7 +460,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
     stop: () => {
       stopModelSetupRedirect();
-      stopConfigRefresh();
+      stopPostConnect();
       router.stop();
       gateway.stop();
       agents.dispose();

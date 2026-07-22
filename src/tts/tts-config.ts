@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
 import { mergeDeep } from "../infra/deep-merge.js";
 import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
@@ -109,7 +110,7 @@ export function resolveEffectiveTtsConfig(
   contextOrAgentId?: string | TtsConfigResolutionContext,
 ): TtsConfig {
   const context = resolveTtsConfigContext(contextOrAgentId);
-  const base = cfg.messages?.tts ?? {};
+  const base = cfg.tts ?? {};
   const agentOverride = resolveAgentTtsOverride(cfg, context.agentId);
   const channelOverride = resolveChannelTtsOverride(cfg, context);
   const accountOverride = resolveAccountTtsOverride(cfg, context);
@@ -128,13 +129,19 @@ export function resolveConfiguredTtsMode(
   return resolveEffectiveTtsConfig(cfg, contextOrAgentId).mode ?? "final";
 }
 
-function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
+function resolveTtsPrefsPathValue(
+  prefsPath: string | undefined,
+  machinePrefsPath?: string,
+): string {
   if (prefsPath?.trim()) {
     return resolveUserPath(prefsPath.trim());
   }
   const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
   if (envPath) {
     return resolveUserPath(envPath);
+  }
+  if (machinePrefsPath?.trim()) {
+    return resolveUserPath(machinePrefsPath.trim());
   }
   return path.join(resolveConfigDir(process.env), "settings", "tts.json");
 }
@@ -174,7 +181,10 @@ export function shouldAttemptTtsPayload(params: {
   }
 
   const raw = resolveEffectiveTtsConfig(params.cfg, params);
-  const prefsAuto = readTtsPrefsAutoMode(resolveTtsPrefsPathValue(raw?.prefsPath));
+  const scopedPrefsPath = (raw as TtsConfig & { prefsPath?: string }).prefsPath;
+  const prefsAuto = readTtsPrefsAutoMode(
+    resolveTtsPrefsPathValue(scopedPrefsPath, readConfigMachineState<string>("tts.prefsPath")),
+  );
   if (prefsAuto) {
     return prefsAuto !== "off";
   }

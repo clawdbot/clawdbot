@@ -272,7 +272,7 @@ describe("resolveExistingAgentSessionStoreTargetsSync", () => {
     });
   });
 
-  it("recognizes matching rows in a fixed legacy store without creating SQLite", async () => {
+  it("ignores matching rows in a fixed legacy store without creating SQLite", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "shared", "sessions.json");
       await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -289,9 +289,7 @@ describe("resolveExistingAgentSessionStoreTargetsSync", () => {
         session: { store: storePath },
       };
 
-      expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "retired")).toEqual([
-        { agentId: "retired", storePath },
-      ]);
+      expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "retired")).toEqual([]);
       expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "ghost")).toEqual([]);
       expect(await fs.readdir(path.dirname(storePath))).toEqual(["sessions.json"]);
     });
@@ -331,9 +329,7 @@ describe("resolveExistingAgentSessionStoreTargetsSync", () => {
         agentId: "retired-sqlite",
         storePath: sqliteStorePath,
       });
-      expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "retired-legacy")).toEqual([
-        { agentId: "retired-legacy", storePath: legacyStorePath },
-      ]);
+      expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "retired-legacy")).toEqual([]);
       expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "retired-sqlite")).toEqual([
         { agentId: "retired-sqlite", storePath: sqliteStorePath },
       ]);

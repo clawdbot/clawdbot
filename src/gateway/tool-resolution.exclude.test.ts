@@ -166,6 +166,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "conversations_turn",
       "nodes",
       "computer",
+      "mobile_ui",
       "openclaw",
     ]);
     expect(args.inheritedToolDenylist).toEqual([
@@ -179,6 +180,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "conversations_turn",
       "nodes",
       "computer",
+      "mobile_ui",
       "openclaw",
     ]);
   });
@@ -706,6 +708,28 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
       { name: "read" },
       { name: "cron" },
+    ]);
+  });
+
+  it("passes unrestricted gateway tool surfaces to cron jobs", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("cron"),
+      hoisted.makeTool("exec"),
+    ]);
+
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec"]);
+    expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
+      { name: "read" },
+      { name: "cron" },
+      { name: "exec" },
     ]);
   });
 });

@@ -30,6 +30,7 @@ function createContext(
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",
@@ -94,6 +95,7 @@ function createConnectedContext(
   let snapshot: ApplicationGatewaySnapshot = {
     client: { request } as GatewayBrowserClient,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",

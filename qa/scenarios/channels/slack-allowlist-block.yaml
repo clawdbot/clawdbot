@@ -3,7 +3,8 @@ scenario:
   id: slack-allowlist-block
   surface: channels
   coverage:
-    primary: [channels.access-and-identity]
+    primary:
+      - slack.access-and-identity
   execution:
     profiles: { "slack:default": 2 }
     kind: flow

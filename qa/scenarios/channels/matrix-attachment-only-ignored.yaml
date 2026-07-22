@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.mention-gating
+      - matrix.mention-gates
     secondary:
       - channels.inbound-media-normalization
   execution:

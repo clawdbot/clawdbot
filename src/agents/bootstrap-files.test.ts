@@ -440,7 +440,7 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files.map((file) => file.name)).toContain("SOUL.md");
   });
 
-  it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {
+  it("keeps HEARTBEAT.md for non-heartbeat runs when heartbeat cadence is enabled", async () => {
     const workspaceDir = await createHeartbeatAgentsWorkspace();
 
     const files = await resolveBootstrapFilesForRun({
@@ -448,16 +448,14 @@ describe("resolveBootstrapContextForRun", () => {
       config: {
         agents: {
           defaults: {
-            heartbeat: {
-              includeSystemPromptSection: false,
-            },
+            heartbeat: {},
           },
           list: [{ id: "main" }],
         },
       },
     });
 
-    expectHeartbeatExcludedAndAgentsKept(files);
+    expect(files.map((file) => file.name)).toContain("HEARTBEAT.md");
   });
 
   it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat cadence is disabled", async () => {
@@ -480,7 +478,7 @@ describe("resolveBootstrapContextForRun", () => {
     expectHeartbeatExcludedAndAgentsKept(files);
   });
 
-  it("keeps HEARTBEAT.md for actual heartbeat runs even when the prompt section is disabled", async () => {
+  it("keeps HEARTBEAT.md for actual heartbeat runs", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
 
@@ -489,11 +487,7 @@ describe("resolveBootstrapContextForRun", () => {
       runKind: "heartbeat",
       config: {
         agents: {
-          defaults: {
-            heartbeat: {
-              includeSystemPromptSection: false,
-            },
-          },
+          defaults: { heartbeat: {} },
           list: [{ id: "main" }],
         },
       },

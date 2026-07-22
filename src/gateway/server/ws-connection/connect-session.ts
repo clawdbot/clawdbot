@@ -9,6 +9,7 @@ import {
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
+import { getPairedDevice } from "../../../infra/device-pairing.js";
 import {
   captureAuthenticatedNodePairingState,
   type NodePairingGeneration,
@@ -213,6 +214,32 @@ export async function attachAuthenticatedGatewayConnect(
       );
     }
   }
+  let pairedDeviceLabel: string | undefined;
+  if (device?.id) {
+    try {
+      const pairedDevice = await getPairedDevice(device.id);
+      pairedDeviceLabel =
+        normalizeOptionalString(pairedDevice?.operatorLabel) ??
+        normalizeOptionalString(pairedDevice?.displayName);
+    } catch (error) {
+      // Pairing metadata is attribution-only and must not turn into a login dependency.
+      logWsControl.warn(
+        `paired device label resolution failed conn=${connId}: ${formatForLog(error)}`,
+      );
+    }
+  }
+  // SSO identity wins over device labeling so one person keeps the same creator
+  // across browsers; paired-device labels cover gateways without trusted proxy auth.
+  const operatorIdentity = authenticatedUserProfile
+    ? {
+        id: authenticatedUserId,
+        label: authenticatedUserProfile.displayName ?? authenticatedUserId,
+      }
+    : authenticatedUserId
+      ? { id: authenticatedUserId, label: authenticatedUserId }
+      : device?.id && pairedDeviceLabel
+        ? { id: device.id, label: pairedDeviceLabel }
+        : undefined;
 
   const pluginSurfaceUrls: Record<string, string> = {};
   const pluginNodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
@@ -308,6 +335,7 @@ export async function attachAuthenticatedGatewayConnect(
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    ...(operatorIdentity ? { operatorIdentity } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),

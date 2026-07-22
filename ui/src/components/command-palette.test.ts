@@ -23,6 +23,7 @@ function createGateway(connected: boolean): GatewayHarness {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     connected,
+    offlineStable: false,
     reconnecting: !connected,
     hello: null,
     assistantAgentId: "main",

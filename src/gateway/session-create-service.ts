@@ -6,6 +6,7 @@ import {
 import {
   ErrorCodes,
   type ErrorShape,
+  type SessionCreatorIdentity,
   errorShape,
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -62,7 +63,7 @@ import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
 
 type TrustedCatalogSessionTarget = {
@@ -260,7 +261,14 @@ export async function createGatewaySession(params: {
   thinkingLevel?: string;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
+  createdBy?: SessionCreatorIdentity;
   parentSessionKey?: string;
+  /**
+   * Spawn-lineage depth declared by spawn-owned creations (visible subagent
+   * sessions). Requires parentSessionKey. Omitted creations persist depth 0 so
+   * operator sessions and forks stay spawn-capable roots.
+   */
+  spawnDepth?: number;
   spawnedCwd?: string;
   /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
   worktree?: { id: string; branch: string; repoRoot: string };
@@ -411,6 +419,20 @@ export async function createGatewaySession(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, "fork requires parentSessionKey"),
     };
   }
+  if (params.spawnDepth !== undefined) {
+    if (!Number.isInteger(params.spawnDepth) || params.spawnDepth < 1) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "spawnDepth must be an integer >= 1"),
+      };
+    }
+    if (!parentSessionKey) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "spawnDepth requires parentSessionKey"),
+      };
+    }
+  }
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId);
   const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
   // Dashboard sessions parent to main for flow-up notices and sidebar threads.
@@ -443,7 +465,7 @@ export async function createGatewaySession(params: {
       }
       parentSelectedAgentId = parentRequestedAgent.agentId;
     }
-    const parent = loadSessionEntry(
+    const parent = loadSessionEntryReadOnly(
       parentSessionKey,
       parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
     );
@@ -515,6 +537,7 @@ export async function createGatewaySession(params: {
           : {}),
         reason: "new",
         commandSource: params.commandSource,
+        createdBy: params.createdBy,
         ...(spawnedCwd ? { spawnedCwd } : {}),
         ...(params.worktree ? { worktree: params.worktree } : {}),
         ...(params.execNode ? { execNode: params.execNode } : {}),
@@ -544,7 +567,7 @@ export async function createGatewaySession(params: {
       parentSessionTarget &&
       (params.emitCommandHooks === true || params.fork === true)
     ) {
-      const currentParent = loadSessionEntry(
+      const currentParent = loadSessionEntryReadOnly(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
       );
@@ -748,6 +771,9 @@ export async function createGatewaySession(params: {
           : undefined;
         const initializedEntry: SessionEntry = {
           ...patched.entry,
+          ...(existingEntry === undefined && params.createdBy
+            ? { createdBy: { ...params.createdBy } }
+            : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
@@ -787,13 +813,17 @@ export async function createGatewaySession(params: {
           ...(params.initialEntry?.pluginExtensions !== undefined
             ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
             : {}),
+          // Spawn lineage is declared, never inferred: spawn-owned creations pass
+          // spawnDepth explicitly; everything else (operator chats, forks, harness
+          // and plugin sessions) persists as a depth-0 root. Reused entries keep
+          // their stored depth.
+          ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
         };
         sessionEntries[target.canonicalKey] = initializedEntry;
         const initialized = { ...patched, entry: initializedEntry };
-        const storedParentSessionKey =
-          canonicalParentSessionKey ??
-          normalizeOptionalString(initializedEntry.parentSessionKey) ??
-          dashboardParentSessionKey;
+        const explicitParentSessionKey =
+          canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
+        const storedParentSessionKey = explicitParentSessionKey ?? dashboardParentSessionKey;
         if (!storedParentSessionKey) {
           return initialized;
         }

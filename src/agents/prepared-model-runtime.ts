@@ -272,8 +272,10 @@ async function acquirePreparedModelRuntimeLease(
       if (pendingModelRuntimeReplacement) {
         continue;
       }
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
-      key = ownerKey(input);
+      if (provenance === "run") {
+        input = rebindInputToCommittedConfiguredOwner(owners, input);
+        key = ownerKey(input);
+      }
       continue;
     }
     let existing = owners.get(key);
@@ -387,7 +389,7 @@ export async function acquireAgentRunPreparedModelRuntime(
   return await acquirePreparedModelRuntimeLease(rawInput, "run", options);
 }
 
-/** Acquires a one-read metadata generation without retaining a dynamic workspace owner. */
+/** Acquires an exact read-only generation scoped to the returned lease. */
 export async function acquireReadOnlyPreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
 ): Promise<PreparedModelRuntimeLease> {

@@ -226,19 +226,15 @@ async function injectTtsAuthProfileApiKey(params: {
       },
     };
   }
-  const messages = { ...params.cfg.messages };
   const nextTts = buildTtsConfigWithHydratedProvider({
-    tts: messages.tts,
+    tts: params.cfg.tts,
     existingProviderConfig,
     providerId,
     apiKey: auth.apiKey,
   });
   return {
     ...params.cfg,
-    messages: {
-      ...messages,
-      tts: nextTts,
-    },
+    tts: nextTts,
   };
 }
 
@@ -280,7 +276,7 @@ function resolveExistingTtsProviderConfig(params: {
   }
   const rootProviderConfig = resolveExistingTtsProviderConfigInTts({
     cfg: params.cfg,
-    tts: params.cfg.messages?.tts,
+    tts: params.cfg.tts,
     providerId: params.providerId,
   });
   return rootProviderConfig ? { ...rootProviderConfig, scope: "root" } : undefined;

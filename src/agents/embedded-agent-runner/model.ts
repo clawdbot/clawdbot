@@ -22,6 +22,7 @@ import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profile
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
+import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
@@ -499,7 +500,12 @@ function mergeStaticCatalogInlineModel(
   if (!staticCatalogModel) {
     return inlineModel;
   }
-  const compat = mergeModelCompat(staticCatalogModel.compat, inlineModel.compat);
+  const compat = resolveCatalogOwnedModelCompat({
+    catalogRoute: staticCatalogModel,
+    catalogCompat: staticCatalogModel.compat,
+    configuredRoute: inlineModel,
+    configuredCompat: inlineModel.compat,
+  });
   const mediaInput = mergeModelMediaInput(staticCatalogModel.mediaInput, inlineModel.mediaInput);
   const params = mergeModelParams(
     readModelParams(staticCatalogModel.params),
@@ -820,13 +826,31 @@ function applyConfiguredProviderOverrides(params: {
         ? Math.min(resolvedMaxTokens, resolvedContextWindow)
         : resolvedMaxTokens
       : undefined;
-  const resolvedCompat = mergeModelCompat(
-    mergeModelCompat(configuredStaticCatalogModel?.compat, discoveredModel.compat),
-    metadataOverrideModel?.compat,
+  const catalogCompat = mergeModelCompat(
+    configuredStaticCatalogModel?.compat,
+    discoveredModel.compat,
   );
+  const hasCatalogOwnedModel =
+    configuredStaticCatalogModel !== undefined || discoveredModel.maxTokensSource !== "configured";
+  const resolvedCompat = resolveCatalogOwnedModelCompat({
+    ...(hasCatalogOwnedModel
+      ? {
+          catalogRoute: {
+            api: discoveredModel.api ?? configuredStaticCatalogModel?.api,
+            baseUrl: discoveredModel.baseUrl ?? configuredStaticCatalogModel?.baseUrl,
+          },
+        }
+      : {}),
+    catalogCompat,
+    configuredRoute: {
+      api: resolvedTransport.api,
+      baseUrl: resolvedTransport.baseUrl,
+    },
+    configuredCompat: metadataOverrideModel?.compat,
+  });
   const resolvedReasoning = resolveMergedConfiguredModelReasoning({
     provider: params.provider,
-    configuredCompat: metadataOverrideModel?.compat,
+    configuredCompat: resolvedCompat,
     resolvedCompat,
     configuredReasoning: metadataOverrideModel?.reasoning,
     discoveredReasoning: discoveredModel.reasoning,
@@ -1321,7 +1345,6 @@ function resolveConfiguredFallbackModel(params: {
     includeRuntimeDiscovery: true,
   }) as StaticCatalogFallbackModel | undefined;
   const metadataModel = configuredModel ?? staticCatalogModel;
-  const fallbackCompat = mergeModelCompat(staticCatalogModel?.compat, configuredModel?.compat);
   const fallbackMediaInput = mergeModelMediaInput(
     staticCatalogModel?.mediaInput,
     configuredModel?.mediaInput,
@@ -1374,6 +1397,15 @@ function resolveConfiguredFallbackModel(params: {
     cfg,
     workspaceDir,
     runtimeHooks,
+  });
+  const fallbackCompat = resolveCatalogOwnedModelCompat({
+    ...(staticCatalogModel ? { catalogRoute: staticCatalogModel } : {}),
+    catalogCompat: staticCatalogModel?.compat,
+    configuredRoute: {
+      api: fallbackTransport.api,
+      baseUrl: fallbackTransport.baseUrl,
+    },
+    configuredCompat: configuredModel?.compat,
   });
   if (
     configuredModel &&

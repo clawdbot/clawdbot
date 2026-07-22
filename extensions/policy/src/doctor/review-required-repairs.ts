@@ -104,17 +104,17 @@ function previewGatewayNodeDenyCommand(
   if (
     command === undefined ||
     command === "" ||
-    finding.ocPath !== "oc://openclaw.config/gateway/nodes/denyCommands"
+    finding.ocPath !== "oc://openclaw.config/gateway/nodes/commands/deny"
   ) {
     return [];
   }
   return [
     {
-      change: `Review required: add ${command} to gateway.nodes.denyCommands for policy conformance.`,
+      change: `Review required: add ${command} to gateway.nodes.commands.deny for policy conformance.`,
       effect: {
         kind: "config",
         action: "would-append-after-review",
-        target: `gateway.nodes.denyCommands += ${command}`,
+        target: `gateway.nodes.commands.deny += ${command}`,
         dryRunSafe: true,
       },
     },

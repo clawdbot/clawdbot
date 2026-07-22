@@ -2,24 +2,23 @@ title: Remember across conversations
 
 scenario:
   id: remember-across-conversations
-  surface: memory
+  surface: session-memory
   risk: high
   coverage:
     primary:
-      - memory.active-recall
+      - session-memory.active-memory-active-recall
     secondary:
-      - memory.recall
-      - channels.qa-channel
+      - session-memory.active-memory-recall
+      - session-memory.active-memory-qa-channel
   objective: Verify bounded private transcript recall across separate conversations without crossing shared, anchor, disabled, or paused conversation boundaries.
   plugins:
     - active-memory
   gatewayConfigPatch:
     session:
       dmScope: per-channel-peer
-    agents:
-      defaults:
-        memorySearch:
-          rememberAcrossConversations: true
+    memory:
+      search:
+        rememberAcrossConversations: true
     plugins:
       entries:
         active-memory:
@@ -98,7 +97,7 @@ flow:
             - ref: env
         - set: originalMemorySearch
           value:
-            expr: "original.config.agents && typeof original.config.agents === 'object' && typeof original.config.agents.defaults === 'object' ? structuredClone(original.config.agents.defaults.memorySearch) : undefined"
+            expr: "original.config.memory && typeof original.config.memory === 'object' ? structuredClone(original.config.memory.search) : undefined"
         - set: initialSessionsVisibility
           value:
             expr: "original.config.tools && typeof original.config.tools === 'object' && typeof original.config.tools.sessions === 'object' ? original.config.tools.sessions.visibility : undefined"
@@ -459,10 +458,9 @@ flow:
                         - env:
                             ref: env
                           patch:
-                            agents:
-                              defaults:
-                                memorySearch:
-                                  expr: "{ ...structuredClone(originalMemorySearch ?? {}), rememberAcrossConversations: false }"
+                            memory:
+                              search:
+                                expr: "{ ...structuredClone(originalMemorySearch ?? {}), rememberAcrossConversations: false }"
                     - call: waitForGatewayHealthy
                       args:
                         - ref: env
@@ -511,10 +509,9 @@ flow:
                   - env:
                       ref: env
                     patch:
-                      agents:
-                        defaults:
-                          memorySearch:
-                            expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
+                      memory:
+                        search:
+                          expr: "originalMemorySearch === undefined ? null : structuredClone(originalMemorySearch)"
               - call: waitForGatewayHealthy
                 args:
                   - ref: env

@@ -35,6 +35,7 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
@@ -319,7 +320,7 @@ export async function finalizeCodexAttempt(
   } else {
     codexModelCallDiagnostics.emitCompleted(result);
   }
-  const assistantTranscriptOwned = await codexTranscriptMirrorRuntime.mirrorBestEffort({
+  const mirrorOutcome = await codexTranscriptMirrorRuntime.mirrorBestEffort({
     params,
     agentId: sessionAgentId,
     notifyUserMessagePersisted,
@@ -329,6 +330,27 @@ export async function finalizeCodexAttempt(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
   });
+  const { assistantTranscriptOwned } = mirrorOutcome;
+  const shouldCaptureSettledTurnFinalizationContext =
+    turnSucceeded &&
+    result.assistantTexts.every((text) => !text.trim()) &&
+    result.messagesSnapshot.some((message) => message.role === "toolResult");
+  const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
+    ? await captureCodexSettledTurnFinalizationContext({
+        ...activeTranscriptTarget,
+        mirroredMessages: mirrorOutcome.mirroredMessages,
+        settledMessages: result.messagesSnapshot,
+        turnId: activeTurnId,
+      })
+    : undefined;
+  if (shouldCaptureSettledTurnFinalizationContext && !settledTurnFinalizationContext) {
+    // The isolated child must not infer around a partial or drifting transcript.
+    // Omitting this field preserves the existing incomplete-turn failure.
+    embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
+      threadId: resourceState.thread.threadId,
+      turnId: activeTurnId,
+    });
+  }
   if (activeContextEngine) {
     const contextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     const isHeartbeat =
@@ -498,6 +520,7 @@ export async function finalizeCodexAttempt(
     ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
+    ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }

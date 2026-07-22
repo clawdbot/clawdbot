@@ -1487,7 +1487,7 @@ describe("redactSensitiveText", () => {
     expect(output).toBe(input);
   });
 
-  it("honors logging redaction settings from the active config path", () => {
+  it("ignores the retired log-redaction opt-out from the active config path", () => {
     const configPath = writeConfig(`{
       logging: {
         redactSensitive: "off",
@@ -1496,7 +1496,7 @@ describe("redactSensitiveText", () => {
 
     withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
       expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
-        "OPENAI_API_KEY=sk-1234567890abcdef",
+        "OPENAI_API_KEY=sk-123…cdef",
       ),
     );
   });

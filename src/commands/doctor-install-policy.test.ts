@@ -30,7 +30,7 @@ async function makeTempDir(): Promise<string> {
 
 async function writePolicyScript(dir: string, response: string): Promise<string> {
   const scriptPath = path.join(dir, "policy.cjs");
-  await fs.writeFile(scriptPath, `process.stdout.write(${JSON.stringify(response)});\n`, "utf8");
+  await fs.writeFile(scriptPath, `#!/bin/sh\nprintf '%s' ${JSON.stringify(response)}\n`, "utf8");
   await fs.chmod(scriptPath, 0o700);
   return scriptPath;
 }
@@ -42,9 +42,8 @@ function configWithPolicy(scriptPath: string): OpenClawConfig {
         enabled: true,
         exec: {
           source: "exec",
-          command: process.execPath,
-          args: [scriptPath],
-          allowInsecurePath: true,
+          command: scriptPath,
+          trustedDirs: [path.dirname(scriptPath)],
         },
       },
     },

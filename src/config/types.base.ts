@@ -220,13 +220,11 @@ export type SessionConfig = {
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
-  idleMinutes?: number;
   reset?: SessionResetConfig;
   resetByType?: SessionResetByTypeConfig;
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
   resetByChannel?: Record<string, SessionResetConfig>;
   store?: string;
-  typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   /** Shared defaults for thread-bound session routing across channels/providers. */
@@ -270,11 +268,12 @@ export type LoggingConfig = {
   /** Maximum size of a single log file in bytes before rotation. Default: 100 MB. */
   maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
-  consoleStyle?: "pretty" | "compact" | "json";
+  consoleStyle?: "pretty" | "json";
   /** Redact sensitive tokens in log sinks and persisted transcript text. Default: "tools". Safety-boundary UI/tool/diagnostic payloads may still redact when this is "off". */
-  redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
   redactPatterns?: string[];
+  /** Metadata-only agent activity audit ledger settings. */
+  audit?: AuditConfig;
 };
 
 export type DiagnosticsOtelConfig = {
@@ -316,13 +315,13 @@ export type DiagnosticsOtelConfig = {
 export type DiagnosticsCacheTraceConfig = {
   /** Write prompt-cache trace artifacts for debugging deterministic cache input. */
   enabled?: boolean;
-  /** Optional output path for cache trace artifacts. */
+  /** @deprecated Doctor-only legacy input. */
   filePath?: string;
-  /** Include normalized messages in cache trace output. */
+  /** @deprecated Doctor-only legacy input. */
   includeMessages?: boolean;
-  /** Include prompt payload text in cache trace output. */
+  /** @deprecated Doctor-only legacy input. */
   includePrompt?: boolean;
-  /** Include system-message content in cache trace output. */
+  /** @deprecated Doctor-only legacy input. */
   includeSystem?: boolean;
 };
 
@@ -348,11 +347,6 @@ export type DiagnosticsConfig = {
   flags?: string[];
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
-};
-
-export type WebConfig = {
-  /** If false, do not start the WhatsApp web provider. Default: true. */
-  enabled?: boolean;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

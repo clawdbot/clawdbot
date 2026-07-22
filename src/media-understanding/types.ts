@@ -27,6 +27,7 @@ export type MediaAttachment = {
   path?: string;
   url?: string;
   mime?: string;
+  workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;
 };

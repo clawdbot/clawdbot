@@ -165,6 +165,19 @@ describe("mock gateway stateful sessions", () => {
   it("cycles subscription-scoped session events and stops after unsubscribe", async () => {
     const sessionKey = "agent:main:sidebar-narration-demo";
     const script = createControlUiMockGatewayInitScript({
+      methodResponses: {
+        "sessions.observer.ask": {
+          cases: [
+            {
+              match: { sessionKey },
+              response: {
+                answer: "It is rerunning the focused test to verify the latest fix.",
+                digestRevision: 1,
+              },
+            },
+          ],
+        },
+      },
       repeatingSessionEvents: {
         intervalMs: 250,
         events: [
@@ -219,6 +232,19 @@ describe("mock gateway stateful sessions", () => {
     await flushMockTimers();
     expect(frames.find((frame) => frame.id === "subscribe-1")?.payload).toEqual({
       key: sessionKey,
+    });
+    socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "observer-ask-1",
+        method: "sessions.observer.ask",
+        params: { sessionKey, question: "Why is it rerunning that test?" },
+      }),
+    );
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.id === "observer-ask-1")?.payload).toEqual({
+      answer: "It is rerunning the focused test to verify the latest fix.",
+      digestRevision: 1,
     });
     expect(frames.find((frame) => frame.event === "agent")?.payload).toMatchObject({
       sessionKey,

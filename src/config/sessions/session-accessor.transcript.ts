@@ -1,6 +1,4 @@
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { patchSessionEntry } from "./session-accessor.entry.js";
 import {
   appendSqliteTranscriptEvent,
@@ -19,6 +17,7 @@ import {
   replaceSqliteTranscriptEvents,
   replaceSqliteTranscriptEventsSync,
   resolveSqliteSessionKeyBySessionId,
+  trimSqliteTranscriptForManualCompact,
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite.js";
@@ -41,7 +40,6 @@ import type {
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -235,37 +233,32 @@ export async function trimSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; nowMs?: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimResult> {
-  const events = await loadTranscriptEvents(scope).catch(() => []);
-  if (events.length === 0) {
-    return { compacted: false, reason: "no transcript" };
-  }
-
   const maxLines = Math.max(1, Math.floor(params.maxLines));
-  const headerLine = JSON.stringify(events[0]);
-  const tailLines = events.slice(1).map((event) => JSON.stringify(event));
   const maxTailLines = Math.max(0, maxLines - 1);
-  if (events.length <= maxLines) {
-    return { compacted: false, kept: events.length };
+  let declined: SessionTranscriptManualTrimResult = { compacted: false, reason: "no transcript" };
+  const trimmed = await trimSqliteTranscriptForManualCompact(scope, (lines) => {
+    if (lines.length === 0) {
+      declined = { compacted: false, reason: "no transcript" };
+      return null;
+    }
+    if (lines.length <= maxLines) {
+      declined = { compacted: false, kept: lines.length };
+      return null;
+    }
+    const tailLines = lines.slice(1);
+    const retainedLines = normalizeManualCompactTranscriptLines(
+      lines[0],
+      maxTailLines > 0 ? tailLines.slice(-maxTailLines) : [],
+    );
+    if (!retainedLines) {
+      declined = { compacted: false, kept: 0 };
+      return null;
+    }
+    return retainedLines;
+  });
+  if (!trimmed.trimmed) {
+    return declined;
   }
-
-  const lines = normalizeManualCompactTranscriptLines(
-    headerLine,
-    maxTailLines > 0 ? tailLines.slice(-maxTailLines) : [],
-  );
-  if (!lines) {
-    return { compacted: false, kept: 0 };
-  }
-  const retainedEvents = lines.map((line) => JSON.parse(line) as TranscriptEvent);
-  await replaceSqliteTranscriptEvents(scope, retainedEvents);
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  if (!agentId) {
-    throw new Error(`Cannot resolve manual compact transcript scope: ${scope.sessionKey}`);
-  }
-  const archived = `${formatSqliteSessionFileMarker({
-    agentId,
-    sessionId: scope.sessionId,
-    storePath: scope.storePath ?? "",
-  })}.bak.${formatSessionArchiveTimestamp()}`;
   await patchSessionEntry(
     {
       ...scope,
@@ -284,7 +277,7 @@ export async function trimSessionTranscriptForManualCompact(
     { replaceEntry: true },
   );
 
-  return { archived, compacted: true, kept: lines.length };
+  return { archived: trimmed.archivedPath, compacted: true, kept: trimmed.kept };
 }
 
 function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {

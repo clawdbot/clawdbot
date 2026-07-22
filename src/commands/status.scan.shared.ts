@@ -12,6 +12,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
@@ -25,6 +26,7 @@ import {
   type MemoryProviderStatus,
 } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
@@ -245,11 +247,15 @@ async function applyLocalStatusRpcFallback(params: {
 }
 
 function hasExplicitMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
-  if (cfg.agents?.defaults && Object.hasOwn(cfg.agents.defaults, "memorySearch")) {
+  if (cfg.memory && Object.hasOwn(cfg.memory, "search")) {
     return true;
   }
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  return agents.some((agent) => agent?.id === agentId && Object.hasOwn(agent, "memorySearch"));
+  return listAgentEntries(cfg).some(
+    (agent) =>
+      normalizeAgentId(agent.id) === normalizeAgentId(agentId) &&
+      agent.memory != null &&
+      Object.hasOwn(agent.memory, "search"),
+  );
 }
 
 /** Resolves whether memory status should be shown and which slot owns it. */

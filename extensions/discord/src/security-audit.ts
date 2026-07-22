@@ -171,20 +171,7 @@ export async function collectDiscordSecurityAuditFindings(params: {
   const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
   const ownerAllowFromConfigured =
     normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-
-  if (!useAccessGroups && groupPolicy !== "disabled" && guildsConfigured && !hasAnyUserAllowlist) {
-    findings.push({
-      checkId: "channels.discord.commands.native.unrestricted",
-      severity: "critical",
-      title: "Discord slash commands are unrestricted",
-      detail:
-        "commands.useAccessGroups=false disables sender allowlists for Discord slash commands unless a per-guild/channel users allowlist is configured; with no users allowlist, any user in allowed guild channels can invoke /… commands.",
-      remediation:
-        "Set commands.useAccessGroups=true (recommended), or configure channels.discord.guilds.<id>.users (or channels.discord.guilds.<id>.channels.<channel>.users).",
-    });
-  } else if (
-    useAccessGroups &&
+  if (
     groupPolicy !== "disabled" &&
     guildsConfigured &&
     !ownerAllowFromConfigured &&

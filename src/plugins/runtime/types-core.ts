@@ -73,7 +73,9 @@ type RuntimeSessionStoreReadParams = {
   readConsistency?: "latest";
   storePath?: string;
 };
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
+type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
+  readOnly?: boolean;
+};
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
   entry: RuntimeSessionEntry;

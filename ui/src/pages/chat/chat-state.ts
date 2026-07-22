@@ -21,6 +21,7 @@ import {
 } from "../../app/settings.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { isGitHubPullRequestLink } from "../../components/github-link-hovercard.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -28,6 +29,7 @@ import { retirePendingChatSideQuestion, type ChatSideResult } from "../../lib/ch
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   readSessionChangedEvent,
@@ -178,6 +180,20 @@ type ChatComposerRouteResetResult = {
   restoredStorageFailure: boolean;
 };
 
+function clearImageLightbox(state: Pick<ChatPageHost, "imageLightbox">) {
+  const item = state.imageLightbox;
+  state.imageLightbox = null;
+  item?.release?.();
+}
+
+function invalidateImageLightbox(
+  state: Pick<ChatPageHost, "imageLightbox" | "imageLightboxRequestVersion">,
+) {
+  state.imageLightboxRequestVersion += 1;
+  clearImageLightbox(state);
+  return state.imageLightboxRequestVersion;
+}
+
 export type ChatPageHost = ChatHost &
   ChatState &
   ChatRealtimeState &
@@ -220,7 +236,7 @@ export type ChatPageHost = ChatHost &
     sessionsResult: SessionsListResult | null;
     sessionsResultAgentId: string | null;
     sessionsError: string | null;
-    sessionsShowArchived: boolean;
+    sessionsArchivedFilter: "active" | "archived" | "all";
     selectedChatSessionArchived: boolean;
     agentsList: AgentsListResult | null;
     agentsSelectedId: string | null;
@@ -268,6 +284,8 @@ export type ChatPageHost = ChatHost &
     chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
     sidebarOpen: boolean;
     sidebarContent: SidebarContent | null;
+    imageLightbox: ImageLightboxItem | null;
+    imageLightboxRequestVersion: number;
     splitRatio: number;
     querySelector: (selectors: string) => Element | null;
     renderLifecycle: RenderLifecycle;
@@ -293,6 +311,9 @@ export type ChatPageHost = ChatHost &
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleOpenSidebar: (content: Parameters<SessionWorkspaceHost["handleOpenSidebar"]>[0]) => void;
     handleCloseSidebar: () => void;
+    beginImageOpen: () => number;
+    handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;
+    handleCloseImage: () => void;
     handleSplitRatioChange: (ratio: number) => void;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
     createChatSession?: () => Promise<boolean>;
@@ -513,6 +534,7 @@ export function resetChatStateForRouteSession(
   if (state.sidebarContent?.kind === "session-discussion") {
     state.sidebarContent = { ...state.sidebarContent, sessionKey };
   }
+  invalidateImageLightbox(state);
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
@@ -536,6 +558,7 @@ export function resetChatStateForRouteSession(
   state.chatEffectiveQueueMode = undefined;
   state.chatStream = null;
   state.observerDigest = null;
+  state.chatRunUsageById = new Map();
   state.chatSending = false;
   state.chatSendingScopeKey = null;
   state.chatSideChatTurns = [];
@@ -900,7 +923,7 @@ async function refreshChat(
     const reconciled = host.sessions.reconcile(history.sessionInfo, history.defaults, {
       resultAgentId: host.sessionsResultAgentId ?? refreshedAgentId,
       selectedGlobalAgentId: refreshedAgentId,
-      showArchived: host.sessionsShowArchived,
+      archivedFilter: host.sessionsArchivedFilter,
     });
     const sessionsResult = reconciled ? host.sessions.state.result : host.sessionsResult;
     if (reconciled) {
@@ -1049,7 +1072,7 @@ function reconcileSessionEvent(state: ChatPageHost, payload: unknown): SessionCh
   const reconciled = state.sessions.reconcileChanged(payload, {
     resultAgentId: state.sessionsResultAgentId ?? selectedAgentId,
     selectedGlobalAgentId: selectedAgentId,
-    showArchived: state.sessionsShowArchived,
+    archivedFilter: state.sessionsArchivedFilter,
   });
   if (reconciled.applied) {
     state.sessionsResult = state.sessions.state.result;
@@ -1269,8 +1292,10 @@ export function createPageState(
     chatEffectiveQueueMode: undefined,
     chatAttachments: [] as ChatAttachment[],
     chatRunId: null,
+    chatRunUsageById: new Map<string, number>(),
     chatStream: null,
     chatStreamStartedAt: null,
+    chatRunStartup: null,
     lastError: null,
     chatError: null,
     chatRunError: null,
@@ -1301,7 +1326,7 @@ export function createPageState(
     sessionsResultAgentId: null,
     sessionsLoading: false,
     sessionsError: null,
-    sessionsShowArchived: false,
+    sessionsArchivedFilter: "active",
     selectedChatSessionArchived: false,
     agentsList: context.agents.state.agentsList,
     agentsSelectedId: context.agentSelection.state.selectedId,
@@ -1342,6 +1367,8 @@ export function createPageState(
     chatProgrammaticScrollTarget: 0,
     sidebarOpen: false,
     sidebarContent: null,
+    imageLightbox: null,
+    imageLightboxRequestVersion: 0,
     splitRatio: settings.splitRatio,
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [] as string[],
@@ -1427,6 +1454,31 @@ export function createPageState(
   };
   state.handleCloseSidebar = () => {
     state.sidebarOpen = false;
+    renderLifecycle.invalidate();
+  };
+  state.beginImageOpen = () => {
+    const requestVersion = invalidateImageLightbox(state);
+    renderLifecycle.invalidate();
+    return requestVersion;
+  };
+  state.handleOpenImage = (item, requestVersion) => {
+    const activeRequestVersion = requestVersion ?? state.beginImageOpen();
+    if (activeRequestVersion !== state.imageLightboxRequestVersion) {
+      item.release?.();
+      return;
+    }
+    const safeSrc = resolveSafeExternalUrl(item.src, window.location.href, {
+      allowDataImage: true,
+    });
+    if (!safeSrc) {
+      item.release?.();
+      return;
+    }
+    state.imageLightbox = { ...item, src: safeSrc };
+    renderLifecycle.invalidate();
+  };
+  state.handleCloseImage = () => {
+    invalidateImageLightbox(state);
     renderLifecycle.invalidate();
   };
   state.handleSplitRatioChange = (ratio) => {
@@ -2026,6 +2078,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     if (state) {
       cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
+      invalidateImageLightbox(state);
       clearSessionWorkspaceTimers(state);
     }
     state?.realtimeTalkSession?.stop();

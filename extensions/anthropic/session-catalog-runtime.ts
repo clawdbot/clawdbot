@@ -60,7 +60,7 @@ export function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, str
   ];
   const bound = new Map<string, string>();
   for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
-    api.runtime.agent.session.listSessionEntries({ agentId }),
+    api.runtime.agent.session.listSessionEntries({ agentId, readOnly: true }),
   )) {
     const source = boundClaudeSource(api.id, entry);
     if (source) {

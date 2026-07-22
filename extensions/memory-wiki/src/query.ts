@@ -1256,6 +1256,12 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     ) {
       return false;
     }
+    const sameAgentLiveOwnerId =
+      !identity.archived &&
+      normalizedScopedAgentId &&
+      normalizedOwnerAgentId === normalizedScopedAgentId
+        ? normalizedOwnerAgentId
+        : undefined;
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
       ((identity.ownerAgentId &&
@@ -1272,21 +1278,26 @@ async function createSessionMemoryPathVisibilityChecker(params: {
           allowQmdSlugFallback: false,
         })
       : [];
+    const resolvedKeys =
+      liveKeys.length > 0
+        ? liveKeys
+        : resolveTranscriptStemToSessionKeys({
+            store: combinedSessionStore,
+            stem: identity.stem,
+            allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
+            ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+          });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys:
-        liveKeys.length > 0
-          ? liveKeys
-          : resolveTranscriptStemToSessionKeys({
-              store: combinedSessionStore,
-              stem: identity.stem,
-              allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
-              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-            }),
+      keys: resolvedKeys,
     });
+    if (keys.length === 0) {
+      const agentWideVisibility = visibility === "agent" || visibility === "all";
+      return Boolean(sameAgentLiveOwnerId && agentWideVisibility);
+    }
     if (!guard) {
-      return Boolean(scopedAgentId && keys.length > 0);
+      return Boolean(scopedAgentId);
     }
     return keys.some((key) => guard.check(key).allowed);
   };

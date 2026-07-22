@@ -6,7 +6,7 @@ import {
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "./archive-compression.js";
-import { formatSessionArchiveTimestamp } from "./artifacts.js";
+import { formatSessionArchiveTimestamp, type SessionArchiveReason } from "./artifacts.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 
 export type SqliteSessionStateDeletePlan = {
@@ -24,7 +24,7 @@ export type MaterializedSqliteSessionStateDeletePlan = SqliteSessionStateDeleteP
 
 function resolveSqliteTranscriptArchivePath(params: {
   archiveDirectory: string;
-  reason: "deleted" | "reset";
+  reason: SessionArchiveReason;
   sessionId: string;
   nowMs?: number;
 }): string {
@@ -42,7 +42,7 @@ function resolveSqliteTranscriptArchivePath(params: {
 function findMatchingSqliteTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
-  reason: "deleted" | "reset";
+  reason: SessionArchiveReason;
   sessionId: string;
 }): string | null {
   let entries: string[];
@@ -76,10 +76,11 @@ function findMatchingSqliteTranscriptArchive(params: {
   return null;
 }
 
-function writeSqliteTranscriptArchive(params: {
+/** Writes or reuses a transcript archive and returns its durable path. */
+export function writeSqliteTranscriptArchive(params: {
   archiveDirectory: string;
   content: string;
-  reason: "deleted" | "reset";
+  reason: SessionArchiveReason;
   sessionId: string;
 }): string {
   fs.mkdirSync(params.archiveDirectory, { recursive: true });

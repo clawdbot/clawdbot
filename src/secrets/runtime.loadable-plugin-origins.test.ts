@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
+import { withSecureTestNodeExecPath } from "./test-node-command.test-support.js";
 
 const manifestMocks = vi.hoisted(() => ({
   listPluginOriginsFromMetadataSnapshot: vi.fn(
@@ -183,16 +184,18 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
           },
         },
       });
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config,
-        assignmentConfig: asConfig({
-          models: config.models,
-          secrets: config.secrets,
+      const snapshot = await withSecureTestNodeExecPath(async () =>
+        prepareSecretsRuntimeSnapshot({
+          config,
+          assignmentConfig: asConfig({
+            models: config.models,
+            secrets: config.secrets,
+          }),
+          env: { HOME: rootDir },
+          includeAuthStoreRefs: false,
+          pluginMetadataSnapshot,
         }),
-        env: { HOME: rootDir },
-        includeAuthStoreRefs: false,
-        pluginMetadataSnapshot,
-      });
+      );
 
       expect(snapshot.config.gateway).toBeUndefined();
       expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("value:models/openai");

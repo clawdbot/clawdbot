@@ -4,9 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
-    secondary:
-      - channels.dm
+      - matrix.matrix-thread-reply-routing
   execution:
     profiles: { "matrix:all": 16, "matrix:transport": 15 }
     kind: flow

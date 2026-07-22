@@ -11,6 +11,10 @@ inputs:
     description: Whether to install Bun alongside Node.
     required: false
     default: "true"
+  install-trufflehog:
+    description: Whether to install the pinned TruffleHog binary for a reusable test environment.
+    required: false
+    default: "false"
   install-deps:
     description: Whether to run pnpm install after environment setup.
     required: false
@@ -96,6 +100,11 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
         use-actions-cache: ${{ inputs.use-actions-cache }}
+
+    - name: Setup TruffleHog
+      if: inputs.install-trufflehog == 'true'
+      shell: bash
+      run: bash scripts/install-trufflehog.sh
 
     - name: Validate sticky pnpm layout
       if: inputs.sticky-disk == 'true'

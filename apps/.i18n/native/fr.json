@@ -7539,6 +7539,16 @@
       "translated": "Répondre"
     },
     {
+      "id": "native.android.6c07db7bdc4b43a4",
+      "source": "Rewind to here",
+      "translated": "Revenir ici"
+    },
+    {
+      "id": "native.android.c824bdc38278a218",
+      "source": "Fork from here",
+      "translated": "Bifurquer à partir d'ici"
+    },
+    {
       "id": "native.android.319b4a29df279bb3",
       "source": "Select text",
       "translated": "Sélectionner le texte"
@@ -7639,14 +7649,19 @@
       "translated": "Envoyé — confirmation de la livraison…"
     },
     {
-      "id": "native.android.15d71d54c0ce946b",
-      "source": "Failed",
-      "translated": "Échec"
+      "id": "native.android.ac5949efe3cfe48c",
+      "source": "Session branch changed; review and retry this message.",
+      "translated": "La branche de session a changé ; vérifiez et réessayez ce message."
     },
     {
       "id": "native.android.6f734a7527ae9c5a",
       "source": "Failed — $it",
       "translated": "Échec — $it"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "Échec"
     },
     {
       "id": "native.android.552a4d6f5110e6a3",
@@ -7997,6 +8012,31 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "Arrêter"
+    },
+    {
+      "id": "native.android.be42506226307680",
+      "source": "Switch branch",
+      "translated": "Changer de branche"
+    },
+    {
+      "id": "native.android.39ea147abba2af8a",
+      "source": "Untitled branch",
+      "translated": "Branche sans titre"
+    },
+    {
+      "id": "native.android.4e2cbf557e2e3cd6",
+      "source": "Current branch",
+      "translated": "Branche actuelle"
+    },
+    {
+      "id": "native.android.d79a4188788ccf49",
+      "source": "Messages: $count",
+      "translated": "Messages : $count"
+    },
+    {
+      "id": "native.android.76e548dffafc9de9",
+      "source": "$count · $updated",
+      "translated": "$count · $updated"
     },
     {
       "id": "native.android.2cb3ec7379426dfe",
@@ -21979,6 +22019,21 @@
       "translated": "Localisation"
     },
     {
+      "id": "native.apple.c105a651c5f972b6",
+      "source": "Privacy",
+      "translated": "Confidentialité"
+    },
+    {
+      "id": "native.apple.b98013fb799d4f3c",
+      "source": "Active computer detection",
+      "translated": "Détection d'ordinateur actif"
+    },
+    {
+      "id": "native.apple.870e09824984a9b2",
+      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "Partagez la durée d'inactivité de ce Mac afin qu'OpenClaw puisse identifier le Mac que vous avez utilisé le plus récemment et acheminer les alertes de nœud. N'envoie jamais les touches, les positions du pointeur, les noms d'applications ni les titres de fenêtres. Nécessite l'Accessibilité."
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "Configuration"
@@ -22074,6 +22129,11 @@
       "translated": "Actualiser"
     },
     {
+      "id": "native.apple.326e187a6656d8d9",
+      "source": "Check",
+      "translated": "Vérifier"
+    },
+    {
       "id": "native.apple.7b62187659c9925f",
       "source": "Grant",
       "translated": "Accorder"
@@ -22094,9 +22154,14 @@
       "translated": "Demander l’accès"
     },
     {
-      "id": "native.apple.4a4c10ca63e99590",
-      "source": "Control other apps (e.g. Terminal) for automation actions",
-      "translated": "Contrôler d’autres apps (par ex. Terminal) pour les actions d’automatisation"
+      "id": "native.apple.5a5689d96828c424",
+      "source": "Status unavailable",
+      "translated": "Statut indisponible"
+    },
+    {
+      "id": "native.apple.2d263648f3916394",
+      "source": "Control Terminal for automation actions; other apps request access separately",
+      "translated": "Contrôler Terminal pour les actions d'automatisation ; les autres applications demandent l'accès séparément"
     },
     {
       "id": "native.apple.5f7eb4234f63c4ad",
@@ -22114,14 +22179,14 @@
       "translated": "Capturer l’écran pour le contexte ou les captures d’écran"
     },
     {
-      "id": "native.apple.b004145c37a470f8",
-      "source": "Allow Voice Wake and audio capture",
-      "translated": "Autoriser Voice Wake et la capture audio"
+      "id": "native.apple.45119f87d3069501",
+      "source": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation",
+      "translated": "Autoriser Voice Wake, la fonction push-to-talk, le mode Talk et la dictée Quick Chat"
     },
     {
-      "id": "native.apple.7c8b825829b3924d",
-      "source": "Transcribe Voice Wake trigger phrases on-device",
-      "translated": "Transcrire les phrases de déclenchement vocal Voice Wake sur l’appareil"
+      "id": "native.apple.33f1e220cc7d69e1",
+      "source": "Use Apple Speech; passive Voice Wake stays on-device",
+      "translated": "Utiliser Apple Speech ; Voice Wake passif reste sur l'appareil"
     },
     {
       "id": "native.apple.37880f3b7ae6c259",
@@ -22754,14 +22819,14 @@
       "translated": "OpenClaw utilise le réseau local pour se connecter à votre Gateway OpenClaw distante via le LAN, Tailnet ou SSH."
     },
     {
-      "id": "native.apple.5db9a976fd1c7fcb",
-      "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
-      "translated": "OpenClaw a besoin du micro pour les tests Voice Wake et la capture audio de l’agent."
+      "id": "native.apple.0fdd4a93f90c6f95",
+      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenClaw utilise le microphone pour Voice Wake, la fonction push-to-talk, le mode Talk, la dictée Quick Chat et la capture audio de l'agent."
     },
     {
-      "id": "native.apple.b7aba524ef867e7f",
-      "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
-      "translated": "OpenClaw utilise la reconnaissance vocale pour détecter votre phrase de déclenchement Voice Wake."
+      "id": "native.apple.44701896858c9029",
+      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenClaw utilise Apple Speech pour Voice Wake, la fonction push-to-talk, le mode Talk et la dictée Quick Chat. Voice Wake reste sur l'appareil."
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
@@ -23624,9 +23689,14 @@
       "translated": "Activer Voice Wake"
     },
     {
-      "id": "native.apple.e992b45cdbccdd10",
-      "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
-      "translated": "Écouter une phrase de réveil avant d’exécuter des commandes vocales. La reconnaissance s’exécute entièrement sur l’appareil."
+      "id": "native.apple.e2811fb1981c52f9",
+      "source": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.",
+      "translated": "Écouter une phrase de réveil avant d'exécuter des commandes vocales. La reconnaissance de la phrase de réveil reste sur ce Mac."
+    },
+    {
+      "id": "native.apple.8e55ed92eb632efa",
+      "source": "On-device recognition is unavailable for the selected language on this Mac.",
+      "translated": "La reconnaissance sur l'appareil n'est pas disponible pour la langue sélectionnée sur ce Mac."
     },
     {
       "id": "native.apple.475eb587a8accd92",
@@ -23787,6 +23857,11 @@
       "id": "native.apple.d57fd5213daf2a6e",
       "source": "\\(self.friendlyName(for: current)) (System)",
       "translated": "\\(self.friendlyName(for: current)) (Système)"
+    },
+    {
+      "id": "native.apple.2565d77dbe6ce76b",
+      "source": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.",
+      "translated": "L'activation vocale nécessite la reconnaissance sur l'appareil pour la langue sélectionnée. L'appui pour parler et le mode conversation restent disponibles."
     },
     {
       "id": "native.apple.79db41c7b941a50f",

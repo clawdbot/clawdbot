@@ -4,6 +4,7 @@ import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
 import {
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
@@ -33,6 +34,32 @@ export class ClawWorkspaceWriteError extends Error {
     super("Claw workspace file creation failed");
     this.name = "ClawWorkspaceWriteError";
   }
+}
+
+type WorkspaceFileRow = {
+  schema_version: string;
+  agent_id: string;
+  workspace: string;
+  target_path: string;
+  source_path: string;
+  content_digest: string;
+  status: PersistedClawWorkspaceFile["status"];
+  created_at_ms: number | bigint;
+  updated_at_ms: number | bigint;
+};
+
+function rowToWorkspaceFile(row: WorkspaceFileRow): PersistedClawWorkspaceFile {
+  return {
+    schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
+    agentId: row.agent_id,
+    workspace: row.workspace,
+    path: row.target_path,
+    sourcePath: row.source_path,
+    contentDigest: row.content_digest,
+    status: row.status,
+    createdAtMs: Number(row.created_at_ms),
+    updatedAtMs: Number(row.updated_at_ms),
+  };
 }
 
 function diagnostic(action: ClawAddPlanAction, code: string, message: string): ClawDiagnostic {
@@ -181,6 +208,25 @@ function updateWorkspaceFileStatus(
 
 function workspaceFileActions(plan: ClawAddPlan): ClawAddPlanAction[] {
   return plan.actions.filter((action) => action.kind === "workspaceFile");
+}
+
+export function readClawWorkspaceFiles(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): PersistedClawWorkspaceFile[] {
+  const database = openOpenClawStateDatabase(options);
+  // sqlite-allow-raw: read-only Claw workspace-file lookup with a closed agent-id filter.
+  const rows =
+    database.db /* sqlite-allow-raw: read-only Claw workspace-file lookup with a closed agent-id filter. */
+      .prepare(
+        `SELECT schema_version, agent_id, workspace, target_path, source_path,
+              content_digest, status, created_at_ms, updated_at_ms
+         FROM claw_workspace_files
+        WHERE agent_id = ?
+        ORDER BY target_path`,
+      )
+      .all(agentId) as WorkspaceFileRow[];
+  return rows.map(rowToWorkspaceFile);
 }
 
 export async function createClawWorkspaceFiles(

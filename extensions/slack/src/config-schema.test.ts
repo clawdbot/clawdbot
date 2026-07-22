@@ -40,39 +40,39 @@ describe("slack config schema", () => {
     }
   });
 
-  it('defaults identity to "bot"', () => {
+  it('defaults postAs to "bot"', () => {
     const res = SlackConfigSchema.safeParse({ accounts: { work: {} } });
 
     expect(res.success).toBe(true);
     if (res.success) {
-      expect(res.data.identity).toBe("bot");
-      expect(res.data.accounts?.work?.identity).toBeUndefined();
-      expect(res.data.accounts?.work?.identity ?? res.data.identity).toBe("bot");
+      expect(res.data.postAs).toBe("bot");
+      expect(res.data.accounts?.work?.postAs).toBeUndefined();
+      expect(res.data.accounts?.work?.postAs ?? res.data.postAs).toBe("bot");
     }
   });
 
-  it('accepts identity="user" with a user token and socket companion app', () => {
+  it('accepts postAs="user" with a user token and socket companion app', () => {
     expectSlackConfigValid({
-      identity: "user",
+      postAs: "user",
       userToken: "test-user-token",
       appToken: "test-app-token",
     });
   });
 
-  it('accepts identity="user" with a user token and HTTP companion app', () => {
+  it('accepts postAs="user" with a user token and HTTP companion app', () => {
     expectSlackConfigValid({
-      identity: "user",
+      postAs: "user",
       mode: "http",
       userToken: "test-user-token",
       signingSecret: "test-signing-secret",
     });
   });
 
-  it("allows account entries to inherit the top-level user identity", () => {
+  it("allows account entries to inherit the top-level user postAs", () => {
     const cfg = {
       channels: {
         slack: {
-          identity: "user" as const,
+          postAs: "user" as const,
           userToken: "test-user-token",
           appToken: "test-app-token",
           accounts: { work: {} },
@@ -84,11 +84,11 @@ describe("slack config schema", () => {
     expect(resolveSlackAccount({ cfg, accountId: "work" }).identity).toBe("user");
   });
 
-  it("keeps user tokens and companion app tokens active for user identity", () => {
+  it("keeps user tokens and companion app tokens active for user postAs", () => {
     const cfg = {
       channels: {
         slack: {
-          identity: "user" as const,
+          postAs: "user" as const,
           userToken: "test-user-token",
           appToken: "test-app-token",
         },
@@ -104,9 +104,9 @@ describe("slack config schema", () => {
     expect(account.appTokenSource).toBe("config");
   });
 
-  it("accepts inherited and relay companion-app transports for user identity", () => {
+  it("accepts inherited and relay companion-app transports for user postAs", () => {
     expectSlackConfigValid({
-      identity: "user",
+      postAs: "user",
       userToken: "test-user-token",
       appToken: "test-app-token",
       accounts: {
@@ -114,7 +114,7 @@ describe("slack config schema", () => {
       },
     });
     expectSlackConfigValid({
-      identity: "user",
+      postAs: "user",
       mode: "relay",
       userToken: "test-user-token",
       relay: {
@@ -125,8 +125,8 @@ describe("slack config schema", () => {
     });
   });
 
-  it("defers user-identity user-token presence to runtime", () => {
-    expectSlackConfigValid({ identity: "user" });
+  it("defers user-postAs user-token presence to runtime", () => {
+    expectSlackConfigValid({ postAs: "user" });
   });
 
   it("keeps presence events off by default and accepts account/channel modes", () => {
@@ -224,22 +224,24 @@ describe("slack config schema", () => {
     });
   });
 
-  it("accepts Socket Mode ping/pong transport tuning", () => {
-    expectSlackConfigValid({
-      mode: "socket",
-      socketMode: {
-        clientPingTimeout: 15_000,
-        serverPingTimeout: 45_000,
-        pingPongLoggingEnabled: true,
-      },
-      accounts: {
-        ops: {
-          socketMode: {
-            clientPingTimeout: 20_000,
+  it("rejects retired Socket Mode ping/pong transport tuning", () => {
+    expect(
+      SlackConfigSchema.safeParse({
+        mode: "socket",
+        socketMode: {
+          clientPingTimeout: 15_000,
+          serverPingTimeout: 45_000,
+          pingPongLoggingEnabled: true,
+        },
+        accounts: {
+          ops: {
+            socketMode: {
+              clientPingTimeout: 20_000,
+            },
           },
         },
-      },
-    });
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts relay mode with a SecretInput auth token", () => {
@@ -269,17 +271,6 @@ describe("slack config schema", () => {
         },
       },
       "relay.gatewayId",
-    );
-  });
-
-  it("rejects invalid Socket Mode ping/pong transport tuning", () => {
-    expectSlackConfigIssue(
-      {
-        socketMode: {
-          clientPingTimeout: 0,
-        },
-      },
-      "socketMode.clientPingTimeout",
     );
   });
 

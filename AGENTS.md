@@ -131,6 +131,9 @@ Skills own workflows; root owns hard policy and routing.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
 - Formatting: `oxfmt`, not Prettier. Write paths with `pnpm format <paths>`; no `format:write` script. Checks use repo wrappers (`pnpm format:*`, `scripts/run-oxlint.mjs`; full `pnpm lint:*` only when scope requires).
 - SDK surface gate: `pnpm plugin-sdk:surface:check`; no `plugin-sdk:surface-report` script.
+- `scripts/*.mjs` exports: matching declaration in sibling `.d.mts` mandatory. `pnpm check:script-declarations` (check-guards) + `check-test-types` enforce; new export without declaration = red CI.
+- Script wrappers: failing or crashed run must end with one final `[tool] FAILED (exit N)` stderr line; crash = nonzero exit. Truncated output must never read as success. Pattern: `scripts/run-oxlint.mjs`.
+- Tooling crash `Cannot find module ...` right after pulling/merging main = stale `node_modules`, not a code bug. `pnpm install` first; only then debug.
 - Build before push when build output, packaging, lazy/module boundaries, dynamic imports, or published surfaces can change; agent builds default to the selected remote box unless platform-specific proof requires another remote host.
 
 ## Validation

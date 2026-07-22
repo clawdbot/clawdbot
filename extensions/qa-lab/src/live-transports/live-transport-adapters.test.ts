@@ -55,6 +55,14 @@ const factories = [
 ] as const;
 
 describe("live transport adapter factories", () => {
+  it("opts only the disposable Matrix adapter into same-channel parallelism", () => {
+    expect(matrixQaAdapterFactory.isolatesInstances).toBe(true);
+    expect(discordQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(slackQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(telegramQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(whatsappQaAdapterFactory.isolatesInstances).toBeUndefined();
+  });
+
   it("selects Slack generic defaults from the YAML adapter profile", () => {
     expect(
       listQaScenariosForExecutionProfile("slack:adapter").map((scenario) => scenario.id),

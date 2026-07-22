@@ -101,6 +101,14 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildFeatherlessProvider,
       buildStaticProvider: buildFeatherlessProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: {
+        endpointPath: "models?capabilities=chat",
+        buildRequestHeaders: ({ apiKey }) => ({
+          Accept: "application/json",
+          "User-Agent": "openclaw",
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        }),
+      },
     },
     augmentModelCatalog: ({ config }) =>
       readConfiguredProviderCatalogEntries({

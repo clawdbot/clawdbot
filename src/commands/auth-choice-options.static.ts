@@ -19,6 +19,7 @@ export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
   hint?: string;
+  methodMessage?: string;
   providerIds?: string[];
   options: AuthChoiceOption[];
 };

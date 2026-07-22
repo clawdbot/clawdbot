@@ -239,7 +239,9 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntries: mocks.listSessionEntries,
+  listSessionEntriesReadOnly: mocks.listSessionEntries,
   loadSessionEntry: mocks.loadSessionEntry,
+  loadSessionEntryReadOnly: mocks.loadSessionEntry,
   patchSessionEntry: mocks.patchSessionEntry,
 }));
 
@@ -939,6 +941,9 @@ describe("subagent registry seam flow", () => {
       completion: { required: false },
       queuedLaunch: {
         request: { sessionKey: `agent:main:subagent:${runId}`, idempotencyKey: runId },
+        authorization: {
+          modelOverride: { provider: "openai", model: "gpt-5.4" },
+        },
         timeoutMs: 1_000,
         schedulerGroupKey: '["agent:main:main","logical-group"]',
         maxConcurrent: 2,
@@ -969,7 +974,12 @@ describe("subagent registry seam flow", () => {
       );
       expect(agentCalls).toHaveLength(1);
       expect(agentCalls[0]?.[0]).toMatchObject({
-        params: { idempotencyKey: "run-queued-one" },
+        params: {
+          idempotencyKey: "run-queued-one",
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+        scopes: ["operator.admin"],
       });
     });
     expect(mod.getSubagentRunByRunId("run-queued-one")?.execution?.status).toBe("running");

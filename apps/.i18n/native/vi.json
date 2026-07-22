@@ -7539,6 +7539,16 @@
       "translated": "Trả lời"
     },
     {
+      "id": "native.android.6c07db7bdc4b43a4",
+      "source": "Rewind to here",
+      "translated": "Tua lại về đây"
+    },
+    {
+      "id": "native.android.c824bdc38278a218",
+      "source": "Fork from here",
+      "translated": "Phân nhánh từ đây"
+    },
+    {
       "id": "native.android.319b4a29df279bb3",
       "source": "Select text",
       "translated": "Chọn văn bản"
@@ -7639,14 +7649,19 @@
       "translated": "Đã gửi — đang xác nhận chuyển phát…"
     },
     {
-      "id": "native.android.15d71d54c0ce946b",
-      "source": "Failed",
-      "translated": "Không thành công"
+      "id": "native.android.ac5949efe3cfe48c",
+      "source": "Session branch changed; review and retry this message.",
+      "translated": "Nhánh phiên đã thay đổi; hãy xem lại và thử lại tin nhắn này."
     },
     {
       "id": "native.android.6f734a7527ae9c5a",
       "source": "Failed — $it",
       "translated": "Không thành công — $it"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "Không thành công"
     },
     {
       "id": "native.android.552a4d6f5110e6a3",
@@ -7997,6 +8012,31 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "Dừng"
+    },
+    {
+      "id": "native.android.be42506226307680",
+      "source": "Switch branch",
+      "translated": "Chuyển nhánh"
+    },
+    {
+      "id": "native.android.39ea147abba2af8a",
+      "source": "Untitled branch",
+      "translated": "Nhánh không có tiêu đề"
+    },
+    {
+      "id": "native.android.4e2cbf557e2e3cd6",
+      "source": "Current branch",
+      "translated": "Nhánh hiện tại"
+    },
+    {
+      "id": "native.android.d79a4188788ccf49",
+      "source": "Messages: $count",
+      "translated": "Tin nhắn: $count"
+    },
+    {
+      "id": "native.android.76e548dffafc9de9",
+      "source": "$count · $updated",
+      "translated": "$count · $updated"
     },
     {
       "id": "native.android.2cb3ec7379426dfe",
@@ -21979,6 +22019,21 @@
       "translated": "Vị trí"
     },
     {
+      "id": "native.apple.c105a651c5f972b6",
+      "source": "Privacy",
+      "translated": "Quyền riêng tư"
+    },
+    {
+      "id": "native.apple.b98013fb799d4f3c",
+      "source": "Active computer detection",
+      "translated": "Phát hiện máy tính đang hoạt động"
+    },
+    {
+      "id": "native.apple.870e09824984a9b2",
+      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "Chia sẻ thời gian nhàn rỗi của máy Mac này để OpenClaw có thể xác định máy Mac bạn đã dùng gần đây nhất và định tuyến cảnh báo nút. Không bao giờ gửi phím, vị trí con trỏ, tên ứng dụng hay tiêu đề cửa sổ. Yêu cầu Trợ năng."
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "Thiết lập"
@@ -22074,6 +22129,11 @@
       "translated": "Làm mới"
     },
     {
+      "id": "native.apple.326e187a6656d8d9",
+      "source": "Check",
+      "translated": "Kiểm tra"
+    },
+    {
       "id": "native.apple.7b62187659c9925f",
       "source": "Grant",
       "translated": "Cấp quyền"
@@ -22094,9 +22154,14 @@
       "translated": "Yêu cầu quyền truy cập"
     },
     {
-      "id": "native.apple.4a4c10ca63e99590",
-      "source": "Control other apps (e.g. Terminal) for automation actions",
-      "translated": "Điều khiển các ứng dụng khác (ví dụ: Terminal) cho các tác vụ tự động hóa"
+      "id": "native.apple.5a5689d96828c424",
+      "source": "Status unavailable",
+      "translated": "Trạng thái không khả dụng"
+    },
+    {
+      "id": "native.apple.2d263648f3916394",
+      "source": "Control Terminal for automation actions; other apps request access separately",
+      "translated": "Điều khiển Terminal cho các hành động tự động hóa; các ứng dụng khác yêu cầu quyền truy cập riêng"
     },
     {
       "id": "native.apple.5f7eb4234f63c4ad",
@@ -22114,14 +22179,14 @@
       "translated": "Chụp màn hình để lấy ngữ cảnh hoặc ảnh chụp màn hình"
     },
     {
-      "id": "native.apple.b004145c37a470f8",
-      "source": "Allow Voice Wake and audio capture",
-      "translated": "Cho phép Voice Wake và thu âm thanh"
+      "id": "native.apple.45119f87d3069501",
+      "source": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation",
+      "translated": "Cho phép Voice Wake, nhấn-để-nói, Talk Mode và đọc chính tả Quick Chat"
     },
     {
-      "id": "native.apple.7c8b825829b3924d",
-      "source": "Transcribe Voice Wake trigger phrases on-device",
-      "translated": "Phiên âm các cụm từ kích hoạt Voice Wake trên thiết bị"
+      "id": "native.apple.33f1e220cc7d69e1",
+      "source": "Use Apple Speech; passive Voice Wake stays on-device",
+      "translated": "Dùng Apple Speech; Voice Wake thụ động vẫn ở trên thiết bị"
     },
     {
       "id": "native.apple.37880f3b7ae6c259",
@@ -22754,14 +22819,14 @@
       "translated": "OpenClaw sử dụng mạng cục bộ để kết nối với OpenClaw gateway từ xa của bạn qua LAN, Tailnet hoặc SSH."
     },
     {
-      "id": "native.apple.5db9a976fd1c7fcb",
-      "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
-      "translated": "OpenClaw cần micrô để kiểm tra Voice Wake và thu âm thanh cho tác nhân."
+      "id": "native.apple.0fdd4a93f90c6f95",
+      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenClaw sử dụng micrô cho Voice Wake, nhấn-để-nói, Talk Mode, đọc chính tả Quick Chat và ghi âm agent."
     },
     {
-      "id": "native.apple.b7aba524ef867e7f",
-      "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
-      "translated": "OpenClaw sử dụng tính năng nhận dạng giọng nói để phát hiện cụm từ kích hoạt Voice Wake của bạn."
+      "id": "native.apple.44701896858c9029",
+      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenClaw sử dụng Apple Speech cho Voice Wake, nhấn-để-nói, Talk Mode và đọc chính tả Quick Chat. Voice Wake vẫn ở trên thiết bị."
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
@@ -23624,9 +23689,14 @@
       "translated": "Bật Voice Wake"
     },
     {
-      "id": "native.apple.e992b45cdbccdd10",
-      "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
-      "translated": "Lắng nghe cụm từ đánh thức trước khi chạy lệnh thoại. Nhận dạng chạy hoàn toàn trên thiết bị."
+      "id": "native.apple.e2811fb1981c52f9",
+      "source": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.",
+      "translated": "Lắng nghe cụm từ đánh thức trước khi chạy lệnh thoại. Nhận dạng cụm từ đánh thức vẫn ở trên máy Mac này."
+    },
+    {
+      "id": "native.apple.8e55ed92eb632efa",
+      "source": "On-device recognition is unavailable for the selected language on this Mac.",
+      "translated": "Nhận dạng trên thiết bị không khả dụng cho ngôn ngữ đã chọn trên máy Mac này."
     },
     {
       "id": "native.apple.475eb587a8accd92",
@@ -23787,6 +23857,11 @@
       "id": "native.apple.d57fd5213daf2a6e",
       "source": "\\(self.friendlyName(for: current)) (System)",
       "translated": "\\(self.friendlyName(for: current)) (Hệ thống)"
+    },
+    {
+      "id": "native.apple.2565d77dbe6ce76b",
+      "source": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.",
+      "translated": "Voice Wake cần nhận dạng trên thiết bị cho ngôn ngữ đã chọn. Push-to-talk và Talk Mode vẫn khả dụng."
     },
     {
       "id": "native.apple.79db41c7b941a50f",

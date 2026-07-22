@@ -24,7 +24,7 @@ import {
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { resolveConfigPath } from "../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { GatewayAuthMode } from "../config/types.gateway.js";
@@ -46,6 +46,7 @@ import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
+import { listAgentSessionDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
@@ -314,7 +315,10 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     return;
   }
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
+  const sessionDirs = await listAgentSessionDirs(resolveStateDir());
+  for (const sessionDir of sessionDirs) {
+    await moveToTrash(sessionDir, runtime);
+  }
   if (scope === "full") {
     const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
     const statePlan = prepareWorkspaceStateDeletion(workspaceDir);

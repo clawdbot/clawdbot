@@ -255,7 +255,7 @@ export async function coordinateSubagentContinuation(params: {
   silentAnnounce?: boolean;
   wakeOnReturn?: boolean;
   traceparent?: string;
-  readSessionEntry: (
+  loadEntry: (
     sessionKey: string,
     options?: { refresh?: boolean },
   ) => (ContinuationChainSource & { inputTokens?: number; outputTokens?: number }) | undefined;
@@ -273,7 +273,7 @@ export async function coordinateSubagentContinuation(params: {
     requesterSessionKey: params.targetRequesterSessionKey,
     task: params.task,
     cfg: params.cfg,
-    readSessionEntry: params.readSessionEntry,
+    loadEntry: params.loadEntry,
     invalidateSessionEntry: params.invalidateSessionEntry,
   });
   if (!continuationEnabled) {
@@ -357,7 +357,7 @@ export async function coordinateSubagentContinuation(params: {
       const config = resolveContinuationRuntimeConfig(params.cfg);
       const childChainHop = parseContinuationChainHop(params.task) ?? 0;
       const nextChainHop = childChainHop + 1;
-      const parentEntry = params.readSessionEntry(params.targetRequesterSessionKey);
+      const parentEntry = params.loadEntry(params.targetRequesterSessionKey);
       const parentChainTokens =
         (parentEntry?.continuationChainTokens ?? 0) + accounting.parentChainTokensToFold;
       const guardAllowed =
@@ -492,7 +492,7 @@ export async function coordinateSubagentContinuation(params: {
     for (let index = 0; index < toolDelegates.length; index += 1) {
       const delegate = toolDelegates[index]!;
       const nextHop = toolHopBase + 1;
-      const parentEntry = params.readSessionEntry(params.targetRequesterSessionKey);
+      const parentEntry = params.loadEntry(params.targetRequesterSessionKey);
       const parentTokens =
         (parentEntry?.continuationChainTokens ?? 0) + accounting.parentChainTokensToFold;
       if (

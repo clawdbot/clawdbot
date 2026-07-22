@@ -1,6 +1,6 @@
 // ClickClack plugin module implements non-interactive setup behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
+import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -26,6 +26,13 @@ const REQUIRED_INPUT_ERROR =
 const INVALID_BASE_URL_ERROR = "ClickClack base URL must be a valid http(s) URL.";
 const SETUP_CODE_CONFLICT_ERROR =
   "ClickClack --code cannot be combined with --token, --token-file, or --use-env.";
+
+type ClickClackSetupInput = ChannelSetupInput & {
+  baseUrl?: string;
+  code?: string;
+  workspace?: string;
+  agentActivity?: boolean;
+};
 
 export function normalizeClickClackBaseUrl(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -263,15 +270,16 @@ export function applyClickClackCredentialConfig(params: {
 export const clickClackSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   prepareAccountConfigInput: async ({ cfg, accountId, input }) => {
-    if (!input.code?.trim()) {
-      return input;
+    const setupInput = input as ClickClackSetupInput;
+    if (!setupInput.code?.trim()) {
+      return setupInput;
     }
-    if (input.token?.trim() || input.tokenFile?.trim() || input.useEnv) {
+    if (setupInput.token?.trim() || setupInput.tokenFile?.trim() || setupInput.useEnv) {
       throw new Error(SETUP_CODE_CONFLICT_ERROR);
     }
     let setup = parseClickClackSetupCodeInput({
-      code: input.code,
-      baseUrl: input.baseUrl,
+      code: setupInput.code,
+      baseUrl: setupInput.baseUrl,
     });
     const existing = resolveClickClackAccountConfig(cfg as CoreConfig, accountId);
     const privateApiBaseUrl = normalizeClickClackBaseUrl(existing.apiBaseUrl);
@@ -291,7 +299,7 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
       throw formatClickClackSetupCodeClaimError(error);
     }
     setup = { ...setup, baseUrl: claim.api_base_url ?? setup.baseUrl };
-    const { code: _code, tokenFile: _tokenFile, useEnv: _useEnv, ...remainingInput } = input;
+    const { code: _code, tokenFile: _tokenFile, useEnv: _useEnv, ...remainingInput } = setupInput;
     return {
       ...remainingInput,
       baseUrl: setup.baseUrl,
@@ -321,11 +329,12 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
       { someOf: ["workspace"], message: REQUIRED_INPUT_ERROR },
     ],
     validate: ({ cfg, accountId, input }) => {
-      const baseUrl = normalizeClickClackBaseUrl(input.baseUrl);
-      if (input.baseUrl && !baseUrl) {
+      const setupInput = input as ClickClackSetupInput;
+      const baseUrl = normalizeClickClackBaseUrl(setupInput.baseUrl);
+      if (setupInput.baseUrl && !baseUrl) {
         return INVALID_BASE_URL_ERROR;
       }
-      if (!input.useEnv) {
+      if (!setupInput.useEnv) {
         return null;
       }
       const existing = resolveClickClackAccountConfig(cfg as CoreConfig, accountId);
@@ -336,30 +345,33 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
       if (!baseUrl && !existingBaseUrl) {
         return REQUIRED_INPUT_ERROR;
       }
-      if (!input.workspace?.trim() && !existing.workspace?.trim()) {
+      if (!setupInput.workspace?.trim() && !existing.workspace?.trim()) {
         return REQUIRED_INPUT_ERROR;
       }
       return null;
     },
   }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const existing = input.useEnv
+    const setupInput = input as ClickClackSetupInput;
+    const existing = setupInput.useEnv
       ? resolveClickClackAccountConfig(cfg as CoreConfig, accountId)
       : undefined;
-    const baseUrl = normalizeClickClackBaseUrl(input.baseUrl ?? existing?.baseUrl);
-    const workspace = input.workspace?.trim() || existing?.workspace?.trim();
-    const tokenFile = input.tokenFile?.trim();
-    const token = input.token?.trim();
+    const baseUrl = normalizeClickClackBaseUrl(setupInput.baseUrl ?? existing?.baseUrl);
+    const workspace = setupInput.workspace?.trim() || existing?.workspace?.trim();
+    const tokenFile = setupInput.tokenFile?.trim();
+    const token = setupInput.token?.trim();
     const next = applyClickClackSetupConfigPatch({
       cfg,
       accountId,
-      name: input.name,
+      name: setupInput.name,
       patch: {
         ...(baseUrl ? { baseUrl } : {}),
         ...(workspace ? { workspace } : {}),
-        ...(input.defaultTo?.trim() ? { defaultTo: input.defaultTo.trim() } : {}),
-        ...(input.allowFrom ? { allowFrom: [...input.allowFrom] } : {}),
-        ...(input.agentActivity !== undefined ? { agentActivity: input.agentActivity } : {}),
+        ...(setupInput.defaultTo?.trim() ? { defaultTo: setupInput.defaultTo.trim() } : {}),
+        ...(setupInput.allowFrom ? { allowFrom: [...setupInput.allowFrom] } : {}),
+        ...(setupInput.agentActivity !== undefined
+          ? { agentActivity: setupInput.agentActivity }
+          : {}),
       },
     });
     return applyClickClackCredentialConfig({
@@ -367,7 +379,7 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
       accountId,
       token,
       tokenFile,
-      useEnv: input.useEnv,
+      useEnv: setupInput.useEnv,
     });
   },
   afterAccountConfigWritten: async ({ cfg, accountId, runtime }) => {

@@ -179,6 +179,13 @@ export function createCodexAppServerAgentHarness(options: {
         nativeHookRelay: { enabled: true },
       });
     },
+    finalizeSettledTurn: async (params) => {
+      const { runCodexSettledTurnFinalization } =
+        await import("./src/app-server/settled-turn-finalizer.js");
+      return runCodexSettledTurnFinalization(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+      });
+    },
     runSideQuestion: async (params) => {
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
       return runCodexAppServerSideQuestion(params, {

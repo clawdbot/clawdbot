@@ -27,6 +27,7 @@ import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Context, Model } from "../../../llm/types.js";
 import {
+  buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   type UserTurnInput,
@@ -437,6 +438,15 @@ describe("append-only late media (issue #99495)", () => {
       expect(lateProvider?.content).toBe(
         `${EXPECTED_PREFIX_TURN1}[media attached: ${path.join(dir, "image.png")}]`,
       );
+      const lateProjection = buildLateMediaAttachedProjection(latePersisted as AgentMsg);
+      expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
+      expect(lateProjection.media).toEqual([
+        expect.objectContaining({
+          path: path.join(dir, "image.png"),
+          contentType: "image/png",
+          kind: "image",
+        }),
+      ]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

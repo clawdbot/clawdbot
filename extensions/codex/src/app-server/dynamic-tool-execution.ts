@@ -573,9 +573,18 @@ function readConfiguredDynamicToolTimeoutMs(
   }
 
   if (toolName === "image") {
-    return (
-      readTimeoutSecondsAsMs(config?.tools?.media?.image?.timeoutSeconds) ??
-      CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS
+    const candidates = (config?.tools?.media?.models ?? []).filter(
+      (entry) => !entry.capabilities || entry.capabilities.includes("image"),
+    );
+    const capabilityTimeoutMs = readTimeoutSecondsAsMs(config?.tools?.media?.image?.timeoutSeconds);
+    return Math.max(
+      capabilityTimeoutMs ?? CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
+      ...candidates.map(
+        (entry) =>
+          readTimeoutSecondsAsMs(entry.timeoutSeconds) ??
+          capabilityTimeoutMs ??
+          CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
+      ),
     );
   }
 

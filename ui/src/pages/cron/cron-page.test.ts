@@ -38,6 +38,7 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,

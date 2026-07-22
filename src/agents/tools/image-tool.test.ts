@@ -1437,16 +1437,15 @@ describe("image tool implicit imageModel config", () => {
           },
           tools: {
             media: {
-              image: {
-                timeoutSeconds: 180,
-                models: [
-                  {
-                    provider: "ollama",
-                    model: "gemma4:26b-a4b-it-q4_K_M",
-                    timeoutSeconds: 300,
-                  },
-                ],
-              },
+              image: { timeoutSeconds: 180 },
+              models: [
+                {
+                  provider: "ollama",
+                  model: "gemma4:26b-a4b-it-q4_K_M",
+                  timeoutSeconds: 300,
+                  capabilities: ["image"],
+                },
+              ],
             },
           },
         };

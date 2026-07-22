@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
+import { isFastTestRuntimeEnv } from "../infra/test-runtime-env.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**
@@ -71,7 +72,7 @@ export function resolveStateDir(
     return resolveUserPath(override, env, effectiveHomedir);
   }
   const newDir = newStateDir(effectiveHomedir);
-  if (env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv(env)) {
     return newDir;
   }
   const legacyDirs = legacyStateDirs(effectiveHomedir);
@@ -174,7 +175,7 @@ export function resolveConfigPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
-  if (env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv(env)) {
     return resolveCanonicalConfigPath(env, resolveStateDir(env, homedir));
   }
   const candidates = resolveDefaultConfigCandidates(env, homedir);
@@ -203,7 +204,7 @@ export function resolveConfigPath(
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  if (env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv(env)) {
     return path.join(stateDir, CONFIG_FILENAME);
   }
   const stateOverride = env.OPENCLAW_STATE_DIR?.trim();

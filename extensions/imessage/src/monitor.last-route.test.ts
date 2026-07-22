@@ -550,7 +550,8 @@ describe("iMessage monitor last-route updates", () => {
             },
           },
           messages: { inbound: { debounceMs: 0 } },
-          session: { mainKey: "main", typingMode },
+          agents: { defaults: { typingMode } },
+          session: { mainKey: "main" },
         } as never,
         runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
       });
@@ -1947,93 +1948,6 @@ describe("iMessage monitor last-route updates", () => {
         `[L3 proof #104136] runtime error: ${runtime.error.mock.calls.at(-1)?.[0]}`,
       ].join("\n"),
     );
-  });
-
-  it("merges a command row with the following URL balloon row", async () => {
-    // Apple's command+URL composition can arrive as a command row followed by a
-    // URL-preview balloon row. The opt-in coalescer keeps the pair as one agent
-    // turn and uses balloon metadata to avoid collapsing ordinary rows.
-    debouncerControl.holdEntries = true;
-
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    const client = {
-      request: vi.fn(async (method: string) => {
-        if (method === "watch.subscribe") {
-          return { subscription: 1 };
-        }
-        throw new Error(`unexpected imsg method ${method}`);
-      }),
-      waitForClose: vi.fn(async () => {
-        // Fresh dates relative to now so the stale-backlog age fence lets the
-        // live rows through to the debouncer.
-        for (const row of [
-          {
-            id: 91,
-            guid: "LIVE-GUID-91",
-            text: "summarize",
-            created_at: new Date(Date.now() - 2000).toISOString(),
-          },
-          {
-            id: 92,
-            guid: "LIVE-GUID-92",
-            text: "https://example.com/article",
-            balloon_bundle_id: "com.apple.messages.URLBalloonProvider",
-            created_at: new Date(Date.now() - 1000).toISOString(),
-          },
-        ]) {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                ...row,
-                chat_id: 123,
-                sender: "+15550001111",
-                is_from_me: false,
-                is_group: false,
-              },
-            },
-          });
-        }
-        await vi.waitFor(() => {
-          expect(debouncerControl.flush).toBeDefined();
-        });
-        await debouncerControl.flush?.();
-        await Promise.resolve();
-      }),
-      stop: vi.fn(async () => {}),
-    };
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      if (!params?.onNotification) {
-        throw new Error("expected iMessage notification handler");
-      }
-      onNotification = params.onNotification;
-      return client as never;
-    });
-
-    await monitorIMessageProvider({
-      config: {
-        channels: {
-          imessage: {
-            coalesceSameSenderDms: true,
-            dmPolicy: "allowlist",
-            allowFrom: ["+15550001111"],
-            sendReadReceipts: false,
-          },
-        },
-        session: { mainKey: "main" },
-      } as never,
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-    });
-
-    const debouncerOptions = createChannelInboundDebouncerMock.mock.calls.at(-1)?.[0] as
-      | { debounceMsOverride?: number }
-      | undefined;
-    expect(debouncerOptions?.debounceMsOverride).toBe(7000);
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-    const mergedBody =
-      dispatchReplyWithBufferedBlockDispatcherMock.mock.calls[0]?.[0].ctx.Body ?? "";
-    expect(mergedBody).toContain("summarize");
-    expect(mergedBody).toContain("https://example.com/article");
   });
 
   it("keeps ordinary buffered DMs separate after balloon metadata is observed", async () => {

@@ -30,8 +30,18 @@ const baseManifest = {
     files: [{ source: "workspace/reference/policy.md", path: "reference/policy.md" }],
   },
   packages: [
-    { kind: "skill", source: "clawhub", ref: "@acme/triage", version: "1.2.0" },
-    { kind: "plugin", source: "clawhub", ref: "@acme/github", version: "2.0.1" },
+    {
+      kind: "skill",
+      source: "clawhub",
+      ref: "@acme/triage",
+      version: "1.2.0",
+    },
+    {
+      kind: "plugin",
+      source: "clawhub",
+      ref: "@acme/github",
+      version: "2.0.1",
+    },
   ],
   mcpServers: {
     github: {
@@ -131,7 +141,7 @@ describe("parseClawManifest", () => {
     },
   );
 
-  it("rejects required flags and connector packages", () => {
+  it("rejects non-v1 package fields and connector packages", () => {
     const connector = parseClawManifest({
       ...baseManifest,
       packages: [{ kind: "connector", source: "clawhub", ref: "@acme/chat", version: "1.0.0" }],
@@ -145,12 +155,31 @@ describe("parseClawManifest", () => {
     });
     expect(required.ok).toBe(false);
     expect(required.diagnostics[0]?.path).toBe("$.packages[0]");
+
+    const manifestIntegrity = parseClawManifest({
+      ...baseManifest,
+      packages: [
+        {
+          ...baseManifest.packages[0],
+          integrity: `sha256:${"a".repeat(64)}`,
+        },
+      ],
+    });
+    expect(manifestIntegrity.ok).toBe(false);
+    expect(manifestIntegrity.diagnostics[0]?.path).toBe("$.packages[0]");
   });
 
   it("requires exact package versions", () => {
     const result = parseClawManifest({
       ...baseManifest,
-      packages: [{ kind: "skill", source: "clawhub", ref: "demo", version: "latest" }],
+      packages: [
+        {
+          kind: "skill",
+          source: "clawhub",
+          ref: "demo",
+          version: "latest",
+        },
+      ],
     });
 
     expect(result.ok).toBe(false);
@@ -431,6 +460,65 @@ describe("readClawManifestFile", () => {
 });
 
 describe("buildClawAddPlan", () => {
+  it("materializes resolved package identity into the consented plan", async () => {
+    const { source, workspace } = await createPlanSource();
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      context: {
+        workspace,
+        packagePreflight: async (pkg) => ({
+          ok: true,
+          action: "install",
+          integrity: `sha256:${(pkg.kind === "skill" ? "a" : "b").repeat(64)}`,
+          warning: `Review ${pkg.ref} before installation.`,
+          ...(pkg.kind === "plugin" ? { installId: "github" } : {}),
+        }),
+      },
+    });
+
+    expect(plan.actions.filter((action) => action.kind === "package")).toEqual([
+      expect.objectContaining({
+        id: "skill:@acme/triage",
+        digest: `sha256:${"a".repeat(64)}`,
+        details: expect.objectContaining({
+          ownerAction: "install",
+          riskWarning: "Review @acme/triage before installation.",
+        }),
+        blocked: false,
+      }),
+      expect.objectContaining({
+        id: "plugin:@acme/github",
+        digest: `sha256:${"b".repeat(64)}`,
+        details: expect.objectContaining({
+          ownerAction: "install",
+          installId: "github",
+          riskWarning: "Review @acme/github before installation.",
+        }),
+        blocked: false,
+      }),
+    ]);
+    expect(plan.capabilityChanges.filter((change) => change.kind === "package")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "skill:@acme/triage",
+          effect: expect.objectContaining({
+            integrity: `sha256:${"a".repeat(64)}`,
+            riskWarning: "Review @acme/triage before installation.",
+          }),
+        }),
+        expect.objectContaining({
+          id: "plugin:@acme/github",
+          effect: expect.objectContaining({
+            integrity: `sha256:${"b".repeat(64)}`,
+            installId: "github",
+            riskWarning: "Review @acme/github before installation.",
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("plans one new agent, workspace, packages, MCP servers, and agent-pinned cron jobs", async () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
@@ -486,7 +574,7 @@ describe("buildClawAddPlan", () => {
     );
   });
 
-  it("blocks agent, configured workspace, MCP, and cron collisions", async () => {
+  it("blocks agent, configured workspace, and MCP collisions", async () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
@@ -496,7 +584,6 @@ describe("buildClawAddPlan", () => {
         existingAgentIds: ["github-triage"],
         existingWorkspacePaths: [workspace],
         existingMcpServerNames: ["github"],
-        existingCronJobIds: ["weekday-triage"],
       },
     });
 
@@ -506,9 +593,8 @@ describe("buildClawAddPlan", () => {
       "package_install_unavailable",
       "package_install_unavailable",
       "mcp_server_collision",
-      "cron_job_collision",
     ]);
-    expect(plan.summary.blockedActions).toBe(8);
+    expect(plan.summary.blockedActions).toBe(7);
   });
 
   it("canonicalizes a missing workspace through an existing aliased parent", async () => {
@@ -531,6 +617,29 @@ describe("buildClawAddPlan", () => {
 
     expect(plan.agent.workspace).toBe(canonicalWorkspace);
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "workspace_collision" }));
+  });
+
+  it("plans reuse for an exact existing MCP server", async () => {
+    const { source, workspace } = await createPlanSource();
+    const manifest = requireManifest();
+    const plan = await buildClawAddPlan({
+      manifest,
+      source,
+      context: {
+        workspace,
+        existingMcpServers: { github: manifest.mcpServers.github! },
+      },
+    });
+
+    expect(plan.blockers.map((item) => item.code)).not.toContain("mcp_server_collision");
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "mcpServer",
+        id: "github",
+        blocked: false,
+        details: expect.objectContaining({ expectedState: "present-exact" }),
+      }),
+    );
   });
 
   it("uses an explicit unused agent id for every derived action", async () => {
@@ -657,5 +766,15 @@ describe("buildClawAddPlan", () => {
     expect(repeated.planIntegrity).toBe(first.planIntegrity);
     expect(changed.planIntegrity).not.toBe(first.planIntegrity);
     expect(changedCapability.planIntegrity).not.toBe(first.planIntegrity);
+  });
+
+  it("rejects current-session cron jobs before planning", () => {
+    const result = parseClawManifest({
+      ...baseManifest,
+      cronJobs: [{ ...baseManifest.cronJobs[0], session: "current" }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]?.path).toBe("$.cronJobs[0].session");
   });
 });

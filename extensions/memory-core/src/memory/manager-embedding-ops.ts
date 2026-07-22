@@ -704,15 +704,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private clearIndexedFileData(pathname: string, source: MemorySource): void {
-    if (this.vector.enabled) {
-      try {
-        this.db
-          .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)`,
-          )
-          .run(pathname, source);
-      } catch {}
-    }
+    this.deleteVectorRowsForSource(pathname, source);
     if (this.fts.enabled && this.fts.available) {
       try {
         deleteMemoryFtsRows({
@@ -761,6 +753,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     vectorReady: boolean,
   ): void {
     const now = Date.now();
+    const needsVectorRebuild = !vectorReady && embeddings.some((embedding) => embedding.length > 0);
     runSqliteImmediateTransactionSync(this.db, () => {
       this.clearIndexedFileData(entry.path, source);
       for (const [i, chunk] of chunks.entries()) {
@@ -809,6 +802,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }
       }
       this.upsertFileRecord(entry, source);
+      if (needsVectorRebuild) {
+        this.markVectorRebuildRequired();
+      }
     });
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
       vectorEnabled: this.vector.enabled,

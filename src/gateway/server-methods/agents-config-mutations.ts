@@ -9,6 +9,7 @@ import {
 } from "../../commands/agents.config.js";
 import { mutateConfigFileWithRetry } from "../../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -54,21 +55,38 @@ export async function updateAgentConfigEntry(params: {
 }
 
 /** Removes an agent entry and returns filesystem roots the caller should clean up. */
-export async function deleteAgentConfigEntry(params: { agentId: string }): Promise<{
+export async function deleteAgentConfigEntry(params: {
+  agentId: string;
+  validate?: (agent: AgentConfig) => void;
+  validateConfig?: (config: OpenClawConfig) => void;
+  allowMissing?: boolean;
+  fallbackWorkspace?: string;
+}): Promise<{
   nextConfig: OpenClawConfig;
   result: AgentDeleteMutationResult | undefined;
 }> {
-  const committed = await mutateConfigFileWithRetry<AgentDeleteMutationResult>({
+  const committed = await mutateConfigFileWithRetry<AgentDeleteMutationResult | undefined>({
     afterWrite: { mode: "auto" },
     mutate: (draft) => {
-      if (!isConfiguredAgent(draft, params.agentId)) {
+      params.validateConfig?.(draft);
+      const configured = isConfiguredAgent(draft, params.agentId);
+      if (!configured && !params.allowMissing) {
         throw new AgentConfigPreconditionError(`agent "${params.agentId}" not found`);
       }
-      const workspaceDir = resolveAgentWorkspaceDir(draft, params.agentId);
+      const agent = listAgentEntries(draft).find((candidate) => candidate.id === params.agentId);
+      if (agent) {
+        params.validate?.(agent);
+      }
+      const workspaceDir = agent
+        ? resolveAgentWorkspaceDir(draft, params.agentId)
+        : (params.fallbackWorkspace ?? "");
       const agentDir = resolveAgentDir(draft, params.agentId);
       const sessionsDir = resolveSessionTranscriptsDirForAgent(params.agentId);
       const result = pruneAgentConfig(draft, params.agentId);
       Object.assign(draft, result.config);
+      if (!agent) {
+        return undefined;
+      }
       return {
         workspaceDir,
         agentDir,

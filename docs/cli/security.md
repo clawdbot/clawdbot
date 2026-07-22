@@ -50,8 +50,8 @@ Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then upd
 **Sandbox/tools**
 
 - Warns when sandbox Docker settings are configured while sandbox mode is off.
-- Warns when `gateway.nodes.denyCommands` uses ineffective pattern-like/unknown entries (matching is exact node command-name only, not shell-text filtering).
-- Warns when `gateway.nodes.allowCommands` explicitly enables dangerous node commands.
+- Warns when `gateway.nodes.commands.deny` uses ineffective pattern-like/unknown entries (matching is exact node command-name only, not shell-text filtering).
+- Warns when `gateway.nodes.commands.allow` explicitly enables dangerous node commands.
 - Warns when global `tools.profile="minimal"` is overridden by agent tool profiles.
 - Warns when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary.
 - Warns when open DMs or groups expose runtime/filesystem tools without sandbox/workspace guards.

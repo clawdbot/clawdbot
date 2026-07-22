@@ -115,7 +115,7 @@ describe("config defaults", () => {
     } as never);
 
     expect(next.messages?.ackReactionScope).toBe("group-mentions");
-    expect(next.messages?.responsePrefix).toBeUndefined();
+    expect(next.messages).not.toHaveProperty("responsePrefix");
     expect(next.messages?.groupChat?.mentionPatterns).toBeUndefined();
   });
 

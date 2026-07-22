@@ -6,8 +6,7 @@ import {
   renderQaToolCoverageMarkdownReport,
 } from "./tool-coverage-report.js";
 
-const TEST_TOOL_COVERAGE_ID =
-  "agent-runtime-and-provider-execution.tool-calls-and-response-handling.tool-call-handling";
+const TEST_TOOL_COVERAGE_ID = "agents.tool-call-handling";
 
 function makeScenario(
   id: string,

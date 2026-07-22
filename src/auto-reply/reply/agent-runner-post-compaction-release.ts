@@ -2,10 +2,10 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   resolveFreshSessionTotalTokens,
-  resolveSessionStoreEntry,
   type SessionEntry,
   type SessionPostCompactionDelegate,
 } from "../../config/sessions.js";
+import { resolveSessionEntryFromStore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { stagePostCompactionDelegate } from "../continuation/delegate-store.js";
@@ -50,7 +50,7 @@ export async function releaseQueuedCompactionCompletion(params: {
     newSessionId: params.compactionResult.result?.sessionId,
     newSessionFile: params.compactionResult.result?.sessionFile,
   });
-  const resolved = resolveSessionStoreEntry({
+  const resolved = resolveSessionEntryFromStore({
     store: params.activeSessionStore,
     sessionKey: params.sessionKey,
   });

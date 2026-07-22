@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -16,6 +15,7 @@ import {
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
 } from "../../mcp/openclaw-tools-serve-config.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
 import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";

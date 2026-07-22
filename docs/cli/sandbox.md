@@ -92,7 +92,7 @@ Run `openclaw doctor --fix` to migrate valid legacy entries into SQLite. Invalid
 
 ## Configuration
 
-Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
+Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.entries.*.sandbox`):
 
 ```jsonc
 {

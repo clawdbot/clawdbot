@@ -140,6 +140,26 @@ describe("process supervisor", () => {
     expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("passes private secret input to the child adapter", async () => {
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+    const secretInput = {
+      fd: 3,
+      createData: () => Buffer.from("secret"),
+    };
+
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s1",
+      argv: createWriteStdoutArgv("ok"),
+      secretInput,
+    });
+    adapter.settle(0);
+    await run.wait();
+
+    expect(createChildAdapterMock).toHaveBeenCalledWith(expect.objectContaining({ secretInput }));
+  });
+
   it("enforces no-output timeout for silent processes", async () => {
     vi.useFakeTimers();
     const adapter = createStubChildAdapter({

@@ -68,7 +68,7 @@ const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
 
 /** Optional instruction policy for preserving identifiers during compaction. */
 export type CompactionSummarizationInstructions = {
-  identifierPolicy?: AgentCompactionIdentifierPolicy;
+  identifierPolicy?: AgentCompactionIdentifierPolicy | "custom";
   identifierInstructions?: string;
 };
 

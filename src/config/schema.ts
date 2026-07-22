@@ -14,6 +14,7 @@ import {
   schemaHasChildren,
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyConfigTierHints, applyResolvedConfigTierHints } from "./schema.tiers.js";
 
 type ConfigSchema = Record<string, unknown>;
 
@@ -557,10 +558,16 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
       collectExtensionHintKeys(mergedWithoutSensitiveHints, [], bundledChannels),
     ),
   );
+  const mergedSchema = applyChannelSchemas(generated.schema, bundledChannels);
   const next = {
     ...generated,
-    schema: applyChannelSchemas(generated.schema, bundledChannels),
-    uiHints: mergedHints,
+    schema: mergedSchema,
+    uiHints: applyDerivedTags(
+      applyResolvedConfigTierHints(
+        mergedSchema,
+        applyConfigTierHints(mergedHints, { includePluginOwnedChannels: true }),
+      ),
+    ),
   };
   cachedBase = next;
   return next;
@@ -606,7 +613,12 @@ export function buildConfigSchema(params?: {
   const merged = {
     ...base,
     schema: mergedSchema,
-    uiHints: mergedHints,
+    uiHints: applyDerivedTags(
+      applyResolvedConfigTierHints(
+        mergedSchema,
+        applyConfigTierHints(mergedHints, { includePluginOwnedChannels: true }),
+      ),
+    ),
   };
   if (cacheKey) {
     setMergedSchemaCache(cacheKey, merged);

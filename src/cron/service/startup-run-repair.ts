@@ -26,7 +26,7 @@ function resolveInterruptedStartupFailureNotificationStatus(params: {
   if (params.job.delivery?.bestEffort === true) {
     return "not-requested";
   }
-  if (resolveFailureDestination(params.job, params.state.deps.cronConfig?.failureDestination)) {
+  if (resolveFailureDestination(params.job, params.state.deps.cronConfig?.failureAlert)) {
     return "unknown";
   }
   const primaryPlan = resolveCronDeliveryPlan(params.job);

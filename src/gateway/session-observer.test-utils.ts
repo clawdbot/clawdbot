@@ -77,6 +77,7 @@ export async function flushObserver(): Promise<void> {
 
 export function createHarness(options?: {
   subscribe?: boolean;
+  visible?: boolean;
   completeModel?: ReturnType<typeof vi.fn>;
   prepareModel?: ReturnType<typeof vi.fn>;
   persistDigest?: ReturnType<typeof vi.fn>;
@@ -117,6 +118,9 @@ export function createHarness(options?: {
     readSession: readSession as never,
     persistDigest: persistDigest as never,
   });
+  if (options?.subscribe !== false && options?.visible !== false) {
+    declareObserverVisibility(observer);
+  }
   return {
     observer,
     subscribers,
@@ -126,6 +130,13 @@ export function createHarness(options?: {
     persistDigest,
     readSession,
   };
+}
+
+export function declareObserverVisibility(
+  observer: ReturnType<typeof createSessionObserver>,
+  connId = "conn-1",
+): void {
+  observer.setConnectionVisibility(connId, true);
 }
 
 export function startAndAddToolNotes(

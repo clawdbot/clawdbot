@@ -37,7 +37,6 @@ export type ReefChannelConfig = z.infer<typeof ReefChannelConfigSchema>;
 
 export type ReefCoreConfig = {
   channels?: { reef?: Partial<ReefChannelConfig> };
-  commands?: { useAccessGroups?: boolean };
   session?: { store?: string };
 };
 

@@ -32,18 +32,20 @@ function createExecDryRunBatch(params: { markerPath: string }) {
     },
   });
   const script = [
+    `#!${process.execPath}`,
     'const fs = require("node:fs");',
     `fs.writeFileSync(${JSON.stringify(params.markerPath)}, "dryrun\\n", "utf8");`,
     `process.stdout.write(${JSON.stringify(response)});`,
-  ].join("");
+  ].join("\n");
+  const scriptPath = path.join(path.dirname(params.markerPath), "exec-provider.cjs");
+  fs.writeFileSync(scriptPath, script, { mode: 0o700 });
   return [
     {
       path: "secrets.providers.runner",
       provider: {
         source: "exec",
-        command: process.execPath,
-        args: ["-e", script],
-        allowInsecurePath: true,
+        command: scriptPath,
+        trustedDirs: [path.dirname(scriptPath)],
         timeoutMs: 60_000,
         noOutputTimeoutMs: 60_000,
       },

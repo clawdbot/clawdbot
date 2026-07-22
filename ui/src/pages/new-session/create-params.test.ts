@@ -100,7 +100,42 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
-  it("sends cwd only for non-workspace folders and execNode when picked", () => {
+  it("sends a custom Gateway folder without requiring a worktree", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "bootstrap here",
+        worktree: false,
+        cwd: "/home",
+        workspace: "/workspace",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "bootstrap here",
+      cwd: "/home",
+    });
+  });
+
+  it("sends a custom Gateway checkout with an explicit worktree", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "isolated work",
+        worktree: true,
+        cwd: "/other/repo",
+        workspace: "/workspace",
+        baseRef: "main",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "isolated work",
+      cwd: "/other/repo",
+      worktree: true,
+      worktreeBaseRef: "main",
+    });
+  });
+
+  it("sends the selected folder and execNode for node sessions", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",

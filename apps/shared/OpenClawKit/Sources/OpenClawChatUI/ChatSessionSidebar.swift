@@ -330,7 +330,9 @@ struct ChatSessionSidebar: View {
             let date = Date(timeIntervalSince1970: updatedAt / 1000)
             parts.append(date.formatted(.relative(presentation: .named)))
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return ChatSessionSidebarModel.subtitle(
+            for: session,
+            workSubtitle: parts.isEmpty ? nil : parts.joined(separator: " · "))
     }
 
     private var connectionFooter: some View {

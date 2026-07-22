@@ -6,6 +6,7 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
@@ -71,6 +72,8 @@ export type SwarmStructuredOutputState = {
 
 export type SwarmQueuedLaunch = {
   request: Record<string, unknown>;
+  /** Exact trusted launch capability, persisted so restart replay cannot lose it. */
+  authorization?: SubagentLaunchAuthorization;
   timeoutMs: number;
   schedulerGroupKey: string;
   maxConcurrent: number;

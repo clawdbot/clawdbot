@@ -45,12 +45,6 @@ export function hasToolSchemaProfile(
   return extractModelCompat(modelOrCompat)?.toolSchemaProfile === profile;
 }
 
-export function hasNativeWebSearchTool(
-  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
-): boolean {
-  return extractModelCompat(modelOrCompat)?.nativeWebSearchTool === true;
-}
-
 export function resolveToolCallArgumentsEncoding(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
 ): ModelCompatConfig["toolCallArgumentsEncoding"] | undefined {

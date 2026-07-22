@@ -388,8 +388,96 @@ struct ChatGatewayPayloadCodecTests {
         #expect(payload.runId == "run-1")
         #expect(payload.sessionKey == "main")
         #expect(payload.state == "final")
+
+        let observer = EventFrame(
+            type: "event",
+            event: "session.observer",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("main"),
+                "runId": AnyCodable("run-1"),
+                "revision": AnyCodable(2),
+                "updatedAt": AnyCodable(300),
+                "headline": AnyCodable("Wrapping up"),
+                "health": AnyCodable("wrapping-up"),
+            ]))
+        guard case let .sessionObserver(digest) = OpenClawChatGatewayPayloadCodec.event(from: observer)
+        else {
+            Issue.record("expected sessionObserver")
+            return
+        }
+        #expect(digest.sessionkey == "main")
+        #expect(digest.runid == "run-1")
+        #expect(digest.revision == 2)
+
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",
             event: "unknown")) == nil)
+    }
+
+    @Test func `session change decoding distinguishes absent fields from explicit clears`() {
+        func decode(_ fields: [String: AnyCodable]) throws -> OpenClawChatSessionsChangedEvent {
+            let frame = EventFrame(
+                type: "event",
+                event: "sessions.changed",
+                payload: AnyCodable(fields))
+            guard case let .sessionsChanged(change) = OpenClawChatGatewayPayloadCodec.event(from: frame)
+            else {
+                throw CancellationError()
+            }
+            return change
+        }
+
+        let partial = try? decode([
+            "sessionKey": AnyCodable("main"),
+            "reason": AnyCodable("message"),
+            "updatedAt": AnyCodable(200),
+        ])
+        #expect(partial?.agentStatusPresent == false)
+        #expect(partial?.observerDigestPresent == false)
+        #expect(partial?.statusPresent == false)
+        #expect(partial?.lastRunErrorPresent == false)
+
+        let cleared = try? decode([
+            "sessionKey": AnyCodable("main"),
+            "reason": AnyCodable("patch"),
+            "agentStatus": AnyCodable(NSNull()),
+            "observerDigest": AnyCodable(NSNull()),
+            "status": AnyCodable(NSNull()),
+            "lastRunError": AnyCodable(NSNull()),
+        ])
+        #expect(cleared?.agentStatusPresent == true)
+        #expect(cleared?.observerDigestPresent == true)
+        #expect(cleared?.statusPresent == true)
+        #expect(cleared?.lastRunErrorPresent == true)
+    }
+
+    @Test func `session change remains codable without exposing presence flags`() throws {
+        let event = OpenClawChatSessionsChangedEvent(
+            sessionKey: "agent:main:work",
+            agentId: "main",
+            reason: "run-progress",
+            updatedAt: 200,
+            lastReadAt: 100,
+            agentStatus: .init(note: "Reviewing", expiresAt: 500, attention: "hand"),
+            observerDigest: .init(
+                runId: "run-1",
+                revision: 2,
+                updatedAt: 200,
+                headline: "On track",
+                health: "on-track"),
+            status: "running",
+            lastRunError: "Previous warning",
+            hasActiveRun: true,
+            activeRunIds: ["run-1"],
+            startedAt: 50,
+            endedAt: nil)
+
+        let data = try JSONEncoder().encode(event)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["agentStatusPresent"] == nil)
+        #expect(object["observerDigestPresent"] == nil)
+        #expect(object["statusPresent"] == nil)
+        #expect(object["lastRunErrorPresent"] == nil)
+        #expect(try JSONDecoder().decode(OpenClawChatSessionsChangedEvent.self, from: data) == event)
     }
 }

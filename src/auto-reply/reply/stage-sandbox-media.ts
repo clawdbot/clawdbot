@@ -15,6 +15,7 @@ import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
+import { projectMediaFacts, resolveMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -24,21 +25,15 @@ import type { MsgContext, TemplateContext } from "../templating.js";
 const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
 const SCP_STDERR_TAIL_CHARS = 16_384;
 
-// `staged` maps every absolute source path that was copied into the sandbox
-// (or remote cache) to its rewritten ctx path. Callers like chat.send's
-// prestage use this to detect partial failures: unstaged sources keep their
-// original absolute path in ctx.MediaPaths, so a length check against the
-// input cannot distinguish "everything staged" from "silently skipped some"
-// (e.g. the 5MB cap in STAGED_MEDIA_MAX_BYTES rejecting files that the
-// chat.send RPC already admitted under its 20MB cap).
+// Attachment indexes are the staging identity. Callers use this map to detect
+// partial failures without matching rewritten strings back to source paths.
 export type StageSandboxMediaResult = {
-  staged: ReadonlyMap<string, string>;
+  staged: ReadonlyMap<number, string>;
 };
 
 const EMPTY_STAGE_RESULT: StageSandboxMediaResult = { staged: new Map() };
 
 type StageableMediaSource = {
-  lookupKey: string;
   pathForFileName: string;
   physicalPath: string;
 };
@@ -52,9 +47,12 @@ export async function stageSandboxMedia(params: {
   remoteMediaMode?: "sandbox-or-cache" | "cache";
 }): Promise<StageSandboxMediaResult> {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
-  const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
-  const rawPaths = resolveRawPaths(ctx);
-  if (rawPaths.length === 0 || !sessionKey) {
+  const media = resolveMediaFacts(ctx);
+  const pathEntries = media.flatMap((fact, index) => {
+    const mediaPath = normalizeOptionalString(fact.path);
+    return mediaPath ? [{ index, path: mediaPath }] : [];
+  });
+  if (pathEntries.length === 0 || !sessionKey) {
     return EMPTY_STAGE_RESULT;
   }
 
@@ -84,15 +82,16 @@ export async function stageSandboxMedia(params: {
     : [];
 
   const usedNames = new Set<string>();
-  const staged = new Map<string, string>(); // original/resolved source -> runner-visible path
+  const staged = new Map<number, string>();
+  const stagedUrlAliases = new Set<number>();
   const hostWorkspaceStagingDir =
     !sandbox && !ctx.MediaRemoteHost
       ? path.join("media", "inbound", `openclaw-staged-${crypto.randomUUID()}`)
       : undefined;
 
-  for (const raw of rawPaths) {
-    const source = await resolveStageableMediaSource(raw);
-    if (!source || staged.has(source.lookupKey) || staged.has(source.physicalPath)) {
+  for (const entry of pathEntries) {
+    const source = await resolveStageableMediaSource(entry.path);
+    if (!source) {
       continue;
     }
     const allowed = await isAllowedSourcePath({
@@ -145,25 +144,101 @@ export async function stageSandboxMedia(params: {
 
     // For sandbox use relative path, for remote cache use absolute path
     const stagedPath = stageIntoSandboxMediaDir ? toPosixRelativePath(relativeDest) : dest;
-    staged.set(source.lookupKey, stagedPath);
-    if (source.physicalPath !== source.lookupKey) {
-      staged.set(source.physicalPath, stagedPath);
+    staged.set(entry.index, stagedPath);
+    if (
+      await isUrlAliasForStagedSource({
+        url: media[entry.index]?.url,
+        sourcePath: entry.path,
+        source,
+        mediaRemoteHost: ctx.MediaRemoteHost,
+      })
+    ) {
+      stagedUrlAliases.add(entry.index);
     }
   }
 
-  if (staged.size > 0 && hostWorkspaceStagingDir) {
-    ctx.MediaWorkspaceDir = path.join(effectiveWorkspaceDir, hostWorkspaceStagingDir);
+  if (staged.size === 0) {
+    return { staged };
   }
 
-  rewriteStagedMediaPaths({
-    ctx,
-    sessionCtx,
-    rawPaths,
-    staged,
-    hasPathsArray,
-  });
+  const nextMedia = [...media];
+  for (const [index, stagedPath] of staged) {
+    const fact = nextMedia[index];
+    if (fact) {
+      nextMedia[index] = {
+        ...fact,
+        path: stagedPath,
+        ...(stagedUrlAliases.has(index) ? { url: stagedPath } : {}),
+        workspaceDir: effectiveWorkspaceDir,
+      };
+    }
+  }
+  const legacyWorkspaceDir =
+    hostWorkspaceStagingDir && staged.size === pathEntries.length
+      ? path.join(effectiveWorkspaceDir, hostWorkspaceStagingDir)
+      : undefined;
+  applyStagedMediaContext(ctx, nextMedia, legacyWorkspaceDir);
+  if (sessionCtx !== ctx) {
+    applyStagedMediaContext(sessionCtx, nextMedia, undefined);
+  }
 
   return { staged };
+}
+
+async function isUrlAliasForStagedSource(params: {
+  url?: string;
+  sourcePath: string;
+  source: StageableMediaSource;
+  mediaRemoteHost?: string;
+}): Promise<boolean> {
+  const url = normalizeOptionalString(params.url);
+  if (!url) {
+    return false;
+  }
+  if (url === params.sourcePath) {
+    return true;
+  }
+  const sourceAbsolutePath = resolveAbsolutePath(params.sourcePath);
+  const urlAbsolutePath = resolveAbsolutePath(url);
+  if (
+    sourceAbsolutePath &&
+    urlAbsolutePath &&
+    path.normalize(sourceAbsolutePath) === path.normalize(urlAbsolutePath)
+  ) {
+    return true;
+  }
+  // Non-identical remote references belong to the remote host; resolving them
+  // against local storage could rewrite an unrelated local file by accident.
+  if (params.mediaRemoteHost) {
+    return false;
+  }
+  const urlSource = await resolveStageableMediaSource(url);
+  if (!urlSource) {
+    return false;
+  }
+  const [sourceIdentity, urlIdentity] = await Promise.all([
+    resolveLocalSourceIdentity(params.source.physicalPath),
+    resolveLocalSourceIdentity(urlSource.physicalPath),
+  ]);
+  return sourceIdentity === urlIdentity;
+}
+
+async function resolveLocalSourceIdentity(sourcePath: string): Promise<string> {
+  return await fs.realpath(sourcePath).catch(() => path.resolve(sourcePath));
+}
+
+function applyStagedMediaContext(
+  ctx: MsgContext,
+  media: MediaFact[],
+  legacyWorkspaceDir: string | undefined,
+): void {
+  ctx.media = media;
+  Object.assign(ctx, projectMediaFacts(media));
+  if (legacyWorkspaceDir) {
+    ctx.MediaWorkspaceDir = legacyWorkspaceDir;
+  } else {
+    delete ctx.MediaWorkspaceDir;
+  }
 }
 
 function toPosixRelativePath(filePath: string): string {
@@ -178,7 +253,6 @@ async function resolveStageableMediaSource(value: string): Promise<StageableMedi
   const inboundReference = await resolveInboundMediaReference(raw).catch(() => null);
   if (inboundReference) {
     return {
-      lookupKey: raw,
       pathForFileName: inboundReference.physicalPath,
       physicalPath: inboundReference.physicalPath,
     };
@@ -186,7 +260,6 @@ async function resolveStageableMediaSource(value: string): Promise<StageableMedi
   const source = resolveAbsolutePath(raw);
   return source
     ? {
-        lookupKey: source,
         pathForFileName: source,
         physicalPath: source,
       }
@@ -227,15 +300,6 @@ async function stageRemoteFileIntoRoot(params: {
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
-}
-
-function resolveRawPaths(ctx: MsgContext): string[] {
-  const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
-  return pathsFromArray && pathsFromArray.length > 0
-    ? pathsFromArray
-    : normalizeOptionalString(ctx.MediaPath)
-      ? [normalizeOptionalString(ctx.MediaPath)!]
-      : [];
 }
 
 function resolveAbsolutePath(value: string): string | null {
@@ -316,51 +380,6 @@ function allocateStagedFileName(source: string, usedNames: Set<string>): string 
   }
   usedNames.add(fileName);
   return fileName;
-}
-
-function rewriteStagedMediaPaths(params: {
-  ctx: MsgContext;
-  sessionCtx: TemplateContext;
-  rawPaths: string[];
-  staged: Map<string, string>;
-  hasPathsArray: boolean;
-}): void {
-  const rewriteIfStaged = (value: string | undefined): string | undefined => {
-    const raw = normalizeOptionalString(value);
-    if (!raw) {
-      return value;
-    }
-    const abs = resolveAbsolutePath(raw);
-    const mapped = params.staged.get(raw) ?? (abs ? params.staged.get(abs) : undefined);
-    return mapped ?? value;
-  };
-
-  const nextMediaPaths = params.hasPathsArray
-    ? params.rawPaths.map((p) => rewriteIfStaged(p) ?? p)
-    : undefined;
-  if (nextMediaPaths) {
-    params.ctx.MediaPaths = nextMediaPaths;
-    params.sessionCtx.MediaPaths = nextMediaPaths;
-    params.ctx.MediaPath = nextMediaPaths[0];
-    params.sessionCtx.MediaPath = nextMediaPaths[0];
-  } else {
-    const rewritten = rewriteIfStaged(params.ctx.MediaPath);
-    if (rewritten && rewritten !== params.ctx.MediaPath) {
-      params.ctx.MediaPath = rewritten;
-      params.sessionCtx.MediaPath = rewritten;
-    }
-  }
-
-  if (Array.isArray(params.ctx.MediaUrls) && params.ctx.MediaUrls.length > 0) {
-    const nextUrls = params.ctx.MediaUrls.map((u) => rewriteIfStaged(u) ?? u);
-    params.ctx.MediaUrls = nextUrls;
-    params.sessionCtx.MediaUrls = nextUrls;
-  }
-  const rewrittenUrl = rewriteIfStaged(params.ctx.MediaUrl);
-  if (rewrittenUrl && rewrittenUrl !== params.ctx.MediaUrl) {
-    params.ctx.MediaUrl = rewrittenUrl;
-    params.sessionCtx.MediaUrl = rewrittenUrl;
-  }
 }
 
 async function scpFile(remoteHost: string, remotePath: string, localPath: string): Promise<void> {

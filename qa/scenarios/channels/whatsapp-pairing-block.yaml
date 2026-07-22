@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.pairing-gate
+      - channels.dm-pairing-pairing-gate
   objective: Verify an unpaired WhatsApp DM receives the pairing gate instead of reaching the agent.
   gatewayConfigPatch:
     channels:

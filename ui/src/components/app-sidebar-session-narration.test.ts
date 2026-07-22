@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
@@ -667,7 +668,7 @@ describe("SidebarSessionNarrationController", () => {
     expect(updates.at(-1)?.has("agent:main:run")).toBe(false);
   });
 
-  it("does not let a stale subscribe completion remove replacement ownership", async () => {
+  it("releases a stale subscribe completion independently of replacement ownership", async () => {
     const completions: Array<{
       resolve: (subscription: { key: string; agentId: null }) => void;
       promise: Promise<{ key: string; agentId: null }>;
@@ -702,9 +703,9 @@ describe("SidebarSessionNarrationController", () => {
     completions[0]?.resolve({ key: "agent:main:run", agentId: null });
     await Promise.resolve();
 
-    expect(unsubscribeMessages).not.toHaveBeenCalled();
-    controller.disconnect();
     expect(unsubscribeMessages).toHaveBeenCalledTimes(1);
+    controller.disconnect();
+    expect(unsubscribeMessages).toHaveBeenCalledTimes(2);
   });
 
   it("rebinds an active global session when the selected agent changes", async () => {

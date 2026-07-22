@@ -80,7 +80,7 @@ describeLive("OpenClaw live rescue channel smoke", () => {
           {
             meta: { lastTouchedVersion: "live-test", lastTouchedAt: new Date(0).toISOString() },
             agents: { defaults: {} },
-            tools: { exec: { security: "full", ask: "off" } },
+            tools: { exec: { mode: "full" } },
           },
           null,
           2,
@@ -88,8 +88,7 @@ describeLive("OpenClaw live rescue channel smoke", () => {
       );
 
       const cfg: OpenClawConfig = {
-        systemAgent: { rescue: { enabled: true } },
-        tools: { exec: { security: "full", ask: "off" } },
+        tools: { exec: { mode: "full" } },
       };
 
       await expect(runRescue({ commandBody: "/openclaw status", cfg })).resolves.toContain(

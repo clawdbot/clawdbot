@@ -25,6 +25,7 @@ import {
 import {
   normalizeSqliteStatus,
   parseSqliteSessionEntryJson as parseSessionEntryRow,
+  serializeSqliteSessionCreatorIdentity,
 } from "./session-accessor.sqlite-status.js";
 import {
   readTranscriptMutationStateInTransaction,
@@ -487,6 +488,7 @@ export function writeSessionEntry(
         entry_json: JSON.stringify(normalizedEntry),
         updated_at: updatedAt,
         status: normalizeSqliteStatus(normalizedEntry.status),
+        created_by_json: serializeSqliteSessionCreatorIdentity(normalizedEntry.createdBy),
       })
       .onConflict((conflict) =>
         conflict.column("session_key").doUpdateSet({
@@ -494,6 +496,7 @@ export function writeSessionEntry(
           entry_json: JSON.stringify(normalizedEntry),
           updated_at: updatedAt,
           status: normalizeSqliteStatus(normalizedEntry.status),
+          created_by_json: serializeSqliteSessionCreatorIdentity(normalizedEntry.createdBy),
         }),
       ),
   );

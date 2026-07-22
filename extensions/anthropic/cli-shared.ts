@@ -5,7 +5,10 @@ import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
+  CliBackendResolveRuntimeToolAvailabilityContext,
+  CliBackendRuntimeToolAvailability,
 } from "openclaw/plugin-sdk/cli-backend";
+import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
@@ -93,8 +96,8 @@ const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
 const CLAUDE_NO_TOOLS_VALUE = "";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
-const CLAUDE_SYSTEM_AGENT_MCP_TOOL = "mcp__openclaw__openclaw";
-const CLAUDE_SYSTEM_AGENT_SETTINGS =
+const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+const CLAUDE_RESTRICTED_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -135,9 +138,13 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
     ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
     : undefined;
   const exec = agentExec ?? context?.config?.tools?.exec;
-  const security = exec?.security ?? "full";
-  const ask = exec?.ask ?? "off";
-  return security === "full" && ask === "off";
+  return (
+    resolveExecModePolicy({
+      mode: exec?.mode,
+      security: exec?.security ?? "full",
+      ask: exec?.ask ?? "off",
+    }).mode === "full"
+  );
 }
 
 /** Resolve Claude permission mode from OpenClaw exec security settings. */
@@ -304,13 +311,13 @@ const CLAUDE_TOOL_AVAILABILITY_ARGS = new Set([
   "--disallowed-tools",
 ]);
 
-const CLAUDE_SYSTEM_AGENT_VARIADIC_VALUE_ARGS = new Set([
+const CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS = new Set([
   ...CLAUDE_TOOL_AVAILABILITY_ARGS,
   "--add-dir",
   "--file",
 ]);
 
-const CLAUDE_SYSTEM_AGENT_VALUE_ARGS = new Set([
+const CLAUDE_RESTRICTED_VALUE_ARGS = new Set([
   CLAUDE_PERMISSION_MODE_ARG,
   CLAUDE_SETTING_SOURCES_ARG,
   CLAUDE_SETTINGS_ARG,
@@ -326,7 +333,7 @@ const CLAUDE_SYSTEM_AGENT_VALUE_ARGS = new Set([
   "--append-system-prompt-file",
 ]);
 
-const CLAUDE_SYSTEM_AGENT_BARE_ARGS = new Set([
+const CLAUDE_RESTRICTED_BARE_ARGS = new Set([
   CLAUDE_BARE_ARG,
   CLAUDE_SAFE_MODE_ARG,
   CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
@@ -420,33 +427,14 @@ function resolveClaudeCliSideQuestionExecutionArgs(baseArgs: readonly string[]):
   ];
 }
 
-function resolveClaudeCliToolAvailabilityArgs(
+function resolveClaudeCliRestrictedExecutionArgs(
   baseArgs: readonly string[],
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
 ): string[] {
   const normalized = stripClaudeArgs(baseArgs, {
-    variadicValue: CLAUDE_TOOL_AVAILABILITY_ARGS,
-  });
-  normalized.push(CLAUDE_TOOLS_ARG, availability.native.join(","));
-  if (availability.mcp.length > 0) {
-    normalized.push(CLAUDE_ALLOWED_TOOLS_ARG, availability.mcp.join(","));
-  } else {
-    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, CLAUDE_DENY_MCP_TOOLS_VALUE);
-  }
-  return normalized;
-}
-
-function isSystemAgentToolAvailability(
-  availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
-): boolean {
-  return availability.mcp.length === 1 && availability.mcp[0] === CLAUDE_SYSTEM_AGENT_MCP_TOOL;
-}
-
-function resolveClaudeCliSystemAgentExecutionArgs(baseArgs: readonly string[]): string[] {
-  const normalized = stripClaudeArgs(baseArgs, {
-    bare: CLAUDE_SYSTEM_AGENT_BARE_ARGS,
-    variadicValue: CLAUDE_SYSTEM_AGENT_VARIADIC_VALUE_ARGS,
-    value: CLAUDE_SYSTEM_AGENT_VALUE_ARGS,
+    bare: CLAUDE_RESTRICTED_BARE_ARGS,
+    variadicValue: CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS,
+    value: CLAUDE_RESTRICTED_VALUE_ARGS,
   });
   // Safe mode also suppresses explicit MCP, while bare mode drops OAuth. Empty
   // setting sources plus restrictive flag settings isolate user customizations;
@@ -455,15 +443,18 @@ function resolveClaudeCliSystemAgentExecutionArgs(baseArgs: readonly string[]): 
     CLAUDE_SETTING_SOURCES_ARG,
     "",
     CLAUDE_SETTINGS_ARG,
-    CLAUDE_SYSTEM_AGENT_SETTINGS,
+    CLAUDE_RESTRICTED_SETTINGS,
     CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
     CLAUDE_TOOLS_ARG,
-    CLAUDE_NO_TOOLS_VALUE,
-    CLAUDE_ALLOWED_TOOLS_ARG,
-    CLAUDE_SYSTEM_AGENT_MCP_TOOL,
+    availability.native.join(","),
   );
+  if (availability.mcp.length > 0) {
+    normalized.push(CLAUDE_ALLOWED_TOOLS_ARG, availability.mcp.join(","));
+  } else {
+    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, CLAUDE_DENY_MCP_TOOLS_VALUE);
+  }
   return normalized;
 }
 
@@ -490,9 +481,16 @@ export function resolveClaudeCliExecutionArgs(
   if (!context.toolAvailability) {
     return executionArgs;
   }
-  return isSystemAgentToolAvailability(context.toolAvailability)
-    ? resolveClaudeCliSystemAgentExecutionArgs(executionArgs)
-    : resolveClaudeCliToolAvailabilityArgs(executionArgs, context.toolAvailability);
+  return resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability);
+}
+
+/** Route restricted runs entirely through OpenClaw's grant-scoped MCP policy boundary. */
+export function resolveClaudeCliRuntimeToolAvailability(
+  context: CliBackendResolveRuntimeToolAvailabilityContext,
+): CliBackendRuntimeToolAvailability {
+  return {
+    mcp: context.toolsAllow.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`),
+  };
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */

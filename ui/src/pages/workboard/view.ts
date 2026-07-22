@@ -5,6 +5,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
+import "../../components/agent-select-registration.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
@@ -830,9 +831,13 @@ function renderCardModal(props: WorkboardProps) {
   const priorityOptions: WorkboardSelectOption<WorkboardPriority>[] = WORKBOARD_PRIORITIES.map(
     (priority) => ({ value: priority, label: formatPriorityLabel(priority) }),
   );
-  const assignableAgentOptions: WorkboardSelectOption[] = agentOptions.map((agent) => ({
-    value: agent.id,
-    label: agent.label,
+  const assignableAgentOptions = agentOptions.map((option) => ({
+    value: option.id,
+    label: option.label,
+    agent: option.id
+      ? (props.agentsList?.agents.find((agent) => agent.id === option.id) ?? { id: option.id })
+      : undefined,
+    icon: option.id ? undefined : icons.bot,
   }));
   const sessionOptions: WorkboardSelectOption[] = [
     { value: "", label: t("workboard.noLinkedSession") },
@@ -996,16 +1001,20 @@ function renderCardModal(props: WorkboardProps) {
               requestUpdate: props.onRequestUpdate,
               disabled: draftActionsBusy,
             })}
-            ${renderWorkboardSelect({
-              value: state.draftAgentId,
-              options: assignableAgentOptions,
-              label: t("workboard.fieldAgent"),
-              onChange: (value) => {
-                state.draftAgentId = value;
-              },
-              requestUpdate: props.onRequestUpdate,
-              disabled: draftActionsBusy,
-            })}
+            <div class="workboard-field">
+              <span>${t("workboard.fieldAgent")}</span>
+              <openclaw-agent-select
+                class="workboard-agent-select"
+                .options=${assignableAgentOptions}
+                .value=${state.draftAgentId}
+                .accessibleLabel=${t("workboard.fieldAgent")}
+                .disabled=${draftActionsBusy}
+                .onSelect=${(value: string) => {
+                  state.draftAgentId = value;
+                  props.onRequestUpdate?.();
+                }}
+              ></openclaw-agent-select>
+            </div>
             ${renderWorkboardSelect({
               value: state.draftSessionKey,
               options: sessionOptions,
@@ -2097,16 +2106,16 @@ export function renderWorkboard(props: WorkboardProps) {
       label: formatPriorityLabel(priority),
     })),
   ];
-  const agentSelectOptions: WorkboardSelectOption[] = agentOptions.map((agent) => {
-    const option: WorkboardSelectOption = {
-      value: agent.id,
-      label: agent.label,
-    };
-    if (agent.description) {
-      option.description = agent.description;
-    }
-    return option;
-  });
+  const agentSelectOptions = agentOptions.map((option) => ({
+    value: option.id,
+    label: option.label,
+    description: option.description,
+    agent:
+      option.id === "all" || option.id === "default"
+        ? undefined
+        : (props.agentsList?.agents.find((agent) => agent.id === option.id) ?? { id: option.id }),
+    icon: option.id === "all" ? icons.users : option.id === "default" ? icons.bot : undefined,
+  }));
   const dialogOpen = state.draftOpen || Boolean(getVisibleDetailCard(state));
 
   return html`
@@ -2162,17 +2171,21 @@ export function renderWorkboard(props: WorkboardProps) {
                 })
               : nothing}
             ${props.showAgentFilter !== false
-              ? renderWorkboardSelect({
-                  value: state.agentFilter,
-                  options: agentSelectOptions,
-                  label: t("workboard.agentFilter"),
-                  onChange: (value) => {
-                    state.agentFilter = value;
-                  },
-                  requestUpdate: props.onRequestUpdate,
-                  className: "workboard-select--toolbar workboard-select--toolbar-agent",
-                  showLabel: false,
-                })
+              ? html`
+                  <openclaw-agent-select
+                    class="workboard-agent-select workboard-agent-select--toolbar"
+                    .options=${agentSelectOptions}
+                    .value=${state.agentFilter}
+                    .accessibleLabel=${t("workboard.agentFilter")}
+                    .onSelect=${(value: string) => {
+                      const option = agentOptions.find((candidate) => candidate.id === value);
+                      if (option) {
+                        state.agentFilter = option.id;
+                        props.onRequestUpdate?.();
+                      }
+                    }}
+                  ></openclaw-agent-select>
+                `
               : nothing}
             <button
               class="btn workboard-archive-toggle ${state.showArchived ? "active" : ""}"

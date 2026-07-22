@@ -486,14 +486,13 @@ function buildLocalModeConfig(params: {
         skills: [],
         skipBootstrap: true,
       },
-      list: [
-        {
-          id: "main",
+      entries: {
+        main: {
           default: true,
           skills: [],
           model: { primary: "tui-pty-mock/gpt-5.5" },
         },
-      ],
+      },
     },
     tools: {
       profile: params.toolsProfile ?? "minimal",
@@ -615,14 +614,18 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
         skills: [],
         skipBootstrap: true,
       },
-      list: scenarios.map((scenario, index) => ({
-        id: scenario.agentId,
-        ...(index === 0 ? { default: true } : {}),
-        workspace: path.join(params.tempDir, scenario.agentId),
-        skills: [],
-        model: { primary: `tui-pty-mock/${scenario.modelId}` },
-        tools: { profile: scenario.toolsProfile },
-      })),
+      entries: Object.fromEntries(
+        scenarios.map((scenario, index) => [
+          scenario.agentId,
+          {
+            ...(index === 0 ? { default: true } : {}),
+            workspace: path.join(params.tempDir, scenario.agentId),
+            skills: [],
+            model: { primary: `tui-pty-mock/${scenario.modelId}` },
+            tools: { profile: scenario.toolsProfile },
+          },
+        ]),
+      ),
     },
     models: {
       mode: "replace",

@@ -7539,6 +7539,16 @@
       "translated": "답장"
     },
     {
+      "id": "native.android.6c07db7bdc4b43a4",
+      "source": "Rewind to here",
+      "translated": "여기로 되감기"
+    },
+    {
+      "id": "native.android.c824bdc38278a218",
+      "source": "Fork from here",
+      "translated": "여기서 분기"
+    },
+    {
       "id": "native.android.319b4a29df279bb3",
       "source": "Select text",
       "translated": "텍스트 선택"
@@ -7639,14 +7649,19 @@
       "translated": "전송됨 — 전달 확인 중…"
     },
     {
-      "id": "native.android.15d71d54c0ce946b",
-      "source": "Failed",
-      "translated": "실패"
+      "id": "native.android.ac5949efe3cfe48c",
+      "source": "Session branch changed; review and retry this message.",
+      "translated": "세션 브랜치가 변경되었습니다. 이 메시지를 검토하고 다시 시도하세요."
     },
     {
       "id": "native.android.6f734a7527ae9c5a",
       "source": "Failed — $it",
       "translated": "실패 — $it"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "실패"
     },
     {
       "id": "native.android.552a4d6f5110e6a3",
@@ -7997,6 +8012,31 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "중지"
+    },
+    {
+      "id": "native.android.be42506226307680",
+      "source": "Switch branch",
+      "translated": "브랜치 전환"
+    },
+    {
+      "id": "native.android.39ea147abba2af8a",
+      "source": "Untitled branch",
+      "translated": "제목 없는 브랜치"
+    },
+    {
+      "id": "native.android.4e2cbf557e2e3cd6",
+      "source": "Current branch",
+      "translated": "현재 브랜치"
+    },
+    {
+      "id": "native.android.d79a4188788ccf49",
+      "source": "Messages: $count",
+      "translated": "메시지: $count"
+    },
+    {
+      "id": "native.android.76e548dffafc9de9",
+      "source": "$count · $updated",
+      "translated": "$count · $updated"
     },
     {
       "id": "native.android.2cb3ec7379426dfe",
@@ -21979,6 +22019,21 @@
       "translated": "위치"
     },
     {
+      "id": "native.apple.c105a651c5f972b6",
+      "source": "Privacy",
+      "translated": "개인정보"
+    },
+    {
+      "id": "native.apple.b98013fb799d4f3c",
+      "source": "Active computer detection",
+      "translated": "활성 컴퓨터 감지"
+    },
+    {
+      "id": "native.apple.870e09824984a9b2",
+      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "OpenClaw이 가장 최근에 사용한 Mac을 식별하고 노드 알림을 라우팅할 수 있도록 이 Mac의 유휴 시간을 공유합니다. 키 입력, 포인터 위치, 앱 이름, 창 제목은 절대 전송하지 않습니다. 손쉬운 사용 권한이 필요합니다."
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "설정"
@@ -22074,6 +22129,11 @@
       "translated": "새로 고침"
     },
     {
+      "id": "native.apple.326e187a6656d8d9",
+      "source": "Check",
+      "translated": "확인"
+    },
+    {
       "id": "native.apple.7b62187659c9925f",
       "source": "Grant",
       "translated": "허용"
@@ -22094,9 +22154,14 @@
       "translated": "접근 요청"
     },
     {
-      "id": "native.apple.4a4c10ca63e99590",
-      "source": "Control other apps (e.g. Terminal) for automation actions",
-      "translated": "자동화 작업을 위해 다른 앱(예: Terminal) 제어"
+      "id": "native.apple.5a5689d96828c424",
+      "source": "Status unavailable",
+      "translated": "상태를 사용할 수 없음"
+    },
+    {
+      "id": "native.apple.2d263648f3916394",
+      "source": "Control Terminal for automation actions; other apps request access separately",
+      "translated": "자동화 작업을 위해 Terminal을 제어합니다. 다른 앱은 별도로 액세스를 요청합니다"
     },
     {
       "id": "native.apple.5f7eb4234f63c4ad",
@@ -22114,14 +22179,14 @@
       "translated": "컨텍스트 또는 스크린샷을 위해 화면 캡처"
     },
     {
-      "id": "native.apple.b004145c37a470f8",
-      "source": "Allow Voice Wake and audio capture",
-      "translated": "Voice Wake 및 오디오 캡처 허용"
+      "id": "native.apple.45119f87d3069501",
+      "source": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation",
+      "translated": "음성 깨우기, 푸시투토크, Talk Mode, 빠른 채팅 받아쓰기를 허용합니다"
     },
     {
-      "id": "native.apple.7c8b825829b3924d",
-      "source": "Transcribe Voice Wake trigger phrases on-device",
-      "translated": "기기 내에서 Voice Wake 트리거 문구 전사"
+      "id": "native.apple.33f1e220cc7d69e1",
+      "source": "Use Apple Speech; passive Voice Wake stays on-device",
+      "translated": "Apple Speech를 사용합니다. 수동 음성 깨우기는 기기에서 유지됩니다"
     },
     {
       "id": "native.apple.37880f3b7ae6c259",
@@ -22754,14 +22819,14 @@
       "translated": "OpenClaw는 LAN, Tailnet 또는 SSH를 통해 원격 OpenClaw gateway에 연결하기 위해 로컬 네트워크를 사용합니다."
     },
     {
-      "id": "native.apple.5db9a976fd1c7fcb",
-      "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
-      "translated": "OpenClaw는 Voice Wake 테스트와 에이전트 오디오 캡처를 위해 마이크가 필요합니다."
+      "id": "native.apple.0fdd4a93f90c6f95",
+      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenClaw은 음성 깨우기, 푸시투토크, Talk Mode, 빠른 채팅 받아쓰기, 에이전트 오디오 캡처에 마이크를 사용합니다."
     },
     {
-      "id": "native.apple.b7aba524ef867e7f",
-      "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
-      "translated": "OpenClaw는 Voice Wake 트리거 문구를 감지하기 위해 음성 인식을 사용합니다."
+      "id": "native.apple.44701896858c9029",
+      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenClaw은 음성 깨우기, 푸시투토크, Talk Mode, 빠른 채팅 받아쓰기에 Apple Speech를 사용합니다. 음성 깨우기는 기기에서 유지됩니다."
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
@@ -23624,9 +23689,14 @@
       "translated": "Voice Wake 활성화"
     },
     {
-      "id": "native.apple.e992b45cdbccdd10",
-      "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
-      "translated": "음성 명령을 실행하기 전에 깨우기 문구를 감지합니다. 인식은 온전히 기기 내에서 실행됩니다."
+      "id": "native.apple.e2811fb1981c52f9",
+      "source": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.",
+      "translated": "음성 명령을 실행하기 전에 깨우기 문구를 대기합니다. 깨우기 문구 인식은 이 Mac에서 유지됩니다."
+    },
+    {
+      "id": "native.apple.8e55ed92eb632efa",
+      "source": "On-device recognition is unavailable for the selected language on this Mac.",
+      "translated": "이 Mac에서는 선택한 언어의 기기 내 인식을 사용할 수 없습니다."
     },
     {
       "id": "native.apple.475eb587a8accd92",
@@ -23787,6 +23857,11 @@
       "id": "native.apple.d57fd5213daf2a6e",
       "source": "\\(self.friendlyName(for: current)) (System)",
       "translated": "\\(self.friendlyName(for: current)) (시스템)"
+    },
+    {
+      "id": "native.apple.2565d77dbe6ce76b",
+      "source": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.",
+      "translated": "음성 깨우기는 선택한 언어에 대해 온디바이스 인식이 필요합니다. 푸시투토크와 대화 모드는 계속 사용할 수 있습니다."
     },
     {
       "id": "native.apple.79db41c7b941a50f",

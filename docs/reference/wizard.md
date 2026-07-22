@@ -251,7 +251,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunMode`
 - `wizard.securityAcknowledgedAt`
 
-`openclaw agents add` writes `agents.list[]` and optional `bindings`.
+`openclaw agents add` writes `agents.entries.*` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Active sessions and transcripts are stored in

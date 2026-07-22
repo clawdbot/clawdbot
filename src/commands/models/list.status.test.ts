@@ -257,10 +257,7 @@ vi.mock("../../agents/provider-auth-aliases.js", () => ({
   ),
 }));
 vi.mock("../../agents/model-selection-cli.js", () => ({
-  isCliProvider: vi.fn(
-    (provider: string, cfg?: { agents?: { defaults?: { cliBackends?: object } } }) =>
-      Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
-  ),
+  isCliProvider: vi.fn((provider: string) => provider === "claude-cli"),
 }));
 vi.mock("../../infra/shell-env.js", () => ({
   getShellEnvAppliedKeys: mocks.getShellEnvAppliedKeys,
@@ -1267,7 +1264,6 @@ describe("modelsStatusCommand auth overview", () => {
         defaults: {
           model: { primary: "claude-cli/claude-sonnet-4-6", fallbacks: [] },
           models: { "claude-cli/claude-sonnet-4-6": {} },
-          cliBackends: { "claude-cli": {} },
         },
       },
       models: { providers: {} },

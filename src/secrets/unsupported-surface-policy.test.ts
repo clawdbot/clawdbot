@@ -6,7 +6,6 @@ describe("unsupported SecretRef surface policy metadata", () => {
   it("exposes the canonical unsupported surface patterns", () => {
     expect(unsupportedSecretRefSurfacePolicy.listPatterns().toSorted()).toEqual(
       [
-        "commands.ownerDisplaySecret",
         "hooks.token",
         "hooks.gmail.pushToken",
         "hooks.mappings[].sessionKey",
@@ -21,7 +20,6 @@ describe("unsupported SecretRef surface policy metadata", () => {
 
   it("discovers concrete config candidates for unsupported mutable surfaces", () => {
     const candidates = unsupportedSecretRefSurfacePolicy.collectConfigCandidates({
-      commands: { ownerDisplaySecret: { source: "env", provider: "default", id: "OWNER" } },
       hooks: {
         token: { source: "env", provider: "default", id: "HOOK_TOKEN" },
         gmail: { pushToken: { source: "env", provider: "default", id: "GMAIL_PUSH" } },
@@ -59,7 +57,6 @@ describe("unsupported SecretRef surface policy metadata", () => {
 
     expect(candidates.map((candidate) => candidate.path).toSorted()).toEqual(
       [
-        "commands.ownerDisplaySecret",
         "hooks.token",
         "hooks.gmail.pushToken",
         "hooks.mappings.0.sessionKey",

@@ -1012,12 +1012,12 @@ describe("resolveNodeCommandAllowlist", () => {
     expectDangerousCommandsDenied(allow);
   });
 
-  it("can explicitly allow dangerous commands via allowCommands", () => {
+  it("can explicitly allow dangerous commands via commands.allow", () => {
     const allow = resolveNodeCommandAllowlist(
       {
         gateway: {
           nodes: {
-            allowCommands: ["camera.snap", "screen.record"],
+            commands: { allow: ["camera.snap", "screen.record"] },
           },
         },
       },

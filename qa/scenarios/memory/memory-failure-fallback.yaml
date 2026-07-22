@@ -2,12 +2,10 @@ title: "Memory failure fallback"
 
 scenario:
   id: memory-failure-fallback
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.failure-handling
-    secondary:
-      - runtime.fallbacks
+      - agent-runtime.tool-availability-rules-tool-policy
   objective: Verify the agent degrades gracefully when memory tools are unavailable and the answer exists only in memory-backed notes.
   successCriteria:
     - Memory tools are absent from the effective tool inventory.

@@ -10,4 +10,13 @@ describe("generate docs map", () => {
       "&lt;scr&lt;script&gt;ipt&gt;alert(1)&lt;/script&gt;",
     );
   });
+
+  it("preserves Markdown syntax inside inline code", () => {
+    expect(testing.cleanHeadingText("`agents.entries.*.contextLimits` and *defaults*")).toBe(
+      "`agents.entries.*.contextLimits` and defaults",
+    );
+    expect(testing.cleanHeadingText("`![label](https://example.test/image)`")).toBe(
+      "`![label](https://example.test/image)`",
+    );
+  });
 });

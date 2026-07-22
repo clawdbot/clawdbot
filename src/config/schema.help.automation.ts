@@ -10,8 +10,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
   "session.resetTriggers":
     "Lists message triggers that force a session reset when matched in inbound content. Use sparingly for explicit reset phrases so context is not dropped unexpectedly during normal conversation.",
-  "session.idleMinutes":
-    "Applies a legacy idle reset window in minutes for session reuse behavior across inactivity gaps. Use this only for compatibility and prefer structured reset policies under session.reset/session.resetByType.",
   "session.reset":
     "Defines the default reset policy object used when no type-specific or channel-specific override applies. By default sessions do not reset automatically; use daily or idle schedules to opt in, while /new and /reset remain available at any time.",
   "session.reset.mode":
@@ -32,8 +30,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Provides channel-specific reset overrides keyed by provider/channel id for fine-grained behavior control. Use this only when one channel needs exceptional reset behavior beyond type-level policies.",
   "session.store":
     "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
-  "session.typingMode":
-    'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
   "session.mainKey":
     'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
   "session.sendPolicy":
@@ -83,8 +79,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
-  "cron.store":
-    "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
   "cron.webhookToken":
     "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
   "cron.sessionRetention":
@@ -225,14 +219,10 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Internal hook loader settings controlling where handler modules are discovered at startup. Use constrained load roots to reduce accidental module conflicts or shadowing.",
   "hooks.internal.load.extraDirs":
     "Additional directories searched for internal hook modules beyond default load paths. Keep this minimal and controlled to reduce accidental module shadowing.",
-  "hooks.internal.installs":
-    "Install metadata for internal hook modules, including source and resolved artifacts for repeatable deployments. Use this as operational provenance and avoid manual drift edits.",
   messages:
-    "Message formatting, acknowledgment, queueing, debounce, and status reaction behavior for inbound/outbound chat flows. Use this section when channel responsiveness or message UX needs adjustment.",
+    "Message infrastructure and cross-agent defaults. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
   "messages.visibleReplies":
     'Controls model-authored source replies across direct, group, and channel conversations. "message_tool" requires message(action=send) for normal assistant output and generic tool media; explicitly host-owned runtime output remains deliverable except for ambient room events. "automatic" posts normal replies as before.',
-  "messages.responsePrefix":
-    "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
   "messages.usageTemplate":
     "Custom /usage full footer template, either an inline object or a JSON file path. Invalid or unavailable templates fall back to the built-in usage line.",
   "messages.responseUsage":
@@ -263,25 +253,20 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.",
   "messages.inbound.byChannel":
     "Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.",
-  "messages.removeAckAfterReply":
-    "Removes the acknowledgment reaction after final reply delivery when enabled. Keep enabled for cleaner UX in channels where persistent ack reactions create clutter.",
-  "messages.tts":
-    "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
-  "messages.tts.persona":
+  tts: "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
+  "tts.persona":
     "Default TTS persona id. Local TTS persona preferences can override this per host.",
-  "messages.tts.personas":
+  "tts.personas":
     "Named TTS personas that define stable spoken identity plus provider-specific speech bindings.",
-  "messages.tts.personas.*":
+  "tts.personas.*":
     "One TTS persona. Use provider-specific bindings for exact voices/models and prompt templates.",
-  "messages.tts.personas.*.prompt":
-    "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
-  "messages.tts.personas.*.providers":
-    "Provider-specific TTS persona bindings keyed by speech provider id. These merge over messages.tts.providers for the active persona.",
-  "messages.tts.providers":
+  "tts.personas.*.providers":
+    "Provider-specific TTS persona bindings keyed by speech provider id. These merge over tts.providers for the active persona.",
+  "tts.providers":
     "Provider-specific TTS settings keyed by speech provider id. Use this instead of bundled provider-specific top-level keys so speech plugins stay decoupled from core config schema.",
-  "messages.tts.providers.*":
+  "tts.providers.*":
     "Provider-specific TTS configuration for one speech provider id. Keep fields scoped to the plugin that owns that provider.",
-  "messages.tts.providers.*.apiKey":
+  "tts.providers.*.apiKey":
     "Provider API key used by that speech provider when its plugin requires authenticated TTS access.", // pragma: allowlist secret
   channels:
     "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",
@@ -301,13 +286,13 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Treat quoted bot messages as implicit mentions by default. Defaults to true for backward compatibility.",
   "channels.defaults.implicitMentions.threadParticipation":
     "Treat follow-ups in threads where the bot participated as implicit mentions by default. Defaults to true for backward compatibility.",
-  "channels.defaults.heartbeat":
+  "channels.defaults.heartbeatVisibility":
     "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
-  "channels.defaults.heartbeat.showOk":
+  "channels.defaults.heartbeatVisibility.showOk":
     "Shows healthy/OK heartbeat status entries when true in channel status outputs. Keep false in noisy environments and enable only when operators need explicit healthy confirmations.",
-  "channels.defaults.heartbeat.showAlerts":
+  "channels.defaults.heartbeatVisibility.showAlerts":
     "Shows degraded/error heartbeat alerts when true so operator channels surface problems promptly. Keep enabled in production so broken channel states are visible.",
-  "channels.defaults.heartbeat.useIndicator":
+  "channels.defaults.heartbeatVisibility.useIndicator":
     "Enables concise indicator-style heartbeat rendering instead of verbose status text where supported. Use indicator mode for dense dashboards with many active channels.",
   "channels.defaults.botLoopProtection":
     "Default pair loop protection settings for channel providers that support bot-to-bot loop guards. Use provider-specific overrides only when one channel needs a different budget.",
@@ -319,16 +304,10 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Sliding window length in seconds for pair loop budgets. Default for supporting channels is 60.",
   "channels.defaults.botLoopProtection.cooldownSeconds":
     "Cooldown seconds applied to a pair after it exceeds the loop budget. Default for supporting channels is 60.",
-  "agents.defaults.heartbeat.includeSystemPromptSection":
-    "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
-  "agents.list.*.heartbeat.includeSystemPromptSection":
-    "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
   "agents.defaults.heartbeat.directPolicy":
     'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
-  "agents.list.*.heartbeat.directPolicy":
+  "agents.entries.*.heartbeat.directPolicy":
     'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
-  "agents.list.*.heartbeat.skipWhenBusy":
-    "Per-agent override that defers heartbeat turns on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeat turns.",
   "channels.mattermost.configWrites":
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":
@@ -342,8 +321,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
   "messages.statusReactions.enabled":
     "Enable lifecycle status reactions on supported channels. Discord treats unset as enabled when ack reactions are active; Slack, Signal, Telegram, and WhatsApp require this to be true before lifecycle reactions are used. Slack uses native assistant thread status for progress by default.",
-  "messages.statusReactions.emojis":
-    "Override default status reaction emojis. Keys: queued, thinking, compacting, tool, coding, web, deploy, build, concierge, done, error, stallSoft, stallHard. Telegram chooses the first supported fallback when a configured emoji is not available in the chat.",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
 };

@@ -37,7 +37,7 @@ import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   listAgentsForGateway,
   resolveSessionModelRef,
   resolveSessionStoreKey,
@@ -186,7 +186,7 @@ async function buildChatStartupModelCatalogProjection(params: {
   cfg: OpenClawConfig;
   snapshot: ModelCatalogSnapshot;
   sessionAgentId: string;
-  sessionEntry: ReturnType<typeof loadSessionEntry>["entry"];
+  sessionEntry: ReturnType<typeof loadSessionEntryReadOnly>["entry"];
   defaultAgentId: string;
   includeAgentsList: boolean;
 }) {
@@ -352,7 +352,7 @@ async function handleChatHistoryRequest({
     agentId: agentIdOverride,
   });
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
+  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
     sessionKey,
     sessionLoadOptions,
   );

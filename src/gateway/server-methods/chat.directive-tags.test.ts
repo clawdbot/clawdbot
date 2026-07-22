@@ -169,36 +169,38 @@ const TINY_PNG_BASE64 =
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  const loadSessionEntry = (rawKey: string, opts?: { agentId?: string }) => {
+    mockState.loadSessionEntryCalls.push({ rawKey, opts });
+    const canonicalKey =
+      typeof mockState.sessionEntry.canonicalKey === "string"
+        ? mockState.sessionEntry.canonicalKey
+        : rawKey || "main";
+    const entry = mockState.sessionMissing
+      ? undefined
+      : {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          ...mockState.sessionEntry,
+        };
+    return {
+      ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
+      cfg: {
+        ...mockState.config,
+        session: {
+          ...(mockState.config.session as Record<string, unknown> | undefined),
+          mainKey: mockState.mainSessionKey,
+        },
+      },
+      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+      store: entry ? { [canonicalKey]: entry } : {},
+      entry,
+      canonicalKey,
+    };
+  };
   return {
     ...original,
-    loadSessionEntry: (rawKey: string, opts?: { agentId?: string }) => {
-      mockState.loadSessionEntryCalls.push({ rawKey, opts });
-      const canonicalKey =
-        typeof mockState.sessionEntry.canonicalKey === "string"
-          ? mockState.sessionEntry.canonicalKey
-          : rawKey || "main";
-      const entry = mockState.sessionMissing
-        ? undefined
-        : {
-            sessionId: mockState.sessionId,
-            sessionFile: mockState.transcriptPath,
-            ...mockState.sessionEntry,
-          };
-      return {
-        ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
-        cfg: {
-          ...mockState.config,
-          session: {
-            ...(mockState.config.session as Record<string, unknown> | undefined),
-            mainKey: mockState.mainSessionKey,
-          },
-        },
-        storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
-        store: entry ? { [canonicalKey]: entry } : {},
-        entry,
-        canonicalKey,
-      };
-    },
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
   };
 });
 
@@ -404,27 +406,35 @@ vi.mock("../../agents/sandbox/context.js", async () => {
 
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
   stageSandboxMedia: vi.fn(
-    async (params: { ctx: { MediaPaths?: string[]; MediaPath?: string } }) => {
+    async (params: {
+      ctx: { media?: Array<{ path?: string; contentType?: string; workspaceDir?: string }> };
+    }) => {
       if (mockState.stageSandboxMediaError) {
         throw mockState.stageSandboxMediaError;
       }
-      const staged = new Map<string, string>();
-      const originalPaths = params.ctx.MediaPaths ?? [];
+      const staged = new Map<number, string>();
+      const originalPaths = params.ctx.media?.map((fact) => fact.path) ?? [];
       if (mockState.stagedRelativePaths) {
         const mapping = mockState.stagedRelativePaths;
-        params.ctx.MediaPaths = [...mapping];
-        params.ctx.MediaPath = mapping[0];
+        params.ctx.media = (params.ctx.media ?? []).map((fact, index) => ({
+          path: mapping[index] ?? fact.path,
+          contentType: fact.contentType,
+          workspaceDir: mockState.sandboxWorkspace?.workspaceDir,
+        }));
         for (let i = 0; i < mapping.length; i += 1) {
           const source = originalPaths[i];
           const dest = mapping[i];
           if (source && dest) {
-            staged.set(source, dest);
+            staged.set(i, dest);
           }
         }
       }
       if (mockState.unstagedSources) {
         for (const source of mockState.unstagedSources) {
-          staged.delete(source);
+          const index = originalPaths.indexOf(source);
+          if (index >= 0) {
+            staged.delete(index);
+          }
         }
       }
       return { staged };

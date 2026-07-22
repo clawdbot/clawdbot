@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.media-rich-content
+      - matrix.media-and-rich-content
   execution:
     profiles: { "matrix:all": 52, "matrix:media": 1 }
     kind: flow

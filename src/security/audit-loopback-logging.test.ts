@@ -62,12 +62,10 @@ describe("security audit loopback and logging findings", () => {
         },
       ),
       (async () => {
-        const cfg: OpenClawConfig = {
-          logging: { redactSensitive: "off" },
-        };
+        const cfg: OpenClawConfig = {};
         expect(
           hasLoggingFinding("logging.redact_off", "warn", await collectSecurityAuditFindings(cfg)),
-        ).toBe(true);
+        ).toBe(false);
       })(),
     ]);
   });

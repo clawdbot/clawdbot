@@ -1,7 +1,7 @@
 /** Best-effort durable signal log for session state changes. */
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { DmScope } from "../config/types.base.js";
 import {
@@ -623,7 +623,7 @@ export function handleSessionStateSessionDeleted(
 
 function sessionExists(sessionKey: string, env?: NodeJS.ProcessEnv): boolean {
   try {
-    return Boolean(loadSessionEntry({ sessionKey, clone: false, env }));
+    return Boolean(loadSessionEntryReadOnly({ sessionKey, clone: false, env }));
   } catch {
     return false;
   }

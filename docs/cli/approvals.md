@@ -140,8 +140,7 @@ This changes the **host approvals file** only. To keep the requested OpenClaw po
 
 ```bash
 openclaw config set tools.exec.host gateway
-openclaw config set tools.exec.security full
-openclaw config set tools.exec.ask off
+openclaw config set tools.exec.mode full
 ```
 
 `tools.exec.host=gateway` is explicit here because `host=auto` still means "sandbox when available, otherwise gateway": YOLO is about approvals, not routing. Use `gateway` (or `/exec host=gateway`) when you want host exec even with a sandbox configured.

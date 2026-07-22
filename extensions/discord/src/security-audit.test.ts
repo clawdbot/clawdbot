@@ -47,40 +47,6 @@ async function collectFindings(params: {
 }
 
 describe("Discord security audit findings", () => {
-  it("flags slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
-    const cfg: OpenClawConfig = {
-      commands: { native: true, useAccessGroups: false },
-      channels: {
-        discord: {
-          enabled: true,
-          token: "t",
-          groupPolicy: "allowlist",
-          guilds: {
-            "123": {
-              channels: {
-                general: { enabled: true },
-              },
-            },
-          },
-        },
-      },
-    };
-
-    const discordConfig = cfg.channels?.discord;
-    if (!discordConfig) {
-      throw new Error("discord config required");
-    }
-    const findings = await collectFindings({
-      cfg,
-      config: discordConfig,
-    });
-
-    const unrestrictedFinding = findings.find(
-      (finding) => finding.checkId === "channels.discord.commands.native.unrestricted",
-    );
-    expect(unrestrictedFinding?.severity).toBe("critical");
-  });
-
   it.each([
     {
       name: "flags missing guild user allowlists",

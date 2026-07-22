@@ -16,7 +16,11 @@ import {
   normalizeInboundTextNewlines,
   sanitizeInboundSystemTags,
 } from "../../auto-reply/reply/inbound-text.js";
-import type { FinalizedMsgContext, MentionSource } from "../../auto-reply/templating.js";
+import type {
+  FinalizedMsgContext,
+  MentionSource,
+  SessionTranscriptContext,
+} from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
@@ -85,6 +89,7 @@ export type BuildChannelInboundEventContextParams = {
   route: RouteFacts;
   reply: ReplyPlanFacts;
   message: MessageFacts;
+  sessionTranscript?: SessionTranscriptContext;
   access?: BuildChannelInboundEventAccess;
   command?: CommandFacts;
   commandTurn?: CommandTurnContext;
@@ -510,6 +515,10 @@ export function buildChannelInboundEventContext(
     InboundEventKind: params.message.inboundEventKind ?? "user_request",
     BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
     InboundHistory: params.message.inboundHistory,
+    SessionTranscriptContext:
+      params.sessionTranscript && params.sessionTranscript.historyLimit > 0
+        ? params.sessionTranscript
+        : undefined,
     SourceModality: params.message.sourceModality,
     RawBody: params.message.rawBody,
     CommandBody: params.message.commandBody ?? params.message.rawBody,

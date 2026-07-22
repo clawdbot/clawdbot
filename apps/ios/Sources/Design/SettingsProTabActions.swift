@@ -933,6 +933,7 @@ extension SettingsProTab {
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .gateway: String(localized: "Gateway")
+        case .systemAgent: String(localized: "OpenClaw")
         case .appleWatch: String(localized: "Apple Watch")
         case .approvals: String(localized: "Approvals")
         case .permissions: String(localized: "Permissions")

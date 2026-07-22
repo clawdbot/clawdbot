@@ -21,6 +21,7 @@ import {
 import type { BoardOp, BoardTab } from "../../lib/board/types.ts";
 import type {
   BoardGrantDecision,
+  BoardObserverContext,
   BoardViewCallbacks,
   BoardViewSnapshot,
   BoardViewWidget,
@@ -78,6 +79,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardViewCallbacks;
   @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
+  @property({ attribute: false }) observer?: BoardObserverContext;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
 
@@ -659,6 +661,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .widgetFrameUrl=${this.widgetFrameUrl}
                 .callbacks=${this.cellCallbacks}
                 .sessions=${this.sessions}
+                .observer=${this.observer}
                 .dragging=${widget.name === this.gestureName}
                 .focusTabIndex=${widget.name === focusName ? 0 : -1}
                 .positionInSet=${(logicalPosition.get(widget.name) ?? 0) + 1}

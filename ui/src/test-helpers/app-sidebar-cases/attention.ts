@@ -242,92 +242,61 @@ describe("AppSidebar session attention", () => {
     expect(section?.querySelector(".sidebar-recent-session")).toBeNull();
   });
 
-  it("bubbles an unloaded child's pending question to its parent and collapsed section", async () => {
+  it("bubbles unloaded child attention to its parent and collapsed section", async () => {
     const parentKey = "agent:main:parent";
-    const childKey = "agent:main:subagent:question";
-    const client = {
-      request: vi.fn().mockResolvedValue({ questions: [] }),
-    } as unknown as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const sessionsHarness = createSessionsHarness("main", [parentKey]);
-    setRows(sessionsHarness, [
-      {
-        key: parentKey,
-        kind: "direct",
-        label: "Parent task",
-        updatedAt: 1,
-        childSessions: [childKey],
-      },
-    ]);
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessionsHarness.sessions);
-
-    gatewayHarness.publishEvent("question.requested", {
-      id: "question-child",
-      agentId: "main",
-      sessionKey: childKey,
-      questions: [{ questionId: "confirm", header: "Confirm", question: "Continue?", options: [] }],
-      createdAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-      status: "pending",
-    });
-    await sidebar.updateComplete;
-
-    expect(
-      sidebar.querySelector(
-        `[data-session-key="${parentKey}"] [data-session-attention="question"]`,
-      ),
-    ).not.toBeNull();
-    expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
-    await sidebar.updateComplete;
-    expect(
-      sidebar
-        .querySelector('[data-session-section="ungrouped"]')
-        ?.querySelector(".sidebar-session-group-attention"),
-    ).not.toBeNull();
-  });
-
-  it("bubbles an unloaded child's pending approval to its parent and collapsed section", async () => {
-    const parentKey = "agent:main:parent";
-    const childKey = "agent:main:subagent:approval";
-    const approval = {
-      id: "approval-child",
-      kind: "exec",
-      request: { command: "git status", sessionKey: childKey },
-      createdAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-    } satisfies ExecApprovalRequest;
-    const sessionsHarness = createSessionsHarness("main", [parentKey]);
-    setRows(sessionsHarness, [
-      {
-        key: parentKey,
-        kind: "direct",
-        label: "Parent task",
-        updatedAt: 1,
-        childSessions: [childKey],
-      },
-    ]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-      "panel",
-      null,
-      [approval],
-    );
-
-    expect(
-      sidebar.querySelector(
-        `[data-session-key="${parentKey}"] [data-session-attention="approval"]`,
-      ),
-    ).not.toBeNull();
-    expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
-    await sidebar.updateComplete;
-    expect(
-      sidebar
-        .querySelector('[data-session-section="ungrouped"]')
-        ?.querySelector(".sidebar-session-group-attention"),
-    ).not.toBeNull();
+    for (const kind of ["question", "approval"] as const) {
+      localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
+      const childKey = `agent:main:subagent:${kind}`;
+      const gatewayHarness = createGatewayHarness({
+        request: vi.fn().mockResolvedValue({ questions: [] }),
+      } as unknown as GatewayBrowserClient);
+      const sessionsHarness = createSessionsHarness("main", [parentKey]);
+      setRows(sessionsHarness, [
+        { key: parentKey, kind: "direct", updatedAt: 1, childSessions: [childKey] },
+      ]);
+      const approval = {
+        id: "approval-child",
+        kind: "exec",
+        request: { command: "git status", sessionKey: childKey },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      } satisfies ExecApprovalRequest;
+      const { sidebar } = await mountSidebar(
+        gatewayHarness.gateway,
+        sessionsHarness.sessions,
+        "panel",
+        null,
+        kind === "approval" ? [approval] : [],
+      );
+      if (kind === "question") {
+        gatewayHarness.publishEvent("question.requested", {
+          id: "question-child",
+          agentId: "main",
+          sessionKey: childKey,
+          questions: [
+            { questionId: "confirm", header: "Confirm", question: "Continue?", options: [] },
+          ],
+          createdAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+          status: "pending",
+        });
+        await sidebar.updateComplete;
+      }
+      expect(
+        sidebar.querySelector(
+          `[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`,
+        ),
+      ).not.toBeNull();
+      expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
+      sidebar.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();
+      await sidebar.updateComplete;
+      expect(
+        sidebar
+          .querySelector('[data-session-section="ungrouped"]')
+          ?.querySelector(".sidebar-session-group-attention"),
+      ).not.toBeNull();
+      sidebar.remove();
+    }
   });
 
   it("bubbles descendant attention and keeps its branch visible past the child cap", async () => {

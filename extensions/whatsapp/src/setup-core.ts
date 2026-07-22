@@ -2,11 +2,16 @@
 import {
   applyAccountNameToChannelSection,
   type ChannelSetupAdapter,
+  type ChannelSetupInput,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
 } from "openclaw/plugin-sdk/setup";
 
 const channel = "whatsapp" as const;
+
+type WhatsAppSetupInput = ChannelSetupInput & {
+  authDir?: string;
+};
 
 export const whatsappSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove: ["authDir"],
@@ -20,11 +25,12 @@ export const whatsappSetupAdapter: ChannelSetupAdapter = {
       alwaysUseAccounts: true,
     }),
   applyAccountConfig: ({ cfg, accountId, input }) => {
+    const setupInput = input as WhatsAppSetupInput;
     const namedConfig = applyAccountNameToChannelSection({
       cfg,
       channelKey: channel,
       accountId,
-      name: input.name,
+      name: setupInput.name,
       alwaysUseAccounts: true,
     });
     const next = migrateBaseNameToDefaultAccount({
@@ -34,7 +40,7 @@ export const whatsappSetupAdapter: ChannelSetupAdapter = {
     });
     const entry = {
       ...next.channels?.whatsapp?.accounts?.[accountId],
-      ...(input.authDir ? { authDir: input.authDir } : {}),
+      ...(setupInput.authDir ? { authDir: setupInput.authDir } : {}),
       enabled: true,
     };
     return {

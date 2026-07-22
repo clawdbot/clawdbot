@@ -283,6 +283,24 @@ describe("secrets runtime snapshot request secret refs", () => {
                   },
                 },
               },
+              {
+                provider: "deepgram",
+                capabilities: ["audio"],
+                request: {
+                  auth: {
+                    mode: "header",
+                    headerName: "x-api-key",
+                    value: { source: "env", provider: "default", id: "MEDIA_AUDIO_MODEL_KEY" },
+                  },
+                  proxy: {
+                    mode: "explicit-proxy",
+                    url: "http://proxy.example:8080",
+                    tls: {
+                      ca: { source: "env", provider: "default", id: "MEDIA_AUDIO_PROXY_CA" },
+                    },
+                  },
+                },
+              },
             ],
             audio: {
               enabled: true,
@@ -298,25 +316,6 @@ describe("secrets runtime snapshot request secret refs", () => {
                   cert: { source: "env", provider: "default", id: "MEDIA_AUDIO_CERT" },
                 },
               },
-              models: [
-                {
-                  provider: "deepgram",
-                  request: {
-                    auth: {
-                      mode: "header",
-                      headerName: "x-api-key",
-                      value: { source: "env", provider: "default", id: "MEDIA_AUDIO_MODEL_KEY" },
-                    },
-                    proxy: {
-                      mode: "explicit-proxy",
-                      url: "http://proxy.example:8080",
-                      tls: {
-                        ca: { source: "env", provider: "default", id: "MEDIA_AUDIO_PROXY_CA" },
-                      },
-                    },
-                  },
-                },
-              ],
             },
           },
         },
@@ -352,7 +351,7 @@ describe("secrets runtime snapshot request secret refs", () => {
         value: "shared-model-key",
       },
     });
-    expect(snapshot.config.tools?.media?.audio?.models?.[0]?.request).toEqual({
+    expect(snapshot.config.tools?.media?.models?.[1]?.request).toEqual({
       auth: {
         mode: "header",
         headerName: "x-api-key",

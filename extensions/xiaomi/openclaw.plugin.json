@@ -99,8 +99,8 @@
       }
     },
     "discovery": {
-      "xiaomi": "static",
-      "xiaomi-token-plan": "runtime"
+      "xiaomi": "refreshable",
+      "xiaomi-token-plan": "refreshable"
     }
   },
   "providerEndpoints": [

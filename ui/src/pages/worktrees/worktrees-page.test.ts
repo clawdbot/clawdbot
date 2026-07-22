@@ -56,6 +56,7 @@ function gatewayWithSnapshot(client: GatewayBrowserClient | null, connected: boo
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,

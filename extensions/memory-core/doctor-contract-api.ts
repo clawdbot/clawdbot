@@ -651,8 +651,14 @@ function importLegacyMemorySidecarIndex(params: {
 }
 
 function resolveConfiguredAgentIds(config: unknown): string[] {
-  const cfg = config as { agents?: { list?: unknown } };
+  const cfg = config as { agents?: { entries?: unknown; list?: unknown } };
   const ids = new Set<string>();
+  const entries = asRecord(cfg.agents?.entries);
+  if (entries) {
+    for (const id of Object.keys(entries)) {
+      ids.add(normalizeAgentId(id));
+    }
+  }
   if (Array.isArray(cfg.agents?.list)) {
     for (const entry of cfg.agents.list) {
       if (!entry || typeof entry !== "object") {
@@ -677,22 +683,29 @@ function readAgentMemorySearch(
   agentId: string,
 ): Record<string, unknown> | undefined {
   const agents = asRecord(asRecord(config)?.agents);
+  const keyedEntries = asRecord(agents?.entries);
+  const keyedEntry = keyedEntries
+    ? Object.entries(keyedEntries).find(([id]) => normalizeAgentId(id) === agentId)?.[1]
+    : undefined;
+  const keyedSearch = asRecord(asRecord(asRecord(keyedEntry)?.memory)?.search);
+  if (keyedSearch) {
+    return keyedSearch;
+  }
   const entries = Array.isArray(agents?.list) ? agents.list : [];
-  return asRecord(
-    entries
-      .map(asRecord)
-      .find(
-        (entry) =>
-          normalizeAgentId(typeof entry?.id === "string" ? entry.id : undefined) === agentId,
-      )?.memorySearch,
-  );
+  const entry = entries
+    .map(asRecord)
+    .find(
+      (candidate) =>
+        normalizeAgentId(typeof candidate?.id === "string" ? candidate.id : undefined) === agentId,
+    );
+  return asRecord(asRecord(entry?.memory)?.search);
 }
 
 function readDefaultMemorySearch(config: unknown): Record<string, unknown> | undefined {
-  const agents = asRecord(asRecord(config)?.agents);
-  return asRecord(asRecord(agents?.defaults)?.memorySearch);
+  return asRecord(asRecord(asRecord(config)?.memory)?.search);
 }
 
+// Doctor still inspects the retired root shape so it can migrate its persisted sidecar path.
 function readTopLevelMemorySearch(config: unknown): Record<string, unknown> | undefined {
   return asRecord(asRecord(config)?.memorySearch);
 }

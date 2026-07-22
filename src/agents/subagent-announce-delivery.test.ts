@@ -1385,6 +1385,41 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("directly delivers direct-message subagent text when the announce agent replies NO_REPLY", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          announceType: "subagent task",
+          taskLabel: "direct completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "child completion output",
+        idempotencyKey: "announce-dm-fallback-empty:text-direct",
+      }),
+    );
+  });
+
   it("directly delivers direct-message subagent text when the announce agent omits the result", async () => {
     const callGateway = createGatewayMock({
       result: {

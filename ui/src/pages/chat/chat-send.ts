@@ -67,6 +67,7 @@ import {
   updateQueuedMessageForSession,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
+import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import {
   isTerminalFailureChatSendAck,
   type ChatSendAck,
@@ -127,6 +128,8 @@ export type ChatHost = ChatInputHistoryState &
     chatQueue: ChatQueueItem[];
     chatQueueByScope?: Record<string, ChatQueueItem[]>;
     chatRunId: string | null;
+    chatRunStartup?: ChatRunStartupState | null;
+    chatRunUsageById?: Map<string, number>;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
     chatRunError?: { summary: string } | null;
@@ -832,9 +835,13 @@ async function sendQueuedChatMessage(
         );
         void loadChatHistory(host as unknown as ChatState);
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
+        const hasAlreadyAdoptedRun = host.chatRunId === ack.runId;
         const hasAlreadyAdoptedRunStream =
-          host.chatRunId === ack.runId && typeof host.chatStream === "string";
+          hasAlreadyAdoptedRun && typeof host.chatStream === "string";
         host.chatRunId = ack.runId;
+        if (!hasAlreadyAdoptedRun) {
+          host.chatRunStartup = null;
+        }
         // Gateway can deliver the first delta before the chat.send ACK resolves.
         // Preserve that adopted stream; resetting here makes first replies vanish
         // until a later delta or final event arrives.

@@ -11,7 +11,6 @@ import {
 import type { GatewayAgentRow } from "../api/types.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
-import "../components/connection-banner.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
 import "../components/login-gate.ts";
@@ -388,7 +387,7 @@ class OpenClawApp extends OpenClawLightDomElement {
       `;
     }
     // Transport drops after an established session keep the shell mounted
-    // (offline banner + client auto-retry); the login gate is reserved for
+    // (offline presentation + client auto-retry); the login gate is reserved for
     // credential-less first connects, credential rejections, and manual gate
     // submissions. A first connect backed by stored credentials paints the
     // connecting splash instead of flashing the login gate; the gate returns
@@ -1597,7 +1596,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 activeRouteId: activeRoute,
                 activeSearch: this.routeState.location?.search ?? "",
                 activeHash: this.routeState.location?.hash ?? "",
-                connected: gatewaySnapshot.connected,
+                offline: gatewaySnapshot.offlineStable,
+                lastError: gatewaySnapshot.lastError,
                 version:
                   context.config.current.serverVersion ??
                   gatewaySnapshot.hello?.server?.version ??
@@ -1608,6 +1608,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 searchQuery: this.settingsSearchQuery,
                 searchBlockMatches: settingsSearchBlocks,
                 onExit: () => this.exitSettings(),
+                onRetryConnect: () => context.gateway.connect(),
                 onNavigate: (routeId, options) => this.navigate(routeId, options),
                 onPreload: (routeId) => context.preload(routeId),
                 onSearchQueryChange: (nextQuery) => {
@@ -1626,6 +1627,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 ) ?? ""}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}
+                .offline=${gatewaySnapshot.offlineStable}
+                .lastError=${gatewaySnapshot.lastError}
                 .terminalAvailable=${terminalAvailable}
                 .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
                 .canPairDevice=${gatewaySnapshot.connected &&
@@ -1649,6 +1652,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .onOpenPalette=${this.openPalette}
                 .onOpenApprovals=${this.openApprovals}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
+                .onRetryConnect=${() => context.gateway.connect()}
                 .onOpenNewSession=${(agentId: string, target?: NewSessionTarget) => {
                   const search = newSessionSearch(agentId, target);
                   this.navigate("new-session", { search });
@@ -1685,14 +1689,6 @@ class OpenClawShell extends OpenClawLightDomElement {
             : ""}"
           .tabIndex=${-1}
         >
-          ${gatewaySnapshot.connected
-            ? nothing
-            : html`<openclaw-connection-banner
-                .props=${{
-                  lastError: gatewaySnapshot.lastError,
-                  onRetry: () => context.gateway.connect(),
-                }}
-              ></openclaw-connection-banner>`}
           <openclaw-update-banner
             .props=${{
               statusBanner: overlaySnapshot.controlUiRefreshRequired

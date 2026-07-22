@@ -17,7 +17,7 @@ import {
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
   listSessionEntries as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   patchSessionEntry as patchAccessorSessionEntry,
   readSessionUpdatedAt as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
@@ -357,7 +357,7 @@ export function resolveSessionStoreEntry(params: {
 
 /** Loads one session entry by agent/session identity. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
-  const entry = loadSessionEntry(toSessionAccessScope(params));
+  const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 

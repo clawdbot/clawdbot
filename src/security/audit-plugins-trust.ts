@@ -7,6 +7,7 @@ import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-ins
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { readHookInstalls } from "../hooks/installs.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
@@ -487,7 +488,9 @@ export async function collectPluginsTrustFindings(params: {
     }
   }
 
-  const hookInstalls = params.cfg.hooks?.internal?.installs ?? {};
+  const hookInstalls = readHookInstalls({
+    env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+  });
   const npmHookInstalls = Object.entries(hookInstalls).filter(
     ([, record]) => record?.source === "npm",
   );

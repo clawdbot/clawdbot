@@ -87,8 +87,7 @@ function resolveWebMonitorConfigSnapshot(params: {
       ...params.cfg.channels,
       whatsapp: {
         ...params.cfg.channels?.whatsapp,
-        ackReaction: account.ackReaction,
-        messagePrefix: account.messagePrefix,
+        responsePrefix: account.messagePrefix,
         allowFrom: account.allowFrom,
         groupAllowFrom: account.groupAllowFrom,
         groupPolicy: account.groupPolicy,

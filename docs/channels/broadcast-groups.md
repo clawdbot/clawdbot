@@ -39,7 +39,7 @@ Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer
 
 **Result:** when OpenClaw would reply in this chat, it runs all three agents.
 
-Every listed agent id must exist in `agents.list`: config validation reports unknown ids, and the runtime skips them with a `Broadcast agent <id> not found in agents.list; skipping` warning.
+Every listed agent id must exist in `agents.entries`: config validation reports unknown ids, and the runtime skips them with a `Broadcast agent <id> not found in agents.entries; skipping` warning.
 
 ### Processing strategy
 
@@ -247,7 +247,7 @@ Broadcast groups work alongside existing routing:
   <Accordion title="Agents not responding">
     **Check:**
 
-    1. Agent IDs exist in `agents.list` (config validation rejects unknown ids).
+    1. Agent IDs exist in `agents.entries` (config validation rejects unknown ids).
     2. Peer ID format is correct (group JID like `120363403215116621@g.us`, or E.164 like `+15551234567` for DMs).
     3. The message passed normal gating (mention/activation rules still apply).
 

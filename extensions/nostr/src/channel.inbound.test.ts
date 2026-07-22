@@ -177,9 +177,7 @@ describe("nostr inbound gateway path", () => {
         publicKey: "bot-pubkey",
         config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
       }),
-      cfg: {
-        commands: { useAccessGroups: true },
-      },
+      cfg: {},
     });
 
     const options = mockCallArg(mocks.startNostrBus) as {

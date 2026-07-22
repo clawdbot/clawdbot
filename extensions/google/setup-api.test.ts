@@ -103,6 +103,44 @@ describe("google setup entry", () => {
 });
 
 describe("google gemini cli backend config", () => {
+  it.each([
+    {
+      phase: "fresh",
+      key: "args" as const,
+      expected: [
+        "--skip-trust",
+        "--approval-mode",
+        "auto_edit",
+        "--output-format",
+        "stream-json",
+        "--prompt",
+        "{prompt}",
+      ],
+    },
+    {
+      phase: "resume",
+      key: "resumeArgs" as const,
+      expected: [
+        "--skip-trust",
+        "--approval-mode",
+        "auto_edit",
+        "--resume",
+        "{sessionId}",
+        "--output-format",
+        "stream-json",
+        "--prompt",
+        "{prompt}",
+      ],
+    },
+  ])("preserves the legacy $phase command bytes in plugin code", ({ key, expected }) => {
+    const backend = buildGoogleGeminiCliBackend();
+
+    expect(backend.config.command).toBe("gemini");
+    expect(backend.config[key]).toEqual(expected);
+    expect(backend.config.env).toBeUndefined();
+    expect(backend.config.clearEnv).toBeUndefined();
+  });
+
   it("declares its bundled package implementation boundary", () => {
     expect(buildGoogleGeminiCliBackend().runtimeArtifact).toEqual({
       kind: "bundled-package-tree",

@@ -209,6 +209,8 @@ vi.mock("../gateway/session-utils.js", () => ({
     loadCombinedSessionStoreForGatewayMock(...args),
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
+  loadSessionEntryReadOnly: (sessionKey: string, opts?: { agentId?: string }) =>
+    loadSessionEntryMock(sessionKey, opts),
   migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({
     primaryKey: key,
     target: { storeKeys: [key] },

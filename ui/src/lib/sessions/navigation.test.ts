@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { resolveSessionNavigation, visibleSessionMatches } from "./navigation.ts";

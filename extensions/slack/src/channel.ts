@@ -796,7 +796,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           snapshot,
           snapshot.identity === "user"
             ? {
-                identity: "user",
+                postAs: "user",
                 userTokenSource: snapshot.userTokenSource ?? "none",
                 ...(snapshot.mode === "http"
                   ? { signingSecretSource: snapshot.signingSecretSource ?? "none" }
@@ -872,7 +872,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       },
       resolveAccountSnapshot: ({ account }) => {
         const mode = account.config.mode ?? "socket";
-        const identity = account.config.identity ?? "bot";
+        const identity = account.config.postAs ?? "bot";
         const credentialConfigured =
           mode === "http"
             ? resolveConfiguredFromRequiredCredentialStatuses(account, [

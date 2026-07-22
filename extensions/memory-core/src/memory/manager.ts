@@ -1,6 +1,7 @@
 // Memory Core plugin module implements manager behavior.
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -211,11 +212,8 @@ function resolveConfiguredMemoryEmbeddingProvider(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): string | undefined {
-  const normalizedAgentId = normalizeAgentId(params.agentId);
-  const agentEntry = params.cfg.agents?.list?.find(
-    (entry) => entry && normalizeAgentId(entry.id) === normalizedAgentId,
-  );
-  return agentEntry?.memorySearch?.provider ?? params.cfg.agents?.defaults?.memorySearch?.provider;
+  const agentEntry = resolveAgentConfig(params.cfg, normalizeAgentId(params.agentId));
+  return agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider;
 }
 
 function resolveMemoryEmbeddingProviderRequirement(params: {
@@ -519,11 +517,29 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         this.ensureSessionListener();
         this.ensureIntervalSync();
       }
-      this.dirty = resolveInitialMemoryDirty({
-        hasMemorySource: this.sources.has("memory"),
-        statusOnly: params.purpose === "status",
-        hasIndexedMeta: Boolean(meta),
-      });
+      const invalidatedSources = new Set(
+        (
+          this.db
+            .prepare("SELECT DISTINCT source FROM memory_index_sources WHERE hash = ''")
+            .all() as Array<{ source?: unknown }>
+        ).flatMap((row) =>
+          row.source === "memory" || row.source === "sessions" ? [row.source] : [],
+        ),
+      );
+      this.dirty =
+        resolveInitialMemoryDirty({
+          hasMemorySource: this.sources.has("memory"),
+          statusOnly: params.purpose === "status",
+          hasIndexedMeta: Boolean(meta),
+        }) ||
+        (this.sources.has("memory") && invalidatedSources.has("memory"));
+      if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
+        // Migration cannot map a durable session source path back to one live
+        // transcript file. Carry a full-session retry so unchanged and deleted
+        // transcripts both converge on the next startup/search sync.
+        this.sessionsDirty = true;
+        this.sessionsFullRetryDirty = true;
+      }
       this.batch = this.resolveBatchConfig();
       if (!transient) {
         this.ensureSessionStartupCatchup();

@@ -126,7 +126,7 @@ describe("renderUsageInsights", () => {
     );
 
     const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
-    const tooltips = [...container.querySelectorAll("wa-tooltip.usage-summary-tooltip")];
+    const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
     expect(
@@ -138,11 +138,16 @@ describe("renderUsageInsights", () => {
       ),
     ).toBe(true);
     expect(
-      tooltips.every(
-        (tooltip) =>
-          tooltip.getAttribute("trigger") === "hover focus" &&
-          buttons.some((button) => button.id === tooltip.getAttribute("for")),
-      ),
+      tooltips.every((tooltip) => {
+        const button = tooltip.querySelector<HTMLButtonElement>("button.usage-summary-hint");
+        const content = tooltip.querySelector('[slot="content"]');
+        return Boolean(
+          button &&
+          buttons.includes(button) &&
+          content &&
+          button.getAttribute("aria-label") !== content.textContent,
+        );
+      }),
     ).toBe(true);
 
     buttons[0]?.click();

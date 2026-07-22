@@ -257,28 +257,6 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
-    findings.push({
-      checkId: "gateway.control_ui.insecure_auth",
-      severity: "warn",
-      title: "Control UI insecure auth toggle enabled",
-      detail:
-        "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
-      remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
-    });
-  }
-
-  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
-    findings.push({
-      checkId: "gateway.control_ui.device_auth_disabled",
-      severity: "critical",
-      title: "DANGEROUS: Control UI device auth disabled",
-      detail:
-        "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
-      remediation: "Disable it unless you are in a short-lived break-glass scenario.",
-    });
-  }
-
   if (cfg.mcp?.apps?.enabled === true) {
     findings.push({
       checkId: "mcp.apps.enabled",

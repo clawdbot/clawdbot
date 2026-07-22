@@ -610,6 +610,109 @@ struct RootTabsPresentationTests {
         #expect(ChatSessionSidebarModel.workSubtitle(for: Self.sessionEntry(key: "plain")) == nil)
     }
 
+    @Test func `sidebar subtitle keeps an unread final observer digest above work metadata`() {
+        let digest = OpenClawChatSessionObserverDigest(
+            revision: 4,
+            updatedAt: 2000,
+            headline: "Finished with warnings",
+            health: "done")
+        let unread = Self.sessionEntry(
+            key: "agent:main:work",
+            lastReadAt: 1999,
+            observerDigest: digest)
+        let read = Self.sessionEntry(
+            key: "agent:main:work",
+            lastReadAt: 2000,
+            observerDigest: digest)
+
+        #expect(ChatSessionSidebarModel.subtitle(
+            for: unread,
+            workSubtitle: "openclaw \u{2387} observer") == "Finished with warnings")
+        #expect(ChatSessionSidebarModel.subtitle(
+            for: read,
+            workSubtitle: "openclaw \u{2387} observer") == "openclaw \u{2387} observer")
+    }
+
+    @Test func `sidebar registers event stream before subscription request`() async {
+        var order: [String] = []
+        let (stream, continuation) = AsyncStream<EventFrame>.makeStream()
+
+        await RootSidebarModel.consumeSubscribedSessionEvents(
+            makeStream: {
+                order.append("stream")
+                return stream
+            },
+            subscribe: {
+                order.append("subscribe")
+                continuation.yield(EventFrame(type: "event", event: "tick"))
+                continuation.finish()
+            },
+            onEvent: { frame in
+                order.append("event:\(frame.event)")
+                return false
+            },
+            retryDelays: [.zero],
+            sleep: { _ in
+                throw CancellationError()
+            })
+
+        #expect(order == ["stream", "subscribe", "event:tick"])
+    }
+
+    @Test func `sidebar retries failed subscribe and resubscribes after stream completion`() async {
+        enum TestError: Error { case transient }
+
+        func sessionsChangedEvent(reason: String) -> EventFrame {
+            EventFrame(
+                type: "event",
+                event: "sessions.changed",
+                payload: AnyCodable([
+                    "sessionKey": AnyCodable("agent:main:work"),
+                    "reason": AnyCodable(reason),
+                    "updatedAt": AnyCodable(200),
+                ]))
+        }
+
+        var streamCount = 0
+        var subscribeAttempts = 0
+        var events: [String] = []
+
+        await RootSidebarModel.consumeSubscribedSessionEvents(
+            makeStream: {
+                streamCount += 1
+                return AsyncStream { continuation in
+                    if streamCount == 2 {
+                        continuation.yield(sessionsChangedEvent(reason: "patch"))
+                    } else if streamCount == 3 {
+                        continuation.yield(sessionsChangedEvent(reason: "message"))
+                    }
+                    continuation.finish()
+                }
+            },
+            subscribe: {
+                subscribeAttempts += 1
+                if subscribeAttempts == 1 {
+                    throw TestError.transient
+                }
+            },
+            onEvent: { frame in
+                guard case let .sessionsChanged(change) = OpenClawChatGatewayPayloadCodec.event(from: frame)
+                else { return false }
+                events.append(change.reason)
+                return false
+            },
+            retryDelays: [.zero],
+            sleep: { _ in
+                if subscribeAttempts >= 3 {
+                    throw CancellationError()
+                }
+            })
+
+        #expect(streamCount == 3)
+        #expect(subscribeAttempts == 3)
+        #expect(events == ["patch", "message"])
+    }
+
     @Test func `pinned pages storage round trips and preserves pin order`() {
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
@@ -758,6 +861,8 @@ struct RootTabsPresentationTests {
         totalTokens: Int? = nil,
         totalTokensFresh: Bool? = nil,
         contextTokens: Int? = nil,
+        lastReadAt: Double? = nil,
+        observerDigest: OpenClawChatSessionObserverDigest? = nil,
         worktree: OpenClawChatSessionWorktree? = nil) -> OpenClawChatSessionEntry
     {
         OpenClawChatSessionEntry(
@@ -782,6 +887,8 @@ struct RootTabsPresentationTests {
             model: nil,
             contextTokens: contextTokens,
             archived: archived,
+            observerDigest: observerDigest,
+            lastReadAt: lastReadAt,
             worktree: worktree)
     }
 

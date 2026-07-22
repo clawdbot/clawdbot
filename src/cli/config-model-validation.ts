@@ -21,7 +21,6 @@ import { formatCliCommand } from "./command-format.js";
 type TouchedModelRef = {
   path: string;
   value: string;
-  agentIndex?: number;
   agentId?: string;
   fallback: boolean;
   authProfileId?: string;
@@ -39,6 +38,15 @@ type ConfigModelRefCheckResult = {
   errors: string[];
 };
 
+type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
+
+function resolveAgentEntries(config: OpenClawConfig): AgentEntriesConfig | undefined {
+  const entries: unknown = config.agents?.entries;
+  return entries && typeof entries === "object" && !Array.isArray(entries)
+    ? (entries as AgentEntriesConfig)
+    : undefined;
+}
+
 function isPathPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
 }
@@ -46,7 +54,6 @@ function isPathPrefix(prefix: readonly string[], path: readonly string[]): boole
 function collectTextModelConfigRefs(params: {
   model: unknown;
   path: string;
-  agentIndex?: number;
   agentId?: string;
 }): TouchedModelRef[] {
   if (typeof params.model === "string") {
@@ -55,7 +62,6 @@ function collectTextModelConfigRefs(params: {
       {
         path: params.path,
         value,
-        ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
         ...(params.agentId ? { agentId: params.agentId } : {}),
         fallback: false,
       },
@@ -71,7 +77,6 @@ function collectTextModelConfigRefs(params: {
     refs.push({
       path: `${params.path}.primary`,
       value,
-      ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       fallback: false,
     });
@@ -84,7 +89,6 @@ function collectTextModelConfigRefs(params: {
       refs.push({
         path: `${params.path}.fallbacks.${index}`,
         value: fallback.trim(),
-        ...(params.agentIndex === undefined ? {} : { agentIndex: params.agentIndex }),
         ...(params.agentId ? { agentId: params.agentId } : {}),
         fallback: true,
       });
@@ -98,18 +102,17 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
     model: config.agents?.defaults?.model,
     path: "agents.defaults.model",
   });
-  const agentList = config.agents?.list;
-  if (Array.isArray(agentList)) {
-    for (const [agentIndex, agent] of agentList.entries()) {
+  const agentEntries = resolveAgentEntries(config);
+  if (agentEntries) {
+    for (const [agentId, agent] of Object.entries(agentEntries)) {
       if (!agent || typeof agent !== "object" || Array.isArray(agent)) {
         continue;
       }
       refs.push(
         ...collectTextModelConfigRefs({
           model: (agent as { model?: unknown }).model,
-          path: `agents.list.${agentIndex}.model`,
-          agentIndex,
-          ...(typeof agent.id === "string" ? { agentId: agent.id } : {}),
+          path: `agents.entries.${agentId}.model`,
+          agentId,
         }),
       );
     }
@@ -129,8 +132,8 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
 }
 
 function modelRefComparisonKey(ref: TouchedModelRef): string {
-  if (ref.agentId && ref.agentIndex !== undefined) {
-    const prefix = `agents.list.${ref.agentIndex}.`;
+  if (ref.agentId) {
+    const prefix = `agents.entries.${ref.agentId}.`;
     const relativePath = ref.path.startsWith(prefix) ? ref.path.slice(prefix.length) : ref.path;
     return `agent:${normalizeAgentId(ref.agentId)}:${relativePath}`;
   }
@@ -179,15 +182,6 @@ function collectTouchedTextModelRefs(params: {
       }
     }
     const refPath = ref.path.split(".");
-    const agentIdPath =
-      ref.agentIndex === undefined ? undefined : ["agents", "list", String(ref.agentIndex), "id"];
-    if (
-      agentIdPath &&
-      params.touchedPaths.some((touchedPath) => isPathPrefix(agentIdPath, touchedPath))
-    ) {
-      ref.dependency = true;
-      return true;
-    }
     const touched = params.touchedPaths.some(
       (touchedPath) => isPathPrefix(touchedPath, refPath) || isPathPrefix(refPath, touchedPath),
     );
@@ -201,18 +195,21 @@ function collectTouchedTextModelRefs(params: {
     }
     return previousRef?.value !== ref.value || ownerChanged;
   });
-  const defaultRefs = refs.filter((ref) => ref.agentIndex === undefined);
-  const agentList = params.config.agents?.list;
+  const defaultRefs = refs.filter((ref) => ref.agentId === undefined);
+  const agentEntries = resolveAgentEntries(params.config);
   if (defaultRefs.length === 0) {
     return touchedRefs;
   }
-  if (!Array.isArray(agentList) || agentList.length === 0) {
-    const listPath = ["agents", "list"];
-    const listTouched = params.touchedPaths.some(
-      (touchedPath) => isPathPrefix(touchedPath, listPath) || isPathPrefix(listPath, touchedPath),
+  if (!agentEntries || Object.keys(agentEntries).length === 0) {
+    const entriesPath = ["agents", "entries"];
+    const entriesTouched = params.touchedPaths.some(
+      (touchedPath) =>
+        isPathPrefix(touchedPath, entriesPath) || isPathPrefix(entriesPath, touchedPath),
     );
-    const previousList = params.previousConfig?.agents?.list;
-    if (!listTouched || !Array.isArray(previousList) || previousList.length === 0) {
+    const previousEntries = params.previousConfig
+      ? resolveAgentEntries(params.previousConfig)
+      : undefined;
+    if (!entriesTouched || !previousEntries || Object.keys(previousEntries).length === 0) {
       return touchedRefs;
     }
     const previousDefaultAgentId = resolveDefaultAgentId(params.previousConfig ?? {});
@@ -227,7 +224,7 @@ function collectTouchedTextModelRefs(params: {
               undefined
           : false;
       const alreadySelected = touchedRefs.some(
-        (ref) => ref.agentIndex === undefined && ref.path === defaultRef.path,
+        (ref) => ref.agentId === undefined && ref.path === defaultRef.path,
       );
       if (!previouslyInherited && !alreadySelected) {
         touchedRefs.push({ ...defaultRef, dependency: true });
@@ -235,19 +232,13 @@ function collectTouchedTextModelRefs(params: {
     }
     return touchedRefs;
   }
-  for (const [agentIndex, agent] of agentList.entries()) {
-    const agentId = typeof agent?.id === "string" ? agent.id : "";
-    if (!agentId) {
-      continue;
-    }
-    const agentEntryPath = ["agents", "list", String(agentIndex)];
-    const agentIdPath = [...agentEntryPath, "id"];
+  for (const agentId of Object.keys(agentEntries)) {
+    const agentEntryPath = ["agents", "entries", agentId];
     const agentModelPath = [...agentEntryPath, "model"];
     const ownershipTouched = params.touchedPaths.some(
       (touchedPath) =>
         isPathPrefix(touchedPath, agentEntryPath) ||
-        isPathPrefix(touchedPath, agentIdPath) ||
-        isPathPrefix(agentIdPath, touchedPath) ||
+        isPathPrefix(agentEntryPath, touchedPath) ||
         isPathPrefix(touchedPath, agentModelPath) ||
         isPathPrefix(agentModelPath, touchedPath),
     );
@@ -258,11 +249,9 @@ function collectTouchedTextModelRefs(params: {
       const inherits = defaultRef.fallback
         ? resolveAgentModelFallbacksOverride(params.config, agentId) === undefined
         : resolveAgentExplicitModelPrimary(params.config, agentId) === undefined;
-      const previousAgentExists = Boolean(
-        params.previousConfig?.agents?.list?.some(
-          (entry) => normalizeAgentId(entry?.id) === normalizeAgentId(agentId),
-        ),
-      );
+      const previousAgentExists = Object.keys(
+        params.previousConfig ? (resolveAgentEntries(params.previousConfig) ?? {}) : {},
+      ).some((entryId) => normalizeAgentId(entryId) === normalizeAgentId(agentId));
       const previouslyInherited =
         previousAgentExists && params.previousConfig
           ? defaultRef.fallback
@@ -270,7 +259,7 @@ function collectTouchedTextModelRefs(params: {
             : resolveAgentExplicitModelPrimary(params.previousConfig, agentId) === undefined
           : false;
       if (inherits && !previouslyInherited) {
-        touchedRefs.push({ ...defaultRef, agentIndex, agentId, dependency: true });
+        touchedRefs.push({ ...defaultRef, agentId, dependency: true });
       }
     }
   }
@@ -344,27 +333,27 @@ function expandInheritedDefaultRefs(
   config: OpenClawConfig,
   refs: TouchedModelRef[],
 ): TouchedModelRef[] {
-  const agentList = config.agents?.list;
-  if (!Array.isArray(agentList)) {
+  const agentEntries = resolveAgentEntries(config);
+  if (!agentEntries) {
     return refs;
   }
   const defaultAgentId = resolveDefaultAgentId(config);
   const expanded: TouchedModelRef[] = [];
   const seen = new Set<string>();
   const push = (ref: TouchedModelRef) => {
-    const key = `${ref.path}\u0000${ref.agentId ?? ""}\u0000${ref.agentIndex ?? ""}`;
+    const key = `${ref.path}\u0000${ref.agentId ?? ""}`;
     if (!seen.has(key)) {
       seen.add(key);
       expanded.push(ref);
     }
   };
   for (const ref of refs) {
-    if (ref.agentIndex !== undefined) {
+    if (ref.agentId !== undefined) {
       push(ref);
       continue;
     }
-    const defaultAgentConfigured = agentList.some(
-      (agent) => normalizeAgentId(agent?.id) === normalizeAgentId(defaultAgentId),
+    const defaultAgentConfigured = Object.keys(agentEntries).some(
+      (agentId) => normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId),
     );
     const defaultAgentInherits =
       !defaultAgentConfigured ||
@@ -374,16 +363,15 @@ function expandInheritedDefaultRefs(
     if (defaultAgentInherits) {
       push(ref);
     }
-    for (const [agentIndex, agent] of agentList.entries()) {
-      const agentId = typeof agent?.id === "string" ? agent.id : "";
-      if (!agentId || normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId)) {
+    for (const agentId of Object.keys(agentEntries)) {
+      if (normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId)) {
         continue;
       }
       const inherits = ref.fallback
         ? resolveAgentModelFallbacksOverride(config, agentId) === undefined
         : resolveAgentExplicitModelPrimary(config, agentId) === undefined;
       if (inherits) {
-        push({ ...ref, agentIndex, agentId });
+        push({ ...ref, agentId });
       }
     }
   }
@@ -427,12 +415,7 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     ]));
 
   return async ({ config, ref }) => {
-    const configuredAgent =
-      ref.agentIndex === undefined ? undefined : config.agents?.list?.[ref.agentIndex];
-    const targetAgentId =
-      typeof configuredAgent?.id === "string"
-        ? configuredAgent.id
-        : agentScope.resolveDefaultAgentId(config);
+    const targetAgentId = ref.agentId ?? agentScope.resolveDefaultAgentId(config);
     const agentDir = agentScope.resolveAgentDir(config, targetAgentId);
     const workspaceDir = agentScope.resolveAgentWorkspaceDir(config, targetAgentId);
     const resolvedRef = ref.fallback

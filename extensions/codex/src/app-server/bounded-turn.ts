@@ -4,9 +4,13 @@ import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { readCodexNotificationItem } from "./attempt-notifications.js";
+import {
+  isRetryableErrorNotification,
+  readCodexNotificationItem,
+} from "./attempt-notifications.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
 import { readModelListResult } from "./models.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
@@ -31,9 +35,15 @@ import {
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
+import {
+  assertCodexRingZeroHasNoManagedHooks,
+  attestCodexRingZeroThreadHasNoMcpServers,
+  buildCodexRingZeroThreadConfigPatch,
+  readCodexInheritedMcpServerNames,
+} from "./thread-requests.js";
 
 const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
-const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR = "OPENCLAW_CODEX_APP_SERVER_ARGS";
+const CODEX_APP_SERVER_ARGS_ENV_KEY = "OPENCLAW_CODEX_APP_SERVER_ARGS";
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
   "features.apps": false,
@@ -46,6 +56,10 @@ const CODEX_PRIVATE_BOUNDED_THREAD_CONFIG: JsonObject = {
   "features.hooks": false,
   notify: [],
 };
+const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
+  "skills.include_instructions": false,
+  include_environment_context: false,
+};
 
 export type CodexBoundedTurnOptions = {
   pluginConfig?: unknown;
@@ -56,6 +70,7 @@ type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
   model: string;
+  usage?: ReturnType<typeof normalizeCodexResponseTokenUsage>;
 };
 
 type CodexBoundedTurnModelSelection = { mode: "required"; id: string } | { mode: "live-default" };
@@ -75,6 +90,8 @@ type CodexBoundedTurnParams = {
   requiredModalities: string[];
   isolation: "configured-transport" | "private-stdio";
   threadConfig?: JsonObject;
+  historyItems?: JsonValue[];
+  requireNoExternalCapabilities?: boolean;
 };
 
 export async function runBoundedCodexAppServerTurn(
@@ -171,6 +188,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       timeoutMs,
       signal: abortController.signal,
     });
+    const inheritedMcpServerNames = params.requireNoExternalCapabilities
+      ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
+      : [];
+    if (params.requireNoExternalCapabilities) {
+      await assertCodexRingZeroHasNoManagedHooks(client, abortController.signal);
+    }
     const thread = assertCodexThreadStartResponse(
       await client.request<unknown>(
         "thread/start",
@@ -181,10 +204,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           approvalPolicy: "on-request",
           sandbox: "read-only",
           serviceName: "OpenClaw",
+          ...(params.requireNoExternalCapabilities ? { baseInstructions: "" } : {}),
           developerInstructions: params.developerInstructions,
-          config: buildCodexRuntimeThreadConfig(resolveBoundedThreadConfig(params, workspace), {
-            nativeCodeModeEnabled: false,
-          }),
+          config: buildCodexRuntimeThreadConfig(
+            resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
+            { nativeCodeModeEnabled: false },
+          ),
           environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
@@ -193,6 +218,22 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         { timeoutMs, signal: abortController.signal },
       ),
     );
+    if (params.requireNoExternalCapabilities) {
+      // Attest the started thread before injecting historical tool evidence.
+      // Otherwise inherited MCP state could act on a finalization-only turn.
+      await attestCodexRingZeroThreadHasNoMcpServers(
+        client,
+        thread.thread.id,
+        abortController.signal,
+      );
+    }
+    if (params.historyItems?.length) {
+      await client.request(
+        "thread/inject_items",
+        { threadId: thread.thread.id, items: params.historyItems },
+        { timeoutMs, signal: abortController.signal },
+      );
+    }
     const collector = createCodexBoundedTurnCollector(thread.thread.id, params.taskLabel);
     const cleanup = client.addNotificationHandler(collector.handleNotification);
     const requestCleanup = client.addRequestHandler(
@@ -252,13 +293,28 @@ async function runBoundedCodexAppServerTurnInWorkspace(
 function resolveBoundedThreadConfig(
   params: CodexBoundedTurnParams,
   workspace: { codexHome?: string },
+  inheritedMcpServerNames: readonly string[],
 ): JsonObject {
   const boundedConfig =
     mergeCodexThreadConfigs(CODEX_BOUNDED_THREAD_CONFIG, params.threadConfig) ??
     CODEX_BOUNDED_THREAD_CONFIG;
-  return workspace.codexHome
+  const privateConfig = workspace.codexHome
     ? (mergeCodexThreadConfigs(boundedConfig, CODEX_PRIVATE_BOUNDED_THREAD_CONFIG) ?? boundedConfig)
     : boundedConfig;
+  if (!params.requireNoExternalCapabilities) {
+    return privateConfig;
+  }
+  return (
+    mergeCodexThreadConfigs(
+      privateConfig,
+      CODEX_SETTLED_FINALIZER_THREAD_CONFIG,
+      buildCodexRingZeroThreadConfigPatch(
+        { toolsAllow: ["openclaw"] },
+        true,
+        inheritedMcpServerNames,
+      ),
+    ) ?? privateConfig
+  );
 }
 
 function buildPrivateCodexAppServerStartOptions(
@@ -267,12 +323,12 @@ function buildPrivateCodexAppServerStartOptions(
 ): ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"] {
   const privateEnv = Object.fromEntries(
     Object.entries(start.env ?? {}).filter(
-      ([name]) => name.trim().toUpperCase() !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR,
+      ([name]) => name.trim().toUpperCase() !== CODEX_APP_SERVER_ARGS_ENV_KEY,
     ),
   );
   const clearEnv = (start.clearEnv ?? []).filter((name) => {
     const normalized = name.trim().toUpperCase();
-    return normalized !== "CODEX_HOME" && normalized !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR;
+    return normalized !== "CODEX_HOME" && normalized !== CODEX_APP_SERVER_ARGS_ENV_KEY;
   });
   return {
     ...start,
@@ -281,7 +337,7 @@ function buildPrivateCodexAppServerStartOptions(
       ...privateEnv,
       CODEX_HOME: codexHome,
     },
-    clearEnv: [...clearEnv, OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR],
+    clearEnv: [...clearEnv, CODEX_APP_SERVER_ARGS_ENV_KEY],
   };
 }
 
@@ -356,6 +412,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
   let turnId: string | undefined;
   let completedTurn: CodexTurn | undefined;
   let promptError: string | undefined;
+  let responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
   const pending: CodexServerNotification[] = [];
   const completedItems = new Map<string, CodexThreadItem>();
   const assistantTextByItem = new Map<string, string>();
@@ -404,6 +461,12 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       rememberAssistantText(itemId, `${assistantTextByItem.get(itemId) ?? ""}${delta}`);
       return;
     }
+    if (notification.method === "rawResponse/completed") {
+      const usage = isJsonObject(params.usage) ? params.usage : undefined;
+      // Exact per-response usage replaces any earlier response in this turn.
+      responseUsage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
+      return;
+    }
     if (notification.method === "turn/completed") {
       completedTurn =
         readCodexTurnCompletedNotification(notification.params)?.turn ?? completedTurn;
@@ -411,6 +474,9 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       return;
     }
     if (notification.method === "error") {
+      if (isRetryableErrorNotification(notification.params)) {
+        return;
+      }
       promptError =
         readCodexErrorNotification(notification.params)?.error.message ??
         `codex app-server ${taskLabel} turn failed`;
@@ -447,6 +513,11 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
           completedTurn.error?.message ?? `codex app-server ${taskLabel} turn failed`,
         );
       }
+      if (completedTurn?.status !== "completed") {
+        throw new Error(
+          `codex app-server ${taskLabel} turn ended with status ${completedTurn?.status ?? "unknown"}`,
+        );
+      }
       const items = collectCompletedItems(completedTurn?.items, completedItems);
       const itemText = collectAssistantTextFromItems(items);
       const deltaText = assistantItemOrder
@@ -458,7 +529,7 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       if (!text) {
         throw new Error(`Codex app-server ${taskLabel} turn returned no text.`);
       }
-      return { text, items };
+      return { text, items, ...(responseUsage ? { usage: responseUsage } : {}) };
     },
   };
 }

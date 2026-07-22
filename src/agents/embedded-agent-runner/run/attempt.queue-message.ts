@@ -3,6 +3,7 @@
  */
 import { toErrorObject } from "../../../infra/errors.js";
 import type { ImageContent } from "../../../llm/types.js";
+import type { MediaFact } from "../../../media/media-facts.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import {
   cancelPendingAgentQuestionForSession,
@@ -22,12 +23,28 @@ type EmbeddedAgentActiveSessionSteerTarget = {
     text: string,
     images?: ImageContent[],
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+    media?: MediaFact[],
   ): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
 /** Default wait for a steered user message to appear in the active transcript. */
 const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
+
+function steerActiveSession(
+  activeSession: EmbeddedAgentActiveSessionSteerTarget,
+  text: string,
+  images?: ImageContent[],
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+  media?: MediaFact[],
+): Promise<void> {
+  if (media?.length) {
+    return activeSession.steer(text, images, userTurnTranscriptRecorder, media);
+  }
+  return userTurnTranscriptRecorder
+    ? activeSession.steer(text, images, userTurnTranscriptRecorder)
+    : activeSession.steer(text, images);
+}
 
 function extractQueuedUserMessageText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
@@ -139,6 +156,7 @@ async function steerAndWaitForTranscriptCommit(
   timeoutMs: number,
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
   images?: ImageContent[],
+  media?: MediaFact[],
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -219,9 +237,13 @@ async function steerAndWaitForTranscriptCommit(
         scheduleTerminalCancellation();
       }
     });
-    const steer = userTurnTranscriptRecorder
-      ? activeSession.steer(text, images, userTurnTranscriptRecorder)
-      : activeSession.steer(text, images);
+    const steer = steerActiveSession(
+      activeSession,
+      text,
+      images,
+      userTurnTranscriptRecorder,
+      media,
+    );
     steer.catch((err: unknown) => {
       finish(err);
     });
@@ -263,11 +285,13 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     return;
   }
   if (options?.waitForTranscriptCommit !== true) {
-    if (options?.userTurnTranscriptRecorder) {
-      await activeSession.steer(text, options.images, options.userTurnTranscriptRecorder);
-    } else {
-      await activeSession.steer(text, options?.images);
-    }
+    await steerActiveSession(
+      activeSession,
+      text,
+      options?.images,
+      options?.userTurnTranscriptRecorder,
+      options?.media,
+    );
     return;
   }
   await steerAndWaitForTranscriptCommit(
@@ -276,5 +300,6 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
     options.userTurnTranscriptRecorder,
     options.images,
+    options.media,
   );
 }

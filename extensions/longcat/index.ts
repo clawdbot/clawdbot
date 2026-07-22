@@ -42,6 +42,8 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildLongCatProvider,
+      buildStaticProvider: buildLongCatProvider,
+      liveModelDiscovery: true,
     },
     ...buildProviderReplayFamilyHooks({
       family: "openai-compatible",

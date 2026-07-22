@@ -19,10 +19,7 @@ import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onbo
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OLLAMA_CLOUD_BASE_URL,
   OLLAMA_CLOUD_DEFAULT_MODELS,
@@ -37,6 +34,7 @@ import {
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
+  isOllamaCloudModel,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
 } from "./provider-models.js";
@@ -119,10 +117,6 @@ function normalizeOllamaModelName(value: string | undefined): string | undefined
     return normalized || undefined;
   }
   return trimmed;
-}
-
-function isOllamaCloudModel(modelName: string | undefined): boolean {
-  return normalizeOptionalLowercaseString(modelName)?.endsWith(":cloud") === true;
 }
 
 function formatOllamaPullStatus(status: string): { text: string; hidePercent: boolean } {

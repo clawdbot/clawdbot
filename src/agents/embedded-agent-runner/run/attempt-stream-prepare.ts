@@ -93,7 +93,10 @@ export function prepareEmbeddedAttemptStream(input: {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
   let beforeAgentFinalizeRevisionReason: string | undefined;
-  const onBeforeTerminalDelivery = hookRunner?.hasHooks("before_agent_finalize")
+  const shouldRunBeforeAgentFinalize =
+    attempt.operation !== "settled-tool-finalization" &&
+    hookRunner?.hasHooks("before_agent_finalize");
+  const onBeforeTerminalDelivery = shouldRunBeforeAgentFinalize
     ? async (event: {
         messages: AgentMessage[];
         willRetry: boolean;

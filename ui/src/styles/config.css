@@ -80,6 +80,29 @@
   min-height: 28px;
 }
 
+.config-show-advanced.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-subtle);
+}
+
+.config-advanced-fields {
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.config-advanced-fields__summary {
+  padding: var(--space-3) 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.config-advanced-fields__content {
+  margin-top: 0;
+}
+
 /* Restart affordance shown after a successful save until apply */
 .config-apply-banner {
   display: flex;

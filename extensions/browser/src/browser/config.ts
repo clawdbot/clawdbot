@@ -140,7 +140,7 @@ const EXTENSION_RELAY_PORT_OFFSET = 8;
 /** Username half of the relay's Basic credential; the password is the derived token. */
 const EXTENSION_RELAY_CDP_USER = "openclaw";
 /** Environment variable that overrides managed Chrome headless mode. */
-const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
+const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 
 /** Source that determined managed Chrome headless mode. */
 export type ManagedBrowserHeadlessSource =
@@ -167,18 +167,6 @@ export type ManagedBrowserHeadlessOptions = {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
 };
-
-function normalizeHexColor(raw: string | undefined): string {
-  const value = (raw ?? "").trim();
-  if (!value) {
-    return DEFAULT_OPENCLAW_BROWSER_COLOR;
-  }
-  const normalized = value.startsWith("#") ? value : `#${value}`;
-  if (!/^#[0-9a-fA-F]{6}$/.test(normalized)) {
-    return DEFAULT_OPENCLAW_BROWSER_COLOR;
-  }
-  return normalized.toUpperCase();
-}
 
 function normalizeExecutablePath(raw: string | undefined): string | undefined {
   const value = normalizeOptionalString(raw);
@@ -249,18 +237,12 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
-  const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolvedAllowPrivateNetwork =
     dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
 
-  if (
-    !resolvedAllowPrivateNetwork &&
-    !hasExplicitPrivateSetting &&
-    !allowedHostnames &&
-    !hostnameAllowlist
-  ) {
+  if (!resolvedAllowPrivateNetwork && !hasExplicitPrivateSetting && !allowedHostnames) {
     // Keep the default policy object present so CDP guards still enforce
     // fail-closed private-network checks on unconfigured installs.
     return {};
@@ -273,13 +255,11 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
       ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
       : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
-    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
   };
 }
 
 function ensureDefaultProfile(
   profiles: Record<string, BrowserProfileConfig> | undefined,
-  defaultColor: string,
   legacyCdpPort?: number,
   derivedDefaultCdpPort?: number,
   legacyCdpUrl?: string,
@@ -288,7 +268,6 @@ function ensureDefaultProfile(
   if (!result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]) {
     result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME] = {
       cdpPort: legacyCdpPort ?? derivedDefaultCdpPort ?? DEFAULT_BROWSER_CDP_PORT_RANGE_START,
-      color: defaultColor,
       ...(legacyCdpUrl ? { cdpUrl: legacyCdpUrl } : {}),
     };
   }
@@ -305,7 +284,6 @@ function ensureDefaultUserBrowserProfile(
   result.user = {
     driver: "existing-session",
     attachOnly: true,
-    color: "#00AA00",
   };
   return result;
 }
@@ -320,7 +298,6 @@ function ensureDefaultChromeExtensionProfile(
   }
   result.chrome = {
     driver: "extension",
-    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
   };
   return result;
 }
@@ -381,7 +358,6 @@ export function resolveBrowserConfig(
   const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
-  const defaultColor = normalizeHexColor(cfg?.color);
   const remoteCdpTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS;
   const remoteCdpHandshakeTimeoutMs = DEFAULT_BROWSER_REMOTE_CDP_HANDSHAKE_TIMEOUT_MS;
   const localLaunchTimeoutMs = DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS;
@@ -432,13 +408,7 @@ export function resolveBrowserConfig(
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
   let profiles = ensureDefaultChromeExtensionProfile(
     ensureDefaultUserBrowserProfile(
-      ensureDefaultProfile(
-        cfg?.profiles,
-        defaultColor,
-        legacyCdpPort,
-        cdpPortRangeStart,
-        legacyCdpUrl,
-      ),
+      ensureDefaultProfile(cfg?.profiles, legacyCdpPort, cdpPortRangeStart, legacyCdpUrl),
     ),
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
@@ -476,7 +446,7 @@ export function resolveBrowserConfig(
     localLaunchTimeoutMs,
     localCdpReadyTimeoutMs,
     actionTimeoutMs,
-    color: defaultColor,
+    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath,
     headless,
     headlessSource,
@@ -540,7 +510,7 @@ export function resolveProfile(
       cdpUrl: relayCdpUrl,
       cdpHost: "127.0.0.1",
       cdpIsLoopback: true,
-      color: profile.color,
+      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       driver,
       executablePath,
       headless: false,
@@ -560,7 +530,7 @@ export function resolveProfile(
       userDataDir: resolveUserPath(profile.userDataDir?.trim() || "") || undefined,
       mcpCommand: normalizeOptionalString(profile.mcpCommand),
       mcpArgs: normalizeStringList(profile.mcpArgs) ?? undefined,
-      color: profile.color,
+      color: DEFAULT_OPENCLAW_BROWSER_COLOR,
       driver,
       executablePath,
       headless,
@@ -608,7 +578,7 @@ export function resolveProfile(
     cdpUrl,
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
-    color: profile.color,
+    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     driver,
     executablePath,
     headless,
@@ -633,7 +603,7 @@ export function resolveManagedBrowserHeadlessMode(
 
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
-  const envHeadless = parseBooleanValue(env[OPENCLAW_BROWSER_HEADLESS_ENV]);
+  const envHeadless = parseBooleanValue(env[BROWSER_HEADLESS_ENV_KEY]);
   if (envHeadless !== undefined) {
     return { headless: envHeadless, source: "env" };
   }
@@ -678,7 +648,7 @@ export function getManagedBrowserMissingDisplayError(
     mode.source === "request"
       ? "request override"
       : mode.source === "env"
-        ? `${OPENCLAW_BROWSER_HEADLESS_ENV}=0`
+        ? `${BROWSER_HEADLESS_ENV_KEY}=0`
         : mode.source === "profile"
           ? `browser.profiles.${profile.name}.headless=false`
           : "browser.headless=false";
@@ -686,7 +656,7 @@ export function getManagedBrowserMissingDisplayError(
     message:
       `Headed browser start requested for profile "${profile.name}" via ${sourceHint}, ` +
       "but no Linux display server was detected ($DISPLAY/$WAYLAND_DISPLAY unset). " +
-      `Set ${OPENCLAW_BROWSER_HEADLESS_ENV}=1, remove the headed override, or launch under Xvfb.`,
+      `Set ${BROWSER_HEADLESS_ENV_KEY}=1, remove the headed override, or launch under Xvfb.`,
     headlessSource: mode.source,
   };
 }

@@ -65,7 +65,7 @@ Named policy scopes under `scopes.<scopeName>` can add stricter normal policy
 sections for the selector they list. `agentIds` supports `tools`,
 `agents.workspace`, `sandbox`, and `dataHandling.memory`; `channelIds` supports
 `ingress.channels`.
-Runtime agent ids that are not explicitly listed in `agents.list[]` are checked
+Runtime agent ids that are not explicitly listed in `agents.entries.*` are checked
 against inherited global/default posture rather than silently passing with no
 evidence. Every scope present in `policy.jsonc` must be valid and enforceable
 for its selector. Overlay rules are additional claims, so they do not weaken

@@ -33,6 +33,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => ({
     "../../config/sessions/session-accessor.js",
   )),
   loadSessionEntry: sessionMocks.loadSessionEntry,
+  loadSessionEntryReadOnly: sessionMocks.loadSessionEntry,
 }));
 vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);

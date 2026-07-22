@@ -38,8 +38,10 @@ import kotlin.math.roundToLong
 import kotlin.random.Random
 
 private const val DEFAULT_CLAW_CYCLE_MS = 2_400L
+private const val DRUMMER_CLAW_CYCLE_MS = 1_200L
 private const val FLURRY_CLAW_CYCLE_MS = 1_300L
 private const val SPIN_CLAW_CYCLE_MS = 3_600L
+private const val ZEN_CLAW_CYCLE_MS = 6_000L
 internal const val WORKING_PHRASE_SHOW_AFTER_MS = 30_000L
 internal const val WORKING_PHRASE_ROTATE_EVERY_MS = 45_000L
 
@@ -67,16 +69,22 @@ internal enum class WorkingClawStance {
   Spin,
   Shadowbox,
   Backflip,
+  Zen,
+  Drummer,
+  Peekaboo,
 }
 
 private val stanceWeights =
   listOf(
-    WorkingClawStance.Default to 66,
-    WorkingClawStance.Southpaw to 20,
+    WorkingClawStance.Default to 63,
+    WorkingClawStance.Southpaw to 19,
     WorkingClawStance.Flurry to 5,
     WorkingClawStance.Spin to 4,
     WorkingClawStance.Shadowbox to 3,
     WorkingClawStance.Backflip to 2,
+    WorkingClawStance.Zen to 2,
+    WorkingClawStance.Drummer to 1,
+    WorkingClawStance.Peekaboo to 1,
   )
 private val processStanceSalt = Random.nextInt()
 
@@ -107,6 +115,7 @@ private data class ClawKeyframe(
 )
 
 private val easeOut = CubicBezierEasing(0f, 0f, 0.58f, 1f)
+private val easeInOut = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
 private val flexFrames =
   frames(0f to 0f, 0.06f to 0f, 0.10f to -4f, 0.16f to 3f, 0.22f to -4f, 0.26f to -4f, 0.32f to 3f, 0.42f to 0f, 1f to 0f)
 private val snipFrames =
@@ -122,12 +131,20 @@ private val backflipRotationFrames =
 private val backflipYFrames = frames(0f to 0f, 0.55f to 0f, 0.62f to -3f, 0.70f to -3f, 0.78f to 0f, 1f to 0f)
 private val powAlphaFrames = frames(0f to 0f, 0.46f to 0f, 0.52f to 1f, 0.58f to 0f, 1f to 0f)
 private val powScaleFrames = frames(0f to 0.4f, 0.46f to 0.4f, 0.52f to 1.2f, 0.58f to 1.5f, 1f to 1.5f)
+private val zenScaleFrames = frames(0f to 1f, 0.30f to 1.08f, 0.55f to 1f, 1f to 1f)
+private val zenJawFrames = frames(0f to -10f, 0.60f to -10f, 0.70f to -24f, 0.76f to 2f, 0.86f to -10f, 1f to -10f)
+private val drummerRotationFrames = frames(0f to 0f, 0.15f to -8f, 0.30f to 0f, 0.55f to 8f, 0.70f to 0f, 1f to 0f)
+private val drummerJawFrames = frames(0f to -10f, 0.10f to -20f, 0.15f to 2f, 0.25f to -10f, 0.50f to -20f, 0.55f to 2f, 0.65f to -10f, 1f to -10f)
+private val peekabooScaleFrames = frames(0f to 1f, 0.55f to 1f, 0.62f to 0.72f, 0.72f to 0.72f, 0.78f to 1.06f, 0.84f to 1f, 1f to 1f)
+private val peekabooYFrames = frames(0f to 0f, 0.55f to 0f, 0.62f to 5f, 0.72f to 5f, 0.78f to -1.5f, 0.84f to 0f, 1f to 0f)
+private val peekabooJawFrames = frames(0f to -10f, 0.55f to -10f, 0.62f to -2f, 0.72f to -2f, 0.78f to -28f, 0.86f to -10f, 1f to -10f)
 
 private fun frames(vararg values: Pair<Float, Float>): List<ClawKeyframe> = values.map { (phase, value) -> ClawKeyframe(phase, value) }
 
 private fun sampleFrames(
   keyframes: List<ClawKeyframe>,
   phase: Float,
+  easing: CubicBezierEasing = easeOut,
 ): Float {
   val bounded = phase.coerceIn(0f, 1f)
   val nextIndex = keyframes.indexOfFirst { it.phase >= bounded }.takeIf { it >= 0 } ?: keyframes.lastIndex
@@ -135,21 +152,22 @@ private fun sampleFrames(
   val previous = keyframes[nextIndex - 1]
   val next = keyframes[nextIndex]
   if (next.phase == previous.phase) return next.value
-  val progress = easeOut.transform((bounded - previous.phase) / (next.phase - previous.phase))
+  val progress = easing.transform((bounded - previous.phase) / (next.phase - previous.phase))
   return previous.value + (next.value - previous.value) * progress
 }
 
-private data class WorkingClawPose(
+internal data class WorkingClawPose(
   val rotationZ: Float = 0f,
   val rotationY: Float = 0f,
   val translationXDp: Float = 0f,
   val translationYDp: Float = 0f,
+  val scale: Float = 1f,
   val jawRotation: Float = -10f,
   val powAlpha: Float = 0f,
   val powScale: Float = 0.4f,
 )
 
-private fun workingClawPose(
+internal fun workingClawPose(
   stance: WorkingClawStance,
   phase: Float,
 ): WorkingClawPose =
@@ -173,6 +191,22 @@ private fun workingClawPose(
         translationYDp = sampleFrames(backflipYFrames, phase),
         jawRotation = sampleFrames(snipFrames, phase),
       )
+    WorkingClawStance.Zen ->
+      WorkingClawPose(
+        scale = sampleFrames(zenScaleFrames, phase, easeInOut),
+        jawRotation = sampleFrames(zenJawFrames, phase),
+      )
+    WorkingClawStance.Drummer ->
+      WorkingClawPose(
+        rotationZ = sampleFrames(drummerRotationFrames, phase),
+        jawRotation = sampleFrames(drummerJawFrames, phase),
+      )
+    WorkingClawStance.Peekaboo ->
+      WorkingClawPose(
+        translationYDp = sampleFrames(peekabooYFrames, phase),
+        scale = sampleFrames(peekabooScaleFrames, phase),
+        jawRotation = sampleFrames(peekabooJawFrames, phase),
+      )
     WorkingClawStance.Default,
     WorkingClawStance.Southpaw,
     WorkingClawStance.Flurry,
@@ -181,6 +215,15 @@ private fun workingClawPose(
         rotationZ = sampleFrames(flexFrames, phase),
         jawRotation = sampleFrames(snipFrames, phase),
       )
+  }
+
+internal fun workingClawCycleMs(stance: WorkingClawStance): Long =
+  when (stance) {
+    WorkingClawStance.Drummer -> DRUMMER_CLAW_CYCLE_MS
+    WorkingClawStance.Flurry -> FLURRY_CLAW_CYCLE_MS
+    WorkingClawStance.Spin -> SPIN_CLAW_CYCLE_MS
+    WorkingClawStance.Zen -> ZEN_CLAW_CYCLE_MS
+    else -> DEFAULT_CLAW_CYCLE_MS
   }
 
 @Composable
@@ -193,12 +236,7 @@ internal fun WorkingClawIcon(
   val stance = remember(runKey, parked) { if (parked) WorkingClawStance.Default else pickWorkingClawStance(runKey) }
   val density = LocalDensity.current
   val animationsEnabled = rememberSystemAnimationsEnabled() && !parked
-  val cycleMs =
-    when (stance) {
-      WorkingClawStance.Flurry -> FLURRY_CLAW_CYCLE_MS
-      WorkingClawStance.Spin -> SPIN_CLAW_CYCLE_MS
-      else -> DEFAULT_CLAW_CYCLE_MS
-    }
+  val cycleMs = workingClawCycleMs(stance)
   var phase by remember(runKey) { mutableFloatStateOf(0f) }
   LaunchedEffect(animationsEnabled, runKey, cycleMs) {
     if (!animationsEnabled) {
@@ -231,7 +269,8 @@ internal fun WorkingClawIcon(
             rotationY = pose.rotationY
             translationX = with(density) { pose.translationXDp.dp.toPx() }
             translationY = with(density) { pose.translationYDp.dp.toPx() }
-            scaleX = if (stance == WorkingClawStance.Southpaw) -1f else 1f
+            scaleX = pose.scale * if (stance == WorkingClawStance.Southpaw) -1f else 1f
+            scaleY = pose.scale
             cameraDistance = with(density) { 60.dp.toPx() }
           },
     ) {

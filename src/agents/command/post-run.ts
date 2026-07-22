@@ -272,8 +272,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
     const resolveFreshSessionEntryForDelivery =
       sessionStore && sessionKey && !params.suppressVisibleSessionEffects
         ? async (): Promise<SessionEntry | undefined> => {
-            const { loadSessionEntry } = await loadSessionStoreRuntime();
-            const freshEntry = loadSessionEntry({
+            const { loadSessionEntryReadOnly } = await loadSessionStoreRuntime();
+            const freshEntry = loadSessionEntryReadOnly({
               storePath,
               sessionKey,
               readConsistency: "latest",

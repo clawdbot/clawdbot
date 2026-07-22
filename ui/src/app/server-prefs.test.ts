@@ -36,6 +36,7 @@ describe("server pref extraction", () => {
           chatShowThinking: false,
           chatSendShortcut: "modifier-enter",
           sidebarLiveActivity: false,
+          showAdvancedSettings: true,
           sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
           bogus: true,
         }),
@@ -50,6 +51,7 @@ describe("server pref extraction", () => {
       chatShowThinking: false,
       chatSendShortcut: "modifier-enter",
       sidebarLiveActivity: false,
+      showAdvancedSettings: true,
       sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
   });
@@ -172,6 +174,14 @@ describe("changedServerUiPrefs", () => {
     expect(previous.sidebarLiveActivity).toBe(true);
     expect(changedServerUiPrefs(previous, { ...previous, sidebarLiveActivity: false })).toEqual({
       sidebarLiveActivity: false,
+    });
+  });
+
+  it("syncs the advanced settings visibility preference", () => {
+    const previous = loadSettings();
+    expect(previous.showAdvancedSettings).toBe(false);
+    expect(changedServerUiPrefs(previous, { ...previous, showAdvancedSettings: true })).toEqual({
+      showAdvancedSettings: true,
     });
   });
 

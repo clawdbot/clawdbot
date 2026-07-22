@@ -14,7 +14,7 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { runGit } from "../../agents/worktrees/git.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -422,7 +422,7 @@ export async function loadSessionDiff(params: SessionsDiffParams): Promise<Sessi
     deletions: 0,
     ...(unavailableReason ? { unavailableReason } : {}),
   });
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.sessionKey, {
+  const { cfg, entry, storePath, canonicalKey } = loadSessionEntryReadOnly(params.sessionKey, {
     agentId: params.agentId,
   });
   // Same session scoping as sessions.files.*: an unknown session must not fall

@@ -604,17 +604,15 @@ describe("buildStatusMessage", () => {
     await withTempHome(async () => {
       const text = buildStatusMessage({
         config: {
-          messages: {
-            tts: {
-              auto: "always",
-              provider: "openai",
-              providers: {
-                openai: {
-                  displayName: "NeuTTS local",
-                  baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
-                  model: "neutts-nano",
-                  voice: "clara",
-                },
+          tts: {
+            auto: "always",
+            provider: "openai",
+            providers: {
+              openai: {
+                displayName: "NeuTTS local",
+                baseUrl: "http://username@127.0.0.1:18801/v1?token=hidden#fragment",
+                model: "neutts-nano",
+                voice: "clara",
               },
             },
           },
@@ -627,7 +625,7 @@ describe("buildStatusMessage", () => {
       expect(normalized).toContain(
         "Voice: always · provider=openai · name=NeuTTS local · model=neutts-nano · voice=clara · endpoint=custom(http://127.0.0.1:18801/v1)",
       );
-      expect(normalized).not.toContain("secret");
+      expect(normalized).not.toContain("username");
       expect(normalized).not.toContain("token=hidden");
       expect(normalized).not.toContain("fragment");
     });
@@ -637,11 +635,7 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {},
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig,
       agent: {
@@ -664,11 +658,7 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {},
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig,
       agent: {

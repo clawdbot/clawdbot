@@ -935,14 +935,13 @@ describe("ollama plugin", () => {
               fallbacks: ["ollama/global-fallback:cloud"],
             },
           },
-          list: [
-            {
-              id: "ops",
+          entries: {
+            ops: {
               model: {
                 primary: "ollama/per-agent:cloud@work",
               },
             },
-          ],
+          },
         },
       },
       env: process.env,

@@ -1133,7 +1133,9 @@ export function validateConfigObjectRaw(
       issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
   }
-  const validatedConfig = materializeBundledModelProviderOverlays(validated.data as OpenClawConfig);
+  const validatedConfig = attachAgentListProjection(
+    materializeBundledModelProviderOverlays(validated.data as OpenClawConfig),
+  );
   const channelIssues =
     policyIssues.length > 0 || opts?.validateBundledChannels
       ? collectRawBundledChannelConfigIssues(validatedConfig)
@@ -1153,7 +1155,7 @@ export function validateConfigObjectRaw(
       ok: false,
       issues: [
         {
-          path: "agents.list",
+          path: "agents.entries",
           message: formatDuplicateAgentDirError(duplicates),
         },
       ],
@@ -1194,10 +1196,27 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: materializeRuntimeConfig(result.config, "snapshot", {
-      manifestRegistry: opts?.manifestRegistry,
-    }),
+    config: attachAgentListProjection(
+      materializeRuntimeConfig(result.config, "snapshot", {
+        manifestRegistry: opts?.manifestRegistry,
+      }),
+    ),
   };
+}
+
+function attachAgentListProjection(config: OpenClawConfig): OpenClawConfig {
+  if (!config.agents) {
+    return config;
+  }
+  Object.defineProperty(config.agents, "list", {
+    configurable: true,
+    enumerable: false,
+    value: Object.entries(config.agents.entries ?? {}).map(([id, entry]) =>
+      Object.assign({ id }, entry),
+    ),
+    writable: false,
+  });
+  return config;
 }
 
 type ValidateConfigWithPluginsResult =

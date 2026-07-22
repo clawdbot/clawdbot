@@ -327,6 +327,205 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.GroupSpace).toBe("T_ENTERPRISE");
   });
 
+  it("routes a self-threaded Agent View root before capability detection completes", async () => {
+    const ctx = createDefaultSlackCtx();
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.000",
+        thread_ts: "10.000",
+        text: "new Agent View conversation",
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
+    expect(prepared.forcedReplyThreadTs).toBe("10.000");
+    expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
+    expect(payload.SlackAgentThread).toBe(true);
+
+    const followUp = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        parent_user_id: "U1",
+        text: "follow up",
+      }),
+    );
+    assertPrepared(followUp);
+    expect(followUp.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(followUp.forcedReplyThreadTs).toBe("10.000");
+  });
+
+  it("does not persist a cached Assistant View self-thread root as Agent View", async () => {
+    const ctx = createDefaultSlackCtx();
+    ctx.saveSlackAssistantThreadContext({
+      assistantChannelId: "D123",
+      threadTs: "10.000",
+      userId: "U1",
+      channelId: "C999",
+      teamId: "T1",
+    });
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.000",
+        thread_ts: "10.000",
+        text: "legacy Assistant View root",
+      }),
+    );
+
+    assertPrepared(prepared);
+    const payload = prepared.ctxPayload as typeof prepared.ctxPayload & Record<string, unknown>;
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(payload.SlackAssistantThread).toBe(true);
+    expect(payload.SlackAgentThread).toBeUndefined();
+    await expect(ctx.isSlackAgentView()).resolves.toBe(false);
+  });
+
+  it("restores Agent View mode and keeps follow-ups in the root session", async () => {
+    const ctx = createDefaultSlackCtx();
+    await ctx.recordSlackAgentView();
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        parent_user_id: "U1",
+        text: "Agent View follow-up",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
+    expect(prepared.forcedReplyThreadTs).toBe("10.000");
+  });
+
+  it("uses the app-wide Agent View marker when Slack omits message context", async () => {
+    const ctx = createDefaultSlackCtx();
+    await ctx.recordSlackAgentView();
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.000",
+        text: "new Agent View conversation without active context",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(prepared.forcedReplyThreadTs).toBe("10.000");
+  });
+
+  it("keeps separate Agent View roots in separate sessions", async () => {
+    const ctx = createDefaultSlackCtx();
+    await ctx.recordSlackAgentView();
+    const account = createSlackAccount({ replyToMode: "off" });
+    const first = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({ ts: "10.000", thread_ts: "10.000", text: "first root" }),
+    );
+    const second = await prepareMessageWith(
+      ctx,
+      account,
+      createSlackMessage({ ts: "20.000", thread_ts: "20.000", text: "second root" }),
+    );
+
+    assertPrepared(first);
+    assertPrepared(second);
+    expect(first.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(second.ctxPayload.SessionKey).toBe("agent:main:main:thread:20.000");
+  });
+
+  it("keeps an ordinary DM thread on the base DM session without an Agent View signal", async () => {
+    const prepared = await prepareMessageWith(
+      createDefaultSlackCtx(),
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        parent_user_id: "U1",
+        text: "ordinary DM thread reply",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main");
+    expect(prepared.forcedReplyThreadTs).toBeUndefined();
+  });
+
+  it("projects Agent View active entities only as structured untrusted context", async () => {
+    const prepared = await prepareMessageWith(
+      createDefaultSlackCtx(),
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.000",
+        thread_ts: "10.000",
+        text: "summarize what I am viewing",
+        app_context: {
+          entities: [
+            { type: "slack#/types/channel_id", value: "C123", team_id: "T1" },
+            {
+              type: "slack#/types/message_context",
+              value: { channel_id: "C123", message_ts: "9.000" },
+            },
+            { type: "slack#/types/future", value: "ignore-me" },
+          ],
+        },
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.UntrustedStructuredContext).toEqual([
+      {
+        label: "Slack active context",
+        source: "slack",
+        type: "active_view",
+        payload: {
+          entities: [
+            { type: "slack#/types/channel_id", value: "C123", team_id: "T1" },
+            {
+              type: "slack#/types/message_context",
+              value: { channel_id: "C123", message_ts: "9.000" },
+            },
+          ],
+        },
+      },
+    ]);
+    expect(prepared.ctxPayload.GroupSystemPrompt).toBeUndefined();
+  });
+
+  it("does not retain stale Agent View entities when Slack omits app_context", async () => {
+    const ctx = createDefaultSlackCtx();
+    await ctx.recordSlackAgentView();
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        text: "no active context",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.UntrustedStructuredContext).toBeUndefined();
+  });
+
   it("keeps Slack assistant DM threads in a thread-scoped session with assistant context", async () => {
     const ctx = createDefaultSlackCtx();
     ctx.saveSlackAssistantThreadContext({
@@ -3685,6 +3884,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   }) {
     const cfg = {
       ...(params.storePath ? { session: { store: params.storePath } } : {}),
+      commands: { allowFrom: { slack: ["user:U_BEK"] } },
       messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
       tools: { media: { audio: { enabled: params.audioEnabled ?? true } } },
       channels: {
@@ -3718,7 +3918,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       async (_input: string | URL | Request) =>
         new Response(Buffer.from("voice clip"), {
           status: 200,
-          headers: { "content-type": "video/mp4" },
+          headers: { "content-type": "audio/mp4" },
         }),
     );
     globalThis.fetch = mockFetch as typeof fetch;
@@ -3736,8 +3936,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     let downloadedPath: string | undefined;
     let downloadedPaths: string[] = [];
     transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { MediaPaths: string[] } }) => {
-        downloadedPath = ctx.MediaPaths[0];
+      async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
+        downloadedPath = ctx.media[0]?.path;
         return "Bill /new please review this";
       },
     );
@@ -3853,7 +4053,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       async (_input: string | URL | Request) =>
         new Response(Buffer.from("voice clip"), {
           status: 200,
-          headers: { "content-type": "video/mp4" },
+          headers: { "content-type": "audio/mp4" },
         }),
     );
     globalThis.fetch = mockFetch as typeof fetch;
@@ -3861,8 +4061,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     slackCtx.historyLimit = 5;
     let downloadedPath: string | undefined;
     transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { MediaPaths: string[] } }) => {
-        downloadedPath = ctx.MediaPaths[0];
+      async ({ ctx }: { ctx: { media: Array<{ path?: string }> } }) => {
+        downloadedPath = ctx.media[0]?.path;
         return "please review this";
       },
     );
@@ -4314,7 +4514,6 @@ describe("prepareSlackMessage sender prefix", () => {
       textLimit: 2000,
       ackReactionScope: "off",
       mediaMaxBytes: 1000,
-      removeAckAfterReply: false,
       logger: { info: vi.fn(), warn: vi.fn() },
       shouldDropMismatchedSlackEvent: () => false,
       resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",

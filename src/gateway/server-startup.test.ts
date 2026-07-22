@@ -134,12 +134,6 @@ describe("gateway startup primary model warmup", () => {
           model: {
             primary: "codex-cli/gpt-5.5",
           },
-          cliBackends: {
-            "codex-cli": {
-              command: "codex",
-              args: ["exec"],
-            },
-          },
         },
       },
     } as OpenClawConfig;

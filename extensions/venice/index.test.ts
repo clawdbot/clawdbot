@@ -39,7 +39,6 @@ describe("venice provider plugin", () => {
           "minContains",
           "maxContains",
         ],
-        nativeWebSearchTool: true,
         toolCallArgumentsEncoding: "html-entities",
       },
     });

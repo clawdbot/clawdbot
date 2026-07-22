@@ -659,7 +659,7 @@ describe("resolveGoogleChatAccount", () => {
         googlechat: {
           accounts: {
             default: {
-              serviceAccountRef: {
+              serviceAccount: {
                 source: "env",
                 provider: "test",
                 id: "default-sa",

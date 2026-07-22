@@ -174,8 +174,19 @@ describe("AppSidebar viewer presence", () => {
     expect(
       footerFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
     ).toBe("6");
-    expect(footerFacepile?.querySelector('[data-viewer-id="00-self"]')).toBeNull();
+    expect(footerFacepile?.querySelector('.viewer-facepile [data-viewer-id="00-self"]')).toBeNull();
     expect(footerFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+1");
+    expect(footerFacepile?.querySelector(".viewer-facepile openclaw-tooltip")).toBeNull();
+    expect(
+      [
+        ...(footerFacepile?.querySelectorAll(
+          ".sidebar-presence-hover-card .sidebar-hover-card__person",
+        ) ?? []),
+      ].map((row) => row.getAttribute("data-viewer-id")),
+    ).toEqual(["00-self", "alice", "bob", "carol", "dave", "erin", "frank"]);
+    expect(footerFacepile?.querySelector(".sidebar-presence-hover-card")?.textContent).toContain(
+      "Server",
+    );
 
     const identityChip = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__identity");
     expect(identityChip?.querySelector(".sidebar-footer-bar__identity-name")?.textContent).toBe(
@@ -266,21 +277,6 @@ describe("AppSidebar brand actions", () => {
     );
     expect(headerButton?.getAttribute("aria-label")).toBe("New thread");
   });
-
-  it("opens the archived Sessions view from the sessions-zone footer", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", ["agent:main:main", "agent:main:work"]),
-    );
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-view-archived")?.click();
-
-    expect(onNavigate).toHaveBeenCalledWith("sessions", { search: "?showArchived=1" });
-  });
 });
 
 describe("AppSidebar agent chip", () => {
@@ -353,52 +349,46 @@ describe("AppSidebar agent chip", () => {
     expect(onNavigate).not.toHaveBeenCalledWith("config");
   });
 
-  it("shows connection exceptions only after a sustained disconnect", async () => {
-    vi.useFakeTimers();
+  it("renders the canonical offline retry button only for a stable disconnect", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const presence = () => sidebar.querySelector(".sidebar-agent-card__presence");
-    const offlinePill = () => sidebar.querySelector(".sidebar-footer-bar__status");
-    const expectQuiet = () => {
-      expect(presence()).toBeNull();
-      expect(offlinePill()).toBeNull();
-    };
+    const onRetryConnect = vi.fn();
+    sidebar.onRetryConnect = onRetryConnect;
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    expectQuiet();
+    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
     expect(
       sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
-    ).toContain("Online");
+    ).not.toContain("Online");
 
     sidebar.connected = false;
+    sidebar.offline = true;
+    sidebar.lastError = "gateway unavailable?token=sidebar-secret";
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent?.trim()).toBe(
+    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
+    expect(button?.textContent).toContain("Offline");
+    expect(button?.textContent).toContain("Reconnecting…");
+    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now");
+    expect(button?.getAttribute("aria-live")).toBe("polite");
+    // The redacted error detail moved from a native title to the shared
+    // tooltip's accessible description.
+    expect(button?.hasAttribute("title")).toBe(false);
+    const descriptionId = button?.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(descriptionId)?.textContent).toBe(
+      "gateway unavailable?[redacted-credential]",
+    );
+    expect(button?.querySelector(".sidebar-footer-bar__status-dot")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).not.toContain(
       "Offline",
     );
-    await vi.advanceTimersByTimeAsync(1_999);
-    expectQuiet();
 
-    await vi.advanceTimersByTimeAsync(1);
-    await sidebar.updateComplete;
-    const pill = offlinePill();
-    expect(pill?.textContent?.trim()).toBe("Offline");
-    expect(pill?.getAttribute("aria-live")).toBe("polite");
-    expect(pill?.getAttribute("title")).toContain("Offline");
-    expect(pill?.querySelector(".sidebar-footer-bar__status-dot")).not.toBeNull();
-    expect(presence()).not.toBeNull();
+    button?.click();
+    expect(onRetryConnect).toHaveBeenCalledOnce();
 
-    sidebar.connected = true;
+    sidebar.offline = false;
     await sidebar.updateComplete;
-    expectQuiet();
-
-    sidebar.connected = false;
-    await sidebar.updateComplete;
-    await vi.advanceTimersByTimeAsync(1_000);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    await vi.advanceTimersByTimeAsync(2_000);
-    expectQuiet();
+    expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {

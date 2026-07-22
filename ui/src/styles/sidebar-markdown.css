@@ -213,6 +213,22 @@
   font-weight: 600;
 }
 
+.sidebar-markdown .markdown-inline-image-button {
+  display: block;
+  max-width: 100%;
+  margin-top: 0.75em;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.sidebar-markdown .markdown-inline-image-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .sidebar-markdown .markdown-inline-image {
   display: block;
   width: auto;
@@ -224,6 +240,10 @@
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--secondary) 70%, transparent);
   object-fit: contain;
+}
+
+.sidebar-markdown .markdown-inline-image-button > .markdown-inline-image {
+  margin-top: 0;
 }
 
 .sidebar-markdown :where(details) {

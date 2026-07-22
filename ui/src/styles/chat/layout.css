@@ -1030,6 +1030,21 @@ openclaw-chat-page {
   margin-bottom: 8px;
 }
 
+.chat-message-image-button {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.chat-message-image-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .chat-message-image {
   width: auto;
   max-width: min(100%, 300px);
@@ -1040,7 +1055,7 @@ openclaw-chat-page {
   transition: transform 150ms ease-out;
 }
 
-.chat-message-image:hover {
+.chat-message-image-button:hover .chat-message-image {
   transform: scale(1.02);
 }
 
@@ -1794,6 +1809,21 @@ openclaw-chat-page {
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
+.agent-chat__input--offline,
+.agent-chat__input--offline:focus-within {
+  border-color: color-mix(in srgb, var(--warn) 38%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
+.agent-chat__offline-hint {
+  padding: 5px var(--chat-box-inset);
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 22%, transparent);
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  color: color-mix(in srgb, var(--warn) 72%, var(--text));
+  font-size: 11px;
+  line-height: 1.3;
+}
+
 @supports (backdrop-filter: blur(1px)) {
   .agent-chat__input {
     backdrop-filter: blur(12px) saturate(1.6);
@@ -2061,7 +2091,12 @@ openclaw-chat-page {
   line-height: 1.4;
 }
 
-.agent-chat__disabled-reason .btn {
+.agent-chat__disabled-banner {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.agent-chat__disabled-banner .btn {
   flex: 0 0 auto;
 }
 

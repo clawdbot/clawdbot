@@ -2,11 +2,11 @@ title: Telegram help command reply
 
 scenario:
   id: telegram-help-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
     primary:
-      - channels.native-commands
+      - channels.channel-native-commands
   objective: Verify the Telegram help command returns the concise command guide.
   successCriteria:
     - The help command is accepted in the Telegram group command path.

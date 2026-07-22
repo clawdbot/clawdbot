@@ -612,6 +612,22 @@ describe("loadSettings default gateway URL derivation", () => {
     );
   });
 
+  it("defaults advanced settings off and persists only an explicit opt-in", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+
+    expect(loadSettings().showAdvancedSettings).toBe(false);
+    saveSettings({ ...loadSettings(), showAdvancedSettings: true });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").showAdvancedSettings).toBe(true);
+    expect(loadSettings().showAdvancedSettings).toBe(true);
+
+    saveSettings({ ...loadSettings(), showAdvancedSettings: false });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "showAdvancedSettings",
+    );
+  });
+
   it("persists only a normalized realtime Talk microphone id", () => {
     setTestLocation({
       protocol: "https:",

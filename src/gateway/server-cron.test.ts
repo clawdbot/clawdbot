@@ -11,6 +11,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { createDeferred } from "../test-utils/deferred.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
@@ -219,7 +220,25 @@ vi.mock("../cron/trigger-script.js", () => ({
 }));
 
 import type { CronJob } from "../cron/types.js";
-import { buildGatewayCronService, fireOnExitJob } from "./server-cron.js";
+import {
+  buildGatewayCronService as buildGatewayCronServiceRuntime,
+  fireOnExitJob,
+} from "./server-cron.js";
+
+function buildGatewayCronService(params: Parameters<typeof buildGatewayCronServiceRuntime>[0]) {
+  const legacyStore = (params.cfg.cron as { store?: unknown } | undefined)?.store;
+  if (typeof legacyStore !== "string") {
+    return buildGatewayCronServiceRuntime(params);
+  }
+  const env = {
+    ...process.env,
+    OPENCLAW_SKIP_CRON: "0",
+    OPENCLAW_STATE_DIR: path.dirname(legacyStore),
+  };
+  // These fixtures predate the config-to-SQLite move; seed the canonical machine-state owner.
+  writeConfigMachineState("cron.store", legacyStore, { env });
+  return buildGatewayCronServiceRuntime({ ...params, env });
+}
 
 function createCronConfig(name: string): OpenClawConfig {
   const tmpDir = path.join(os.tmpdir(), `${name}-${Date.now()}`);
@@ -1078,7 +1097,7 @@ describe("buildGatewayCronService", () => {
 
   it("cron_changed hook event includes agentId from the job", async () => {
     const cfg = createCronConfig("server-cron-hook-agentId");
-    cfg.agents = { list: [{ id: "main", default: true }, { id: "yinze" }] };
+    cfg.agents = { entries: { main: { default: true }, yinze: {} } };
     loadConfigMock.mockReturnValue(cfg);
 
     const state = buildGatewayCronService({
@@ -2028,10 +2047,10 @@ describe("buildGatewayCronService", () => {
       session: { mainKey: "main" },
       cron: { store: path.join(os.tmpdir(), `server-cron-untargeted-${Date.now()}`, "cron.json") },
       agents: {
-        list: [
-          { id: "primary", default: true, model: "test/primary" },
-          { id: "ops", model: "test/ops" },
-        ],
+        entries: {
+          primary: { default: true, model: "test/primary" },
+          ops: { model: "test/ops" },
+        },
       },
     } as unknown as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
@@ -2087,10 +2106,10 @@ describe("buildGatewayCronService", () => {
       session: { mainKey: "main" },
       cron: { store: path.join(os.tmpdir(), `server-cron-symmetric-${Date.now()}`, "cron.json") },
       agents: {
-        list: [
-          { id: "primary", default: true, model: "test/primary" },
-          { id: "ops", model: "test/ops" },
-        ],
+        entries: {
+          primary: { default: true, model: "test/primary" },
+          ops: { model: "test/ops" },
+        },
       },
     } as unknown as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
@@ -2162,10 +2181,10 @@ describe("buildGatewayCronService", () => {
         store: path.join(os.tmpdir(), `server-cron-relative-default-${Date.now()}`, "cron.json"),
       },
       agents: {
-        list: [
-          { id: "primary", default: true, model: "test/primary" },
-          { id: "main", model: "test/main" },
-        ],
+        entries: {
+          primary: { default: true, model: "test/primary" },
+          main: { model: "test/main" },
+        },
       },
     } as unknown as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
@@ -2222,10 +2241,10 @@ describe("buildGatewayCronService", () => {
         store: path.join(os.tmpdir(), `server-cron-unknown-agent-${Date.now()}`, "cron.json"),
       },
       agents: {
-        list: [
-          { id: "primary", default: true, model: "test/primary" },
-          { id: "ops", model: "test/ops" },
-        ],
+        entries: {
+          primary: { default: true, model: "test/primary" },
+          ops: { model: "test/ops" },
+        },
       },
     } as unknown as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
@@ -2279,10 +2298,10 @@ describe("buildGatewayCronService", () => {
         store: path.join(os.tmpdir(), `server-cron-wake-service-${Date.now()}`, "cron.json"),
       },
       agents: {
-        list: [
-          { id: "primary", default: true, model: "test/primary" },
-          { id: "ops", model: "test/ops" },
-        ],
+        entries: {
+          primary: { default: true, model: "test/primary" },
+          ops: { model: "test/ops" },
+        },
       },
     } as unknown as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
@@ -2504,10 +2523,10 @@ describe("buildGatewayCronService", () => {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),
         },
-        list: [
-          { id: "main", default: true },
-          { id: "yinze", workspace: path.join(tmpDir, "workspace-yinze") },
-        ],
+        entries: {
+          main: { default: true },
+          yinze: { workspace: path.join(tmpDir, "workspace-yinze") },
+        },
       },
     } as OpenClawConfig;
     const reloadedCfg = {
@@ -2521,7 +2540,7 @@ describe("buildGatewayCronService", () => {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),
         },
-        list: [{ id: "main", default: true }],
+        entries: { main: { default: true } },
       },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(startupCfg);
@@ -2562,7 +2581,7 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(tmpDir, "cron.json") },
       agents: {
         defaults: { workspace: path.join(tmpDir, "workspace") },
-        list: [{ id: "main", default: true }, { id: "yinze" }, { id: "other" }],
+        entries: { main: { default: true }, yinze: {}, other: {} },
       },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
@@ -2604,7 +2623,7 @@ describe("buildGatewayCronService", () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-agent-uncertain-${Date.now()}`);
     const cfg = {
       cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { list: [{ id: "main", default: true }, { id: "yinze" }, { id: "other" }] },
+      agents: { entries: { main: { default: true }, yinze: {}, other: {} } },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
     const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
@@ -2641,11 +2660,11 @@ describe("buildGatewayCronService", () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-default-change-${Date.now()}`);
     const startupCfg = {
       cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { list: [{ id: "main" }, { id: "yinze", default: true }, { id: "other" }] },
+      agents: { entries: { main: {}, yinze: { default: true }, other: {} } },
     } as OpenClawConfig;
     const runtimeCfg = {
       ...startupCfg,
-      agents: { list: [{ id: "main" }, { id: "yinze" }, { id: "other", default: true }] },
+      agents: { entries: { main: {}, yinze: {}, other: { default: true } } },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(startupCfg);
     const state = buildGatewayCronService({
@@ -2688,7 +2707,7 @@ describe("buildGatewayCronService", () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-agent-fenced-${Date.now()}`);
     const cfg = {
       cron: { store: path.join(tmpDir, "cron.json") },
-      agents: { list: [{ id: "main", default: true }, { id: "yinze" }] },
+      agents: { entries: { main: { default: true }, yinze: {} } },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
     const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
@@ -2723,12 +2742,12 @@ describe("buildGatewayCronService", () => {
       cron: { store: path.join(tmpDir, "cron.json") },
       agents: {
         defaults: { workspace: path.join(tmpDir, "workspace") },
-        list: [{ id: "main", default: true }, { id: "yinze" }],
+        entries: { main: { default: true }, yinze: {} },
       },
     } as OpenClawConfig;
     const deletedCfg = {
       ...cfg,
-      agents: { ...cfg.agents, list: [{ id: "main", default: true }] },
+      agents: { ...cfg.agents, entries: { main: { default: true } } },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
     const state = buildGatewayCronService({ cfg, deps: {} as CliDeps, broadcast: () => {} });
@@ -2800,17 +2819,16 @@ describe("buildGatewayCronService", () => {
             deliveryFormat: "text",
           },
         },
-        list: [
-          { id: "main", default: true },
-          {
-            id: "yinze",
+        entries: {
+          main: { default: true },
+          yinze: {
             workspace: path.join(tmpDir, "workspace-yinze"),
             heartbeat: {
               target: "last",
               deliveryFormat: "markdown",
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const reloadedCfg = {
@@ -2828,7 +2846,7 @@ describe("buildGatewayCronService", () => {
             deliveryFormat: "text",
           },
         },
-        list: [{ id: "main", default: true }],
+        entries: { main: { default: true } },
       },
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(reloadedCfg);

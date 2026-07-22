@@ -6,7 +6,7 @@ scenario:
   runtimeParityTier: optional
   coverage:
     primary:
-      - tools.tts
+      - media.generated-audio-persistence-and-delivery
   objective: Verify tts preserves arguments and result shape when the tool is present.
   successCriteria:
     - If tts is present, the fixture exercises happy and failure paths.

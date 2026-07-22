@@ -8,6 +8,10 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
+import {
+  type AgentEventPayload,
+  onAgentEvent as subscribeAgentEvent,
+} from "../../infra/agent-events.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { createDeferred } from "../../shared/deferred.js";
 import {
@@ -1754,13 +1758,25 @@ describe("worker turn launcher", () => {
       redispatchReclaimed,
     });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const events: AgentEventPayload[] = [];
+    const unsubscribe = subscribeAgentEvent((event) => events.push(event));
+    const result = await provider
+      .executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+        turn(runId),
+        runLocal,
+      )
+      .finally(unsubscribe);
 
-    const result = await provider.executeTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-      turn(runId),
-      runLocal,
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        runId,
+        stream: "run_status",
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        data: { phase: "provisioning_environment" },
+      }),
     );
-
     expect(result.payloads).toEqual([{ text: "Redispatched worker reply" }]);
     expect(redispatchCalls).toBe(1);
     expect(runWorkspaceCommand).toHaveBeenCalledOnce();

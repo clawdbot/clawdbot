@@ -116,12 +116,12 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
     }
     if (needsPerFileTip) {
       lines.push(
-        "- Tip: tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+        "- Tip: tune `agents.entries.*.bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
       );
     }
     if (needsTotalTip) {
       lines.push(
-        "- Tip: tune `agents.list[].bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
+        "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
       );
     }
 

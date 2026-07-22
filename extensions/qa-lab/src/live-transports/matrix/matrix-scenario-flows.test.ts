@@ -124,10 +124,10 @@ describe("Matrix QA Lab scenario flows", () => {
     expect(readQaScenarioById("matrix-voice-preflight-mention").gatewayConfigPatch).toMatchObject({
       tools: {
         media: {
+          models: [{ capabilities: ["audio"], model: "gpt-4o-transcribe", provider: "openai" }],
           audio: {
             echoTranscript: true,
             enabled: true,
-            models: [{ model: "gpt-4o-transcribe", provider: "openai" }],
             prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
           },
         },
@@ -141,10 +141,10 @@ describe("Matrix QA Lab scenario flows", () => {
     expect(readQaScenarioExecutionConfig("matrix-voice-preflight-mention")).toMatchObject({
       matrixRequireCanary: true,
       matrixConfigOverrides: {
+        mediaModels: [{ capabilities: ["audio"], model: "gpt-4o-transcribe", provider: "openai" }],
         audio: {
           echoTranscript: true,
           enabled: true,
-          models: [{ model: "gpt-4o-transcribe", provider: "openai" }],
           prompt: "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER",
         },
         groupMentionPatterns: ["matrix\\W+qa\\W+voice\\W+pre[ -]?flight\\W+ok(?:ay)?"],

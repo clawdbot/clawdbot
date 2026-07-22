@@ -16,7 +16,7 @@ export function resolveMemorySessionStartupDirtyFiles(params: {
   const dirtyFiles: string[] = [];
   for (const file of params.files) {
     const existing = indexedRows.get(file.path);
-    if (!existing) {
+    if (!existing || existing.hash === "") {
       dirtyFiles.push(file.absPath);
       continue;
     }

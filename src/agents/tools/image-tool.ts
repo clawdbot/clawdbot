@@ -647,16 +647,6 @@ function resolveImageToolTimeoutMs(params: {
   model: string;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): number {
-  const imageConfig = params.cfg.tools?.media?.image;
-  const capabilityEntry = imageConfig?.models?.find((entry) =>
-    matchesImageTimeoutEntry({
-      entry,
-      source: "capability",
-      provider: params.provider,
-      model: params.model,
-      providerRegistry: params.providerRegistry,
-    }),
-  );
   const sharedEntry = params.cfg.tools?.media?.models?.find((entry) =>
     matchesImageTimeoutEntry({
       entry,
@@ -667,7 +657,7 @@ function resolveImageToolTimeoutMs(params: {
     }),
   );
   return resolveTimeoutMs(
-    capabilityEntry?.timeoutSeconds ?? sharedEntry?.timeoutSeconds ?? imageConfig?.timeoutSeconds,
+    sharedEntry?.timeoutSeconds ?? params.cfg.tools?.media?.image?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS.image,
   );
 }

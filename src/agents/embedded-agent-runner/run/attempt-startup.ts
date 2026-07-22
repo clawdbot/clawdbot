@@ -34,6 +34,14 @@ export function prepareEmbeddedAttemptSkills(params: {
   sandbox: AttemptSetup["sandbox"];
   sessionAgentId: string;
 }) {
+  if (params.attempt.operation === "settled-tool-finalization") {
+    return {
+      restoreSkillEnv: () => {},
+      skillUsagePaths: undefined,
+      skillsPrompt: "",
+      skillsSnapshotForRun: undefined,
+    };
+  }
   const {
     skillsEligibility,
     skillsPromptWorkspaceDir,

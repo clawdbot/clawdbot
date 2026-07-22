@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - media.image-understanding
+      - media.image-summary-image-understanding
     secondary:
       - channels.inbound-media-normalization
   docsRefs:

@@ -17,6 +17,20 @@ export type MediaFactInput = {
   [Key in keyof MediaFact]?: MediaFact[Key] | null;
 };
 
+const RUNTIME_PROMPT_MEDIA_FACTS = Symbol.for("openclaw.runtimePromptMediaFacts");
+
+/** Attaches facts to a runtime prompt message without changing serialized/model-visible bytes. */
+export function attachRuntimePromptMediaFacts<T extends object>(
+  message: T,
+  media: readonly MediaFact[],
+): T {
+  Object.defineProperty(message, RUNTIME_PROMPT_MEDIA_FACTS, {
+    configurable: true,
+    value: normalizeMediaFacts(media),
+  });
+  return message;
+}
+
 type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
   kind?: MediaKind;
   messageId?: string;
@@ -115,11 +129,13 @@ export function resolveMediaFacts(source: MediaFactSource): MediaFact[] {
         contentType:
           fact?.contentType ??
           normalizeOptionalString(types[index]) ??
-          (count === 1 ? source.MediaType : undefined),
+          (index === 0 ? source.MediaType : undefined),
         kind: fact?.kind,
         transcribed: fact?.transcribed === true || transcribed.has(index),
         messageId: fact?.messageId,
-        workspaceDir: fact?.workspaceDir,
+        workspaceDir:
+          normalizeOptionalString(fact?.workspaceDir) ??
+          normalizeOptionalString(source.MediaWorkspaceDir),
       },
       index,
     );

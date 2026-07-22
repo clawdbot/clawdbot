@@ -37,6 +37,7 @@ function contextWithGateway(client: GatewayBrowserClient, connected: boolean): A
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,
