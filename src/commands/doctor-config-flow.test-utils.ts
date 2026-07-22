@@ -4,6 +4,7 @@ const DOCTOR_CONFIG_TEST_INPUT = Symbol.for("openclaw.doctorConfigFlow.testInput
 type DoctorConfigTestInput = {
   config: Record<string, unknown>;
   parsed?: Record<string, unknown>;
+  sourceConfigBeforeMigrations?: Record<string, unknown>;
   exists: boolean;
   path: string;
   preflightMode: "fast" | "issues" | "compat";
@@ -130,6 +131,7 @@ function hasCompatPreflightSignals(config: Record<string, unknown>): boolean {
 export async function runDoctorConfigWithInput<T>(params: {
   config: Record<string, unknown>;
   parsedConfig?: Record<string, unknown>;
+  sourceConfigBeforeMigrations?: Record<string, unknown>;
   exists?: boolean;
   repair?: boolean;
   preflightMode?: "fast" | "issues" | "compat";
@@ -146,6 +148,9 @@ export async function runDoctorConfigWithInput<T>(params: {
   setDoctorConfigInputForTest({
     config: structuredClone(params.config),
     ...(params.parsedConfig ? { parsed: structuredClone(params.parsedConfig) } : {}),
+    ...(params.sourceConfigBeforeMigrations
+      ? { sourceConfigBeforeMigrations: structuredClone(params.sourceConfigBeforeMigrations) }
+      : {}),
     exists: params.exists ?? true,
     path: "/virtual/.openclaw/openclaw.json",
     preflightMode: params.preflightMode ?? inferredPreflightMode,

@@ -181,10 +181,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ? (parsedRoot.agents as Record<string, unknown>)
       : undefined;
   const rosterIsAuthoredLocally = Boolean(parsedAgents && Object.hasOwn(parsedAgents, "list"));
-  const includeCanOwnRoster = Boolean(
+  const preMigrationAgents = snapshot.sourceConfigBeforeMigrations?.agents;
+  const rosterIncludeExists = Boolean(
     (parsedRoot && Object.hasOwn(parsedRoot, INCLUDE_KEY)) ||
     (parsedAgents && Object.hasOwn(parsedAgents, INCLUDE_KEY)),
   );
+  const includeCanOwnRoster =
+    !rosterIsAuthoredLocally && rosterIncludeExists && Array.isArray(preMigrationAgents?.list);
   if (
     snapshot.exists &&
     rosterMigration.changed &&

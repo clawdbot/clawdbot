@@ -285,6 +285,8 @@ export type ConfigFileSnapshot = {
   raw: string | null;
   /** Parsed JSON/JSONC/YAML value before schema normalization. */
   parsed: unknown;
+  /** Include/env-resolved source before raw compatibility migrations. */
+  sourceConfigBeforeMigrations?: ResolvedSourceConfig;
   /**
    * Config authored on disk after $include resolution and ${ENV} substitution,
    * but BEFORE runtime defaults are applied.

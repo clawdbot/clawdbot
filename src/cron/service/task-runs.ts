@@ -1,7 +1,11 @@
 /** Detached task-ledger integration for cron runs. */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 
 function requireCronAgentId(agentId: string | undefined): string {
   if (!agentId?.trim()) {
@@ -51,10 +55,11 @@ export function resolveMainSessionCronRunSessionKey(
   startedAt: number,
   configuredDefaultAgentId: string | undefined,
 ): string {
-  const explicitAgentId = job.agentId?.trim();
-  const agentId = explicitAgentId
-    ? normalizeAgentId(explicitAgentId)
-    : resolveAgentIdFromSessionKey(job.sessionKey, requireCronAgentId(configuredDefaultAgentId));
+  const explicitAgentId = job.agentId?.trim() || undefined;
+  const sessionKeyAgentId = parseAgentSessionKey(job.sessionKey)?.agentId;
+  const agentId = normalizeAgentId(
+    explicitAgentId ?? sessionKeyAgentId ?? requireCronAgentId(configuredDefaultAgentId),
+  );
   const jobSegment = normalizeCronLaneSegment(job.id, "job");
   const runSegment = normalizeCronLaneSegment(String(Math.max(0, Math.floor(startedAt))), "run");
   return `agent:${agentId}:cron:${jobSegment}:run:${runSegment}`;

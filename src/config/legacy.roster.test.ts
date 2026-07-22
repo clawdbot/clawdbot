@@ -30,6 +30,36 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
+  it("retains include-resolved roster provenance before migration", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const includePath = path.join(configDir, "included.json");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify({ $include: "./included.json" }));
+
+      await fs.writeFile(
+        includePath,
+        JSON.stringify({ channels: { telegram: { enabled: true } } }),
+      );
+      resetConfigRuntimeState();
+      const channelsSnapshot = await readConfigFileSnapshot();
+      expect(channelsSnapshot.sourceConfigBeforeMigrations?.agents?.list).toBeUndefined();
+      expect(channelsSnapshot.sourceConfig.agents?.list).toEqual([{ id: "main", default: true }]);
+
+      await fs.writeFile(
+        includePath,
+        JSON.stringify({ agents: { list: [{ id: "ops", default: true }] } }),
+      );
+      resetConfigRuntimeState();
+      const rosterSnapshot = await readConfigFileSnapshot();
+      expect(rosterSnapshot.sourceConfigBeforeMigrations?.agents?.list).toEqual([
+        { id: "ops", default: true },
+      ]);
+      expect(rosterSnapshot.sourceConfig.agents?.list).toEqual([{ id: "ops", default: true }]);
+    });
+  });
+
   it("preserves malformed agents values for validation", () => {
     expect(migratePersistedImplicitMainRoster({ agents: "invalid" })).toEqual({
       config: { agents: "invalid" },

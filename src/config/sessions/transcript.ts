@@ -5,6 +5,7 @@ import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   scopeLegacySessionKeyToAgent,
@@ -114,6 +115,20 @@ type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationText
   sessionKey: string;
   storePath?: string;
 };
+
+export class SessionTranscriptAgentScopeMismatchError extends Error {
+  readonly code = "SESSION_TRANSCRIPT_AGENT_SCOPE_MISMATCH";
+
+  constructor(
+    readonly agentId: string,
+    readonly sessionKeyAgentId: string,
+  ) {
+    super(
+      `Session transcript agent scope mismatch: explicit agent "${agentId}" does not match session key agent "${sessionKeyAgentId}".`,
+    );
+    this.name = "SessionTranscriptAgentScopeMismatchError";
+  }
+}
 
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
 type TailAssistantTranscriptText = AssistantTranscriptText;
@@ -272,7 +287,16 @@ function resolveSessionConversationTranscriptTarget(params: {
   if (!sessionKey) {
     return {};
   }
-  const agentId = resolveAgentIdFromSessionKey(sessionKey, params.agentId);
+  const explicitAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
+  const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (
+    explicitAgentId &&
+    sessionKeyAgentId &&
+    explicitAgentId !== normalizeAgentId(sessionKeyAgentId)
+  ) {
+    throw new SessionTranscriptAgentScopeMismatchError(explicitAgentId, sessionKeyAgentId);
+  }
+  const agentId = explicitAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const scopedSessionKey = scopeLegacySessionKeyToAgent({ agentId, sessionKey }) ?? sessionKey;
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(agentId);
   const entry = loadSessionEntryReadOnly({ agentId, sessionKey: scopedSessionKey, storePath });

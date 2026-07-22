@@ -1374,12 +1374,16 @@ vi.mock("./doctor-config-preflight.js", async () => {
           injectedEffectiveConfig = parsed;
         }
       }
+      const sourceConfigBeforeMigrations = injected?.sourceConfigBeforeMigrations
+        ? structuredClone(injected.sourceConfigBeforeMigrations)
+        : injectedEffectiveConfig;
       if (injected?.preflightMode === "fast") {
         return {
           snapshot: {
             exists,
             path: configPath,
             parsed,
+            sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
             valid: true,
@@ -1402,6 +1406,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
             exists,
             path: configPath,
             parsed,
+            sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
             valid: legacyIssues.length === 0,
@@ -1425,6 +1430,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
           exists,
           path: configPath,
           parsed,
+          sourceConfigBeforeMigrations,
           config: effectiveConfig,
           sourceConfig: effectiveConfig,
           valid: legacyIssues.length === 0,
@@ -1632,6 +1638,22 @@ describe("doctor config flow", () => {
 
     expect(result.shouldWriteConfig).toBe(false);
     expect(result.cfg.agents?.list).toEqual([{ id: "ops", default: true }]);
+  });
+
+  it("persists an injected roster when a root include contributes only channels", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        channels: { telegram: { enabled: true } },
+      },
+      parsedConfig: { $include: "./channels.json" },
+      sourceConfigBeforeMigrations: { channels: { telegram: { enabled: true } } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.list).toEqual([{ id: "main", default: true }]);
   });
 
   it("repairs a locally authored roster when unrelated includes exist", async () => {
@@ -3213,9 +3235,10 @@ describe("doctor config flow", () => {
       expect(changeTitles).toContain("Doctor changes preview");
       expect(changeTitles).not.toContain("Doctor changes");
       const previewPanel = noteSpy.mock.calls.find(
-        ([, title]) => title === "Doctor changes preview",
+        ([message, title]) =>
+          title === "Doctor changes preview" && message.includes("Moved heartbeat to"),
       );
-      expect(previewPanel?.[0]).toContain("Moved heartbeat to");
+      expect(previewPanel).toBeDefined();
     } finally {
       noteSpy.mockClear();
     }

@@ -52,6 +52,22 @@ describe("cron task run terminal records", () => {
     );
   });
 
+  it.each([undefined, "   "])(
+    "uses a scoped session key without evaluating a missing configured default (agentId=%j)",
+    (agentId) => {
+      const job = {
+        id: "scoped-owner",
+        sessionTarget: "main",
+        sessionKey: "agent:ops:main",
+        agentId,
+      } as CronJob;
+
+      expect(resolveMainSessionCronRunSessionKey(job, 1_500, undefined)).toBe(
+        "agent:ops:cron:scoped-owner:run:1500",
+      );
+    },
+  );
+
   it("persists canonical history directly when a detached runtime is registered", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-core-ledger-runtime-" },

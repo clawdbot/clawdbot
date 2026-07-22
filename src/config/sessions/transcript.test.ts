@@ -42,6 +42,7 @@ import {
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,
   readTailAssistantTextFromSessionTranscript,
+  SessionTranscriptAgentScopeMismatchError,
 } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -1071,6 +1072,16 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       { id: "root-user", role: "user", text: "keep this branch", timestamp: 1_000 },
       { id: "active-reply", role: "assistant", text: "active answer", timestamp: 2_000 },
     ]);
+  });
+
+  it("rejects a session key scoped to a different agent", async () => {
+    await expect(
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey: "agent:worker:main",
+        storePath: fixture.storePath(),
+      }),
+    ).rejects.toBeInstanceOf(SessionTranscriptAgentScopeMismatchError);
   });
 
   it("resolves an unscoped main alias with the configured agent owner", async () => {
