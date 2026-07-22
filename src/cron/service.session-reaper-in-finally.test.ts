@@ -102,6 +102,22 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
 
     const resolvedAgentIds: string[] = [];
     const sharedStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        storePath: sharedStorePath,
+        sessionKey: "agent:main:cron:default-job:run:expired",
+      },
+      { sessionId: "main-expired", updatedAt: now - 25 * 3_600_000 },
+    );
+    await replaceSessionEntry(
+      {
+        agentId: "worker",
+        storePath: sharedStorePath,
+        sessionKey: "agent:worker:cron:worker-job:run:expired",
+      },
+      { sessionId: "worker-expired", updatedAt: now - 25 * 3_600_000 },
+    );
     const state = createCronServiceState({
       storePath: store.storePath,
       cronEnabled: true,
@@ -124,6 +140,10 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       await onTimer(state);
 
       expect([...new Set(resolvedAgentIds)].toSorted()).toEqual(["main", "worker"]);
+      expect(listSessionEntries({ agentId: "main", storePath: sharedStorePath })).toStrictEqual([]);
+      expect(listSessionEntries({ agentId: "worker", storePath: sharedStorePath })).toStrictEqual(
+        [],
+      );
       expect(state.running).toBe(false);
     });
   });

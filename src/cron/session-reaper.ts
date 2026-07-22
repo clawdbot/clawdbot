@@ -17,7 +17,11 @@ const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 /** Minimum interval between reaper sweeps (avoid running every timer tick). */
 const MIN_SWEEP_INTERVAL_MS = 5 * 60_000; // 5 minutes
 
-const lastSweepAtMsByStore = new Map<string, number>();
+const lastSweepAtMsByTarget = new Map<string, number>();
+
+function reaperTargetKey(agentId: string, storePath: string): string {
+  return `${agentId}\0${storePath}`;
+}
 
 /** Resolves cron run-session retention; `false` disables pruning, bad strings fall back safely. */
 function resolveRetentionMs(cronConfig?: CronConfig): number | null {
@@ -58,17 +62,20 @@ export async function sweepCronRunSessions(params: {
 }): Promise<ReaperResult> {
   const now = params.nowMs ?? Date.now();
   const storePath = params.sessionStorePath;
-  const lastSweepAtMs = lastSweepAtMsByStore.get(storePath) ?? 0;
+  // Shared physical stores still hold agent-scoped rows. The throttle also
+  // suppresses in-flight attempts, so its identity must retain both scopes.
+  const targetKey = reaperTargetKey(params.agentId, storePath);
+  const lastSweepAtMs = lastSweepAtMsByTarget.get(targetKey) ?? 0;
 
-  // Timer ticks can be frequent; throttle per store path to avoid repeated
-  // session-store I/O while preserving a force path for deterministic tests.
+  // Timer ticks can be frequent; throttle per agent/store target to avoid
+  // repeated session-store I/O while preserving a force path for tests.
   if (!params.force && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
   }
 
   // Throttle attempts, not only successful sweeps. A broken session store must
   // not turn frequent timer ticks into an unbounded persistence-error loop.
-  lastSweepAtMsByStore.set(storePath, now);
+  lastSweepAtMsByTarget.set(targetKey, now);
 
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
@@ -155,9 +162,9 @@ export async function sweepCronRunSessions(params: {
   return { swept: true, pruned };
 }
 
-/** Resets per-store reaper throttles between tests. */
+/** Resets per-target reaper throttles between tests. */
 function resetReaperThrottle(): void {
-  lastSweepAtMsByStore.clear();
+  lastSweepAtMsByTarget.clear();
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
