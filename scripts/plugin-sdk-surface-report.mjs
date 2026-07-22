@@ -141,7 +141,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // +1: session-discussion binds one external discussion provider to sessions.
-      140,
+      // +1: number-runtime is shared by official external plugin packages.
+      141,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
