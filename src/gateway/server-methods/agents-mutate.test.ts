@@ -173,6 +173,13 @@ vi.mock("../../commands/agents.config.js", () => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
   listAgentEntries: mocks.listAgentEntries,
+  resolveDefaultAgentId: (cfg: unknown) => {
+    const defaults = getAgentList(cfg).filter((entry) => entry.default === true);
+    if (defaults.length !== 1) {
+      throw new Error("expected exactly one default agent");
+    }
+    return defaults[0]!.id;
+  },
   resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentConfig: (cfg: unknown, agentId: string) =>
     getAgentList(cfg).find((entry) => entry.id === agentId),
@@ -533,6 +540,7 @@ type MockIdentity = {
 
 type MockAgentEntry = {
   id: string;
+  default?: boolean;
   name?: string;
   workspace?: string;
   agentDir?: string;
@@ -682,7 +690,9 @@ beforeEach(() => {
 describe("agents.create", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfigReturn = {};
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }] },
+    };
   });
 
   it("creates a new agent successfully", async () => {
@@ -841,7 +851,7 @@ describe("agents.create", () => {
 
     expectRespondErrorContaining(respond, "unsafe workspace file");
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(getAgentList(mocks.loadConfigReturn)).toEqual([]);
+    expect(getAgentList(mocks.loadConfigReturn)).toEqual([{ id: "main", default: true }]);
   });
 
   it("passes model to applyAgentConfig when provided", async () => {
@@ -1254,10 +1264,18 @@ describe("agents.delete", () => {
     } as unknown as import("node:fs").Stats);
     mocks.fsRealpath.mockImplementation(async (pathname: string) => pathname);
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "test-agent", workspace: "/workspace/test-agent" }] },
+      agents: {
+        entries: {
+          "test-agent": { workspace: "/workspace/test-agent" },
+          main: { default: true },
+        },
+      },
     };
     mocks.findAgentEntryIndex.mockReturnValue(0);
-    mocks.pruneAgentConfig.mockReturnValue({ config: {}, removedBindings: 2 });
+    mocks.pruneAgentConfig.mockReturnValue({
+      config: { agents: { entries: { main: { default: true } } } },
+      removedBindings: 2,
+    });
     mocks.movePathToTrash.mockReset().mockResolvedValue("/trashed");
   });
 
@@ -2391,7 +2409,7 @@ describe("agents.delete", () => {
 
   it("protects every journaled path claimed as a surviving agent workspace", async () => {
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "other-agent", workspace: "/journal" }] },
+      agents: { list: [{ id: "other-agent", workspace: "/journal", default: true }] },
     };
     mocks.findAgentEntryIndex.mockReturnValue(-1);
     mocks.readAgentDeletionJournal.mockReturnValue({
@@ -2780,7 +2798,9 @@ describe("agents.delete", () => {
     const workspaceDir = await actualFs.realpath(
       await actualFs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-delete-trash-failure-")),
     );
-    mocks.resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, agentId?: string) =>
+      agentId === "test-agent" ? workspaceDir : `/workspace/${agentId ?? "unknown"}`,
+    );
     mocks.movePathToTrash.mockImplementation(async (pathname?: string) => {
       if (pathname === workspaceDir) {
         throw Object.assign(new Error("trash destination missing"), { code: "ENOENT" });
@@ -2873,17 +2893,6 @@ describe("agents.delete", () => {
 
     expectRespondErrorContaining(respond, "cannot be deleted");
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("returns the normal not-found response when the roster is empty", async () => {
-    mocks.findAgentEntryIndex.mockReturnValue(-1);
-
-    const { respond, promise } = makeCall("agents.delete", {
-      agentId: "ghost",
-    });
-    await promise;
-
-    expectNotFoundResponseAndNoWrite(respond);
   });
 
   it("returns not found when a concurrent delete wins the delete race", async () => {

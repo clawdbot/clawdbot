@@ -12,17 +12,35 @@ import {
   isPersistentSystemAgentOperation,
   type SystemAgentCommandDeps,
 } from "./operations.js";
-import {
-  expectAuditRecord,
-  expectRecordFields,
-  requireRecord,
-} from "./operations.setup.test-support.js";
 import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
 
 function readLastAuditEntry(): unknown {
   return listSystemAgentAuditEntriesForTests().at(-1)?.value;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectAuditRecord(
+  audit: unknown,
+  fields: Record<string, unknown>,
+  detailFields: Record<string, unknown>,
+) {
+  const auditRecord = requireRecord(audit, "audit record");
+  expectRecordFields(auditRecord, fields);
+  expectRecordFields(requireRecord(auditRecord.details, "audit details"), detailFields);
 }
 
 const mockConfig = vi.hoisted(() => {
@@ -62,7 +80,7 @@ const mockConfig = vi.hoisted(() => {
     missing(pathLocal: string) {
       state.path = pathLocal;
       state.exists = false;
-      state.config = {};
+      state.config = { agents: { list: [{ id: "main", default: true }] } };
       state.hash = undefined;
     },
     currentConfig() {
@@ -173,7 +191,6 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: true,
-      agentId: "main",
       lines: ["Workspace: /tmp/work"],
     }));
     const deps = {
@@ -213,7 +230,6 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).toHaveBeenCalledWith(
       {
         workspace: "/tmp/work",
-        agentName: "main",
         expectedInferenceRoute: expect.any(Object),
         surface: "cli",
         runtime,
@@ -321,10 +337,7 @@ describe("parseSystemAgentOperation", () => {
 
   it("preserves unrelated concurrent edits after re-verifying the same setup route", async () => {
     mockConfig.setConfig({
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.5" } },
-        list: [{ id: "ops", default: true }],
-      },
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
       gateway: { port: 18789 },
     });
     const { runtime } = createSystemAgentTestRuntime();
@@ -333,7 +346,6 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
-      agentId: "ops",
       lines: [],
     }));
 
@@ -347,10 +359,7 @@ describe("parseSystemAgentOperation", () => {
           loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
           verifyInferenceConfig: async () => {
             mockConfig.setConfig({
-              agents: {
-                defaults: { model: { primary: "openai/gpt-5.5" } },
-                list: [{ id: "ops", default: true }],
-              },
+              agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
               gateway: { port: 19000 },
             });
             return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
@@ -360,7 +369,6 @@ describe("parseSystemAgentOperation", () => {
     );
 
     expect(result.applied).toBe(true);
-    expect(result.agentId).toBe("ops");
     expect(mockConfig.currentConfig()).toMatchObject({ gateway: { port: 19000 } });
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ expectedInferenceRoute: expect.any(Object) }),
@@ -401,7 +409,6 @@ describe("parseSystemAgentOperation", () => {
       configHashBefore: "mock-hash-0",
       configHashAfter: "mock-hash-1",
       bootstrapPending: false,
-      agentId: "main",
       lines: ["Workspace: /tmp/work"],
     }));
 
@@ -422,11 +429,10 @@ describe("parseSystemAgentOperation", () => {
       },
     );
 
-    expect(result).toEqual({ applied: true, bootstrapPending: false, agentId: "main" });
+    expect(result).toEqual({ applied: true, bootstrapPending: false });
     expect(applySetup).toHaveBeenCalledWith(
       {
         workspace: "/tmp/work",
-        agentName: "main",
         expectedInferenceRoute: expect.any(Object),
         surface: "cli",
         runtime,
@@ -607,24 +613,6 @@ describe("parseSystemAgentOperation", () => {
       },
     },
     {
-      field: "default marker",
-      initial: {
-        agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          list: [{ id: "main", default: true }, { id: "work" }],
-        },
-      },
-      change: (config: TestConfig) => {
-        const next = structuredClone(config);
-        const list = requireRecord(next.agents, "agents").list as Array<{
-          id: string;
-          default?: boolean;
-        }>;
-        delete list[0]?.default;
-        return next;
-      },
-    },
-    {
       field: "auth profile order",
       initial: {
         agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
@@ -703,7 +691,7 @@ describe("parseSystemAgentOperation", () => {
     },
   ])(
     "aborts when concurrent $field changes invalidate the verified route",
-    async ({ field, initial, change }) => {
+    async ({ initial, change }) => {
       const tempDir = opTempDirs.make("openclaw-route-conflict-");
       setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
       mockConfig.setConfig(initial);
@@ -713,10 +701,6 @@ describe("parseSystemAgentOperation", () => {
         mockConfig.setConfig(change(mockConfig.currentConfig()));
         return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
       });
-      const expectedError =
-        field === "default marker"
-          ? "expected exactly one default=true entry"
-          : "inference route changed during verification";
 
       await expect(
         executeSystemAgentOperation(
@@ -727,7 +711,7 @@ describe("parseSystemAgentOperation", () => {
             deps: { verifyInferenceConfig },
           },
         ),
-      ).rejects.toThrow(expectedError);
+      ).rejects.toThrow("inference route changed during verification");
 
       expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
       expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");

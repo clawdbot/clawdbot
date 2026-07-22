@@ -1,9 +1,8 @@
-import fsSync from "node:fs";
 // Setup wizard tests cover end-to-end onboarding prompt flows.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
@@ -16,62 +15,6 @@ import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
-
-const onboardingMocks = vi.hoisted(() => ({
-  ensureOnboardingAgent: vi.fn(
-    async ({
-      config,
-      entry,
-      name,
-      workspace,
-    }: {
-      config: OpenClawConfig;
-      entry?: { id: string };
-      name: string;
-      workspace: string;
-    }) => {
-      const agentId = normalizeAgentId(entry?.id ?? name);
-      return {
-        config: {
-          ...config,
-          agents: {
-            ...config.agents,
-            list: [
-              {
-                ...entry,
-                id: agentId,
-                name,
-                workspace,
-                agentDir: path.join(process.env.OPENCLAW_STATE_DIR ?? "", "agent"),
-                default: true,
-              },
-            ],
-          },
-        },
-        agentId,
-        bootstrapPending: true,
-      };
-    },
-  ),
-  stageOnboardingAgent: vi.fn(
-    ({ config, name, workspace }: { config: OpenClawConfig; name: string; workspace: string }) => {
-      const agentId = normalizeAgentId(name);
-      const entry = {
-        id: agentId,
-        name,
-        workspace,
-        agentDir: path.join(process.env.OPENCLAW_STATE_DIR ?? "", "agent"),
-        default: true,
-      };
-      return {
-        config: { ...config, agents: { ...config.agents, list: [entry] } },
-        agent: { agentId, name, workspace, agentDir: entry.agentDir },
-      };
-    },
-  ),
-}));
-
-vi.mock("../commands/onboard-agent.js", () => onboardingMocks);
 
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
@@ -471,6 +414,13 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort,
   replaceConfigFile,
 }));
+vi.mock("../commands/onboard-agent.js", () => ({
+  ensureOnboardingConfig: async (config: OpenClawConfig) => ({
+    config,
+    agentId: "main",
+    bootstrapPending: true,
+  }),
+}));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
@@ -835,37 +785,6 @@ describe("runSetupWizard", () => {
     expect(runTui).not.toHaveBeenCalled();
   });
 
-  it("leaves first-agent roster and workspace state untouched after a late wizard failure", async () => {
-    const caseDir = path.join(suiteRoot, `cancelled-first-agent-${++suiteCase}`);
-    setupSkills.mockRejectedValueOnce(new Error("late setup failure"));
-
-    await expect(
-      runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          authChoice: "skip",
-          installDaemon: false,
-          skipChannels: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipUi: true,
-          workspace: caseDir,
-        },
-        createRuntime(),
-        buildWizardPrompter({}),
-      ),
-    ).rejects.toThrow("late setup failure");
-
-    expect(onboardingMocks.ensureOnboardingAgent).not.toHaveBeenCalled();
-    expect(ensureWorkspaceAndSessions).not.toHaveBeenCalled();
-    for (const config of persistedWizardConfigs()) {
-      expect(config.agents?.list ?? []).toEqual([]);
-      expect(config.agents?.defaults?.workspace).toBeUndefined();
-    }
-    await expect(fs.access(caseDir)).rejects.toThrow();
-  });
-
   it("seeds interactive remote setup from command flags", async () => {
     const remoteToken = "REDACTED";
     readConfigFileSnapshot.mockResolvedValueOnce({
@@ -1182,28 +1101,10 @@ describe("runSetupWizard", () => {
       requireRecord(agents.defaults, "next config agent defaults"),
       {
         skipBootstrap: true,
+        workspace: workspaceDir,
       },
       "next config agent defaults",
     );
-    expect(requireRecord(agents.defaults, "next config agent defaults").workspace).toBeUndefined();
-    const finalReplaceParams = requireRecord(
-      getMockCallArg(
-        replaceConfigFile,
-        replaceConfigFile.mock.calls.length - 1,
-        0,
-        "final config replacement",
-      ),
-      "final config replacement params",
-    );
-    expect(
-      requireRecord(
-        requireRecord(
-          requireRecord(finalReplaceParams.nextConfig, "final next config").agents,
-          "final agents",
-        ).defaults,
-        "final agent defaults",
-      ).workspace,
-    ).toBe(workspaceDir);
     expectRecordFields(
       replaceParams.writeOptions,
       { allowConfigSizeDrop: false },
@@ -1215,39 +1116,6 @@ describe("runSetupWizard", () => {
       getMockCallArg(ensureWorkspaceAndSessions, 0, 2, "workspace setup"),
       { skipBootstrap: true },
       "workspace setup options",
-    );
-  });
-
-  it("finalizes a custom first agent under its staged roster owner", async () => {
-    ensureWorkspaceAndSessions.mockClear();
-    const workspaceDir = await makeCaseDir("custom-first-agent-");
-    const prompter = buildWizardPrompter({
-      text: vi.fn(async (params) =>
-        params.message === "What should we call your first agent?" ? "Research Buddy" : "",
-      ),
-    });
-
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipUi: true,
-        workspace: workspaceDir,
-      },
-      createRuntime(),
-      prompter,
-    );
-
-    expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      workspaceDir,
-      expect.anything(),
-      expect.objectContaining({ agentId: "research-buddy" }),
     );
   });
 

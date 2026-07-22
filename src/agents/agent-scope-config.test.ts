@@ -1,19 +1,9 @@
 // Agent scope tests cover which per-agent fields may flatten into runtime defaults.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  listAgentIds,
-  resolveAgentConfig,
-  resolveAgentWorkspaceDirForConfigInspection,
-  resolveDefaultAgentId,
-} from "./agent-scope-config.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 
 describe("agent roster resolution", () => {
-  it("does not synthesize ids for an empty roster", () => {
-    expect(listAgentIds({})).toEqual([]);
-    expect(() => resolveDefaultAgentId({})).toThrow("No agents configured");
-  });
-
   it("requires one explicit default", () => {
     expect(() =>
       resolveDefaultAgentId({ agents: { list: [{ id: "alpha" }, { id: "beta" }] } }),
@@ -23,15 +13,6 @@ describe("agent roster resolution", () => {
         agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
       }),
     ).toBe("beta");
-  });
-
-  it("uses the configured global workspace when inspecting an empty roster", () => {
-    expect(
-      resolveAgentWorkspaceDirForConfigInspection(
-        { agents: { defaults: { workspace: "/tmp/pre-onboarding" }, list: [] } },
-        {},
-      ),
-    ).toBe("/tmp/pre-onboarding");
   });
 });
 

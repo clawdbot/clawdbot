@@ -11,7 +11,6 @@ const hoisted = vi.hoisted(() => ({
     }>
   >(),
   listAgentIdsMock: vi.fn<() => string[]>(),
-  defaultAgentId: "main",
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
@@ -21,20 +20,17 @@ vi.mock("../../config/sessions/session-accessor.js", () => ({
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: (_store?: string, params?: { agentId?: string }) =>
-    _store?.includes("{agentId}")
-      ? `/stores/${params?.agentId ?? "main"}.json`
-      : (_store ?? `/stores/${params?.agentId ?? "main"}.json`),
+    `/stores/${params?.agentId ?? "main"}.json`,
 }));
 
 vi.mock("../../config/sessions/main-session.js", () => ({
-  resolveAgentIdFromSessionKey: (key?: string) => key?.split(":")[1] ?? hoisted.defaultAgentId,
-  resolveExplicitAgentSessionKey: ({ agentId }: { agentId?: string }) =>
-    agentId ? `agent:${agentId}:main` : undefined,
+  resolveAgentIdFromSessionKey: () => "main",
+  resolveExplicitAgentSessionKey: () => undefined,
 }));
 
 vi.mock("../agent-scope.js", () => ({
   listAgentIds: () => hoisted.listAgentIdsMock(),
-  resolveDefaultAgentId: () => hoisted.defaultAgentId,
+  resolveDefaultAgentId: () => "main",
 }));
 
 const { resolveSessionKeyForRequest, resolveStoredSessionKeyForSessionId } =
@@ -73,157 +69,7 @@ describe("resolveSessionKeyForRequest", () => {
   beforeEach(() => {
     hoisted.listSessionEntriesMock.mockReset();
     hoisted.listAgentIdsMock.mockReset();
-    hoisted.defaultAgentId = "main";
     hoisted.listAgentIdsMock.mockReturnValue(["main", "other"]);
-  });
-
-  it("remaps a historical shared-store main key to the configured default", () => {
-    hoisted.defaultAgentId = "ops";
-    hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
-    const legacyEntry = { sessionId: "legacy-main", updatedAt: 10 } satisfies SessionEntry;
-    mockSessionStores({
-      "/stores/shared.json": { "agent:main:main": legacyEntry },
-    });
-
-    const result = resolveSessionKeyForRequest({
-      cfg: {
-        agents: { list: [{ id: "ops", default: true }] },
-        session: { store: "/stores/shared.json" },
-      },
-      to: "+15551234567",
-    });
-
-    expect(result.sessionKey).toBe("agent:ops:main");
-    expect(result.sessionStore["agent:ops:main"]).toMatchObject({ sessionId: "legacy-main" });
-  });
-
-  it("remaps a historical separate main store to the configured default", () => {
-    hoisted.defaultAgentId = "ops";
-    hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
-    mockSessionStores({
-      "/stores/ops.json": {},
-      "/stores/main.json": {
-        "agent:main:main": { sessionId: "legacy-main", updatedAt: 10 },
-      },
-    });
-
-    const result = resolveSessionKeyForRequest({
-      cfg: {
-        agents: { list: [{ id: "ops", default: true }] },
-        session: { store: "/stores/{agentId}.json" },
-      },
-      to: "+15551234567",
-    });
-
-    expect(result.storePath).toBe("/stores/ops.json");
-    expect(result.sessionStore["agent:ops:main"]).toMatchObject({ sessionId: "legacy-main" });
-  });
-
-  it("remaps a historical main key for an explicit default-agent command", () => {
-    hoisted.defaultAgentId = "ops";
-    hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
-    mockSessionStores({
-      "/stores/ops.json": {},
-      "/stores/main.json": {
-        "agent:main:main": { sessionId: "legacy-main", updatedAt: 10 },
-      },
-    });
-
-    const result = resolveSessionKeyForRequest({
-      cfg: {
-        agents: { list: [{ id: "ops", default: true }] },
-        session: { store: "/stores/{agentId}.json" },
-      },
-      agentId: "ops",
-    });
-
-    expect(result.sessionKey).toBe("agent:ops:main");
-    expect(result.sessionStore["agent:ops:main"]).toMatchObject({ sessionId: "legacy-main" });
-  });
-
-  it("remaps a historical main key for a recipient-less default command", () => {
-    hoisted.defaultAgentId = "ops";
-    hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
-    mockSessionStores({
-      "/stores/ops.json": {},
-      "/stores/main.json": {
-        "agent:main:main": { sessionId: "legacy-main", updatedAt: 10 },
-      },
-    });
-
-    const result = resolveSessionKeyForRequest({
-      cfg: {
-        agents: { list: [{ id: "ops", default: true }] },
-        session: { store: "/stores/{agentId}.json" },
-      },
-    });
-
-    expect(result.sessionKey).toBe("agent:ops:main");
-    expect(result.sessionStore["agent:ops:main"]).toMatchObject({ sessionId: "legacy-main" });
-  });
-
-  it("chooses the freshest historical main alias", () => {
-    hoisted.defaultAgentId = "ops";
-    hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
-    mockSessionStores({
-      "/stores/shared.json": {
-        "agent:main:primary": { sessionId: "older", updatedAt: 10 },
-        "agent:main:main": { sessionId: "newer", updatedAt: 20 },
-      },
-    });
-
-    const result = resolveSessionKeyForRequest({
-      cfg: {
-        agents: { list: [{ id: "ops", default: true }] },
-        session: { mainKey: "primary", store: "/stores/shared.json" },
-      },
-      to: "+15551234567",
-    });
-
-    expect(result.sessionStore["agent:ops:primary"]).toMatchObject({ sessionId: "newer" });
-  });
-
-  it("ignores an unreadable optional legacy main store", () => {
-    hoisted.defaultAgentId = "ops";
-    hoisted.listAgentIdsMock.mockReturnValue(["ops"]);
-    hoisted.listSessionEntriesMock.mockImplementation((scope) => {
-      if (scope?.storePath === "/stores/main.json") {
-        throw new Error("legacy store unreadable");
-      }
-      return [];
-    });
-
-    expect(() =>
-      resolveSessionKeyForRequest({
-        cfg: {
-          agents: { list: [{ id: "ops", default: true }] },
-          session: { store: "/stores/{agentId}.json" },
-        },
-      }),
-    ).not.toThrow();
-  });
-
-  it("does not borrow the explicit main agent's session for another default", () => {
-    hoisted.defaultAgentId = "ops";
-    hoisted.listAgentIdsMock.mockReturnValue(["ops", "main"]);
-    mockSessionStores({
-      "/stores/shared.json": {
-        "agent:main:main": { sessionId: "explicit-main", updatedAt: 10 },
-      },
-    });
-
-    const result = resolveSessionKeyForRequest({
-      cfg: {
-        agents: {
-          list: [{ id: "ops", default: true }, { id: "main" }],
-        },
-        session: { store: "/stores/shared.json" },
-      },
-      to: "+15551234567",
-    });
-
-    expect(result.sessionKey).toBe("agent:ops:main");
-    expect(result.sessionStore["agent:ops:main"]).toBeUndefined();
   });
 
   it("prefers the current store when equal duplicates exist across stores", () => {

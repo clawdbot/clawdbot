@@ -1,7 +1,7 @@
 /** Tests bundled plugin config secret collectors. */
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveAgentWorkspaceDirForConfigInspection } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
@@ -12,6 +12,10 @@ function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
+const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
+  list: [{ id: "main", default: true }],
+};
+
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
     expect(
@@ -21,6 +25,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       })?.manifest.configContracts?.secretInputs?.paths,
     ).toEqual([{ path: "routes.*.secret", expected: "string", ownerKind: "route" }]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           webhooks: {
@@ -68,6 +73,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       { path: "appServer.headers.*", expected: "string" },
     ]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           codex: {
@@ -90,7 +96,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(
       resolvePluginConfigContractsById({
         config,
-        workspaceDir: resolveAgentWorkspaceDirForConfigInspection(config, {}),
+        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
         env: {},
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
@@ -150,6 +156,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       { path: "tts.providers.*.apiKey", expected: "string" },
     ]);
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         entries: {
           "voice-call": {
@@ -190,7 +197,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(
       resolvePluginConfigContractsById({
         config,
-        workspaceDir: resolveAgentWorkspaceDirForConfigInspection(config, {}),
+        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
         env: {},
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
@@ -235,6 +242,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       new URL("../../extensions/google-meet", import.meta.url),
     );
     const config = {
+      agents: explicitMainRoster,
       plugins: {
         load: { paths: [googleMeetPluginDir] },
         entries: {

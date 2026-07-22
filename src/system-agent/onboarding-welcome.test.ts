@@ -59,13 +59,12 @@ describe("buildOnboardingWelcome", () => {
 
     expect(propose).toHaveBeenCalledWith({
       kind: "setup",
-      agentId: "main",
       workspace: "/existing/workspace",
     });
-    expect(question.id).toBe("onboarding-agent-name");
+    expect(question.id).toBe("onboarding-apply-setup");
     expect(question.options[0]).toMatchObject({
-      label: "Main",
-      reply: "Use main and set it up",
+      label: "Yes — set it up",
+      reply: "yes",
       recommended: true,
     });
     expect(welcome).toContain("Workspace: /existing/workspace");
@@ -117,7 +116,6 @@ describe("buildOnboardingWelcome", () => {
 
     expect(propose).toHaveBeenCalledWith({
       kind: "setup",
-      agentId: "main",
       workspace: "/default/workspace",
     });
   });
@@ -145,7 +143,6 @@ describe("buildOnboardingWelcome", () => {
 
     expect(propose).toHaveBeenCalledWith({
       kind: "setup",
-      agentId: "main",
       workspace: "/requested/workspace",
     });
     expect(welcome).toContain("Workspace: /requested/workspace");
@@ -207,8 +204,8 @@ describe("buildOnboardingWelcome", () => {
     });
 
     expect(propose).toHaveBeenCalledTimes(configured ? 0 : 1);
-    expect(question.id).toBe(configured ? "onboarding-next-step" : "onboarding-agent-name");
+    expect(question.id).toBe(configured ? "onboarding-next-step" : "onboarding-apply-setup");
     expect(question.skipAction).toBe(configured ? "exit" : undefined);
-    expect(welcome.includes("What should we call your first agent?")).toBe(!configured);
+    expect(welcome.includes("Say **yes**")).toBe(!configured);
   });
 });

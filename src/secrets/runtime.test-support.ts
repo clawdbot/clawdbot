@@ -25,18 +25,6 @@ export function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-function withExplicitTestRoster(config: OpenClawConfig): OpenClawConfig {
-  const next = structuredClone(config);
-  next.agents ??= {};
-  next.agents.list ??= [];
-  if (next.agents.list.length === 0) {
-    next.agents.list.push({ id: "main", default: true });
-  } else if (!next.agents.list.some((agent) => agent.default === true)) {
-    next.agents.list[0]!.default = true;
-  }
-  return next;
-}
-
 export function loadAuthStoreWithProfiles(
   profiles: AuthProfileStore["profiles"],
 ): AuthProfileStore {
@@ -151,13 +139,7 @@ export function setupSecretsRuntimeSnapshotTestHooks(): {
   });
 
   return {
-    prepareSecretsRuntimeSnapshot: ((params) =>
-      prepareSecretsRuntimeSnapshotImpl({
-        ...params,
-        config: withExplicitTestRoster(params.config),
-        ...(params.assignmentConfig
-          ? { assignmentConfig: withExplicitTestRoster(params.assignmentConfig) }
-          : {}),
-      })) as PrepareSecretsRuntimeSnapshot,
+    prepareSecretsRuntimeSnapshot: ((...args) =>
+      prepareSecretsRuntimeSnapshotImpl(...args)) as PrepareSecretsRuntimeSnapshot,
   };
 }

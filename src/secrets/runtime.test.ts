@@ -18,6 +18,10 @@ const BUNDLED_WEBHOOKS_PLUGIN_ORIGINS = new Map([["webhooks", "bundled" as const
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function explicitMainRoster() {
+  return { agents: { list: [{ id: "main", default: true }] } };
+}
+
 const CODEX_APP_SERVER_TOKEN_REF = {
   source: "env",
   provider: "default",
@@ -52,6 +56,7 @@ describe("secrets runtime snapshot", () => {
     const ref = (id: string) => ({ source: "env" as const, provider: "default", id });
     const config = (firstId: string) =>
       asConfig({
+        ...explicitMainRoster(),
         models: {
           providers: {
             first: {
@@ -108,6 +113,7 @@ describe("secrets runtime snapshot", () => {
     };
     const config = (apiKey: typeof canonicalRef | string) =>
       asConfig({
+        ...explicitMainRoster(),
         models: {
           providers: {
             first: {
@@ -148,6 +154,7 @@ describe("secrets runtime snapshot", () => {
     const ref = (id: string) => ({ source: "env" as const, provider: "default", id });
     const config = (firstId: string) =>
       asConfig({
+        ...explicitMainRoster(),
         models: {
           providers: {
             first: {
@@ -207,6 +214,7 @@ describe("secrets runtime snapshot", () => {
     };
     const config = (baseUrl: string) =>
       asConfig({
+        ...explicitMainRoster(),
         models: {
           providers: {
             first: { apiKey: apiKeyRef, baseUrl, models: [] },
@@ -250,6 +258,7 @@ describe("secrets runtime snapshot", () => {
     } as const;
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         skills: {
           entries: {
             cold: { apiKey: missingRef },
@@ -289,6 +298,7 @@ describe("secrets runtime snapshot", () => {
     } as const;
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         plugins: {
           entries: {
             webhooks: {
@@ -356,6 +366,7 @@ describe("secrets runtime snapshot", () => {
     const secret = "runtime-registration-secret";
     await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         talk: {
           apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
         },
@@ -372,6 +383,7 @@ describe("secrets runtime snapshot", () => {
     const secret = "test-secret";
     await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         tts: { providers: { elevenlabs: { apiKey: TTS_REF } } },
       }),
       env: { ELEVENLABS_API_KEY: secret },
@@ -386,6 +398,7 @@ describe("secrets runtime snapshot", () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         agents: {
+          list: [{ id: "main", default: true }],
           defaults: {
             sandbox: {
               mode: "all",
@@ -436,6 +449,7 @@ describe("secrets runtime snapshot", () => {
           },
           entries: {
             worker: {
+              default: true,
               enabled: false,
               sandbox: {
                 ssh: {
@@ -480,6 +494,7 @@ describe("secrets runtime snapshot", () => {
           },
           entries: {
             worker: {
+              default: true,
               sandbox: {
                 ssh: {
                   identityData: {
@@ -529,7 +544,7 @@ describe("secrets runtime snapshot", () => {
             },
           },
           entries: {
-            cold: {},
+            cold: { default: true },
             healthy: {
               sandbox: {
                 ssh: {
@@ -572,6 +587,7 @@ describe("secrets runtime snapshot", () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         agents: {
+          list: [{ id: "main", default: true }],
           defaults: {
             sandbox: {
               mode: "all",
@@ -600,29 +616,10 @@ describe("secrets runtime snapshot", () => {
     });
   });
 
-  it("keeps defaults sandbox ssh refs inactive before the first agent exists", async () => {
-    const ref = { source: "env" as const, provider: "default", id: "SSH_IDENTITY_DATA" };
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        agents: {
-          list: [],
-          defaults: {
-            sandbox: { mode: "all", backend: "ssh", ssh: { identityData: ref } },
-          },
-        },
-      }),
-      env: {},
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-
-    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual(ref);
-  });
-
   it("resolves active bundled Codex app-server plugin SecretRefs", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         plugins: {
           entries: {
             codex: {
@@ -665,6 +662,7 @@ describe("secrets runtime snapshot", () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
         config: asConfig({
+          ...explicitMainRoster(),
           plugins: {
             entries: {
               codex: {
@@ -695,6 +693,7 @@ describe("secrets runtime snapshot", () => {
   it("isolates the TTS owner when its SecretRef is missing during cold startup", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         tts: {
           providers: {
             elevenlabs: {
@@ -737,6 +736,7 @@ describe("secrets runtime snapshot", () => {
 
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         secrets: {
           providers: {
             ttsfile: {
@@ -780,6 +780,7 @@ describe("secrets runtime snapshot", () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
         config: asConfig({
+          ...explicitMainRoster(),
           secrets: {
             providers: {
               default: {
@@ -810,6 +811,7 @@ describe("secrets runtime snapshot", () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
         config: asConfig({
+          ...explicitMainRoster(),
           tts: {
             providers: {
               elevenlabs: {
@@ -832,6 +834,7 @@ describe("secrets runtime snapshot", () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
         config: asConfig({
+          ...explicitMainRoster(),
           tts: {
             providers: {
               elevenlabs: {
@@ -852,6 +855,7 @@ describe("secrets runtime snapshot", () => {
     const ref = { source: "env", provider: "default", id: "MISSING_PROVIDER_KEY" } as const;
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         models: {
           providers: {
             example: {
@@ -883,6 +887,7 @@ describe("secrets runtime snapshot", () => {
     const ref = { source: "env", provider: "default", id: "MISSING_WEBHOOK_TOKEN" } as const;
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
+        ...explicitMainRoster(),
         cron: { webhookToken: ref },
       }),
       env: {},
@@ -906,6 +911,7 @@ describe("secrets runtime snapshot", () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
         config: asConfig({
+          ...explicitMainRoster(),
           talk: {
             apiKey: { source: "exec", provider: "vault", id: "a/../b" },
           },

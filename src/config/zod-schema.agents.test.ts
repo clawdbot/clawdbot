@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { AgentsSchema } from "./zod-schema.agents.js";
 
 describe("agent roster defaults", () => {
-  it("allows an empty roster for pre-onboarding config", () => {
-    expect(AgentsSchema.safeParse({ list: [] }).success).toBe(true);
+  it("rejects an empty roster after load-time migration", () => {
+    expect(AgentsSchema.safeParse({ list: [] }).success).toBe(false);
   });
 
   it("requires exactly one default in a non-empty roster", () => {

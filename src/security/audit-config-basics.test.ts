@@ -30,16 +30,6 @@ function captureSecurityEvents(): {
 }
 
 describe("security audit config basics", () => {
-  it("audits an empty roster as global config scope", async () => {
-    const findings = await collectSecurityAuditFindings({
-      tools: { exec: { security: "full" } },
-    });
-
-    expect(
-      findings.find((finding) => finding.checkId === "tools.exec.security_full_configured")?.detail,
-    ).toContain("global");
-  });
-
   it("flags agent profile overrides when global tools.profile is minimal", () => {
     const findings = collectMinimalProfileOverrideFindings({
       tools: {
@@ -65,6 +55,7 @@ describe("security audit config basics", () => {
 
   it("flags tools.elevated allowFrom wildcard as critical", async () => {
     const findings = await collectSecurityAuditFindings({
+      agents: { list: [{ id: "main", default: true }] },
       tools: {
         elevated: {
           allowFrom: { whatsapp: ["*"] },
@@ -102,6 +93,7 @@ describe("security audit config basics", () => {
             list: [
               {
                 id: "asset-agent",
+                default: true,
                 skills: ["asset-lifecycle-tracking"],
                 tools: { exec: { host: "gateway", mode: "full" } },
               },
@@ -149,6 +141,7 @@ describe("security audit config basics", () => {
             list: [
               {
                 id: "asset-agent",
+                default: true,
                 skills: ["asset-lifecycle-tracking"],
                 tools: { exec: { host: "gateway", mode: "full" } },
               },
@@ -186,6 +179,7 @@ describe("security audit config basics", () => {
             list: [
               {
                 id: "asset-agent",
+                default: true,
                 skills: ["asset-lifecycle-tracking"],
                 tools: { exec: { host: "gateway", mode: "full" } },
               },
@@ -223,6 +217,7 @@ describe("security audit config basics", () => {
             list: [
               {
                 id: "asset-agent",
+                default: true,
                 skills: ["asset-lifecycle-tracking"],
                 tools: { exec: { host: "gateway", mode: "full" } },
               },
@@ -255,7 +250,7 @@ describe("security audit config basics", () => {
       );
 
       const report = await runSecurityAudit({
-        config: {},
+        config: { agents: { list: [{ id: "main", default: true }] } },
         sourceConfig: {},
         env: { OPENCLAW_STATE_DIR: stateDir },
         stateDir,
@@ -286,6 +281,7 @@ describe("security audit config basics", () => {
             list: [
               {
                 id: "asset-agent",
+                default: true,
                 skills: ["asset-lifecycle-tracking"],
                 tools: { exec: { host: "gateway", mode: "full" } },
               },
@@ -324,6 +320,7 @@ describe("security audit config basics", () => {
               list: [
                 {
                   id: "asset-agent",
+                  default: true,
                   skills: ["asset-lifecycle-tracking"],
                   tools: { exec: { host: "gateway", mode: "full" } },
                 },
@@ -369,6 +366,7 @@ describe("security audit config basics", () => {
             list: [
               {
                 id: "asset-agent",
+                default: true,
                 skills: ["asset-lifecycle-tracking"],
                 tools: { exec: { host: "gateway", mode: "full" } },
               },
@@ -410,6 +408,7 @@ describe("security audit config basics", () => {
             list: [
               {
                 id: "asset-agent",
+                default: true,
                 skills: ["asset-lifecycle-tracking"],
                 tools: { exec: { host: "gateway", mode: "full" } },
               },
@@ -443,7 +442,7 @@ describe("security audit config basics", () => {
           },
           agents: {
             defaults: { skills: ["docs-search"] },
-            list: [{ id: "docs-agent", tools: { exec: { mode: "deny" } } }],
+            entries: { "docs-agent": { default: true, tools: { exec: { mode: "deny" } } } },
           },
           tools: { exec: { mode: "deny" } },
         },
@@ -465,6 +464,7 @@ describe("security audit config basics", () => {
   it("suppresses configured accepted findings from the active audit report", async () => {
     const report = await runSecurityAudit({
       config: {
+        agents: { list: [{ id: "main", default: true }] },
         security: {
           audit: {
             suppressions: [
@@ -506,6 +506,7 @@ describe("security audit config basics", () => {
   it("keeps unrelated dangerous flags active when one dangerous flag is suppressed", async () => {
     const report = await runSecurityAudit({
       config: {
+        agents: { entries: { main: { default: true } } },
         hooks: { gmail: { allowUnsafeExternalContent: true } },
         tools: {
           exec: {

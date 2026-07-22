@@ -32,20 +32,22 @@ export function createThrowingRuntime(): NonInteractiveRuntime {
   };
 }
 
-export async function mockOnboardingAgent(params: {
-  config: OpenClawConfig;
-  name: string;
-  workspace: string;
-}) {
+export async function mockOnboardingAgent(params: { config: OpenClawConfig; workspace: string }) {
+  const existing =
+    params.config.agents?.list?.find((entry) => entry.default === true) ??
+    params.config.agents?.list?.[0];
+  if (existing) {
+    return { config: params.config, agentId: existing.id, bootstrapPending: false };
+  }
   return {
     config: {
       ...params.config,
       agents: {
         ...params.config.agents,
-        list: [{ id: params.name, name: params.name, workspace: params.workspace, default: true }],
+        list: [{ id: "main", name: "main", workspace: params.workspace, default: true }],
       },
     },
-    agentId: params.name,
+    agentId: "main",
     bootstrapPending: true,
   };
 }

@@ -25,12 +25,12 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
-  it("leaves a missing config as a truly fresh empty roster", async () => {
+  it("injects main into the in-memory config when no file exists", async () => {
     await withTempHome(async () => {
       resetConfigRuntimeState();
       const snapshot = await readConfigFileSnapshot();
       expect(snapshot.exists).toBe(false);
-      expect(snapshot.sourceConfig.agents?.list).toBeUndefined();
+      expect(snapshot.sourceConfig.agents?.list).toEqual([{ id: "main", default: true }]);
     });
   });
 
@@ -42,7 +42,7 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
-  it("preserves a persisted explicit empty new-world roster", async () => {
+  it("migrates a persisted empty roster to explicit main", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -51,8 +51,10 @@ describe("persisted implicit-main roster migration", () => {
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.sourceConfig.agents?.list).toEqual([]);
-      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({ agents: { list: [] } });
+      expect(snapshot.sourceConfig.agents?.list).toEqual([{ id: "main", default: true }]);
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
+        agents: { list: [{ id: "main", default: true }] },
+      });
     });
   });
 

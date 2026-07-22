@@ -58,7 +58,7 @@ function expectRuntimeArg(value: unknown) {
 }
 
 const mockConfig = vi.hoisted(() => {
-  const initial = { agents: { list: [{ id: "main", default: true }] } };
+  const initial = {};
   const state = {
     path: "/tmp/openclaw.json",
     exists: true,
@@ -88,7 +88,7 @@ const mockConfig = vi.hoisted(() => {
     reset() {
       state.path = "/tmp/openclaw.json";
       state.exists = true;
-      state.config = { agents: { list: [{ id: "main", default: true }] } };
+      state.config = {};
       state.hash = "mock-hash-0";
     },
     missing(pathLocal: string) {

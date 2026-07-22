@@ -11,7 +11,7 @@ describe("multi-agent agentDir validation", () => {
     const shared = path.join(tmpdir(), "openclaw-shared-agentdir");
     const res = validateConfigObject({
       agents: {
-        entries: { a: { agentDir: shared }, b: { agentDir: shared } },
+        entries: { a: { agentDir: shared, default: true }, b: { agentDir: shared } },
       },
     });
     expect(res.ok).toBe(false);
