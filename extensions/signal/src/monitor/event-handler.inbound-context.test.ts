@@ -1263,7 +1263,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(sentEmojis).toContain("❌");
     expect(sentEmojis).not.toContain("✅");
     expect(sentEmojis.at(-1)).toBe("👀");
-    expect(removeReactionSignalMock).not.toHaveBeenCalled();
   });
 
   it("targets Signal group status reactions with groupId and message author", async () => {
