@@ -1063,3 +1063,78 @@ describe("createPdfTool", () => {
     });
   });
 });
+
+describe("pdf tool run abort", () => {
+  const priorFetch = global.fetch;
+
+  beforeEach(() => {
+    resetPdfToolAuthEnv();
+    completeMock.mockReset();
+    registerProviderStreamForModelMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    global.fetch = priorFetch;
+  });
+
+  it("throws before loading or calling the model when the run signal is already aborted", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, { provider: "anthropic" });
+      const nativeSpy = vi
+        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
+        .mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        tool.execute(
+          "t1",
+          { prompt: "summarize", pdfs: ["/tmp/a.pdf", "/tmp/b.pdf"] },
+          controller.signal,
+        ),
+      ).rejects.toThrow();
+
+      // Aborted run must not spend bandwidth on downloads or a paid model call.
+      expect(loadSpy).not.toHaveBeenCalled();
+      expect(nativeSpy).not.toHaveBeenCalled();
+      expect(completeMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("stops remaining downloads and skips the model call when aborted mid-run", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        mockLoad: false,
+        provider: "anthropic",
+      });
+      const controller = new AbortController();
+      loadSpy.mockImplementation(async () => {
+        // Abort the run as soon as the first PDF finishes downloading.
+        controller.abort();
+        return FAKE_PDF_MEDIA as never;
+      });
+      const nativeSpy = vi
+        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
+        .mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute(
+          "t1",
+          { prompt: "summarize", pdfs: ["/tmp/a.pdf", "/tmp/b.pdf", "/tmp/c.pdf"] },
+          controller.signal,
+        ),
+      ).rejects.toThrow();
+
+      // Only the first PDF is fetched; the loop exits before the rest and the
+      // paid model call never fires for the dead run.
+      expect(loadSpy).toHaveBeenCalledTimes(1);
+      expect(nativeSpy).not.toHaveBeenCalled();
+      expect(completeMock).not.toHaveBeenCalled();
+    });
+  });
+});

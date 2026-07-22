@@ -3299,4 +3299,124 @@ describe("image compression policy", () => {
     });
   });
 });
+
+type MockImageLoadWebMedia = Awaited<
+  ReturnType<
+    NonNullable<
+      NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>["loadImageWebMediaRuntime"]
+    >
+  >
+>["loadWebMedia"];
+
+describe("image tool run abort", () => {
+  afterEach(() => {
+    imageProviderHarness.reset();
+    testing.setProviderDepsForTest();
+  });
+
+  function makeDescribeSpies() {
+    const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+      text: "ok",
+      model: params.model,
+    }));
+    const describeImages = vi.fn(async (params: ImagesDescriptionRequest) => ({
+      text: "ok",
+      model: params.model,
+    }));
+    return { describeImage, describeImages };
+  }
+
+  function installAbortImageDeps(
+    loadWebMedia: MockImageLoadWebMedia,
+    spies: ReturnType<typeof makeDescribeSpies>,
+  ) {
+    installImageUnderstandingProviderDeps([minimaxProvider, moonshotProvider], {
+      loadImageWebMediaRuntime: async () => ({
+        loadWebMedia,
+        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        }),
+      }),
+      describeImageWithModel: spies.describeImage,
+      describeImagesWithModel: spies.describeImages,
+    });
+  }
+
+  it("throws before downloading or calling the provider when the run signal is already aborted", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    const spies = makeDescribeSpies();
+    installAbortImageDeps(loadWebMedia, spies);
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        tool.execute(
+          "t1",
+          {
+            prompt: "Describe the images.",
+            images: ["https://example.test/a.png", "https://example.test/b.png"],
+          },
+          controller.signal,
+        ),
+      ).rejects.toThrow();
+
+      // Aborted run must not spend bandwidth on downloads or a paid vision call.
+      expect(loadWebMedia).not.toHaveBeenCalled();
+      expect(spies.describeImage).not.toHaveBeenCalled();
+      expect(spies.describeImages).not.toHaveBeenCalled();
+    });
+  });
+
+  it("stops remaining downloads and skips the provider call when aborted mid-run", async () => {
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const controller = new AbortController();
+    const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => {
+      // Abort the run as soon as the first image finishes downloading.
+      controller.abort();
+      return {
+        buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+        contentType: "image/png",
+        kind: "image" as const,
+      };
+    });
+    const spies = makeDescribeSpies();
+    installAbortImageDeps(loadWebMedia, spies);
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({ config: createMinimaxImageConfig(), agentDir });
+
+      await expect(
+        tool.execute(
+          "t1",
+          {
+            prompt: "Describe the images.",
+            images: [
+              "https://example.test/a.png",
+              "https://example.test/b.png",
+              "https://example.test/c.png",
+            ],
+          },
+          controller.signal,
+        ),
+      ).rejects.toThrow();
+
+      // Only the first image is fetched; the loop exits before the rest and the
+      // paid vision provider is never called for the dead run.
+      expect(loadWebMedia).toHaveBeenCalledTimes(1);
+      expect(spies.describeImage).not.toHaveBeenCalled();
+      expect(spies.describeImages).not.toHaveBeenCalled();
+    });
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

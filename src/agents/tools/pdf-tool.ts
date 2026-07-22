@@ -392,7 +392,7 @@ export function createPdfTool(options?: {
     name: "pdf",
     description,
     parameters: PdfToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 
       // MARK: - Normalize pdf + pdfs input
@@ -459,6 +459,9 @@ export function createPdfTool(options?: {
       }> = [];
 
       for (const pdfRaw of pdfInputs) {
+        // Stop before starting the next sequential download when the run was
+        // aborted, so a dead run cannot keep pulling remote PDFs.
+        signal?.throwIfAborted();
         const trimmed = normalizeMediaReferenceSource(pdfRaw);
         const refInfo = classifyMediaReferenceSource(trimmed);
         const { isHttpUrl } = refInfo;
@@ -519,6 +522,9 @@ export function createPdfTool(options?: {
               localRoots,
               ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
               ssrfPolicy: remoteMediaSsrfPolicy,
+              // Forward the run abort signal into the fetch layer so an abort
+              // mid-download disconnects the in-flight socket.
+              ...(signal ? { requestInit: { signal } } : {}),
             });
 
         if (media.kind !== "document") {
@@ -564,6 +570,8 @@ export function createPdfTool(options?: {
         return extractedAll;
       };
 
+      // Do not issue a paid PDF-model call for an already-aborted run.
+      signal?.throwIfAborted();
       const result = await runPdfPrompt({
         cfg: options?.config,
         agentId: options?.agentId,
