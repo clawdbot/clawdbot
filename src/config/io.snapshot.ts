@@ -171,8 +171,9 @@ export async function readConfigFileSnapshotInternal(
       !containsConfigIncludeDirective(effectiveParsed) &&
       !deps.fs.lstatSync(configPath).isSymbolicLink()
     ) {
+      let observedLockedSnapshot = false;
       try {
-        const wrote = await withFileLock(
+        await withFileLock(
           configPath,
           { stale: 30_000, retries: { retries: 40, factor: 1.2, minTimeout: 25, maxTimeout: 250 } },
           async () => {
@@ -190,11 +191,12 @@ export async function readConfigFileSnapshotInternal(
             return true;
           },
         );
-        if (wrote) {
-          return await readConfigFileSnapshotInternal(context, options);
-        }
+        observedLockedSnapshot = true;
       } catch {
         // Read-only deployments still receive the compatibility roster in memory.
+      }
+      if (observedLockedSnapshot) {
+        return await readConfigFileSnapshotInternal(context, options);
       }
     }
     const effectiveConfigRaw = rosterMigration.config;

@@ -37,15 +37,19 @@ export function migratePersistedImplicitMainRoster(raw: unknown): {
   if (!Array.isArray(list) || list.length === 0) {
     return { config: raw, changed: false, diagnostics: [] };
   }
-  const defaultIndexes = list.flatMap((entry, index) =>
-    entry && typeof entry === "object" && !Array.isArray(entry) && entry.default === true
-      ? [index]
-      : [],
+  const validIndexes = list.flatMap((entry, index) =>
+    entry && typeof entry === "object" && !Array.isArray(entry) ? [index] : [],
+  );
+  if (validIndexes.length === 0) {
+    return { config: raw, changed: false, diagnostics: [] };
+  }
+  const defaultIndexes = validIndexes.filter(
+    (index) => (list[index] as Record<string, unknown>).default === true,
   );
   if (defaultIndexes.length === 1) {
     return { config: raw, changed: false, diagnostics: [] };
   }
-  const effectiveIndex = defaultIndexes[0] ?? 0;
+  const effectiveIndex = defaultIndexes[0] ?? validIndexes[0]!;
   const repaired = list.map((entry, index) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       return entry;
