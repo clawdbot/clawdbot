@@ -156,7 +156,7 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
             } = entry;
             return { sessionKey, entry: lightEntry as SessionEntry };
           }
-          return { sessionKey, entry };
+          return { sessionKey, entry: structuredClone(entry) };
         });
       if (scope.offset) {
         entries = entries.slice(scope.offset);
