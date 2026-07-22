@@ -64,6 +64,7 @@ export function applyMattermostSetupConfigPatch(params: {
 }
 
 export const mattermostSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["botToken", "baseUrl"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({

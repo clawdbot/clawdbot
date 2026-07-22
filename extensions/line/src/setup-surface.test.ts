@@ -15,6 +15,7 @@ import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { probeLineBot } from "./probe.js";
 import { setLineRuntime } from "./runtime.js";
+import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
@@ -40,6 +41,13 @@ afterAll(() => {
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
 
 describe("line setup wizard", () => {
+  it("exposes config-promotion declarations on the setup adapter", () => {
+    expect(lineSetupAdapter.singleAccountKeysToMove).toContain("channelAccessToken");
+    expect(lineSetupAdapter.singleAccountKeysToMove).toContain("channelSecret");
+    expect(lineSetupAdapter.singleAccountKeysToMove).toContain("tokenFile");
+    expect(lineSetupAdapter.singleAccountKeysToMove).toContain("secretFile");
+  });
+
   it("configures token and secret for the default account", async () => {
     const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
