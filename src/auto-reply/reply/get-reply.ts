@@ -1039,7 +1039,10 @@ export async function getReplyFromConfig(
       const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
       const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
         hookRunner.runBeforeAgentReply(
-          { cleanedBody },
+          {
+            cleanedBody,
+            explicitlyMentionedBot: sessionCtx.ExplicitlyMentionedBot ?? ctx.ExplicitlyMentionedBot,
+          },
           {
             agentId,
             sessionKey: agentSessionKey,

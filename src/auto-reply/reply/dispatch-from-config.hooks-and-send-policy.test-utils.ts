@@ -169,6 +169,29 @@ describe("before_dispatch hook", () => {
     });
   });
 
+  it("passes the explicit Slack mention fact to before_dispatch with an escaped body", async () => {
+    hookMocks.runner.runBeforeDispatch.mockResolvedValue({ handled: true });
+    const dispatcher = createDispatcher();
+    const ctx = createHookCtx({
+      Body: "&lt;@U0AT9FME09F&gt; investigate this",
+      BodyForAgent: "&lt;@U0AT9FME09F&gt; investigate this",
+      ExplicitlyMentionedBot: true,
+    });
+
+    await expect(
+      dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher }),
+    ).resolves.toBeDefined();
+
+    const beforeDispatchCall = firstMockCall(
+      hookMocks.runner.runBeforeDispatch,
+      "before dispatch hook",
+    );
+    expect(beforeDispatchCall?.[0]).toMatchObject({
+      body: "&lt;@U0AT9FME09F&gt; investigate this",
+      explicitlyMentionedBot: true,
+    });
+  });
+
   it("suppresses before_dispatch handled reply when sendPolicy is deny", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

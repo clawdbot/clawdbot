@@ -1565,6 +1565,7 @@ async function dispatchReplyFromConfigInner(
                     replyToIsQuote: hookContext.replyToIsQuote,
                     isGroup: hookContext.isGroup,
                     timestamp: hookContext.timestamp,
+                    explicitlyMentionedBot: ctx.ExplicitlyMentionedBot,
                   },
                   {
                     channelId: hookContext.channelId,

@@ -93,7 +93,10 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     });
 
     const result = await getReplyFromConfig(
-      buildGetReplyGroupCtx({ SenderId: "telegram-user-42" }),
+      buildGetReplyGroupCtx({
+        SenderId: "telegram-user-42",
+        ExplicitlyMentionedBot: true,
+      }),
       undefined,
       {},
     );
@@ -104,7 +107,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
       (
         mocks.runBeforeAgentReply.mock.calls as unknown as Array<
           [
-            { cleanedBody?: string },
+            { cleanedBody?: string; explicitlyMentionedBot?: boolean },
             {
               agentId?: string;
               sessionKey?: string;
@@ -124,9 +127,10 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
           ]
         >
       )[0],
-      "(mocks.runBeforeAgentReply.mock.calls as unknown as Array<\n        [\n          { cleanedBody?: string },\n          {\n            agentId?: string;\n            sessionKey?: string;\n            sessionId?: string;\n            workspaceDir?: string;\n            messageProvider?: string;\n            trigger?: string;\n            channelId?: string;\n            senderId?: string;\n            chatId?: string;\n            channel?: string;\n            channelContext?: {\n              sender?: { id?: string };\n              chat?: { id?: string };\n            };\n          },\n        ]\n      >)[0] test invariant",
+      "(mocks.runBeforeAgentReply.mock.calls as unknown as Array<...>)[0] test invariant",
     );
     expect(body.cleanedBody).toBe("hello world");
+    expect(body.explicitlyMentionedBot).toBe(true);
     expect(hookCtx.agentId).toBe("main");
     expect(hookCtx.sessionKey).toBe("agent:main:telegram:-100123");
     expect(hookCtx.sessionId).toBe("session-1");

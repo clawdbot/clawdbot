@@ -305,6 +305,7 @@ export type PluginHookContextWindowSource =
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
+  explicitlyMentionedBot?: boolean;
 };
 
 export type PluginHookBeforeAgentReplyResult = {
@@ -478,6 +479,7 @@ export type PluginHookBeforeDispatchEvent = {
   replyToIsQuote?: boolean;
   isGroup?: boolean;
   timestamp?: number;
+  explicitlyMentionedBot?: boolean;
 };
 
 export type PluginHookBeforeDispatchContext = {
