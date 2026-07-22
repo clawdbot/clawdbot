@@ -197,6 +197,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     lastStreamedAssistantCleaned: undefined,
     lastStreamedCommentary: undefined,
     commentaryStreamedWithDelta: false,
+    assistantDisplayPhasePending: false,
     emittedAssistantUpdate: false,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
@@ -448,6 +449,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.lastStreamedAssistantCleaned = undefined;
     state.lastStreamedCommentary = undefined;
     state.commentaryStreamedWithDelta = false;
+    state.assistantDisplayPhasePending = false;
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;

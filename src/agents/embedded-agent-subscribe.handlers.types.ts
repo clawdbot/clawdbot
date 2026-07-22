@@ -126,6 +126,7 @@ export type EmbeddedAgentSubscribeState = {
   lastStreamedAssistantCleaned?: string;
   lastStreamedCommentary?: string;
   commentaryStreamedWithDelta: boolean;
+  assistantDisplayPhasePending: boolean;
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;

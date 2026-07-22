@@ -745,6 +745,33 @@ function emitCommentaryDisplayTransition(
   ctx.emitAssistantStreamData(data);
 }
 
+function emitResolvedCommentaryDisplay(
+  ctx: EmbeddedAgentSubscribeContext,
+  rawText: string,
+  params: {
+    final?: boolean;
+    itemId?: string;
+    preferReplace?: boolean;
+  },
+): void {
+  if (!ctx.state.assistantDisplayPhasePending) {
+    emitCommentaryDisplayTransition(ctx, rawText, params);
+    return;
+  }
+  const text = resolveCommentaryDisplayText(rawText, { final: params.final });
+  ctx.state.assistantDisplayPhasePending = false;
+  ctx.state.lastStreamedCommentary = text;
+  ctx.state.commentaryStreamedWithDelta = false;
+  ctx.emitAssistantStreamData(
+    buildAssistantStreamData({
+      text,
+      replace: true,
+      phase: "commentary",
+      itemId: params.itemId,
+    }),
+  );
+}
+
 function containsCompleteMediaDirectiveLine(text: string): boolean {
   return /(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(text);
 }
@@ -939,7 +966,7 @@ export function handleMessageUpdate(
       delta: "",
       content: rawCommentaryText,
     });
-    emitCommentaryDisplayTransition(ctx, rawCommentaryText, { preferReplace: true });
+    emitResolvedCommentaryDisplay(ctx, rawCommentaryText, { preferReplace: true });
     return;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
@@ -1114,7 +1141,7 @@ export function handleMessageUpdate(
         extractAssistantCommentaryText(streamAssistant),
       );
     }
-    emitCommentaryDisplayTransition(ctx, ctx.state.deltaBuffer, {
+    emitResolvedCommentaryDisplay(ctx, ctx.state.deltaBuffer, {
       itemId: deliveryItemId,
       preferReplace: !chunk,
     });
@@ -1122,6 +1149,11 @@ export function handleMessageUpdate(
   }
   if (isPhasePendingResponsesTextItem) {
     return;
+  }
+  const isAssistantDisplayPhasePending =
+    isPhasePendingAnthropicText || isPhasePendingCompletionsText;
+  if (isAssistantDisplayPhasePending) {
+    ctx.state.assistantDisplayPhasePending = true;
   }
   // Subagents have no live consumer; their final result is delivered from
   // message_end. Keep accumulating deltaBuffer, but skip per-chunk visible-text
@@ -1250,19 +1282,26 @@ export function handleMessageUpdate(
       parsedStreamDirectives,
       shouldUsePhaseAwareBlockReply,
     });
+    const displayPhaseResolved = Boolean(deliveryPhase) && !isAssistantDisplayPhasePending;
+    const displayText =
+      isAssistantDisplayPhasePending || ctx.state.assistantDisplayPhasePending
+        ? resolveCommentaryDisplayText(cleanedText, {
+            final: displayPhaseResolved || evtType === "text_end",
+          })
+        : cleanedText;
     const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
 
     let shouldEmit;
     let deltaText = "";
     let replace = false;
-    if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
+    if (!hasAssistantVisibleReply({ text: displayText, mediaUrls, audioAsVoice: hasAudio })) {
       shouldEmit = false;
     } else {
-      replace = Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
-      deltaText = replace ? "" : cleanedText.slice(previousCleaned.length);
+      replace = Boolean(previousCleaned && !displayText.startsWith(previousCleaned));
+      deltaText = replace ? "" : displayText.slice(previousCleaned.length);
       shouldEmit = replace
-        ? cleanedText !== previousCleaned || hasMedia || hasAudio
+        ? displayText !== previousCleaned || hasMedia || hasAudio
         : Boolean(deltaText || hasMedia || hasAudio);
     }
 
@@ -1286,7 +1325,10 @@ export function handleMessageUpdate(
     }
 
     ctx.state.lastStreamedAssistant = nextRawStreamText;
-    ctx.state.lastStreamedAssistantCleaned = cleanedText;
+    ctx.state.lastStreamedAssistantCleaned = displayText;
+    if (displayPhaseResolved) {
+      ctx.state.assistantDisplayPhasePending = false;
+    }
 
     if (
       ctx.params.silentExpected ||
@@ -1298,7 +1340,7 @@ export function handleMessageUpdate(
 
     if (shouldEmit) {
       const data = buildAssistantStreamData({
-        text: cleanedText,
+        text: displayText,
         delta: deltaText,
         replace,
         mediaUrls,
@@ -1389,7 +1431,7 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     });
-    emitCommentaryDisplayTransition(ctx, rawCommentaryText, {
+    emitResolvedCommentaryDisplay(ctx, rawCommentaryText, {
       final: true,
       itemId: ctx.state.lastAssistantStreamItemId,
       preferReplace: !ctx.state.commentaryStreamedWithDelta,

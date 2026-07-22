@@ -65,6 +65,7 @@ function createMessageUpdateContext(
       lastStreamedAssistantCleaned: undefined,
       lastStreamedCommentary: undefined,
       commentaryStreamedWithDelta: false,
+      assistantDisplayPhasePending: false,
       emittedAssistantUpdate: false,
       shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
       blockReplyBreak: "text_end",
@@ -875,6 +876,84 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.deltaBuffer).toBe("CONTINUE_WORK");
   });
 
+  it.each(["anthropic-messages", "openai-completions"])(
+    "keeps phase-pending %s continuation markers off the assistant event bus",
+    async (api) => {
+      const onAgentEvent = vi.fn();
+      const context = createMessageUpdateContext({ onAgentEvent });
+
+      for (const [text, delta] of [
+        ["C", "C"],
+        ["CONTINUE_WORK", "ONTINUE_WORK"],
+      ]) {
+        handleMessageUpdate(context, {
+          type: "message_update",
+          message: {
+            role: "assistant",
+            api,
+            content: [{ type: "text", text }],
+          },
+          assistantMessageEvent: { type: "text_delta", delta },
+        } as never);
+      }
+
+      expect(onAgentEvent).not.toHaveBeenCalled();
+      await handleMessageEnd(context, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          api,
+          phase: "commentary",
+          content: [
+            {
+              type: "text",
+              text: "CONTINUE_WORK",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "commentary-0",
+                phase: "commentary",
+              }),
+            },
+          ],
+        },
+      } as never);
+
+      expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+        stream: "assistant",
+        data: {
+          text: "",
+          replace: true,
+          phase: "commentary",
+        },
+      });
+      expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("CONTINUE_WORK");
+    },
+  );
+
+  it("releases an ordinary phase-pending Completions prefix at text_end", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const message = {
+      role: "assistant",
+      api: "openai-completions",
+      content: [{ type: "text", text: "Ordinary C" }],
+    };
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", delta: "Ordinary C" },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_end" },
+    } as never);
+
+    expect(onAgentEvent.mock.calls.map((call) => call[0]?.data?.delta)).toEqual(["Ordinary ", "C"]);
+    expect(context.state.lastStreamedAssistantCleaned).toBe("Ordinary C");
+  });
+
   it("keeps independently classified Anthropic commentary blocks partitioned", async () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
@@ -882,6 +961,7 @@ describe("handleMessageUpdate text signatures", () => {
       context.state.deltaBuffer = "";
       context.state.lastStreamedCommentary = undefined;
       context.state.commentaryStreamedWithDelta = false;
+      context.state.assistantDisplayPhasePending = false;
       context.state.lastAssistantStreamContentIndex = undefined;
       context.state.lastAssistantStreamItemId = undefined;
     });
@@ -956,6 +1036,7 @@ describe("handleMessageUpdate text signatures", () => {
       context.state.lastStreamedAssistantCleaned = undefined;
       context.state.lastStreamedCommentary = undefined;
       context.state.commentaryStreamedWithDelta = false;
+      context.state.assistantDisplayPhasePending = false;
       context.state.lastAssistantStreamContentIndex = undefined;
       context.state.lastAssistantStreamItemId = undefined;
     });
@@ -1105,6 +1186,7 @@ describe("handleMessageUpdate text signatures", () => {
       context.state.deltaBuffer = "";
       context.state.lastStreamedCommentary = undefined;
       context.state.commentaryStreamedWithDelta = false;
+      context.state.assistantDisplayPhasePending = false;
       context.state.lastAssistantStreamContentIndex = undefined;
       context.state.lastAssistantStreamItemId = undefined;
     });
