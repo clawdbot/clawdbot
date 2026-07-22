@@ -206,7 +206,9 @@ async function releaseMaintainedClawPackageLifecycleLease(
     } catch (error) {
       lastError = error;
       if (attempt < 3) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        await new Promise<void>((done) => {
+          setTimeout(done, 25);
+        });
       }
     }
   }
