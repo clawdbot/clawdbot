@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/localization-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./catalog": {
+      "types": "./dist/catalog.d.mts",
+      "import": "./dist/catalog.mjs",
+      "default": "./dist/catalog.mjs"
+    },
+    "./context": {
+      "types": "./dist/context.d.mts",
+      "import": "./dist/context.mjs",
+      "default": "./dist/context.mjs"
+    },
+    "./locale-registry": {
+      "types": "./dist/locale-registry.d.mts",
+      "import": "./dist/locale-registry.mjs",
+      "default": "./dist/locale-registry.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown --config tsdown.config.ts"
+  }
+}

@@ -1,4 +1,13 @@
 // Wizard i18n helpers resolve translated onboarding copy by locale.
+import {
+  createCatalogSnapshot,
+  createLocalizationContext,
+  renderLocalizedMessage,
+  resolveProcessLocalizationContext,
+  type LocalizationCatalog,
+  type LocalizationContext,
+  type MessageParam,
+} from "@openclaw/localization-core";
 import { en } from "./locales/en.js";
 import { zh_CN } from "./locales/zh-CN.js";
 import { zh_TW } from "./locales/zh-TW.js";
@@ -22,37 +31,21 @@ const LOCALES: Record<WizardLocale, WizardTranslationMap> = {
 };
 
 const WIZARD_DEFAULT_LOCALE: WizardLocale = "en";
+const WIZARD_LOCALES = ["en", "zh-CN", "zh-TW"] as const;
+const WIZARD_CATALOG_SNAPSHOT = createCatalogSnapshot({
+  catalogRevision: "wizard:1",
+  catalogs: {
+    en: flattenTranslationMap(en),
+    "zh-CN": flattenTranslationMap(zh_CN),
+    "zh-TW": flattenTranslationMap(zh_TW),
+  },
+});
 
-function normalizeLocaleToken(raw: string | undefined): string {
-  return (raw ?? "").trim().split(".")[0]?.split("@")[0]?.replaceAll("_", "-") ?? "";
-}
-
-// Resolve shell/browser locale strings such as zh_Hant_TW.UTF-8 into supported
-// setup locales, falling back to English for unknown languages.
-function resolveWizardLocale(value: string | undefined): WizardLocale {
-  const normalized = normalizeLocaleToken(value);
-  if (!normalized) {
-    return WIZARD_DEFAULT_LOCALE;
-  }
-
-  const lower = normalized.toLowerCase();
-  if (lower === "en" || lower.startsWith("en-")) {
-    return "en";
-  }
-  if (lower === "zh-tw" || lower === "zh-hk" || lower === "zh-mo" || lower.includes("hant")) {
-    return "zh-TW";
-  }
-  if (lower === "zh" || lower === "zh-cn" || lower === "zh-sg" || lower.includes("hans")) {
-    return "zh-CN";
-  }
-  return WIZARD_DEFAULT_LOCALE;
-}
-
-function resolveWizardLocaleFromEnv(env: NodeJS.ProcessEnv = process.env): WizardLocale {
-  const locale = [env.OPENCLAW_LOCALE, env.LC_ALL, env.LC_MESSAGES, env.LANG].find((value) =>
-    value?.trim(),
-  );
-  return resolveWizardLocale(locale);
+function resolveWizardContextFromEnv(env: NodeJS.ProcessEnv = process.env): LocalizationContext {
+  return resolveProcessLocalizationContext(env, {
+    audience: "operator",
+    supportedLocales: WIZARD_LOCALES,
+  }).context;
 }
 
 function readKey(map: WizardTranslationMap, key: string): string | undefined {
@@ -66,25 +59,26 @@ function readKey(map: WizardTranslationMap, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function interpolate(value: string, params?: WizardI18nParams): string {
-  if (!params) {
-    return value;
-  }
-  return value.replace(/\{([A-Za-z0-9_]+)\}/g, (match, key) => {
-    const param = params[key];
-    return param === undefined || param === null ? match : String(param);
-  });
-}
-
 export function wizardT(
   key: string,
   params?: WizardI18nParams,
   options?: { locale?: WizardLocale },
 ): string {
-  const locale = options?.locale ?? resolveWizardLocaleFromEnv();
-  const localized = readKey(LOCALES[locale], key);
-  const fallback = localized ?? readKey(LOCALES[WIZARD_DEFAULT_LOCALE], key) ?? key;
-  return interpolate(fallback, params);
+  const context = options?.locale
+    ? createLocalizationContext({
+        locale: options.locale,
+        source: "explicit-user",
+        audience: "operator",
+        supportedLocales: WIZARD_LOCALES,
+      })
+    : resolveWizardContextFromEnv();
+  const messageParams = toMessageParams(params);
+  const fallback = readKey(LOCALES[WIZARD_DEFAULT_LOCALE], key) ?? key;
+  return renderLocalizedMessage(WIZARD_CATALOG_SNAPSHOT, context, {
+    key,
+    params: messageParams,
+    fallback,
+  });
 }
 
 export const t = wizardT;
@@ -103,4 +97,33 @@ export function createSetupTranslator(options?: {
         : key;
     return wizardT(resolvedKey, params, { locale: options?.locale });
   };
+}
+
+function flattenTranslationMap(
+  map: WizardTranslationMap,
+  prefix = "",
+  output: Record<string, string> = {},
+): LocalizationCatalog {
+  for (const [key, value] of Object.entries(map)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (typeof value === "string") {
+      output[path] = value;
+    } else {
+      flattenTranslationMap(value, path, output);
+    }
+  }
+  return output;
+}
+
+function toMessageParams(
+  params: WizardI18nParams | undefined,
+): Readonly<Record<string, MessageParam>> | undefined {
+  if (!params) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(params).filter(
+      (entry): entry is [string, MessageParam] => entry[1] !== null && entry[1] !== undefined,
+    ),
+  );
 }

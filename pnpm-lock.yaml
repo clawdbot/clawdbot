@@ -2262,6 +2262,8 @@ importers:
         specifier: 2.9.0
         version: 2.9.0
 
+  packages/localization-core: {}
+
   packages/media-core:
     dependencies:
       '@openclaw/normalization-core':

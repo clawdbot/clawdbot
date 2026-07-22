@@ -20,13 +20,16 @@ function collectLeafKeys(tree: WizardTranslationTree, prefix = "", out: string[]
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("wizard i18n", () => {
   it.each([
     ["zh_CN.UTF-8", "Gateway 端口"],
     ["zh-Hans", "Gateway 端口"],
+    ["zh-Hans-SG", "Gateway 端口"],
     ["zh_TW.UTF-8", "Gateway 連接埠"],
+    ["zh-Hant-HK", "Gateway 連接埠"],
     ["zh-HK", "Gateway 連接埠"],
     ["en_US.UTF-8", "Gateway port"],
     ["de_DE.UTF-8", "Gateway port"],
@@ -64,6 +67,17 @@ describe("wizard i18n", () => {
     vi.stubEnv("LC_MESSAGES", "\t");
     vi.stubEnv("LANG", "  ");
     expect(t("wizard.gateway.port")).toBe("Gateway port");
+  });
+
+  it("uses the Windows runtime locale when POSIX locale variables are absent", () => {
+    vi.stubEnv("LANG", "");
+    vi.stubEnv("LC_ALL", "");
+    vi.stubEnv("LC_MESSAGES", "");
+    vi.stubGlobal("navigator", {
+      language: "zh-Hant-HK",
+      languages: ["zh-Hant-HK"],
+    });
+    expect(t("wizard.gateway.port")).toBe("Gateway 連接埠");
   });
 
   it("falls back to English and interpolates params", () => {
