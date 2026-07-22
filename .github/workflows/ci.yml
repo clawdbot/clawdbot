@@ -1509,8 +1509,8 @@ jobs:
           DIFF_BASE_REVISION: ${{ needs.preflight.outputs.diff_base_revision }}
         run: |
           if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["localization:catalogs:check"] ? 0 : 1)'; then
-            if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] ||
-              { [[ "${{ github.event_name }}" == "pull_request" ]] &&
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] ||
+              { [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] &&
                 ! git diff --quiet "${DIFF_BASE_REVISION}" HEAD -- src/wizard/i18n/catalogs/generated; }; then
               pnpm localization:catalogs:check
             else
