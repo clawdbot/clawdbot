@@ -1110,7 +1110,7 @@ describe("doctor preview warnings", () => {
     const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
       tools: {
         profiles: {
-          "message-only": { extends: "messaging" },
+          "message-only": { baseProfile: "messaging" },
         },
         profile: "message-only",
         exec: {

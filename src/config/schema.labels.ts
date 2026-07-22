@@ -202,7 +202,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.links.scope": "Link Understanding Scope",
   "tools.profile": "Tool Profile",
   "tools.profiles": "Configured Tool Profiles",
-  "tools.profiles.*.extends": "Parent Tool Profile",
+  "tools.profiles.*.baseProfile": "Base Tool Profile",
   "tools.profiles.*.alsoAllow": "Profile Allowlist Additions",
   "tools.profiles.*.deny": "Profile Denylist",
   "tools.alsoAllow": "Tool Allowlist Additions",

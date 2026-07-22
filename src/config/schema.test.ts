@@ -798,26 +798,28 @@ describe("config schema", () => {
     const result = OpenClawSchema.safeParse({
       tools: {
         profiles: {
-          researcher: { extends: "minimal", alsoAllow: ["group:web"], deny: ["web_fetch"] },
-          "read-only-researcher": { extends: "researcher", deny: ["write"] },
+          researcher: {
+            baseProfile: "minimal",
+            alsoAllow: ["group:web"],
+            deny: ["web_fetch"],
+          },
         },
         profile: "researcher",
       },
       agents: {
         entries: {
-          main: { tools: { profile: "read-only-researcher" } },
+          main: { tools: { profile: "researcher" } },
         },
       },
     });
     expect(result.success).toBe(true);
   });
 
-  it("rejects invalid configured tool profile graphs and references", () => {
+  it("rejects invalid configured tool profile definitions and references", () => {
     const cases = [
       { tools: { profile: "missing" } },
-      { tools: { profiles: { broken: { extends: "missing" } } } },
-      { tools: { profiles: { minimal: { extends: "coding" } } } },
-      { tools: { profiles: { first: { extends: "second" }, second: { extends: "first" } } } },
+      { tools: { profiles: { broken: { baseProfile: "missing" } } } },
+      { tools: { profiles: { minimal: { baseProfile: "coding" } } } },
     ];
     for (const config of cases) {
       expect(OpenClawSchema.safeParse(config).success).toBe(false);

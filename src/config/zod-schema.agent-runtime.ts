@@ -456,7 +456,7 @@ const ToolProfileSchema = ToolProfileIdSchema.optional();
 
 const ToolProfileDefinitionSchema = z
   .object({
-    extends: ToolProfileIdSchema,
+    baseProfile: z.enum(["minimal", "coding", "messaging", "full"]),
     alsoAllow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
   })

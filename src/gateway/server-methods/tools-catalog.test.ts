@@ -161,8 +161,8 @@ describe("tools.catalog handler", () => {
       {
         tools: {
           profiles: {
-            zeta: { extends: "minimal" },
-            alpha: { extends: "coding" },
+            zeta: { baseProfile: "minimal" },
+            alpha: { baseProfile: "coding" },
           },
         },
       },

@@ -158,11 +158,11 @@ export type MediaToolsConfig = {
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 export type ToolProfileDefinitionConfig = {
-  /** Built-in or configured profile inherited by this profile. */
-  extends: string;
-  /** Additional tool names or groups added to the inherited allowlist. */
+  /** Built-in profile used as this profile's base policy. */
+  baseProfile: ToolProfileId;
+  /** Additional tool names or groups added to the base allowlist. */
   alsoAllow?: string[];
-  /** Tool names or groups denied after inheritance; deny wins. */
+  /** Tool names or groups denied after composition; deny wins. */
   deny?: string[];
 };
 
@@ -416,7 +416,7 @@ export type AgentToolsConfig = {
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: string;
-  /** Reusable named profiles that extend built-in or configured profiles. */
+  /** Reusable named profiles composed from one built-in base profile. */
   profiles?: ToolProfileDefinitionsConfig;
   allow?: string[];
   /** Additional allowlist entries merged into allow and/or profile allowlist. */

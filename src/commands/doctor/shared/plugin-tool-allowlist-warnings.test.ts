@@ -176,7 +176,7 @@ describe("collectPluginToolAllowlistWarnings", () => {
         mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
         tools: {
           profiles: {
-            "status-only": { extends: "minimal" },
+            "status-only": { baseProfile: "minimal" },
           },
           profile: "status-only",
           sandbox: { tools: { alsoAllow: ["web_fetch"] } },

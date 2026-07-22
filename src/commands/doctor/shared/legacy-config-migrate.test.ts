@@ -1249,7 +1249,7 @@ describe("profile configured tool section migrate", () => {
         profile: "research-assistant",
         profiles: {
           "research-assistant": {
-            extends: "minimal",
+            baseProfile: "minimal",
             alsoAllow: ["exec", "process"],
           },
         },

@@ -10,12 +10,9 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSwarmConfig } from "../../agents/swarm-config.js";
-import {
-  listCoreToolSections,
-  PROFILE_OPTIONS,
-  resolveCoreToolProfiles,
-} from "../../agents/tool-catalog.js";
+import { listCoreToolSections, resolveCoreToolProfiles } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
+import { listToolProfileOptions } from "../../agents/tool-policy-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -216,12 +213,7 @@ function buildToolsCatalogResult(params: {
   }
   return {
     agentId,
-    profiles: [
-      ...PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
-      ...Object.keys(params.cfg.tools?.profiles ?? {})
-        .toSorted((a, b) => a.localeCompare(b))
-        .map((id) => ({ id, label: id })),
-    ],
+    profiles: listToolProfileOptions(params.cfg.tools?.profiles),
     groups,
   };
 }

@@ -18,8 +18,7 @@ const BUILT_IN_TOOL_PROFILES = new Set(["minimal", "coding", "messaging", "full"
 
 export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((cfg, ctx) => {
   const configuredProfiles = cfg.tools?.profiles ?? {};
-  const configuredProfileIds = new Set(Object.keys(configuredProfiles));
-  const knownProfileIds = new Set([...BUILT_IN_TOOL_PROFILES, ...configuredProfileIds]);
+  const knownProfileIds = new Set([...BUILT_IN_TOOL_PROFILES, ...Object.keys(configuredProfiles)]);
   const validateProfileReference = (profile: string | undefined, path: PropertyKey[]) => {
     if (profile && !knownProfileIds.has(profile)) {
       ctx.addIssue({
@@ -30,29 +29,13 @@ export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((c
     }
   };
 
-  for (const [profileId, definition] of Object.entries(configuredProfiles)) {
+  for (const profileId of Object.keys(configuredProfiles)) {
     if (BUILT_IN_TOOL_PROFILES.has(profileId)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["tools", "profiles", profileId],
         message: `Configured tool profile "${profileId}" cannot replace a built-in profile.`,
       });
-    }
-    validateProfileReference(definition.extends, ["tools", "profiles", profileId, "extends"]);
-
-    const seen = new Set<string>();
-    let current: string | undefined = profileId;
-    while (current && configuredProfileIds.has(current)) {
-      if (seen.has(current)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["tools", "profiles", profileId, "extends"],
-          message: `Tool profile inheritance for "${profileId}" contains a cycle.`,
-        });
-        break;
-      }
-      seen.add(current);
-      current = configuredProfiles[current]?.extends;
     }
   }
 

@@ -36,7 +36,7 @@ Define reusable profiles under `tools.profiles` when the built-ins are close but
   tools: {
     profiles: {
       "research-assistant": {
-        extends: "minimal",
+        baseProfile: "minimal",
         alsoAllow: ["group:web", "read"],
         deny: ["web_fetch"],
       },
@@ -46,7 +46,7 @@ Define reusable profiles under `tools.profiles` when the built-ins are close but
 }
 ```
 
-Each configured profile has one parent, which can be a built-in or another configured profile. Allows and denies accumulate through the inheritance chain, and deny rules win. Profile ids must be lowercase letters, numbers, hyphens, or underscores; they cannot replace built-ins. Unknown parents, unknown selected profiles, and inheritance cycles fail config validation. Global, agent, and provider-specific `profile` fields can select configured profiles.
+Each configured profile starts from one built-in `baseProfile`. `alsoAllow` adds tools or groups, and `deny` removes them; deny rules win after composition. Profile ids must be lowercase letters, numbers, hyphens, or underscores, and they cannot replace built-ins. Unknown selected profiles and non-built-in base profiles fail config validation. Global, agent, and provider-specific `profile` fields can select configured profiles.
 
 ### Tool groups
 

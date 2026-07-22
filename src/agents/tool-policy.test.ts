@@ -39,36 +39,23 @@ describe("tool-policy", () => {
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
-  it("resolves configured profile inheritance with accumulated denies", () => {
+  it("resolves a configured profile from one built-in base", () => {
     const profiles = {
       researcher: {
-        extends: "minimal",
+        baseProfile: "minimal" as const,
         alsoAllow: ["group:web", "read"],
         deny: ["web_fetch"],
       },
-      "read-only-researcher": {
-        extends: "researcher",
-        alsoAllow: ["web_fetch"],
-        deny: ["write"],
-      },
     };
 
-    expect(resolveToolProfilePolicy("read-only-researcher", profiles)).toEqual({
-      allow: expect.arrayContaining(["session_status", "group:web", "read", "web_fetch"]),
-      deny: ["web_fetch", "write"],
+    expect(resolveToolProfilePolicy("researcher", profiles)).toEqual({
+      allow: expect.arrayContaining(["session_status", "group:web", "read"]),
+      deny: ["web_fetch"],
     });
   });
 
-  it("fails closed for invalid configured profile graphs", () => {
-    expect(
-      resolveToolProfilePolicy("first", {
-        first: { extends: "second" },
-        second: { extends: "first" },
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveToolProfilePolicy("missing-parent", { "missing-parent": { extends: "nope" } }),
-    ).toBeUndefined();
+  it("ignores configured profiles that are absent from the supplied registry", () => {
+    expect(resolveToolProfilePolicy("missing", {})).toBeUndefined();
   });
 
   it("includes core tool groups in group:openclaw", () => {
