@@ -3435,6 +3435,48 @@ describe("update-cli", () => {
       doctorCommand,
       syncPluginsForUpdateChannel,
     );
+  it("localizes update dry-run output while preserving operational values", async () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
+    vi.mocked(defaultRuntime.log).mockClear();
+
+    try {
+      await updateCommand({ dryRun: true, channel: "beta", restart: false });
+
+      const output = vi
+        .mocked(defaultRuntime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n");
+      expect(output).toContain("更新试运行");
+      expect(output).toContain("未应用任何更改");
+      expect(output).toContain("计划操作：");
+      expect(output).toContain("安装类型: git");
+      expect(output).toContain("更新通道: beta");
+      expect(output).toContain("软件包管理器");
+      expect(output).toContain("openclaw@");
+      expect(output).toContain("--no-restart");
+      expect(output).not.toContain("Update dry-run");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps update dry-run JSON unchanged under a localized process locale", async () => {
+    await updateCommand({ dryRun: true, json: true, channel: "beta", restart: false });
+    const englishOutput = structuredClone(
+      requireValue(lastWriteJsonCall(), "English update dry-run JSON output"),
+    );
+
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
+    try {
+      await updateCommand({ dryRun: true, json: true, channel: "beta", restart: false });
+
+      expect(requireValue(lastWriteJsonCall(), "localized update dry-run JSON output")).toEqual(
+        englishOutput,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("refuses an incompatible package target before service stop or install", async () => {
