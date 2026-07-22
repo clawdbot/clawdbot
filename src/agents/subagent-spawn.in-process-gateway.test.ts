@@ -223,7 +223,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         {
           method: "agent",
           forceSyntheticClient: true,
-          allowSyntheticModelOverride: true,
+          allowSyntheticModelOverride: undefined,
         },
       ]);
       expect(preflightResults).toEqual([

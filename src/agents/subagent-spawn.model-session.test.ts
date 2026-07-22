@@ -88,8 +88,10 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expect(result.modelApplied).toBe(true);
     expect(result.resolvedModel).toBe("openai/gpt-5.4");
     expect(result.resolvedProvider).toBe("openai");
-    expect(childAgentRequest?.params?.provider).toBeUndefined();
-    expect(childAgentRequest?.params?.model).toBeUndefined();
+    expect(childAgentRequest?.params).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(3);
     expectPersistedRuntimeModel({
       persistedStore,
