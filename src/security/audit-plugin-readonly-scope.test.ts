@@ -2,8 +2,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
+const collectLivePluginRegistriesMock = vi.hoisted(() => vi.fn());
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn());
 const loadPluginMetadataRegistrySnapshotMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredChannelPluginIdsMock = vi.hoisted(() => vi.fn());
@@ -21,6 +23,7 @@ vi.mock("../plugins/runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/runtime.js")>();
   return {
     ...actual,
+    collectLivePluginRegistries: (...args: unknown[]) => collectLivePluginRegistriesMock(...args),
     getActivePluginRegistry: (...args: unknown[]) => getActivePluginRegistryMock(...args),
   };
 });
@@ -65,9 +68,11 @@ function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string)
 describe("security audit read-only plugin scope", () => {
   beforeEach(() => {
     applyPluginAutoEnableMock.mockReset();
+    collectLivePluginRegistriesMock.mockReset();
     getActivePluginRegistryMock.mockReset();
     loadPluginMetadataRegistrySnapshotMock.mockReset();
     resolveConfiguredChannelPluginIdsMock.mockReset();
+    collectLivePluginRegistriesMock.mockReturnValue([]);
     getActivePluginRegistryMock.mockReturnValue(null);
     applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
       config: params.config,
@@ -183,6 +188,75 @@ describe("security audit read-only plugin scope", () => {
     expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();
   });
 
+  it("keeps plugin security collectors from pinned live registries", async () => {
+    const activeDuplicateCollector = vi.fn(() => [
+      {
+        checkId: "plugins.duplicate.active",
+        severity: "warn" as const,
+        title: "Active duplicate collector ran",
+        detail: "active duplicate",
+      },
+    ]);
+    const pinnedDuplicateCollector = vi.fn(() => [
+      {
+        checkId: "plugins.duplicate.pinned",
+        severity: "warn" as const,
+        title: "Pinned duplicate collector ran",
+        detail: "pinned duplicate",
+      },
+    ]);
+    const pinnedOnlyCollector = vi.fn(() => [
+      {
+        checkId: "plugins.pinned_only.audit",
+        severity: "warn" as const,
+        title: "Pinned-only collector ran",
+        detail: "pinned only",
+      },
+    ]);
+
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.securityAuditCollectors.push({
+      pluginId: "duplicate-plugin",
+      pluginName: "Duplicate plugin",
+      collector: activeDuplicateCollector,
+      source: "runtime",
+    });
+    const pinnedRegistry = createEmptyPluginRegistry();
+    pinnedRegistry.securityAuditCollectors.push(
+      {
+        pluginId: "duplicate-plugin",
+        pluginName: "Duplicate plugin",
+        collector: pinnedDuplicateCollector,
+        source: "runtime",
+      },
+      {
+        pluginId: "pinned-only-plugin",
+        pluginName: "Pinned-only plugin",
+        collector: pinnedOnlyCollector,
+        source: "runtime",
+      },
+    );
+    collectLivePluginRegistriesMock.mockReturnValue([activeRegistry, pinnedRegistry]);
+
+    const report = await runSecurityAudit(
+      createAuditOptions({
+        sourceConfig: {},
+        plugins: [],
+      }),
+    );
+
+    const pluginCheckIds = report.findings
+      .map((finding) => finding.checkId)
+      .filter((checkId) => checkId.startsWith("plugins."))
+      .toSorted();
+    expect(pluginCheckIds).toStrictEqual(["plugins.duplicate.active", "plugins.pinned_only.audit"]);
+    expect(activeDuplicateCollector).toHaveBeenCalledOnce();
+    expect(pinnedDuplicateCollector).not.toHaveBeenCalled();
+    expect(pinnedOnlyCollector).toHaveBeenCalledOnce();
+    expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
+    expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();
+  });
+
   it("keeps plain security audit off plugin collector runtime discovery by default", async () => {
     const sourceConfig = {
       agents: { list: [{ id: "main", default: true }] },
@@ -202,6 +276,7 @@ describe("security audit read-only plugin scope", () => {
     });
 
     expect(getActivePluginRegistryMock).not.toHaveBeenCalled();
+    expect(collectLivePluginRegistriesMock).not.toHaveBeenCalled();
     expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
     expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();
   });
