@@ -33,6 +33,7 @@ describe("formatStatusSummary localization", () => {
             {
               key: "agent:main:literal-session",
               kind: "direct",
+              age: 3_600_000,
               model: "provider/model-id",
               totalTokens: 12_000,
               contextTokens: 30_000,
@@ -50,7 +51,7 @@ describe("formatStatusSummary localization", () => {
 
     expect(rendered).toContain("网关状态");
     expect(rendered).toContain("版本：2026.7.18");
-    expect(rendered).toContain("Gateway supplied channel: 已链接");
+    expect(rendered).toContain("Gateway supplied channel: 已链接（上次刷新于 1 分钟前）");
     expect(rendered).toContain("系统：\n  provider=literal-provider");
     expect(rendered).toContain("心跳：已禁用（agent-literal）");
     expect(rendered).toContain("会话存储：C:\\literal\\sessions.json");
@@ -58,6 +59,7 @@ describe("formatStatusSummary localization", () => {
     expect(rendered).toContain("活动会话数：7");
     expect(rendered).toContain("agent:main:literal-session");
     expect(rendered).toContain("[direct]");
+    expect(rendered).toContain("1 小时前");
     expect(rendered).toContain("provider/model-id");
     expect(rendered).toContain("令牌数 12k/30k（剩余 18k, 40%）");
     expect(rendered).toContain("flag-literal");

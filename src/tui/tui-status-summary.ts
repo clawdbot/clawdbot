@@ -5,6 +5,28 @@ import { createTuiLocalization, type TuiLocalization } from "./i18n/runtime.js";
 import { formatContextUsageLine } from "./tui-formatters.js";
 import type { GatewayStatusSummary } from "./tui-types.js";
 
+function formatLocalizedTimeAgo(durationMs: number, localization: TuiLocalization): string {
+  if (localization.context.locale === "en") {
+    return formatTimeAgo(durationMs);
+  }
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    return localization.t("tui.status.unknown");
+  }
+  const totalSeconds = Math.round(durationMs / 1000);
+  const minutes = Math.round(totalSeconds / 60);
+  if (minutes < 1) {
+    return localization.t("tui.status.relative.justNow");
+  }
+  if (minutes < 60) {
+    return localization.t("tui.status.relative.minutesAgo", { count: minutes });
+  }
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) {
+    return localization.t("tui.status.relative.hoursAgo", { count: hours });
+  }
+  return localization.t("tui.status.relative.daysAgo", { count: Math.round(hours / 24) });
+}
+
 /** Formats Gateway/session health into compact status lines for the TUI. */
 export function formatStatusSummary(
   summary: GatewayStatusSummary,
@@ -24,7 +46,7 @@ export function formatStatusSummary(
     const authAge =
       linked && typeof summary.linkChannel.authAgeMs === "number"
         ? localization.t("tui.status.lastRefreshed", {
-            age: formatTimeAgo(summary.linkChannel.authAgeMs),
+            age: formatLocalizedTimeAgo(summary.linkChannel.authAgeMs, localization),
           })
         : "";
     lines.push(
@@ -83,7 +105,7 @@ export function formatStatusSummary(
       // Keep each recent session on one scan-friendly line for narrow terminal output.
       const ageLabel =
         typeof entry.age === "number"
-          ? formatTimeAgo(entry.age)
+          ? formatLocalizedTimeAgo(entry.age, localization)
           : localization.t("tui.status.noActivity");
       const model = entry.model ?? localization.t("tui.status.unknown");
       const usage = formatContextUsageLine(
