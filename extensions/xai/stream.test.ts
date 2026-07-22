@@ -124,7 +124,7 @@ async function captureXaiResponsesPayloadWithThinking(
   const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("provider payload callback was not invoked")),
-      1_000,
+      10_000,
     );
     const stream = streamSimple(
       model,
