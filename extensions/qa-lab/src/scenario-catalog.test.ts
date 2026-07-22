@@ -127,8 +127,13 @@ describe("qa scenario catalog", () => {
     const fallbackFlow = JSON.stringify(
       readQaScenarioById("memory-failure-fallback").execution.flow,
     );
+    const capabilityFlipFlow = JSON.stringify(
+      readQaScenarioById("config-restart-capability-flip").execution.flow,
+    );
     expect(fallbackFlow).toContain("liveTurnTimeoutMs(env, 180000)");
     expect(fallbackFlow).toContain('"replacePaths":["tools.deny"]');
+    expect(capabilityFlipFlow).toContain('"mediaModels"');
+    expect(capabilityFlipFlow).not.toContain("imageGenerationModel");
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
