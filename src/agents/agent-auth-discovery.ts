@@ -1,4 +1,5 @@
 /** Discovers agent runtime credentials from auth profiles, env, and synthetic providers. */
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
@@ -39,8 +40,12 @@ export function resolveAmbientAgentCredentialsForDiscovery(
   options: AmbientAgentCredentialOptions = {},
 ): AgentCredentialMap {
   const credentials = addEnvBackedAgentCredentials({}, options);
+  const env = options.env ?? process.env;
   const syntheticAuthProviderRefs =
-    options.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
+    options.syntheticAuthProviderRefs ??
+    (isTruthyEnvValue(env.OPENCLAW_SKIP_PROVIDERS)
+      ? []
+      : resolveRuntimeSyntheticAuthProviderRefs());
   const resolveSyntheticAuth =
     options.resolveSyntheticAuth ??
     ((provider: string) =>

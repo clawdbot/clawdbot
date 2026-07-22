@@ -34,6 +34,11 @@ function createUiE2eVitestConfig(
     test: {
       ...baseTest,
       environment: "node",
+      env: {
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+      },
       exclude,
       // Vitest's expect.poll defaults to a 1s deadline; these polls await real
       // Chromium renders, which loaded CI runners regularly stall past 1s.

@@ -2636,6 +2636,53 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("does not back off a server after repeated caller deadline cancellations", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-backoff-abort-"));
+    const serverPath = path.join(tempDir, "resource-backoff-abort.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: {} },
+      resourcePageDelayMs: 120,
+      resourcePageCursors: [null],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-resource-backoff-abort",
+      sessionKey: "agent:test:session-resource-backoff-abort",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            delayed: {
+              command: process.execPath,
+              args: [serverPath],
+              requestTimeoutMs: 1_000,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      if (!runtime.listResources) {
+        throw new Error("Expected test runtime to expose resource utilities");
+      }
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await expect(
+          runtime.listResources("delayed", { signal: AbortSignal.timeout(20) }),
+        ).rejects.toThrow(/abort/i);
+      }
+      await expect(
+        runtime.listResources("delayed", { signal: AbortSignal.timeout(500) }),
+      ).resolves.toHaveLength(1);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("cancels only the active page when paginated resource listing aborts", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-cancel-"));
     const serverPath = path.join(tempDir, "resource-cancel.mjs");
