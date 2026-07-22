@@ -2669,6 +2669,7 @@ process.on("SIGINT", shutdown);`,
       if (!runtime.listResources) {
         throw new Error("Expected test runtime to expose resource utilities");
       }
+      await expect(runtime.listResources("delayed")).resolves.toHaveLength(1);
       for (let attempt = 0; attempt < 3; attempt += 1) {
         await expect(
           runtime.listResources("delayed", { signal: AbortSignal.timeout(20) }),
