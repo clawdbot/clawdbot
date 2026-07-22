@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBackupCommand } from "./register.backup.js";
 
 const mocks = vi.hoisted(() => ({
+  backupCaptureFinalCommand: vi.fn(),
   backupCreateCommand: vi.fn(),
   backupRestoreCommand: vi.fn(),
   backupSqliteCreateCommand: vi.fn(),
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => ({
 
 const backupCreateCommand = mocks.backupCreateCommand;
 const backupRestoreCommand = mocks.backupRestoreCommand;
+const backupCaptureFinalCommand = mocks.backupCaptureFinalCommand;
 const backupSqliteCreateCommand = mocks.backupSqliteCreateCommand;
 const backupSqliteListCommand = mocks.backupSqliteListCommand;
 const backupSqliteRestoreCommand = mocks.backupSqliteRestoreCommand;
@@ -33,6 +35,10 @@ vi.mock("../../commands/backup.js", () => ({
 
 vi.mock("../../commands/backup-restore.js", () => ({
   backupRestoreCommand: mocks.backupRestoreCommand,
+}));
+
+vi.mock("../../commands/backup-capture-final.js", () => ({
+  backupCaptureFinalCommand: mocks.backupCaptureFinalCommand,
 }));
 
 vi.mock("../../commands/backup-verify.js", () => ({
@@ -61,6 +67,7 @@ describe("registerBackupCommand", () => {
     vi.clearAllMocks();
     backupCreateCommand.mockResolvedValue(undefined);
     backupRestoreCommand.mockResolvedValue(undefined);
+    backupCaptureFinalCommand.mockResolvedValue(undefined);
     backupSqliteCreateCommand.mockResolvedValue(undefined);
     backupSqliteListCommand.mockResolvedValue(undefined);
     backupSqliteRestoreCommand.mockResolvedValue(undefined);
@@ -151,6 +158,17 @@ describe("registerBackupCommand", () => {
       "restore",
       "verify",
     ]);
+  });
+
+  it("keeps final capture hidden and invokes its structured stdin command", async () => {
+    const program = new Command();
+    registerBackupCommand(program);
+    const backup = program.commands.find((command) => command.name() === "backup");
+    expect(backup?.helpInformation()).not.toContain("capture-final");
+
+    await program.parseAsync(["backup", "capture-final"], { from: "user" });
+
+    expect(backupCaptureFinalCommand).toHaveBeenCalledWith(runtime);
   });
 
   it("runs SQLite snapshot create for named OpenClaw databases", async () => {
