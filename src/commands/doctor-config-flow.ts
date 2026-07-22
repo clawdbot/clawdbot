@@ -2,7 +2,7 @@
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { INCLUDE_KEY } from "../config/includes.js";
+import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -172,27 +172,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   fixHints = legacyStep.state.fixHints;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const rosterMigration = migratePersistedImplicitMainRoster(snapshot.parsed);
-  const parsedRoot =
-    snapshot.parsed && typeof snapshot.parsed === "object" && !Array.isArray(snapshot.parsed)
-      ? (snapshot.parsed as Record<string, unknown>)
-      : undefined;
-  const parsedAgents =
-    parsedRoot?.agents && typeof parsedRoot.agents === "object" && !Array.isArray(parsedRoot.agents)
-      ? (parsedRoot.agents as Record<string, unknown>)
-      : undefined;
-  const rosterIsAuthoredLocally = Boolean(parsedAgents && Object.hasOwn(parsedAgents, "list"));
-  const preMigrationAgents = snapshot.sourceConfigBeforeMigrations?.agents;
-  const rosterIncludeExists = Boolean(
-    (parsedRoot && Object.hasOwn(parsedRoot, INCLUDE_KEY)) ||
-    (parsedAgents && Object.hasOwn(parsedAgents, INCLUDE_KEY)),
-  );
-  const includeCanOwnRoster =
-    !rosterIsAuthoredLocally && rosterIncludeExists && Array.isArray(preMigrationAgents?.list);
-  if (
-    snapshot.exists &&
-    rosterMigration.changed &&
-    (!includeCanOwnRoster || rosterIsAuthoredLocally)
-  ) {
+  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
+  if (snapshot.exists && rosterMigration.changed && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
     const migrated = migratePersistedImplicitMainRoster(candidate).config as OpenClawConfig;
     const rosterRepair = {

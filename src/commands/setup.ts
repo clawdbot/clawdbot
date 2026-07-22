@@ -7,6 +7,10 @@
 import fs from "node:fs/promises";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigWriteOptions, ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
+import {
+  configIncludeOwnsAgentRoster,
+  hasResolvedRosterBeforeMigrations,
+} from "../config/agent-roster-provenance.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
@@ -146,37 +150,49 @@ export async function setupCommand(
     return;
   }
 
-  const cfg = migratePersistedImplicitMainRoster(snapshot.sourceConfig).config as OpenClawConfig;
-  const defaults = cfg.agents?.defaults ?? {};
+  const resolvedConfig = snapshot.config;
+  const shouldPersistRoster =
+    !snapshot.exists ||
+    (!hasResolvedRosterBeforeMigrations(snapshot) && !configIncludeOwnsAgentRoster(snapshot));
+  const cfg = shouldPersistRoster
+    ? (migratePersistedImplicitMainRoster(snapshot.sourceConfig).config as OpenClawConfig)
+    : snapshot.sourceConfig;
+  const authoredDefaults = cfg.agents?.defaults ?? {};
+  const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
 
   const workspace =
-    desiredWorkspace ?? defaults.workspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
+    desiredWorkspace ?? resolvedDefaults.workspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
+  const shouldWriteWorkspace = resolvedDefaults.workspace !== workspace;
+  const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
 
-  let next: OpenClawConfig = {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        workspace,
+  // Keep the candidate runtime-shaped. replaceConfigFile persists only its
+  // diff against snapshot.parsed, never resolved include/env values wholesale.
+  let next: OpenClawConfig = snapshot.exists ? resolvedConfig : cfg;
+  if (shouldPersistRoster) {
+    next = {
+      ...next,
+      agents: { ...next.agents, entries: cfg.agents?.entries },
+    };
+  }
+  if (shouldWriteWorkspace) {
+    next = {
+      ...next,
+      agents: {
+        ...next.agents,
+        defaults: { ...next.agents?.defaults, workspace },
       },
-    },
-    gateway: {
-      ...cfg.gateway,
-      mode: cfg.gateway?.mode ?? "local",
-    },
-  };
+    };
+  }
+  if (shouldWriteGatewayMode) {
+    next = { ...next, gateway: { ...next.gateway, mode: "local" } };
+  }
 
   if (!snapshot.exists) {
     const { ensureOnboardingAgent } = await import("./onboard-agent.js");
     next = (await ensureOnboardingAgent({ config: next, workspace, baseConfig: cfg })).config;
   }
 
-  if (
-    !snapshot.exists ||
-    defaults.workspace !== workspace ||
-    cfg.gateway?.mode !== next.gateway?.mode
-  ) {
+  if (!snapshot.exists || shouldWriteWorkspace || shouldWriteGatewayMode) {
     // Preserve all existing config fields and touch only workspace/gateway mode
     // defaults that this command owns.
     const replaceConfig = deps.replaceConfigFile ?? writeDefaultConfigFile;
@@ -184,17 +200,25 @@ export async function setupCommand(
       nextConfig: next,
       snapshot,
       afterWrite: { mode: "auto" },
-      writeOptions: prepared.writeOptions,
+      writeOptions: {
+        ...prepared.writeOptions,
+        ...(snapshot.exists && shouldPersistRoster
+          ? {
+              explicitSetPaths: [["agents", "entries"]],
+              explicitSetValueSource: cfg,
+            }
+          : {}),
+      },
     });
     if (!snapshot.exists) {
       const formatConfigPath = deps.formatConfigPath ?? formatDefaultConfigPath;
       runtime.log(`Wrote ${await formatConfigPath(configPath)}`);
     } else {
       const updates: string[] = [];
-      if (defaults.workspace !== workspace) {
+      if (shouldWriteWorkspace) {
         updates.push("set agents.defaults.workspace");
       }
-      if (cfg.gateway?.mode !== next.gateway?.mode) {
+      if (shouldWriteGatewayMode) {
         updates.push("set gateway.mode");
       }
       const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
@@ -210,12 +234,14 @@ export async function setupCommand(
 
   const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({
     dir: workspace,
-    ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
-    skipOptionalBootstrapFiles: next.agents?.defaults?.skipOptionalBootstrapFiles,
+    ensureBootstrapFiles: !resolvedDefaults.skipBootstrap,
+    skipOptionalBootstrapFiles: resolvedDefaults.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
-  const defaultAgentId = next.agents?.list?.find((entry) => entry.default === true)?.id;
+  const defaultAgentId = Object.entries(
+    next.agents?.entries ?? resolvedConfig.agents?.entries ?? {},
+  ).find(([, entry]) => entry.default === true)?.[0];
   if (!defaultAgentId) {
     throw new Error("Setup requires a default agent after config migration.");
   }

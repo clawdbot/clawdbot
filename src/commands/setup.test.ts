@@ -152,6 +152,42 @@ describe("setupCommand", () => {
     });
   });
 
+  it("leaves an include-owned roster in its authored file", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const includePath = path.join(configDir, "agents.json");
+      const workspace = path.join(home, "ops-workspace");
+      const rootRaw = `{
+        $include: "./agents.json"
+      }`;
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, rootRaw);
+      await fs.writeFile(
+        includePath,
+        JSON.stringify({
+          agents: {
+            defaults: { workspace },
+            list: [{ id: "ops", default: true }],
+          },
+          gateway: { mode: "local" },
+        }),
+      );
+      const deps = {
+        ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
+        formatConfigPath: (value: string) => value,
+        mkdir: vi.fn(async () => {}),
+        resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "ops-sessions")),
+      };
+
+      await setupCommand(undefined, runtime, deps);
+
+      expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("ops");
+    });
+  });
+
   it("threads skipOptionalBootstrapFiles into workspace creation", async () => {
     await withTempHome(async (home) => {
       const runtime = {

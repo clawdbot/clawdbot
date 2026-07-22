@@ -18,15 +18,17 @@ function isInjectedMainRoster(config: OpenClawConfig): boolean {
 function mergeOnboardingCandidate(params: {
   base: OpenClawConfig;
   candidate: OpenClawConfig;
-  persisted: OpenClawConfig;
+  currentRuntime: OpenClawConfig;
 }): OpenClawConfig {
   const proposalPatch = createMergePatch(params.base, params.candidate);
-  const merged = applyMergePatch(params.persisted, proposalPatch) as OpenClawConfig;
+  // Keep this runtime-shaped. The canonical config writer projects only this
+  // patch onto snapshot.parsed, preserving include ownership and env refs.
+  const merged = applyMergePatch(params.currentRuntime, proposalPatch) as OpenClawConfig;
   return {
     ...merged,
     agents: {
       ...merged.agents,
-      list: params.persisted.agents?.list,
+      list: params.currentRuntime.agents?.list,
     },
   };
 }
@@ -51,16 +53,15 @@ export async function ensureOnboardingAgent(params: {
   if (before.exists && !before.valid) {
     throw new Error("Cannot create the first agent from an invalid OpenClaw config.");
   }
-  const base = before.sourceConfig ?? before.config;
-  const candidateBase = params.baseConfig ?? base;
   const effective = before.config;
+  const candidateBase = params.baseConfig ?? effective;
   const existing = effective.agents?.list?.find((entry) => entry.default === true);
   if (before.exists && existing) {
     return {
       config: mergeOnboardingCandidate({
         base: candidateBase,
         candidate: params.config,
-        persisted: base,
+        currentRuntime: effective,
       }),
       agentId: existing.id,
       bootstrapPending: false,
@@ -83,9 +84,12 @@ export async function ensureOnboardingAgent(params: {
   if (!after.valid) {
     throw new Error("Agent creation wrote an invalid OpenClaw config.");
   }
-  const persisted = after.sourceConfig ?? after.config;
   return {
-    config: mergeOnboardingCandidate({ base: candidateBase, candidate: params.config, persisted }),
+    config: mergeOnboardingCandidate({
+      base: candidateBase,
+      candidate: params.config,
+      currentRuntime: after.config,
+    }),
     agentId: created.agentId,
     bootstrapPending: created.bootstrapPending,
   };
