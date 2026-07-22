@@ -13,9 +13,9 @@ import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
-export type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
-export type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
+type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
 export type ListedAgentEntry = {
   entry: AgentEntry;
   source: { kind: "entries"; key: string } | { kind: "list"; index: number };

@@ -1711,6 +1711,10 @@ describe("doctor config flow", () => {
         },
       },
       parsedConfig: { $include: "./channels.json", agents: { entries: {} } },
+      sourceConfigBeforeMigrations: {
+        channels: { telegram: { enabled: true } },
+        agents: { entries: {} },
+      },
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });

@@ -1,7 +1,79 @@
 import { describe, expect, it } from "vitest";
-import { createAgentToAgentPolicy, createSessionVisibilityChecker } from "./session-visibility.js";
+import {
+  createAgentToAgentPolicy,
+  createSessionVisibilityChecker,
+  createSessionVisibilityRowChecker,
+} from "./session-visibility.js";
 
 describe("scoped session access providers", () => {
+  it("does not assign an unscoped default-agent row to a non-default requester", () => {
+    const checker = createSessionVisibilityChecker({
+      action: "history",
+      defaultAgentId: "main",
+      requesterAgentId: "work",
+      requesterSessionKey: "agent:work:main",
+      visibility: "agent",
+      a2aPolicy: createAgentToAgentPolicy({}),
+      spawnedKeys: null,
+    });
+
+    expect(checker.check("main")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+    });
+  });
+
+  it("fails closed for an unscoped row without configured ownership", () => {
+    const checker = createSessionVisibilityChecker({
+      action: "history",
+      requesterAgentId: "work",
+      requesterSessionKey: "agent:work:main",
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy({}),
+      spawnedKeys: null,
+    });
+
+    expect(checker.check("main")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error: "Session history denied because target agent ownership is unavailable.",
+    });
+  });
+
+  it("keeps exact and current self aliases available without a configured default", () => {
+    const checker = createSessionVisibilityChecker({
+      action: "history",
+      requesterAgentId: "work",
+      requesterSessionKey: "main",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({}),
+      spawnedKeys: null,
+    });
+
+    expect(checker.check("main")).toEqual({ allowed: true });
+    expect(checker.check("current")).toEqual({ allowed: true });
+  });
+
+  it("keeps explicit row ownership authoritative when a bare key matches the requester", () => {
+    const checker = createSessionVisibilityRowChecker({
+      action: "history",
+      defaultAgentId: "main",
+      requesterAgentId: "work",
+      requesterSessionKey: "main",
+      visibility: "agent",
+      a2aPolicy: createAgentToAgentPolicy({}),
+    });
+
+    expect(checker.check({ key: "main", agentId: "main" })).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+    });
+  });
+
   it("grants only the exact requester, target, and action supplied by a provider", () => {
     const makeChecker = (action: "history" | "send") =>
       createSessionVisibilityChecker({

@@ -29,6 +29,7 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { listAgentIds } from "../agent-scope.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
@@ -615,6 +616,7 @@ export function createSessionsSendTool(opts?: {
       }
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: effectiveRequesterKey,
         visibility: sessionVisibility,
         a2aPolicy,

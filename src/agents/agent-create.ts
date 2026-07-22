@@ -54,7 +54,7 @@ type CreateAgentResult =
 
 type CreateError = Extract<CreateAgentResult, { status: "error" }>;
 type AgentEntryConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
-export type CreateAgentEntry = AgentEntryConfig & { id: string };
+type CreateAgentEntry = AgentEntryConfig & { id: string };
 
 type CreateAgentParams = {
   name?: string;
@@ -83,7 +83,7 @@ function createError(
 }
 
 /** True when raw user input contains a character that can survive agent-id normalization. */
-export function hasValidRawAgentIdCharacters(value: string): boolean {
+function hasValidRawAgentIdCharacters(value: string): boolean {
   return /[a-z0-9]/iu.test(value);
 }
 

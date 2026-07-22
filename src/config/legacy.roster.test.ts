@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { configIncludeOwnsAgentRoster } from "./agent-roster-provenance.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
 
@@ -59,6 +60,35 @@ describe("persisted implicit-main roster migration", () => {
       expect(rosterSnapshot.sourceConfig.agents?.entries).toEqual({
         ops: { default: true },
       });
+    });
+  });
+
+  it("tracks nested mixed roster includes at the entries boundary", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          $include: "./base.json",
+          agents: { entries: { main: { default: true } } },
+        }),
+      );
+      await fs.writeFile(
+        path.join(configDir, "base.json"),
+        JSON.stringify({ agents: { entries: { $include: "./entries.json" } } }),
+      );
+      await fs.writeFile(path.join(configDir, "entries.json"), JSON.stringify({ ops: {} }));
+      resetConfigRuntimeState();
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.sourceConfigBeforeMigrations?.agents?.entries).toEqual({
+        main: { default: true },
+        ops: {},
+      });
+      expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
     });
   });
 

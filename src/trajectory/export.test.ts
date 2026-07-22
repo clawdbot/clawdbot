@@ -326,7 +326,7 @@ describe("exportTrajectoryBundle", () => {
         },
       ],
     );
-    appendSqliteTrajectoryRuntimeEvents({ sessionId, storePath }, [
+    appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId, storePath }, [
       {
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,

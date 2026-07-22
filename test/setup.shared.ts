@@ -1,5 +1,6 @@
 // Shared test setup installs common Vitest mocks and cleanup behavior.
 import { vi } from "vitest";
+import "./setup-agent-roster.js";
 
 const openAiCodexTokenRefreshTestHook = "__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__";
 type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {

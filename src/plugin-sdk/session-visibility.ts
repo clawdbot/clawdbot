@@ -308,6 +308,7 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
 /** Create a direct session-key visibility checker for one requester/action pair. */
 function createSessionVisibilityCheckerImpl(params: {
   action: SessionAccessAction;
+  defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
@@ -317,6 +318,7 @@ function createSessionVisibilityCheckerImpl(params: {
   const spawnedKeys = params.spawnedKeys;
   const rowChecker = createSessionVisibilityRowChecker({
     action: params.action,
+    defaultAgentId: params.defaultAgentId,
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
     visibility: params.visibility,
@@ -361,6 +363,7 @@ function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: str
 /** Create a row-aware visibility checker that can use owner/spawn metadata. */
 export function createSessionVisibilityRowChecker(params: {
   action: SessionAccessAction;
+  defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
@@ -368,14 +371,28 @@ export function createSessionVisibilityRowChecker(params: {
 }): { check: (row: SessionVisibilityRow) => SessionAccessResult } {
   const requesterAgentId =
     normalizeLowercaseStringOrEmpty(params.requesterAgentId) ||
-    resolveAgentIdFromSessionKey(params.requesterSessionKey);
+    resolveAgentIdFromSessionKey(params.requesterSessionKey, params.defaultAgentId);
   let watchedSessionKeys: Set<string> | undefined;
 
   const check = (row: SessionVisibilityRow): SessionAccessResult => {
     const targetSessionKey = row.key;
-    const targetAgentId = row.agentId ?? resolveAgentIdFromSessionKey(targetSessionKey);
     const isRequesterSession =
       targetSessionKey === params.requesterSessionKey || targetSessionKey === "current";
+    let targetAgentId = normalizeLowercaseStringOrEmpty(row.agentId);
+    if (!targetAgentId && isRequesterSession) {
+      targetAgentId = requesterAgentId;
+    }
+    if (!targetAgentId) {
+      try {
+        targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey, params.defaultAgentId);
+      } catch {
+        return {
+          allowed: false,
+          status: "forbidden",
+          error: `${actionPrefix(params.action)} denied because target agent ownership is unavailable.`,
+        };
+      }
+    }
     // Only durable ambient-group provenance makes the target ownership-equivalent
     // for same-agent reads. Explicit A2A watches, send access, and cross-agent
     // targets remain fail-closed.
@@ -447,6 +464,7 @@ export function createSessionVisibilityRowChecker(params: {
 /** Create a visibility guard, loading spawned-session ownership when direct keys need it. */
 export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
+  defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
   visibility: SessionToolsVisibility;
@@ -462,6 +480,7 @@ export async function createSessionVisibilityGuard(params: {
       : null;
   return createSessionVisibilityChecker({
     action: params.action,
+    defaultAgentId: params.defaultAgentId,
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
     visibility: params.visibility,

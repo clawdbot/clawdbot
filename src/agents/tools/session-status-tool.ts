@@ -50,6 +50,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agent-scope.js";
 import {
   buildModelAliasIndex,
@@ -613,6 +614,7 @@ export function createSessionStatusTool(opts?: {
       };
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "status",
+        defaultAgentId: resolveDefaultAgentId(cfg),
         requesterSessionKey: visibilityRequesterKey,
         visibility: resolveEffectiveSessionToolsVisibility({
           cfg,

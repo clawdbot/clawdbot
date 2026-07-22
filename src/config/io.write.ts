@@ -110,6 +110,7 @@ export async function writeConfigFileFromContext(
     persistCandidate = resolvePersistCandidateForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       nextConfig: cfg,
       rootAuthoredConfig: snapshot.parsed,
       unsetPaths,

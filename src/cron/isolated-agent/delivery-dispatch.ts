@@ -1423,7 +1423,7 @@ export async function dispatchCronDelivery(
           // are folded into mirrorText so media does not replace delivered text.
           mediaUrls: undefined,
           storePath: resolveStorePath(params.cfgWithAgentDefaults.session?.store, {
-            agentId: resolveAgentIdFromSessionKey(deliverySessionKey),
+            agentId: resolveAgentIdFromSessionKey(deliverySessionKey, params.agentId),
           }),
           idempotencyKey: deliveryIdempotencyKey,
           config: params.cfgWithAgentDefaults,

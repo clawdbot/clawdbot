@@ -159,7 +159,7 @@ describe("normalizeStoredCronJobs", () => {
     expect(payload.model).toBe("openai/gpt-5.6-sol");
     expect(payload.fallbacks).toEqual(["openai/gpt-5.4-mini"]);
     const runtimeRepair = repairCronCodexRuntimePolicies({
-      cfg: {},
+      cfg: { agents: { entries: { main: { default: true } } } },
       targets: result.codexRuntimePolicyTargets,
     });
     expect(runtimeRepair.warnings).toStrictEqual([]);
@@ -232,6 +232,7 @@ describe("normalizeStoredCronJobs", () => {
               "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
             },
           },
+          entries: { main: { default: true } },
         },
       },
       targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
@@ -388,7 +389,7 @@ describe("normalizeStoredCronJobs", () => {
     expect((job.payload as Record<string, unknown>).model).toBe("openai/gpt-5.6-sol");
   });
 
-  it("writes an implicit default agent policy to defaults when no list entry exists", () => {
+  it("writes the configured default agent policy to defaults when no list entry exists", () => {
     const jobs = [
       makeLegacyJob({
         id: "implicit-default-codex-model",
@@ -401,7 +402,7 @@ describe("normalizeStoredCronJobs", () => {
       }),
     ];
     const policyRepair = repairCronCodexRuntimePolicies({
-      cfg: {},
+      cfg: { agents: { entries: { main: { default: true } } } },
       targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
     });
 
@@ -423,7 +424,7 @@ describe("normalizeStoredCronJobs", () => {
       }),
     ];
     const rewritePlan = planCronCodexRefRewriteAgainstPersistedConfig({
-      cfg: {},
+      cfg: { agents: { entries: { main: { default: true } } } },
       targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
     });
     const blocked = new Set(rewritePlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));

@@ -17,6 +17,7 @@ import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
@@ -207,6 +208,7 @@ export function createSessionsListTool(opts?: {
       const sessions = (Array.isArray(list?.sessions) ? list.sessions : []).filter(
         (entry) => !entry || typeof entry !== "object" || !isIncognitoSessionKey(entry.key),
       );
+      const defaultAgentId = resolveDefaultAgentId(cfg);
       const stateVersions = getSessionStateVersions(
         sessions.flatMap((entry) =>
           entry && typeof entry === "object" && typeof entry.key === "string"
@@ -216,7 +218,7 @@ export function createSessionsListTool(opts?: {
                   agentId:
                     typeof entry.agentId === "string" && entry.agentId
                       ? entry.agentId
-                      : resolveAgentIdFromSessionKey(entry.key),
+                      : resolveAgentIdFromSessionKey(entry.key, defaultAgentId),
                 },
               ]
             : [],
@@ -225,6 +227,7 @@ export function createSessionsListTool(opts?: {
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
+        defaultAgentId,
         requesterSessionKey: effectiveRequesterKey,
         visibility,
         a2aPolicy,
@@ -301,7 +304,7 @@ export function createSessionsListTool(opts?: {
         const sessionId = readStringValue(entry.sessionId);
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = readStringValue(sessionFileRaw);
-        const resolvedAgentId = resolveAgentIdFromSessionKey(key);
+        const resolvedAgentId = resolveAgentIdFromSessionKey(key, defaultAgentId);
         // Version lookup keys on the store-owning agent (gateway row agentId), not the
         // key-derived agent: bare "global" keys parse to the default agent id.
         const stateVersionAgentId =

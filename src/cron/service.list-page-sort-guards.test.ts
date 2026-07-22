@@ -82,7 +82,7 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs.map((job) => job.id)).toEqual(["job-ops", "job-unset"]);
   });
 
-  it("matches omitted job agent ids to main when no default agent is configured", async () => {
+  it("matches omitted job agent ids to the prepared main default", async () => {
     const jobs = [
       createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
       createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),

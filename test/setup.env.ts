@@ -1,10 +1,9 @@
-// Env-only isolation for fast shards that intentionally skip the full shared
-// setup (no module mocks, no custom runner). unit-fast runs isolate:false with
-// auto-curated membership, so without this any test that reads config/state
-// sees the developer's real ~/.openclaw (e.g. an openclaw.json key the branch
-// schema rejects deterministically fails schema-reading tests locally while CI
-// stays green).
+// Env isolation for fast shards that intentionally skip the full shared setup.
+// unit-fast runs isolate:false with auto-curated membership, so without this any
+// test that reads config/state sees the developer's real ~/.openclaw. The roster
+// adapter below also models the load-time normalization ordinary runtime tests receive.
 import { installTestEnv } from "./test-env.js";
+import "./setup-agent-roster.js";
 
 process.env.VITEST = "true";
 

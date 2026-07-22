@@ -1,7 +1,9 @@
 // Agent scope tests cover which per-agent fields may flatten into runtime defaults.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
+
+vi.unmock("./agent-scope-config.js");
 
 describe("agent roster resolution", () => {
   it("requires one explicit default", () => {

@@ -1,9 +1,11 @@
 // Workspace run tests cover runtime workspace resolution from explicit input,
 // agent config, session keys, and environment fallback.
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveRunWorkspaceDir } from "./workspace-run.js";
+
+vi.unmock("./agent-scope-config.js");
 
 describe("resolveRunWorkspaceDir", () => {
   it("resolves explicit workspace values without fallback", () => {
