@@ -77,6 +77,9 @@ type AgentSkillMcpBoundaryScope = {
   execSecurity: string;
   execAsk: string;
 };
+type AgentSkillMcpBoundaryCandidate =
+  | { kind: "defaults"; id: "agents.defaults"; skillSource: string }
+  | { kind: "agent"; id: string; skillSource: string; agentId: string };
 
 export type { SecurityAuditReport } from "./audit.types.js";
 
@@ -1006,15 +1009,14 @@ function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
 
 function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpBoundaryScope[] {
   const agents = listAgentEntries(cfg);
-  const defaultAgentId = resolveDefaultAgentId(cfg);
   const defaultsHaveSkillAllowlist = hasOwnSkillsAllowlist(cfg.agents?.defaults);
-  const candidates = [
-    ...(defaultsHaveSkillAllowlist && defaultAgentId
+  const candidates: AgentSkillMcpBoundaryCandidate[] = [
+    ...(defaultsHaveSkillAllowlist
       ? [
           {
-            id: defaultAgentId,
+            kind: "defaults" as const,
+            id: "agents.defaults" as const,
             skillSource: "agents.defaults.skills",
-            agentId: defaultAgentId,
           },
         ]
       : []),
@@ -1025,11 +1027,19 @@ function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpB
       )
       .flatMap((entry) => {
         if (hasOwnSkillsAllowlist(entry)) {
-          return [{ id: entry.id, skillSource: "agents.list[].skills", agentId: entry.id }];
+          return [
+            {
+              kind: "agent" as const,
+              id: entry.id,
+              skillSource: "agents.list[].skills",
+              agentId: entry.id,
+            },
+          ];
         }
         if (defaultsHaveSkillAllowlist) {
           return [
             {
+              kind: "agent" as const,
               id: entry.id,
               skillSource: "agents.defaults.skills (inherited)",
               agentId: entry.id,
@@ -1041,10 +1051,11 @@ function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpB
   ];
 
   return candidates.flatMap((candidate) => {
-    const sandboxMode = resolveSandboxConfigForAgent(cfg, candidate.agentId).mode;
+    const agentId = candidate.kind === "agent" ? candidate.agentId : undefined;
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, agentId).mode;
     const exec = resolveExecDefaults({
       cfg,
-      agentId: candidate.agentId,
+      ...(candidate.kind === "defaults" ? { scope: { kind: "defaults" as const } } : { agentId }),
       sandboxAvailable: sandboxMode !== "off",
     });
     if (exec.security === "deny" || exec.effectiveHost === "sandbox") {

@@ -486,16 +486,11 @@ export async function executeSetup(
     runtime,
     opts,
     run: async (ctx) => {
-      const before = await readConfigFileSnapshotLazy();
-      const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
-      await ensureOnboardingAgent({
-        config: before.sourceConfig ?? before.config,
-        workspace,
-        baseConfig: before.sourceConfig ?? before.config,
-      });
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applySystemAgentSetup;
       const surface = ctx.deps?.setupSurface ?? "cli";
+      // The guarded setup transaction publishes the load-time injected main
+      // roster before any workspace provisioning or other follow-up effect.
       // The outer boundary covers injected implementations. The production
       // setup helper also uses this same seam for each of its internal writes.
       const applied = await ctx.commit(

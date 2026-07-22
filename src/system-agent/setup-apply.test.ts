@@ -386,11 +386,12 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       ).rejects.toThrow("config changed while AI access was being tested");
 
       expect(mocks.commit).not.toHaveBeenCalled();
+      expect(mocks.state.persistedConfig).toBeUndefined();
       expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
     },
   );
 
-  it("preserves fresh-setup behavior for an explicitly verified absent revision", async () => {
+  it("commits a fresh injected roster before provisioning its workspace", async () => {
     const absent = snapshot(null, {});
     mocks.state.initialSnapshot = absent;
     mocks.state.commitConfig = {};
@@ -402,8 +403,12 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(result.configHashBefore).toBeNull();
     expect(result.bootstrapPending).toBe(true);
     expect(mocks.state.persistedConfig).toMatchObject({
-      agents: { defaults: { workspace: "/tmp/openclaw-workspace" } },
+      agents: {
+        defaults: { workspace: "/tmp/openclaw-workspace" },
+        list: [{ id: "main", default: true }],
+      },
     });
+    expect(mocks.events).toEqual(["commit", "workspace"]);
   });
 
   it("does not mistake a proposal-created roster for an existing fleet", async () => {

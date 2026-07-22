@@ -461,6 +461,48 @@ describe("security audit config basics", () => {
     }
   });
 
+  it("audits inherited defaults independently of the default agent override", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcp-defaults-"));
+    try {
+      const report = await runSecurityAudit({
+        config: {
+          mcp: {
+            servers: {
+              docs: { command: "node", args: ["docs-mcp.js"] },
+            },
+          },
+          tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+          agents: {
+            defaults: { skills: ["docs-search"] },
+            list: [
+              {
+                id: "safe-default",
+                default: true,
+                skills: ["safe-only"],
+                tools: { exec: { security: "deny" } },
+              },
+              { id: "inheritor" },
+            ],
+          },
+        },
+        sourceConfig: {},
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      const finding = report.findings.find(
+        (entry) => entry.checkId === "tools.exec.agent_skill_mcp_boundary_drift",
+      );
+      expect(finding?.detail).toContain("- agents.defaults: agents.defaults.skills");
+      expect(finding?.detail).toContain("- inheritor: agents.defaults.skills (inherited)");
+      expect(finding?.detail).not.toContain("- safe-default:");
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("suppresses configured accepted findings from the active audit report", async () => {
     const report = await runSecurityAudit({
       config: {
