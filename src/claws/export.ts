@@ -58,8 +58,13 @@ function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawMani
     ...(avatar ? { avatar } : {}),
   };
   const tools = {
+    ...(agent.tools?.profile ? { profile: agent.tools.profile } : {}),
     ...(agent.tools?.allow?.length ? { allow: agent.tools.allow } : {}),
+    ...(agent.tools?.alsoAllow?.length ? { alsoAllow: agent.tools.alsoAllow } : {}),
     ...(agent.tools?.deny?.length ? { deny: agent.tools.deny } : {}),
+    ...(agent.tools?.fs?.workspaceOnly !== undefined
+      ? { fs: { workspaceOnly: agent.tools.fs.workspaceOnly } }
+      : {}),
   };
   return {
     id: agent.id,
@@ -81,6 +86,21 @@ function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawMani
         }
       : {}),
     ...(Object.keys(tools).length > 0 ? { tools } : {}),
+    ...(agent.memorySearch
+      ? {
+          memorySearch: {
+            ...(agent.memorySearch.enabled !== undefined
+              ? { enabled: agent.memorySearch.enabled }
+              : {}),
+            ...(agent.memorySearch.rememberAcrossConversations !== undefined
+              ? {
+                  rememberAcrossConversations: agent.memorySearch.rememberAcrossConversations,
+                }
+              : {}),
+            ...(agent.memorySearch.sources?.length ? { sources: agent.memorySearch.sources } : {}),
+          },
+        }
+      : {}),
     ...(agent.heartbeat
       ? {
           heartbeat: {

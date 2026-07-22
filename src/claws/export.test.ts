@@ -42,7 +42,17 @@ async function installedFixture(
       id: "worker",
       name: "Worker",
       ...(options.avatar ? { identity: { avatar: options.avatar } } : {}),
-      tools: { deny: ["exec"] },
+      tools: {
+        profile: "coding",
+        alsoAllow: ["cron"],
+        deny: ["exec"],
+        fs: { workspaceOnly: true },
+      },
+      memorySearch: {
+        enabled: true,
+        rememberAcrossConversations: true,
+        sources: ["memory", "sessions"],
+      },
     },
     workspace: {
       bootstrapFiles: { "SOUL.md": { source: "source/SOUL.md" } },
@@ -166,7 +176,21 @@ describe("exportClawAgent", () => {
       agentId: "worker",
       manifest: {
         schemaVersion: 1,
-        agent: { id: "worker", name: "Worker", tools: { deny: ["exec"] } },
+        agent: {
+          id: "worker",
+          name: "Worker",
+          tools: {
+            profile: "coding",
+            alsoAllow: ["cron"],
+            deny: ["exec"],
+            fs: { workspaceOnly: true },
+          },
+          memorySearch: {
+            enabled: true,
+            rememberAcrossConversations: true,
+            sources: ["memory", "sessions"],
+          },
+        },
         workspace: {
           bootstrapFiles: { "SOUL.md": { source: "workspace/SOUL.md" } },
           files: [{ source: "workspace/reference/policy.md", path: "reference/policy.md" }],

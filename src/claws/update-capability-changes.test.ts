@@ -227,6 +227,85 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     }
   });
 
+  it("resolves built-in profile capabilities and portable policy changes", () => {
+    const changes = collectChanges({
+      currentAgent: {
+        id: "worker",
+        tools: { profile: "coding", fs: { workspaceOnly: false } },
+        memorySearch: {
+          enabled: false,
+          rememberAcrossConversations: false,
+          sources: ["memory"],
+        },
+      },
+      desiredAgent: {
+        id: "worker",
+        tools: {
+          profile: "full",
+          alsoAllow: ["cron"],
+          fs: { workspaceOnly: true },
+        },
+        memorySearch: {
+          enabled: true,
+          rememberAcrossConversations: true,
+          sources: ["memory", "sessions"],
+        },
+      },
+    });
+
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agent.tools.profile",
+          classification: "escalation",
+          requiresDistinctConsent: true,
+          effect: expect.objectContaining({
+            current: "coding",
+            desired: "full",
+            currentCapabilities: expect.arrayContaining(["read", "write"]),
+            desiredCapabilities: ["*"],
+          }),
+        }),
+        expect.objectContaining({
+          path: "agent.tools.fs.workspaceOnly",
+          classification: "reduction",
+          requiresDistinctConsent: false,
+        }),
+        expect.objectContaining({
+          path: "agent.memorySearch.enabled",
+          classification: "escalation",
+          requiresDistinctConsent: true,
+        }),
+        expect.objectContaining({
+          path: "agent.memorySearch.rememberAcrossConversations",
+          classification: "escalation",
+          requiresDistinctConsent: true,
+        }),
+        expect.objectContaining({
+          path: "agent.memorySearch.sources",
+          classification: "escalation",
+          requiresDistinctConsent: true,
+        }),
+      ]),
+    );
+  });
+
+  it("resolves inherited memory defaults before classifying updates", () => {
+    const changes = collectChanges({
+      currentAgent: { id: "worker", memorySearch: { enabled: false } },
+      desiredAgent: { id: "worker" },
+    });
+
+    expect(changes).toContainEqual(
+      expect.objectContaining({
+        path: "agent.memorySearch.enabled",
+        classification: "escalation",
+        current: expect.objectContaining({ summary: "false" }),
+        desired: expect.objectContaining({ summary: "true" }),
+      }),
+    );
+  });
+
   it("treats tool policies on a restored missing agent as escalations", () => {
     for (const field of ["allow", "deny"] as const) {
       const changes: Changes = [];

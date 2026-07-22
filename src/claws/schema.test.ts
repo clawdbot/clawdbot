@@ -141,6 +141,39 @@ describe("parseClawManifest", () => {
     },
   );
 
+  it("accepts portable agent tool and memory-search settings", () => {
+    const result = parseClawManifest({
+      ...baseManifest,
+      agent: {
+        ...baseManifest.agent,
+        tools: {
+          profile: "coding",
+          alsoAllow: ["cron"],
+          deny: ["exec"],
+          fs: { workspaceOnly: true },
+        },
+        memorySearch: {
+          enabled: true,
+          rememberAcrossConversations: true,
+          sources: ["memory", "sessions"],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects unknown profiles, conflicting allowlists, and non-portable memory settings", () => {
+    for (const agent of [
+      { id: "worker", tools: { profile: "future-profile" } },
+      { id: "worker", tools: { allow: ["read"], alsoAllow: ["write"] } },
+      { id: "worker", memorySearch: { provider: "openai" } },
+      { id: "worker", memorySearch: { sources: ["sessions"] } },
+    ]) {
+      expect(parseClawManifest({ schemaVersion: 1, agent }).ok).toBe(false);
+    }
+  });
+
   it("rejects non-v1 package fields and connector packages", () => {
     const connector = parseClawManifest({
       ...baseManifest,

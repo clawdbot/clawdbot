@@ -48,7 +48,15 @@ agent:
   id: incident-triage
   name: Incident triage
   tools:
+    profile: coding
+    alsoAllow: [cron]
     deny: [exec]
+    fs:
+      workspaceOnly: true
+  memorySearch:
+    enabled: true
+    rememberAcrossConversations: true
+    sources: [memory, sessions]
 workspace:
   bootstrapFiles: {}
 packages: []
@@ -64,6 +72,16 @@ Creates one agent for reviewing and routing incidents.
 The same strict version 1 schema continues to accept grouped JSON manifests.
 The remaining schema fragments on this page use JSON, with equivalent keys
 available in `CLAW.md` frontmatter.
+
+Portable agent policy may select any built-in tool profile registered by the
+running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
+`tools.fs.workspaceOnly`. `tools.allow` remains available as an explicit
+allowlist but cannot be combined with `alsoAllow`. A Claw may also set
+`memorySearch.enabled`, choose the portable `memory` and `sessions` sources,
+and opt into cross-conversation memory with `rememberAcrossConversations`.
+Declaring the `sessions` source requires that opt-in.
+Host policy still constrains these settings, and Claws do not carry custom
+profile definitions, providers, credentials, bindings, or local memory paths.
 
 Package and workspace paths must remain inside the package root. Manifests are
 limited to 1 MiB, package metadata to 256 KiB, and workspace sources enforce

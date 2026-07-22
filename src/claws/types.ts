@@ -1,4 +1,5 @@
 // Shared types for grouped OpenClaw Claw manifests and read-only add plans.
+import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 
 export const CLAW_SCHEMA_VERSION = 1 as const;
 export const CLAW_ADD_PLAN_SCHEMA_VERSION = "openclaw.clawAddPlan.v1" as const;
@@ -34,8 +35,18 @@ type ClawAgent = {
     workspaceAccess?: "none" | "ro" | "rw";
   };
   tools?: {
+    profile?: ToolProfileId;
     allow?: string[];
+    alsoAllow?: string[];
     deny?: string[];
+    fs?: {
+      workspaceOnly?: boolean;
+    };
+  };
+  memorySearch?: {
+    enabled?: boolean;
+    rememberAcrossConversations?: boolean;
+    sources?: Array<"memory" | "sessions">;
   };
   heartbeat?: {
     every?: string;

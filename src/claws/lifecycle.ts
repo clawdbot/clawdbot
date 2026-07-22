@@ -239,6 +239,9 @@ export async function buildClawAddPlan(params: {
   const agentCapabilityEffect = {
     ...(params.manifest.agent.sandbox ? { sandbox: params.manifest.agent.sandbox } : {}),
     ...(params.manifest.agent.tools ? { tools: params.manifest.agent.tools } : {}),
+    ...(params.manifest.agent.memorySearch
+      ? { memorySearch: params.manifest.agent.memorySearch }
+      : {}),
     ...(params.manifest.agent.heartbeat ? { heartbeat: params.manifest.agent.heartbeat } : {}),
   };
   if (Object.keys(agentCapabilityEffect).length > 0) {
@@ -248,7 +251,8 @@ export async function buildClawAddPlan(params: {
         id: finalId,
         path: "agent",
         action: "create",
-        reason: "The new agent declares sandbox, tool, or recurring heartbeat capabilities.",
+        reason:
+          "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
         effect: agentCapabilityEffect,
       }),
     );

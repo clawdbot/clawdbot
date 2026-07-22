@@ -1,5 +1,6 @@
 // Strict parser for grouped Claw schema version 1 manifests.
 import { z } from "zod";
+import { resolveToolProfilePolicy } from "../agents/tool-policy-shared.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { computeNextRunAtMs } from "../cron/schedule.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
@@ -81,10 +82,52 @@ const agentSchema = z
       .optional(),
     tools: z
       .object({
+        profile: nonEmptyString
+          .refine(
+            (value) => resolveToolProfilePolicy(value) !== undefined,
+            "Tool profile must name a registered OpenClaw built-in profile.",
+          )
+          .optional(),
         allow: z.array(nonEmptyString).min(1).optional(),
+        alsoAllow: z.array(nonEmptyString).min(1).optional(),
         deny: z.array(nonEmptyString).min(1).optional(),
+        fs: z.object({ workspaceOnly: z.boolean().optional() }).strict().optional(),
       })
       .strict()
+      .superRefine((tools, ctx) => {
+        if (tools.allow && tools.alsoAllow) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["alsoAllow"],
+            message:
+              "Agent tools cannot set both allow and alsoAllow; use allow alone or profile with alsoAllow.",
+          });
+        }
+      })
+      .optional(),
+    memorySearch: z
+      .object({
+        enabled: z.boolean().optional(),
+        rememberAcrossConversations: z.boolean().optional(),
+        sources: z
+          .array(z.enum(["memory", "sessions"]))
+          .min(1)
+          .optional(),
+      })
+      .strict()
+      .superRefine((memorySearch, ctx) => {
+        if (
+          memorySearch.sources?.includes("sessions") &&
+          memorySearch.rememberAcrossConversations !== true
+        ) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["rememberAcrossConversations"],
+            message:
+              "The sessions source requires rememberAcrossConversations: true in a portable Claw.",
+          });
+        }
+      })
       .optional(),
     heartbeat: z
       .object({
