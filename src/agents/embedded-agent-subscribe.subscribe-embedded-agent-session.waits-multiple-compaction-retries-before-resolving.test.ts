@@ -20,9 +20,9 @@ function toolResultPayloadAt(
 }
 
 describe("subscribeEmbeddedAgentSession", () => {
-  it("waits for multiple compaction retries before resolving", async () => {
-    // Each retrying compaction requires a matching agent_end before waiters are
-    // released, preventing early continuation during repeated overflow repairs.
+  it("waits for the latest compaction replacement before resolving", async () => {
+    // A later retrying compaction supersedes the earlier replacement attempt,
+    // so only the latest generation requires a terminal agent_end.
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-3",
     });
@@ -40,13 +40,9 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({ type: "agent_end" });
 
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    emit({ type: "agent_end" });
-
     await waitPromise;
     expect(resolved).toBe(true);
+    expect(subscription.isCompacting()).toBe(false);
   });
 
   it("does not count compaction until end event", () => {

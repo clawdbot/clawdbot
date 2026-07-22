@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { stripContinuationSignal } from "../../../auto-reply/continuation/signal.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   createHeartbeatToolResponsePayload,
@@ -30,7 +31,7 @@ import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import {
-  extractAssistantTextForPhase,
+  extractAssistantTextPartsForPhase,
   parseAssistantTextSignature,
 } from "../../../shared/chat-message-content.js";
 import {
@@ -91,16 +92,36 @@ function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
-function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
-  if (!lastAssistant) {
+function sanitizeCanonicalAssistantItemText(
+  text: string,
+  sanitize: (value: string) => string,
+): string {
+  const sanitized = sanitize(text);
+  if (!sanitized) {
     return "";
   }
-  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, {
+  const sanitizedIndex = text.indexOf(sanitized);
+  if (
+    sanitizedIndex >= 0 &&
+    text.slice(0, sanitizedIndex).trim().length === 0 &&
+    text.slice(sanitizedIndex + sanitized.length).trim().length === 0
+  ) {
+    return text;
+  }
+  return sanitized;
+}
+
+function resolveRawAssistantAnswerParts(lastAssistant: AssistantMessage | undefined): string[] {
+  if (!lastAssistant) {
+    return [];
+  }
+  const finalAnswerParts = extractAssistantTextPartsForPhase(lastAssistant, {
     phase: "final_answer",
-    sanitizeText: sanitizeAssistantFinalAnswerText,
+    sanitizeText: (text) =>
+      sanitizeCanonicalAssistantItemText(text, sanitizeAssistantFinalAnswerText),
   });
-  if (finalAnswerText) {
-    return normalizeOptionalString(finalAnswerText) ?? "";
+  if (normalizeOptionalString(finalAnswerParts.join("\n"))) {
+    return finalAnswerParts;
   }
   if (Array.isArray(lastAssistant.content)) {
     const hasExplicitPhasedTextBlock = lastAssistant.content.some((block) => {
@@ -129,22 +150,21 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
           ) {
             return null;
           }
-          const text = sanitizeAssistantFinalAnswerText(record.text);
+          const text = sanitizeCanonicalAssistantItemText(
+            record.text,
+            sanitizeAssistantFinalAnswerText,
+          );
           return text.trim() ? text : null;
         })
         .filter((value): value is string => typeof value === "string");
       if (signedUnphasedParts.length) {
-        return normalizeOptionalString(signedUnphasedParts.join("\n")) ?? "";
+        return signedUnphasedParts;
       }
     }
   }
-  return (
-    normalizeOptionalString(
-      extractAssistantTextForPhase(lastAssistant, {
-        sanitizeText: sanitizeAssistantVisibleText,
-      }),
-    ) ?? ""
-  );
+  return extractAssistantTextPartsForPhase(lastAssistant, {
+    sanitizeText: (text) => sanitizeCanonicalAssistantItemText(text, sanitizeAssistantVisibleText),
+  });
 }
 
 function normalizeReplyTextForComparison(text: string): string {
@@ -673,7 +693,8 @@ export function buildEmbeddedRunPayloads(params: {
   const fallbackAnswerText = assistantForPayload
     ? extractAssistantVisibleText(assistantForPayload)
     : "";
-  const fallbackRawAnswerText = resolveRawAssistantAnswerText(assistantForPayload);
+  const fallbackRawAnswerParts = resolveRawAssistantAnswerParts(assistantForPayload);
+  const fallbackRawAnswerText = normalizeOptionalString(fallbackRawAnswerParts.join("\n")) ?? "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantNeedsErrorSurface) {
       return false;
@@ -729,6 +750,12 @@ export function buildEmbeddedRunPayloads(params: {
     : null;
   const rawAnswerHasMedia =
     (rawAnswerDirectiveState?.mediaUrls?.length ?? 0) > 0 || rawAnswerDirectiveState?.audioAsVoice;
+  const rawAnswerHasContinuation = fallbackRawAnswerParts.some(
+    (part) => stripContinuationSignal(part).signal !== null,
+  );
+  const rawAnswerHasEarlierContinuation = fallbackRawAnswerParts
+    .slice(0, -1)
+    .some((part) => stripContinuationSignal(part).signal !== null);
   const assistantTextsHaveMedia = params.assistantTexts.some((text) => {
     const parsed = parseReplyDirectives(text);
     return (parsed.mediaUrls?.length ?? 0) > 0 || parsed.audioAsVoice;
@@ -736,13 +763,14 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedAssistantTexts = normalizeTextForComparison(nonEmptyAssistantTexts.join("\n\n"));
   const normalizedRawAnswerText = normalizeTextForComparison(rawAnswerDirectiveState?.text ?? "");
   const shouldPreferRawAnswerText =
-    rawAnswerHasMedia &&
-    (!nonEmptyAssistantTexts.length ||
-      (!assistantTextsHaveMedia &&
-        normalizedAssistantTexts.length > 0 &&
-        normalizedAssistantTexts === normalizedRawAnswerText));
-  // When streamed text lost media directives but the canonical assistant answer
-  // still contains them, keep the raw answer so attachments are not dropped.
+    rawAnswerHasContinuation ||
+    (rawAnswerHasMedia &&
+      (!nonEmptyAssistantTexts.length ||
+        (!assistantTextsHaveMedia &&
+          normalizedAssistantTexts.length > 0 &&
+          normalizedAssistantTexts === normalizedRawAnswerText)));
+  // Keep raw canonical text when streamed delivery lost media directives or
+  // continuation markers that must remain available to the post-run extractor.
   const fallbackAnswerSourceText =
     shouldPreferRawAnswerText && fallbackRawAnswerText ? fallbackRawAnswerText : fallbackAnswerText;
   const normalizedFallbackAnswerSourceText = fallbackAnswerSourceText
@@ -752,12 +780,18 @@ export function buildEmbeddedRunPayloads(params: {
     !lastAssistantNeedsErrorSurface &&
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
+  const canonicalFinalAnswerTexts =
+    rawAnswerHasEarlierContinuation && shouldPreferRawAnswerText
+      ? fallbackRawAnswerParts.filter((part) => part.trim().length > 0)
+      : [fallbackAnswerSourceText];
+  const preserveCanonicalItemWhitespace =
+    rawAnswerHasEarlierContinuation && shouldPreferRawAnswerText;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts =
     suppressAssistantArtifacts || runAborted
       ? []
       : (shouldUseCanonicalFinalAnswer
-          ? [fallbackAnswerSourceText]
+          ? canonicalFinalAnswerTexts
           : shouldPreferRawAnswerText && fallbackRawAnswerText
             ? [fallbackRawAnswerText]
             : hasAssistantTextPayload
@@ -794,6 +828,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
+      preserveTextWhitespace: preserveCanonicalItemWhitespace,
     });
     hasUserFacingAssistantReply = true;
     if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
@@ -849,7 +884,11 @@ export function buildEmbeddedRunPayloads(params: {
   return replyItems
     .map((item) => {
       const payload: ReplyPayload = {
-        text: normalizeOptionalString(item.text),
+        text: item.preserveTextWhitespace
+          ? item.text.trim().length > 0
+            ? item.text
+            : undefined
+          : normalizeOptionalString(item.text),
       };
       const mediaUrl = item.mediaUrl ?? item.media?.[0];
       if (mediaUrl) {

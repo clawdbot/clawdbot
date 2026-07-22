@@ -108,6 +108,7 @@ function createTestContext(): {
   const trace = vi.fn();
   const isEnabled = vi.fn(() => false);
   const ctx: ToolHandlerContext = {
+    getBlockReplyDeliveryGeneration: () => 0,
     params: {
       runId: "run-test",
       sessionKey: "agent:unit-session",
@@ -2707,6 +2708,58 @@ describe("handleToolExecutionEnd timeout metadata", () => {
 });
 
 describe("handleToolExecutionEnd exec approval prompts", () => {
+  it("does not restore approval suppression state after generation invalidation", async () => {
+    const { ctx } = createTestContext();
+    let deliveryGeneration = 0;
+    let resolveToolResult: (() => void) | undefined;
+    ctx.params.onToolResult = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveToolResult = resolve;
+        }),
+    );
+    (
+      ctx as typeof ctx & {
+        getBlockReplyDeliveryGeneration: () => number;
+      }
+    ).getBlockReplyDeliveryGeneration = () => deliveryGeneration;
+
+    const task = handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-stale-approval",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            host: "gateway",
+            command: "npm view diver name version description",
+            cwd: "/tmp/work",
+            warningText: "Approval required.",
+          },
+        },
+      } as never,
+      { deliveryGeneration },
+    );
+
+    await vi.waitFor(() => {
+      expect(ctx.params.onToolResult).toHaveBeenCalledTimes(1);
+    });
+    deliveryGeneration += 1;
+    ctx.state.deterministicApprovalPromptPending = false;
+    ctx.state.deterministicApprovalPromptSent = false;
+    resolveToolResult?.();
+    await task;
+
+    expect(ctx.state.deterministicApprovalPromptPending).toBe(false);
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(false);
+  });
+
   it("emits a deterministic approval payload and marks assistant output suppressed", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();

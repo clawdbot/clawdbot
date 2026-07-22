@@ -24,6 +24,7 @@ type EmbeddedRunReplyItem = {
   channelData?: Record<string, unknown>;
   nonTerminalToolErrorWarning?: boolean;
   sourceReplyMirror?: { idempotencyKey?: string };
+  preserveTextWhitespace?: boolean;
 };
 
 /** Builds transcript mirrors and completion evidence for message-tool source replies. */

@@ -35,6 +35,8 @@ type CompactionEndEvent =
       result?: unknown;
       aborted?: unknown;
       errorMessage?: unknown;
+      invalidatedDeliveryGeneration?: number;
+      retryAlreadyNoted?: boolean;
     };
 
 // Unknown reasons come from external runtimes or older sessions. Treat them as
@@ -166,8 +168,12 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
       `compactionCount.delta=${compactionCountDelta}`,
   );
   if (willRetry) {
-    ctx.noteCompactionRetry();
-    ctx.resetForCompactionRetry();
+    if (!("retryAlreadyNoted" in evt) || evt.retryAlreadyNoted !== true) {
+      ctx.noteCompactionRetry();
+    }
+    ctx.resetForCompactionRetry(
+      "invalidatedDeliveryGeneration" in evt ? evt.invalidatedDeliveryGeneration : undefined,
+    );
     ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
     if (!wasAborted) {

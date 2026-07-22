@@ -79,6 +79,25 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     }
   };
 
+  const scheduleAttemptEvent = (
+    evt: EmbeddedAgentSubscribeEvent,
+    handler: () => void | Promise<void>,
+    options?: { detach?: boolean },
+  ) => {
+    const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
+    scheduleEvent(
+      evt,
+      () => {
+        if (deliveryGeneration !== ctx.getBlockReplyDeliveryGeneration()) {
+          return;
+        }
+        return handler();
+      },
+      options,
+    );
+    return deliveryGeneration;
+  };
+
   return (evt: EmbeddedAgentSubscribeEvent) => {
     switch (evt.type) {
       case "message_start":
@@ -86,49 +105,59 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         // message-scoped. Reset only its accounting boundary synchronously so
         // this message's streamed usage cannot inherit the prior commit state.
         resetPendingAssistantUsage(ctx, evt.message as AgentMessage);
-        scheduleEvent(evt, () => {
+        scheduleAttemptEvent(evt, () => {
           handleMessageStart(ctx, evt as never);
         });
         return;
-      case "message_update":
+      case "message_update": {
         // AgentSession persists message_end after this listener returns, while
         // delivery handlers may still be queued. Capture usage synchronously so
         // the following final snapshot can be repaired before persistence.
         capturePendingAssistantUsage(ctx, evt as never);
-        scheduleEvent(evt, () => {
-          handleMessageUpdate(ctx, evt as never);
-        });
+        const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
+        scheduleAttemptEvent(evt, () =>
+          handleMessageUpdate(ctx, evt as never, { deliveryGeneration }),
+        );
         return;
-      case "message_end":
+      }
+      case "message_end": {
         if ((evt.message as AgentMessage)?.role === "assistant") {
           preservePendingAssistantUsage(
             evt.message as Extract<AgentMessage, { role: "assistant" }>,
             ctx.state.pendingAssistantUsage,
           );
         }
-        scheduleEvent(evt, () => {
-          return handleMessageEnd(ctx, evt as never);
+        const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
+        scheduleAttemptEvent(evt, () => {
+          return handleMessageEnd(ctx, evt as never, { deliveryGeneration });
         });
         return;
-      case "tool_execution_start":
-        scheduleEvent(evt, () => {
-          return handleToolExecutionStart(ctx, evt as never);
+      }
+      case "tool_execution_start": {
+        const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
+        scheduleAttemptEvent(evt, () => {
+          return handleToolExecutionStart(ctx, evt as never, { deliveryGeneration });
         });
         return;
-      case "tool_execution_update":
-        scheduleEvent(evt, () => {
-          handleToolExecutionUpdate(ctx, evt as never);
+      }
+      case "tool_execution_update": {
+        const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
+        scheduleAttemptEvent(evt, () => {
+          handleToolExecutionUpdate(ctx, evt as never, { deliveryGeneration });
         });
         return;
-      case "tool_execution_end":
-        scheduleEvent(
+      }
+      case "tool_execution_end": {
+        const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
+        scheduleAttemptEvent(
           evt,
           () => {
-            return handleToolExecutionEnd(ctx, evt as never);
+            return handleToolExecutionEnd(ctx, evt as never, { deliveryGeneration });
           },
           { detach: true },
         );
         return;
+      }
       case "agent_start":
         scheduleEvent(evt, () => {
           handleAgentStart(ctx);
@@ -142,7 +171,17 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
           });
         });
         return;
-      case "compaction_end":
+      case "compaction_end": {
+        // A delivery callback from the discarded attempt must not prevent the
+        // serialized compaction replacement from reaching its reset handler.
+        // Keep each observed compaction's generation token distinct so queued
+        // replacement attempts cannot collapse across consecutive compactions.
+        const invalidatedDeliveryGeneration = evt.willRetry
+          ? ctx.invalidateBlockReplyDeliveriesForCompactionRetry()
+          : undefined;
+        if (invalidatedDeliveryGeneration !== undefined) {
+          ctx.noteCompactionRetry(invalidatedDeliveryGeneration);
+        }
         scheduleEvent(evt, () => {
           handleCompactionEnd(ctx, {
             type: "compaction_end",
@@ -150,13 +189,18 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
             willRetry: evt.willRetry,
             result: evt.result,
             aborted: evt.aborted,
+            invalidatedDeliveryGeneration,
+            retryAlreadyNoted: invalidatedDeliveryGeneration !== undefined,
           });
         });
         return;
-      case "agent_end":
-        scheduleEvent(evt, () => {
-          return handleAgentEnd(ctx, evt as never);
+      }
+      case "agent_end": {
+        const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
+        scheduleAttemptEvent(evt, () => {
+          return handleAgentEnd(ctx, evt as never, { deliveryGeneration });
         });
+      }
       default:
     }
   };

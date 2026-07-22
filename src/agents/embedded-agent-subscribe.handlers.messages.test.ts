@@ -137,6 +137,8 @@ function createMessageEndContext(
     state: {
       assistantTexts: [],
       assistantTextBaseline: 0,
+      deliveredBlockReplyTexts: [],
+      deferredBlockReplyTexts: [],
       emittedAssistantUpdate: false,
       deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
@@ -416,7 +418,7 @@ describe("handleMessageUpdate text signatures", () => {
       },
     } as never);
 
-    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
+    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(2);
     expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenCalledWith(
@@ -860,7 +862,7 @@ describe("handleMessageUpdate text signatures", () => {
     for (const [text, delta] of [
       ["C", "C"],
       ["Carry on.", "arry on."],
-    ]) {
+    ] as const) {
       const partial = createPartial(text);
       handleMessageUpdate(context, {
         type: "message_update",
@@ -1173,7 +1175,7 @@ describe("handleMessageUpdate text signatures", () => {
     for (const [text, delta] of [
       [prefix, prefix],
       [`${prefix}]`, "]"],
-    ]) {
+    ] as const) {
       const partial = createPartial(text);
       handleMessageUpdate(context, {
         type: "message_update",
@@ -1233,7 +1235,7 @@ describe("handleMessageUpdate text signatures", () => {
       for (const [text, delta] of [
         [prefix, prefix],
         [`${prefix}]]`, "]]"],
-      ]) {
+      ] as const) {
         const partial = createPartial(text);
         handleMessageUpdate(context, {
           type: "message_update",
@@ -1491,7 +1493,9 @@ describe("handleMessageUpdate text signatures", () => {
     } as never);
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
-    expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
+    expect(resetAssistantMessageState).toHaveBeenCalledWith(0, {
+      preserveReplyDirectiveState: true,
+    });
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1607,7 +1611,7 @@ describe("handleMessageUpdate text signatures", () => {
       },
     } as never);
 
-    expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
+    expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
     expect(resetAssistantMessageState).not.toHaveBeenCalled();
     expect(onAssistantMessageStart).not.toHaveBeenCalled();
     expect(onPartialReply).toHaveBeenCalledWith(
@@ -2539,6 +2543,7 @@ describe("handleMessageEnd", () => {
         blockReplyBreak: "text_end",
         // Simulate text_end already delivered this text through emitBlockChunk
         lastBlockReplyText: "Hello world",
+        deliveredBlockReplyTexts: ["Hello world"],
         deltaBuffer: "",
         blockBuffer: "",
       },
@@ -2582,12 +2587,12 @@ describe("handleMessageEnd", () => {
     } as never);
 
     expect(emitBlockReply).toHaveBeenCalledWith(
-      { text: "Final answer" },
-      { assistantMessageIndex: 7 },
+      expect.objectContaining({ text: "Final answer" }),
+      expect.objectContaining({ assistantMessageIndex: 7 }),
     );
   });
 
-  it("does not duplicate block reply for text_end channels even when stripping differs", () => {
+  it("corrects text_end block replies when canonical message_end text differs", () => {
     const onBlockReply = vi.fn();
     const emitBlockReply = vi.fn();
     // Same pattern: directive accumulator returns null for empty final flush
@@ -2602,6 +2607,7 @@ describe("handleMessageEnd", () => {
         blockReplyBreak: "text_end",
         // text_end delivered via emitBlockChunk which uses different stripping
         lastBlockReplyText: "Hello world.",
+        deliveredBlockReplyTexts: ["Hello world."],
         deltaBuffer: "",
         blockBuffer: "",
       },
@@ -2617,10 +2623,10 @@ describe("handleMessageEnd", () => {
       },
     } as never);
 
-    // Even though text !== lastBlockReplyText (different stripping), the safety
-    // send should NOT fire for text_end channels. The only consumeReplyDirectives
-    // call is the final empty flush which returns null.
-    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(emitBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Hello world" }),
+      expect.objectContaining({ assistantMessageIndex: undefined }),
+    );
   });
 
   it("emits final media after flushing buffered message_end text", () => {
@@ -2662,6 +2668,34 @@ describe("handleMessageEnd", () => {
       text: "",
       mediaUrls: ["/tmp/final.png"],
     });
+  });
+
+  it("does not re-emit final media already delivered at text_end", () => {
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn(() => null),
+      state: {
+        blockReplyBreak: "text_end",
+        blockBuffer: "",
+        deltaBuffer: "",
+        lastBlockReplyText: "Caption",
+        lastDeliveredAssistantReplyDirectives: {
+          mediaUrls: ["/tmp/final.png"],
+        },
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Caption\nMEDIA:/tmp/final.png" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
   });
 
   it("preserves literal reasoning-looking tags in unphased final visible text", () => {

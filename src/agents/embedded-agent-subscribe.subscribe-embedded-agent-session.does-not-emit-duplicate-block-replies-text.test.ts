@@ -3,6 +3,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createParagraphChunkedBlockReplyHarness,
   createStubSessionHarness,
   createTextEndBlockReplyHarness,
   emitAssistantTextDelta,
@@ -22,6 +23,127 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
+  });
+  it("does not duplicate metadata when message_end flushes a buffered reply", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createParagraphChunkedBlockReplyHarness({
+      onBlockReply,
+      chunking: { minChars: 50, maxChars: 200 },
+    });
+    const answer = "Done.\n\n[[audio_as_voice]]";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: answer });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: answer }],
+      } as AssistantMessage,
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        text: "Done.",
+        audioAsVoice: true,
+      }),
+    );
+  });
+  it("does not duplicate metadata after an async buffered message_end flush", async () => {
+    const onBlockReply = vi.fn().mockResolvedValue(undefined);
+    const { emit, subscription } = createParagraphChunkedBlockReplyHarness({
+      onBlockReply,
+      chunking: { minChars: 50, maxChars: 200 },
+    });
+    const answer = "Done.\n\n[[audio_as_voice]]";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: answer });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: answer }],
+      } as AssistantMessage,
+    });
+    await subscription.waitForPendingEvents();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        text: "Done.",
+        audioAsVoice: true,
+      }),
+    );
+  });
+  it("keeps callback completion order out of canonical reconciliation", async () => {
+    const replyResolvers: Array<() => void> = [];
+    const onBlockReply = vi.fn((_payload: { text?: string }) => {
+      if (replyResolvers.length >= 3) {
+        return undefined;
+      }
+      return new Promise<void>((resolve) => {
+        replyResolvers.push(resolve);
+      });
+    });
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: {
+        minChars: 5,
+        maxChars: 8,
+        breakPreference: "newline",
+      },
+    });
+    const answer = "AAAAA\nBBBBB\nCCCCC\nDDDDD";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: answer });
+    emitAssistantTextEnd({ emit });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: answer }],
+      } as AssistantMessage,
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(3);
+    for (const resolve of replyResolvers.toReversed()) {
+      resolve();
+    }
+    await subscription.waitForPendingEvents();
+
+    expect(
+      onBlockReply.mock.calls.map(([payload]) => (payload as { text?: string } | undefined)?.text),
+    ).toEqual(["AAAAA", "BBBBB", "CCCCC", "DDDDD"]);
+  });
+  it("does not resend a canonical answer after contiguous hard splits", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createParagraphChunkedBlockReplyHarness({
+      onBlockReply,
+      chunking: { minChars: 5, maxChars: 5 },
+    });
+    const answer = "abcdefghij";
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: answer });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: answer }],
+      } as AssistantMessage,
+    });
+    await subscription.waitForPendingEvents();
+
+    expect(
+      onBlockReply.mock.calls.map(([payload]) => (payload as { text?: string } | undefined)?.text),
+    ).toEqual(["abcde", "fghij"]);
   });
   it("does not duplicate assistantTexts when message_end repeats", () => {
     const { session, emit } = createStubSessionHarness();

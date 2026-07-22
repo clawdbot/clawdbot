@@ -66,8 +66,15 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
 export function handleAgentEnd(
   ctx: EmbeddedAgentSubscribeContext,
   evt?: Extract<AgentSessionEvent, { type: "agent_end" }>,
+  options?: { deliveryGeneration?: number },
 ): void | Promise<void> {
   type BeforeTerminalDeliveryDecision = void | { suppressTerminalDelivery?: boolean };
+  const isCurrentDeliveryGeneration = () =>
+    options?.deliveryGeneration === undefined ||
+    options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
+  if (!isCurrentDeliveryGeneration()) {
+    return;
+  }
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
@@ -238,6 +245,9 @@ export function handleAgentEnd(
   };
 
   const finalizeAgentEnd = () => {
+    if (!isCurrentDeliveryGeneration()) {
+      return;
+    }
     ctx.state.blockState.thinking = false;
     ctx.state.blockState.final = false;
     ctx.state.blockState.inlineCode = createInlineCodeState();
@@ -246,27 +256,33 @@ export function handleAgentEnd(
     ctx.state.blockState.pendingFenceFragment = undefined;
 
     if (ctx.state.pendingCompactionRetry > 0) {
-      ctx.resolveCompactionRetry();
+      ctx.resolveCompactionRetry(options?.deliveryGeneration);
     } else {
       ctx.maybeResolveCompactionWait();
     }
   };
 
   const flushPendingMediaAndChannel = () => {
+    if (!isCurrentDeliveryGeneration()) {
+      return;
+    }
     if (ctx.params.onBlockReply) {
       const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
       if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
-        const visibleReplyCountBefore = ctx.state.visibleBlockReplyCount;
-        ctx.emitBlockReply(pendingToolMediaReply);
-        if (ctx.state.visibleBlockReplyCount > visibleReplyCountBefore) {
-          ctx.state.hasToolMediaBlockReply = true;
-        }
+        ctx.emitBlockReply(pendingToolMediaReply, {
+          onDelivered: () => {
+            ctx.state.hasToolMediaBlockReply = true;
+          },
+        });
       }
     }
 
-    const postMediaFlushResult = ctx.flushBlockReplyBuffer();
+    const postMediaFlushResult = ctx.flushBlockReplyBuffer({ retryFailures: true });
     if (isPromiseLike<void>(postMediaFlushResult)) {
       return postMediaFlushResult.then(() => {
+        if (!isCurrentDeliveryGeneration()) {
+          return undefined;
+        }
         const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
         if (isPromiseLike<void>(onBlockReplyFlushResult)) {
           return onBlockReplyFlushResult;
@@ -302,19 +318,30 @@ export function handleAgentEnd(
   };
 
   const deliverTerminal = () => {
+    if (!isCurrentDeliveryGeneration()) {
+      return;
+    }
     ctx.state.deferBlockReplyDelivery = false;
     ctx.flushDeferredAssistantEvents();
     ctx.flushDeferredBlockReplies();
-    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
+    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({
+      final: true,
+      retryFailures: true,
+    });
     finalizeAgentEnd();
     const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
-      ? Promise.resolve(flushBlockReplyBufferResult).then(() => flushPendingMediaAndChannel())
+      ? Promise.resolve(flushBlockReplyBufferResult).then(() =>
+          isCurrentDeliveryGeneration() ? flushPendingMediaAndChannel() : undefined,
+        )
       : flushPendingMediaAndChannel();
 
     if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
       return Promise.resolve(flushPendingMediaAndChannelResult).then(
-        () => emitLifecycleTerminalOnce(),
+        () => (isCurrentDeliveryGeneration() ? emitLifecycleTerminalOnce() : undefined),
         (error: unknown) => {
+          if (!isCurrentDeliveryGeneration()) {
+            return undefined;
+          }
           const emitted = emitLifecycleTerminalOnce();
           if (isPromiseLike<void>(emitted)) {
             return Promise.resolve(emitted).then(() => {
@@ -343,6 +370,9 @@ export function handleAgentEnd(
   };
 
   const suppressTerminalDelivery = () => {
+    if (!isCurrentDeliveryGeneration()) {
+      return;
+    }
     ctx.clearDeferredAssistantEvents();
     ctx.clearDeferredBlockReplies();
     finalizeAgentEnd();
@@ -350,7 +380,7 @@ export function handleAgentEnd(
 
   let lifecycleTerminalEmitted = false;
   const emitLifecycleTerminalOnce = (): void | Promise<void> => {
-    if (lifecycleTerminalEmitted) {
+    if (lifecycleTerminalEmitted || !isCurrentDeliveryGeneration()) {
       return;
     }
     lifecycleTerminalEmitted = true;
@@ -389,6 +419,9 @@ export function handleAgentEnd(
         return undefined;
       })
       .then((decision) => {
+        if (!isCurrentDeliveryGeneration()) {
+          return undefined;
+        }
         if (decision?.suppressTerminalDelivery === true) {
           suppressTerminalDelivery();
           return undefined;
