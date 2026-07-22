@@ -1,0 +1,14 @@
+{
+  "id": "buzz",
+  "name": "Buzz",
+  "description": "Connect OpenClaw agents to Buzz rooms.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["buzz"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
