@@ -2,6 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { CreateAgentEntry } from "../agents/agent-create.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import type { StagedOnboardingAgent } from "../commands/onboard-agent.js";
 import {
@@ -28,7 +29,7 @@ import {
 } from "./inference-route.js";
 import { requireValidSystemAgentSetupSnapshot } from "./setup-config-snapshot.js";
 import {
-  prepareFirstAgentCredentialDir,
+  prepareAndVerifyFirstAgentCredentialDir,
   resolveVerifiedFirstAgentDir,
 } from "./setup-first-agent.js";
 
@@ -329,15 +330,17 @@ export async function applySystemAgentSetup(
     if (!guardModules) {
       return;
     }
-    const [{ resolveAgentDir, resolveDefaultAgentId }, { resolveDefaultModelForAgent }] =
-      guardModules;
+    const [
+      { resolveAgentDir: resolveGuardAgentDir, resolveDefaultAgentId },
+      { resolveDefaultModelForAgent },
+    ] = guardModules;
     const currentAgentId = resolveDefaultAgentId(config);
     if (expectedAgentId && currentAgentId !== expectedAgentId) {
       throw new Error(
         "The default agent changed while AI access was being tested. Try setup again.",
       );
     }
-    if (expectedAgentDir && resolveAgentDir(config, currentAgentId) !== expectedAgentDir) {
+    if (expectedAgentDir && resolveGuardAgentDir(config, currentAgentId) !== expectedAgentDir) {
       throw new Error(
         "The agent credential location changed while AI access was being tested. Try setup again.",
       );
@@ -533,6 +536,16 @@ export async function applySystemAgentSetup(
               "The setup candidate no longer preserves the exact verified inference route, so it was not saved. Retry setup from the current OpenClaw session.",
             );
           }
+          let preparedFirstAgentDir: string | undefined;
+          if (setupCandidate.introducesFirstRoster && setupCandidate.stagedAgent) {
+            preparedFirstAgentDir = await prepareAndVerifyFirstAgentCredentialDir({
+              agentId: setupCandidate.stagedAgent.agentId,
+              config: finalizedConfig,
+              expectedRoute: expectedSourceRoute,
+              runtime,
+              verifiedAgentDir: verifiedInferenceRouteAtStart?.route?.agentDir,
+            });
+          }
           // This is the auth/config operation's linearization point. Never hold
           // the synchronous cross-store guard across async config I/O.
           assertCommitPreconditions?.();
@@ -552,6 +565,7 @@ export async function applySystemAgentSetup(
               workspace: setupCandidate.workspace,
               stagedAgent: setupCandidate.stagedAgent,
               stagedEntry: setupCandidate.stagedEntry,
+              preparedFirstAgentDir,
               introducesFirstRoster: setupCandidate.introducesFirstRoster,
               expectedInferenceRoute: expectedSourceRoute,
             },
@@ -579,12 +593,8 @@ export async function applySystemAgentSetup(
     nextConfig = created.config;
     finalConfigHash = resolveConfigSnapshotHash(await readConfigFileSnapshot()) ?? finalConfigHash;
     if (created.agentId) {
-      const verifiedAgentDir = verifiedInferenceRouteAtStart?.route?.agentDir;
-      const agentDir = await prepareFirstAgentCredentialDir({
-        agentId: created.agentId,
-        config: nextConfig,
-        verifiedAgentDir,
-      });
+      const agentDir =
+        setupResult.preparedFirstAgentDir ?? resolveAgentDir(nextConfig, created.agentId);
       stagedAgent = {
         agentId: created.agentId,
         name: agentName?.trim() || "main",
@@ -616,18 +626,6 @@ export async function applySystemAgentSetup(
     const movedFirstAgentDir =
       setupResult.introducesFirstRoster &&
       verifiedInferenceRouteAtStart?.route?.agentDir !== expectedPersistedRoute.route?.agentDir;
-    if (movedFirstAgentDir) {
-      const { verifySetupInferenceConfig } = await import("./setup-inference.js");
-      const verification = await verifySetupInferenceConfig({
-        config: expectedRuntime.config,
-        runtime,
-      });
-      if (!verification.ok || verification.modelRef !== expectedPersistedRoute.route?.modelLabel) {
-        throw new Error(
-          `The renamed first agent could not verify inference from ${expectedPersistedRoute.route?.agentDir ?? "its canonical agent directory"}.`,
-        );
-      }
-    }
     // Plugin defaults are part of the access-tested runtime route. Reject a
     // metadata change that would make the committed config run differently.
     if (

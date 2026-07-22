@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => ({
   refreshPluginRegistry: vi.fn(),
   updateExecApprovals: vi.fn(),
   ensureOnboardingAgent: vi.fn(),
-  copyPortableAuthProfiles: vi.fn(),
+  prepareFirstAgentCredentialDir: vi.fn(),
   verifySetupInferenceConfig: vi.fn(),
 }));
 
@@ -54,8 +54,9 @@ vi.mock("../commands/onboard-agent.js", async (importOriginal) => ({
   ensureOnboardingAgent: mocks.ensureOnboardingAgent,
 }));
 
-vi.mock("../agents/auth-profiles/copy-portable.js", () => ({
-  copyPortableAuthProfiles: mocks.copyPortableAuthProfiles,
+vi.mock("./setup-first-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-first-agent.js")>()),
+  prepareAndVerifyFirstAgentCredentialDir: mocks.prepareFirstAgentCredentialDir,
 }));
 
 vi.mock("./setup-inference.js", () => ({
@@ -362,7 +363,9 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     mocks.ensureGatewayService.mockResolvedValue({ installDaemon: false });
     mocks.refreshPluginRegistry.mockResolvedValue(undefined);
     mocks.updateExecApprovals.mockResolvedValue(undefined);
-    mocks.copyPortableAuthProfiles.mockResolvedValue({ copied: 1, skipped: 0 });
+    mocks.prepareFirstAgentCredentialDir.mockImplementation(
+      async ({ agentId }: { agentId: string }) => `/agents/${agentId}`,
+    );
     mocks.verifySetupInferenceConfig.mockResolvedValue({
       ok: true,
       modelRef: "openai/gpt-5.5",
@@ -467,6 +470,25 @@ describe("applySystemAgentSetup transaction boundaries", () => {
 
     expect(mocks.state.persistedConfig).toBeUndefined();
     expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("publishes no roster when credential relocation fails and retries as first-agent setup", async () => {
+    mocks.state.initialSnapshot = snapshot(null, {});
+    mocks.state.commitConfig = {};
+    mocks.state.commitSnapshot = mocks.state.initialSnapshot;
+    mocks.state.commitPreviousHash = null;
+    mocks.prepareFirstAgentCredentialDir.mockRejectedValueOnce(
+      new Error("credential relocation failed"),
+    );
+    const params = baseParams({ expectedConfigHash: null, agentName: "Research Buddy" });
+
+    await expect(applySystemAgentSetup(params)).rejects.toThrow("credential relocation failed");
+    expect(mocks.state.persistedConfig).toBeUndefined();
+
+    await expect(applySystemAgentSetup(params)).resolves.toMatchObject({
+      agentId: "research-buddy",
+    });
+    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
   });
 
   it("uses the roster supplied by the setup patch instead of stale staged metadata", async () => {

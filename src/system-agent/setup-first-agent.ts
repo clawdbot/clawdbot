@@ -2,6 +2,7 @@ import { resolveAgentDir } from "../agents/agent-scope.js";
 import { copyPortableAuthProfiles } from "../agents/auth-profiles/copy-portable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
 import type { DefaultInferenceRouteProjection } from "./inference-route.js";
 
 /** Reuses a verified directory only when setup is creating that same literal agent id. */
@@ -27,6 +28,29 @@ export async function prepareFirstAgentCredentialDir(params: {
       sourceAgentDir: params.verifiedAgentDir,
       destAgentDir: agentDir,
     });
+  }
+  return agentDir;
+}
+
+/** Relocates and verifies credentials against a staged first-agent roster before it is published. */
+export async function prepareAndVerifyFirstAgentCredentialDir(params: {
+  agentId: string;
+  config: OpenClawConfig;
+  expectedRoute?: DefaultInferenceRouteProjection;
+  runtime: RuntimeEnv;
+  verifiedAgentDir?: string;
+}): Promise<string> {
+  const agentDir = await prepareFirstAgentCredentialDir(params);
+  if (params.verifiedAgentDir === agentDir || !params.expectedRoute?.route) {
+    return agentDir;
+  }
+  const { verifySetupInferenceConfig } = await import("./setup-inference.js");
+  const verification = await verifySetupInferenceConfig({
+    config: params.config,
+    runtime: params.runtime,
+  });
+  if (!verification.ok || verification.modelRef !== params.expectedRoute.route.modelLabel) {
+    throw new Error(`The renamed first agent could not verify inference from ${agentDir}.`);
   }
   return agentDir;
 }
