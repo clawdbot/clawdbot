@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -82,9 +83,12 @@ function outcomeOfKind<TKind extends LegacyMainSessionKeyMigrationOutcome["kind"
 describe("legacy non-main default session key migration", () => {
   it("moves a separate legacy main store and its transcript to the configured default", async () => {
     const { env } = createFixture("openclaw-main-key-separate-");
-    const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
+    const cfg = {
+      agents: { list: [{ id: "ops", default: true }] },
+      session: { store: path.join(env.OPENCLAW_STATE_DIR!, "current", "{agentId}.json") },
+    } satisfies OpenClawConfig;
     const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
-    const defaultStorePath = resolveStorePath(undefined, { agentId: "ops", env });
+    const defaultStorePath = resolveStorePath(cfg.session.store, { agentId: "ops", env });
     trackStore(defaultStorePath, "ops");
     await seedSession({
       agentId: "main",
@@ -219,6 +223,32 @@ describe("legacy non-main default session key migration", () => {
     expect(
       loadExactSessionEntry({ agentId: "ops", storePath, sessionKey: "agent:main:main" }),
     ).toBeDefined();
+  });
+
+  it("rejects JSON-only legacy ownership without creating a SQLite store", async () => {
+    const { env } = createFixture("openclaw-main-key-json-only-");
+    const cfg = {
+      agents: { list: [{ id: "ops", default: true }] },
+      session: { store: path.join(env.OPENCLAW_STATE_DIR!, "current", "{agentId}.json") },
+    } satisfies OpenClawConfig;
+    const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(legacyStorePath, {
+      agentId: "main",
+    }).path;
+    fs.mkdirSync(path.dirname(legacyStorePath), { recursive: true });
+    fs.writeFileSync(
+      legacyStorePath,
+      JSON.stringify({ "agent:main:main": { sessionId: "legacy-json", updatedAt: 10 } }),
+    );
+
+    const result = await migrateLegacyDefaultMainSessionKeys(cfg, env);
+
+    expect(outcomeOfKind(result.outcomes, "legacy-json-present")).toMatchObject({
+      resolved: false,
+      sourceStorePath: legacyStorePath,
+      legacyKeys: ["agent:main:main"],
+    });
+    expect(fs.existsSync(sqlitePath)).toBe(false);
   });
 
   it("requires one explicit default before assigning legacy ownership", async () => {

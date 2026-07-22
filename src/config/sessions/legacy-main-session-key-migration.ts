@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import { readLegacySessionStoreTarget } from "./legacy-store-readonly.js";
 import { resolveStorePath } from "./paths.js";
 import {
   deleteSqliteSessionEntryLifecycle,
@@ -10,6 +11,7 @@ import {
   migrateSqliteSessionEntryKeys,
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveAllAgentSessionStoreCandidateTargetsSync } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
 const LEGACY_AGENT_ID = "main";
@@ -47,6 +49,13 @@ export type LegacyMainSessionKeyMigrationOutcome =
       aliases: LegacyMainSessionClaim[];
     } & OutcomeBase)
   | ({ kind: "aliases-disagree"; resolved: false; aliases: LegacyMainSessionClaim[] } & OutcomeBase)
+  | ({
+      kind: "legacy-json-present";
+      resolved: false;
+      legacyKeys: string[];
+      sourceAgentId: string;
+      sourceStorePath: string;
+    } & OutcomeBase)
   | ({
       kind: "store-unreadable";
       resolved: false;
@@ -122,6 +131,26 @@ function unreadable(params: {
     sourceAgentId: params.sourceAgentId,
     sourceStorePath: params.sourceStorePath,
   };
+}
+
+function probeLegacyJsonStore(params: {
+  agentId: string;
+  base: OutcomeBase;
+  legacyKeys: string[];
+  storePath: string;
+}): LegacyMainSessionKeyMigrationOutcome | undefined {
+  const store = readLegacySessionStoreTarget(params.storePath, params.agentId);
+  const legacyKeys = params.legacyKeys.filter((key) => store?.[key]);
+  return legacyKeys.length > 0
+    ? {
+        ...params.base,
+        kind: "legacy-json-present",
+        resolved: false,
+        legacyKeys,
+        sourceAgentId: params.agentId,
+        sourceStorePath: params.storePath,
+      }
+    : undefined;
 }
 
 async function removeAliases(params: {
@@ -268,32 +297,54 @@ export async function migrateLegacyDefaultMainSessionKeys(
     env,
   });
   const legacyStorePath = resolveStorePath(configuredStore, { agentId: LEGACY_AGENT_ID, env });
-  const targetSqlitePath = resolveSqliteTargetFromSessionStorePath(targetStorePath, {
-    agentId: target.defaultAgentId,
-  }).path;
-  const legacySqlitePath = resolveSqliteTargetFromSessionStorePath(legacyStorePath, {
-    agentId: LEGACY_AGENT_ID,
-  }).path;
   const base = {
     canonicalKey: `agent:${target.defaultAgentId}:${target.mainKey}`,
     defaultAgentId: target.defaultAgentId,
     targetStorePath,
   };
   const legacyKeys = [...new Set([`agent:main:${target.mainKey}`, "agent:main:main"])];
-  const sources = [
-    ...(fs.existsSync(targetSqlitePath)
-      ? [{ sourceAgentId: target.defaultAgentId, sourceStorePath: targetStorePath }]
-      : []),
-    ...(legacySqlitePath !== targetSqlitePath && fs.existsSync(legacySqlitePath)
-      ? [{ sourceAgentId: LEGACY_AGENT_ID, sourceStorePath: legacyStorePath }]
-      : []),
+  const candidateTargets = [
+    { agentId: target.defaultAgentId, storePath: targetStorePath },
+    { agentId: LEGACY_AGENT_ID, storePath: legacyStorePath },
+    ...resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).filter(
+      (candidate) => normalizeAgentId(candidate.agentId) === LEGACY_AGENT_ID,
+    ),
   ];
-  if (sources.length === 0) {
+  const uniqueTargets = new Map<
+    string,
+    { agentId: string; sqlitePath: string; storePath: string }
+  >();
+  for (const candidate of candidateTargets) {
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(candidate.storePath, {
+      agentId: candidate.agentId,
+    }).path;
+    if (!uniqueTargets.has(sqlitePath)) {
+      uniqueTargets.set(sqlitePath, { ...candidate, sqlitePath });
+    }
+  }
+  const sources = [...uniqueTargets.values()].flatMap((candidate) =>
+    fs.existsSync(candidate.sqlitePath)
+      ? [{ sourceAgentId: candidate.agentId, sourceStorePath: candidate.storePath }]
+      : [],
+  );
+  const jsonOutcomes = [...uniqueTargets.values()].flatMap((candidate) => {
+    if (fs.existsSync(candidate.sqlitePath)) {
+      return [];
+    }
+    const outcome = probeLegacyJsonStore({
+      agentId: candidate.agentId,
+      base,
+      legacyKeys,
+      storePath: candidate.storePath,
+    });
+    return outcome ? [outcome] : [];
+  });
+  if (sources.length === 0 && jsonOutcomes.length === 0) {
     return {
       outcomes: [{ ...base, kind: "not-needed", resolved: true, reason: "no-legacy-rows" }],
     };
   }
-  const outcomes: LegacyMainSessionKeyMigrationOutcome[] = [];
+  const outcomes: LegacyMainSessionKeyMigrationOutcome[] = [...jsonOutcomes];
   for (const source of sources) {
     outcomes.push(
       await migrateSource({ ...source, base, defaultAgentId: target.defaultAgentId, legacyKeys }),
@@ -325,6 +376,9 @@ export function formatLegacyMainSessionMigrationOutcome(
   }
   if (outcome.kind === "aliases-disagree") {
     return `Legacy main aliases diverge: ${outcome.aliases.map((alias) => `${alias.sessionId} (${alias.sessionKey} in ${alias.storePath})`).join(", ")}.`;
+  }
+  if (outcome.kind === "legacy-json-present") {
+    return `Legacy JSON session store ${outcome.sourceStorePath} still contains ${outcome.legacyKeys.join(", ")}; run openclaw doctor --fix before creating agent main.`;
   }
   return `Could not read legacy main-session store ${outcome.sourceStorePath}: ${outcome.error}`;
 }

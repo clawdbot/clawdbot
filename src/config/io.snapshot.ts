@@ -1,4 +1,6 @@
+import path from "node:path";
 import { withFileLock } from "../infra/file-lock.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { ConfigIncludeError } from "./includes.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { maybeRecoverSuspiciousConfigRead } from "./io.observe-recovery.js";
@@ -180,14 +182,15 @@ export async function readConfigFileSnapshotInternal(
             if (deps.fs.readFileSync(configPath, "utf8") !== raw) {
               return false;
             }
-            const temporaryPath = `${configPath}.roster-migration-${process.pid}`;
-            const mode = deps.fs.statSync(configPath).mode & 0o777;
-            deps.fs.writeFileSync(
-              temporaryPath,
-              `${JSON.stringify(sourceRosterMigration.config, null, 2)}\n`,
-              { encoding: "utf8", mode },
-            );
-            deps.fs.renameSync(temporaryPath, configPath);
+            await replaceFileAtomic({
+              filePath: configPath,
+              content: `${JSON.stringify(sourceRosterMigration.config, null, 2)}\n`,
+              dirMode: 0o700,
+              mode: 0o600,
+              tempPrefix: path.basename(configPath),
+              copyFallbackOnPermissionError: true,
+              fileSystem: deps.fs,
+            });
             return true;
           },
         );

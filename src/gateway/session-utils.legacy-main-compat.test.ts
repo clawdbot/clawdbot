@@ -7,6 +7,7 @@ import { importSqliteSessionRows } from "../config/sessions/session-accessor.sql
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
@@ -29,12 +30,35 @@ test("gateway keeps an observed deleted-main store reachable for a non-main defa
 
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg,
-    key: "main",
+    key: "agent:main:main",
   });
 
   expect(target.agentId).toBe("main");
   expect(target.storePath).toBe(legacyStorePath);
   expect(target.canonicalKey).toBe("agent:ops:main");
+  expect(target.store["agent:main:main"]?.sessionId).toBe("legacy-main");
+});
+
+test("gateway discovers a legacy main store after the configured store path changes", async () => {
+  const stateDir = tempDirs.make("openclaw-gateway-moved-main-store-");
+  const legacyStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+  await importSqliteSessionRows({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    storePath: legacyStorePath,
+    entry: { sessionId: "legacy-main", updatedAt: 10 },
+  });
+  const cfg = {
+    agents: { list: [{ id: "ops", default: true }] },
+    session: { store: path.join(stateDir, "current", "{agentId}.json") },
+  } satisfies OpenClawConfig;
+
+  const target = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () =>
+    resolveGatewaySessionStoreTargetWithStore({ cfg, key: "agent:main:main" }),
+  );
+
+  expect(target.canonicalKey).toBe("agent:ops:main");
+  expect(target.storePath).toBe(legacyStorePath);
   expect(target.store["agent:main:main"]?.sessionId).toBe("legacy-main");
 });
 

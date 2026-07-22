@@ -65,10 +65,14 @@ vi.mock("../config/sessions/legacy-main-session-key-migration.js", () => ({
     canonical?: { sessionId: string };
     canonicalKey: string;
     aliases?: Array<{ sessionId: string; sessionKey: string }>;
+    legacyKeys?: string[];
+    sourceStorePath?: string;
   }) =>
-    `Sessions ${outcome.canonical?.sessionId} (${outcome.canonicalKey}) and ${outcome.aliases
-      ?.map((item) => `${item.sessionId} (${item.sessionKey})`)
-      .join(", ")} both claim main.`,
+    outcome.legacyKeys
+      ? `Legacy JSON session store ${outcome.sourceStorePath} contains ${outcome.legacyKeys.join(", ")}.`
+      : `Sessions ${outcome.canonical?.sessionId} (${outcome.canonicalKey}) and ${outcome.aliases
+          ?.map((item) => `${item.sessionId} (${item.sessionKey})`)
+          .join(", ")} both claim main.`,
 }));
 
 vi.mock("./workspace.js", async (importOriginal) => {
@@ -215,6 +219,30 @@ describe("createAgent", () => {
       status: "error",
       reason: "legacy-session-migration-required",
       message: expect.stringMatching(/ops-session.*legacy-session.*agent:main:main/),
+    });
+  });
+
+  it("rejects main creation while a JSON-only legacy main session remains", async () => {
+    mocks.config = { agents: { list: [{ id: "ops", default: true }] } };
+    mocks.migrateLegacyDefaultMainSessionKeys.mockResolvedValue({
+      outcomes: [
+        {
+          kind: "legacy-json-present",
+          resolved: false,
+          canonicalKey: "agent:ops:main",
+          defaultAgentId: "ops",
+          targetStorePath: "/state/agents/ops/sessions/sessions.json",
+          legacyKeys: ["agent:main:main"],
+          sourceAgentId: "main",
+          sourceStorePath: "/state/agents/main/sessions/sessions.json",
+        },
+      ],
+    });
+
+    await expect(createAgent({ name: "main" })).resolves.toMatchObject({
+      status: "error",
+      reason: "legacy-session-migration-required",
+      message: expect.stringContaining("agent:main:main"),
     });
   });
 

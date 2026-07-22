@@ -75,6 +75,18 @@ export async function ensureOnboardingAgent(params: {
     throw new Error("Cannot create the first agent from an invalid OpenClaw config.");
   }
   const baseConfig = before.exists ? (before.sourceConfig ?? before.config) : {};
+  const effectiveConfig = before.exists ? before.config : {};
+  const requestedAgentId = normalizeAgentId(params.entry?.id ?? params.name);
+  const freshRoster = effectiveConfig.agents?.list ?? [];
+  if (freshRoster.length > 0) {
+    const existing = freshRoster.find((entry) => normalizeAgentId(entry.id) === requestedAgentId);
+    if (existing) {
+      return { config: effectiveConfig, agentId: requestedAgentId, bootstrapPending: false };
+    }
+    throw new Error(
+      `Cannot create first agent "${requestedAgentId}" because agent "${freshRoster[0]?.id}" was created concurrently. Retry onboarding with the current roster.`,
+    );
+  }
   const proposalPatch = createMergePatch(baseConfig, params.config);
   const staged = stageOnboardingAgent({
     config: params.config,

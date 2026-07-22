@@ -120,4 +120,57 @@ describe("onboarding agent creation", () => {
       ensureOnboardingAgent({ config: {}, name: "main", workspace: "/tmp/work" }),
     ).resolves.toMatchObject({ agentId: "main", config: repaired.config });
   });
+
+  it("resolves interleaved first-agent creation from the fresh persisted roster", async () => {
+    const empty = { exists: true, valid: true, sourceConfig: {}, config: {} };
+    const roster = {
+      exists: true,
+      valid: true,
+      sourceConfig: { gateway: { port: 18000 } },
+      config: {
+        agents: { list: [{ id: "ops", default: true }] },
+        gateway: { port: 19000 },
+      },
+    };
+    let current = empty;
+    let markStarted!: () => void;
+    let releaseCreate!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    mocks.readConfigFileSnapshot.mockReset();
+    mocks.readConfigFileSnapshot.mockImplementation(async () => current);
+    mocks.createAgent.mockImplementationOnce(async () => {
+      current = roster;
+      markStarted();
+      await blocked;
+      return {
+        status: "created",
+        agentId: "ops",
+        name: "ops",
+        workspace: "/tmp/ops",
+        agentDir: "/tmp/ops-agent",
+        bootstrapPending: true,
+      };
+    });
+
+    const first = ensureOnboardingAgent({ config: {}, name: "ops", workspace: "/tmp/ops" });
+    await started;
+    await expect(
+      ensureOnboardingAgent({ config: {}, name: "ops", workspace: "/tmp/ops" }),
+    ).resolves.toMatchObject({
+      agentId: "ops",
+      bootstrapPending: false,
+      config: { gateway: { port: 19000 } },
+    });
+    await expect(
+      ensureOnboardingAgent({ config: {}, name: "writer", workspace: "/tmp/writer" }),
+    ).rejects.toThrow('agent "ops" was created concurrently');
+    releaseCreate();
+    await expect(first).resolves.toMatchObject({ agentId: "ops" });
+    expect(mocks.createAgent).toHaveBeenCalledOnce();
+  });
 });
