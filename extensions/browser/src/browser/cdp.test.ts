@@ -660,12 +660,8 @@ describe("cdp", () => {
       );
     });
 
-    const httpPort = await startVersionHttpServer({
-      webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-    });
-
     const created = await createTargetViaCdp({
-      cdpUrl: `http://127.0.0.1:${httpPort}`,
+      cdpUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
       url: "http://127.0.0.1:8080",
       ssrfPolicy: { allowPrivateNetwork: true },
     });
