@@ -179,9 +179,13 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!session) {
       return;
     }
-    session.cancel();
+    const cancelled = session.cancel();
     const status = readWizardStatus(session);
-    context.purgeWizardSession(sessionId);
+    if (cancelled) {
+      void session.whenSettled().then(() => context.purgeWizardSession(sessionId));
+    } else {
+      context.purgeWizardSession(sessionId);
+    }
     respond(true, status, undefined);
   },
   "wizard.status": ({ params, respond, context }) => {

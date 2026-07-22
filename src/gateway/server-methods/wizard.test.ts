@@ -162,7 +162,7 @@ describe("wizard setup ownership", () => {
 
     runnerSettled.resolve();
     await vi.waitFor(() => {
-      expect(tracker.wizardSessions.get(start.sessionId)?.isSettled()).toBe(true);
+      expect(tracker.wizardSessions.has(start.sessionId)).toBe(false);
     });
 
     const replacementRespond = vi.fn();

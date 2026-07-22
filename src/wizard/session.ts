@@ -231,6 +231,7 @@ class WizardSessionPrompter implements WizardPrompter {
 export class WizardSession {
   private readonly abortController = new AbortController();
   private readonly expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly runnerPromise: Promise<void>;
   private currentStep: WizardStep | null = null;
   private progressSteps: WizardStep[] = [];
   private deliveredProgressStepIds = new Set<string>();
@@ -264,7 +265,7 @@ export class WizardSession {
       this.expiryTimer = setTimeout(() => this.cancel(), options.timeoutMs);
       this.expiryTimer.unref?.();
     }
-    void this.run(prompter);
+    this.runnerPromise = this.run(prompter);
   }
 
   async next(): Promise<WizardNextResult> {
@@ -475,6 +476,11 @@ export class WizardSession {
   /** Whether the runner has stopped and can no longer mutate setup state. */
   isSettled(): boolean {
     return this.settled;
+  }
+
+  /** Resolves after the runner can no longer mutate setup state. */
+  whenSettled(): Promise<void> {
+    return this.runnerPromise;
   }
 
   getError(): string | undefined {
