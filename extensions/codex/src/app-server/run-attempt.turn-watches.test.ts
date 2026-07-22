@@ -2445,12 +2445,14 @@ describe("runCodexAppServerAttempt turn watches", () => {
       cwd: workspaceDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
     });
 
     // Turn 1: resume an existing thread, then never deliver turn/completed.
     const firstHarness = createResumeHarness();
     const firstParams = createParams(sessionFile, workspaceDir);
+    firstParams.disableTools = false;
+    firstParams.toolsAllow = ["*"];
+    firstParams.config = { tools: { web: { search: { enabled: false } } } };
     firstParams.timeoutMs = 200;
     const firstRun = runCodexAppServerAttempt(firstParams, { turnCompletionIdleTimeoutMs: 15 });
     await firstHarness.waitForMethod("turn/start");
