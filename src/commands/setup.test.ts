@@ -136,6 +136,63 @@ describe("setupCommand", () => {
     });
   });
 
+  it("keeps the default entry workspace on bare setup", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const workspace = "/srv/ops";
+      const raw = JSON.stringify({
+        agents: { list: [{ id: "ops", default: true, workspace }] },
+        gateway: { mode: "local" },
+      });
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, raw);
+      const deps = createSetupDeps(home);
+
+      await setupCommand(undefined, runtime, deps);
+
+      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+      expect(requireFirstWorkspaceParams(deps.ensureAgentWorkspace).dir).toBe(workspace);
+      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("ops");
+
+      const nextWorkspace = path.join(home, "next-ops-workspace");
+      await setupCommand({ workspace: nextWorkspace }, runtime, deps);
+      const updated = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(resolveAgentWorkspaceDir(updated, "ops")).toBe(nextWorkspace);
+      expect(updated.agents?.list?.[0]?.workspace).toBe(nextWorkspace);
+    });
+  });
+
+  it("does not copy an entry workspace into defaults during a gateway-only write", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const workspace = "/srv/ops";
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: { list: [{ id: "ops", default: true, workspace }] },
+        }),
+      );
+      const deps = {
+        ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
+        formatConfigPath: (value: string) => value,
+        mkdir: vi.fn(async () => {}),
+        resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "sessions")),
+      };
+
+      await setupCommand(undefined, runtime, deps);
+
+      const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(config.agents?.defaults?.workspace).toBeUndefined();
+      expect(config.agents?.list?.[0]?.workspace).toBe(workspace);
+      expect(config.gateway?.mode).toBe("local");
+    });
+  });
+
   it("adds gateway.mode=local to an existing config without overwriting workspace", async () => {
     await withTempHome(async (home) => {
       const runtime = {

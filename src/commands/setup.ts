@@ -159,10 +159,17 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
+  const defaultEntryWorkspace = resolvedConfig.agents?.list
+    ?.find((entry) => entry.default === true)
+    ?.workspace?.trim();
+  const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
 
   const workspace =
-    desiredWorkspace ?? resolvedDefaults.workspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
-  const shouldWriteWorkspace = resolvedDefaults.workspace !== workspace;
+    desiredWorkspace ?? configuredWorkspace ?? (await resolveDefaultAgentWorkspaceDir(deps));
+  // Bare setup is observational for an established roster. Only a caller
+  // override or fresh bootstrap owns a persisted workspace change.
+  const shouldWriteWorkspace =
+    !snapshot || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
   const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
 
   // Keep the candidate runtime-shaped. replaceConfigFile persists only its
