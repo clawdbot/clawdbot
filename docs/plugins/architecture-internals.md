@@ -328,6 +328,11 @@ Declare organization or billing credentials in manifest
 `providerUsageAuthEnvVars`. This lets generic discovery and secret-scrubbing
 surfaces recognize them without making them inference auth candidates.
 
+OpenClaw caches repeated `normalizeToolSchemas` results only for the bundled
+tool compatibility helpers returned by `buildProviderToolCompatFamilyHooks`.
+Custom provider normalizers bypass this internal cache so provider plugins do
+not need to declare or maintain cache-key contracts.
+
 ### Provider example
 
 ```ts

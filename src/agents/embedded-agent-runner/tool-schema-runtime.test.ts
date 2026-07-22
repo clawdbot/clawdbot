@@ -333,7 +333,7 @@ describe("tool schema runtime cache", () => {
     });
     const secondTool = second[0];
     expect(secondTool).toBeDefined();
-    (secondTool.parameters as { properties?: Record<string, unknown> }).properties = {};
+    (secondTool!.parameters as { properties?: Record<string, unknown> }).properties = {};
     const third = normalizeProviderToolSchemas({
       provider: "openai",
       modelId: "gpt-5.4",
