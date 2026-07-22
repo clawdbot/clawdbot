@@ -97,4 +97,37 @@ describe("subscribeEmbeddedAgentSession — Anthropic pre-tool narration", () =>
     });
     expect(postedBlockReplyText(onBlockReply)).toContain("Here is the full answer.");
   });
+
+  it("keeps incomplete continuation markers out of final assistant delivery", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const onBlockReply = vi.fn();
+    const subscription = subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-anthropic-incomplete-continuation",
+      onAgentEvent,
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+    const answer = "Done.\nCONTINUE_WOR";
+
+    emit({ type: "message_start", message: anthropicAssistant("") });
+    emit({
+      type: "message_update",
+      message: anthropicAssistant(answer),
+      assistantMessageEvent: { type: "text_delta", delta: answer },
+    });
+    emit({
+      type: "message_update",
+      message: anthropicAssistant(answer),
+      assistantMessageEvent: { type: "text_end", contentIndex: 0 },
+    });
+    emit({ type: "message_end", message: anthropicAssistant(answer) });
+
+    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalled());
+    expect(postedBlockReplyText(onBlockReply)).toContain("Done.");
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("CONTINUE_WOR");
+    expect(JSON.stringify(onBlockReply.mock.calls)).not.toContain("CONTINUE_WOR");
+    expect(subscription.assistantTexts.join("\n")).not.toContain("CONTINUE_WOR");
+  });
 });

@@ -88,6 +88,39 @@ describe("Chat Completions pre-tool narration", () => {
     expect(postedText(onBlockReply)).toContain("prefix suffix");
   });
 
+  it("keeps incomplete continuation markers out of final assistant delivery", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const onBlockReply = vi.fn();
+    const subscription = subscribeEmbeddedAgentSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"],
+      runId: "run-completions-incomplete-continuation",
+      onAgentEvent,
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+    const answer = "Done.\nCONTINUE_WOR";
+
+    emit({ type: "message_start", message: completionsAssistant("") });
+    emit({
+      type: "message_update",
+      message: completionsAssistant(answer),
+      assistantMessageEvent: { type: "text_delta", delta: answer },
+    });
+    emit({
+      type: "message_update",
+      message: completionsAssistant(answer),
+      assistantMessageEvent: { type: "text_end", contentIndex: 0 },
+    });
+    emit({ type: "message_end", message: completionsAssistant(answer) });
+
+    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalled());
+    expect(postedText(onBlockReply)).toContain("Done.");
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("CONTINUE_WOR");
+    expect(JSON.stringify(onBlockReply.mock.calls)).not.toContain("CONTINUE_WOR");
+    expect(subscription.assistantTexts.join("\n")).not.toContain("CONTINUE_WOR");
+  });
+
   it("delivers text when spurious tool calls were stripped and tags rolled back", async () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();

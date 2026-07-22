@@ -1501,16 +1501,13 @@ export function handleMessageEnd(
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
+  const displayText = resolveCommentaryDisplayText(text, { final: true });
+  const trimmedDisplayText = displayText.trim();
   const parsedText = (() => {
-    if (!trimmedText) {
+    if (!trimmedDisplayText) {
       return null;
     }
-    const parsed = parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text);
-    if (!parsed.text) {
-      return parsed;
-    }
-    const displayText = stripContinuationSignalFromDisplayText(parsed.text);
-    return displayText === parsed.text ? parsed : { ...parsed, text: displayText };
+    return parseReplyDirectives(splitTrailingDirective(trimmedDisplayText, { final: true }).text);
   })();
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
@@ -1554,7 +1551,7 @@ export function handleMessageEnd(
 
   const silentExpectedWithoutSentinel =
     ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
-  const finalAssistantText = silentExpectedWithoutSentinel ? "" : text;
+  const finalAssistantText = silentExpectedWithoutSentinel ? "" : displayText;
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
   ctx.finalizeAssistantTexts({
@@ -1603,13 +1600,14 @@ export function handleMessageEnd(
       replyToTag,
       replyToCurrent,
     } = splitResult;
+    const displayTextLocal = resolveCommentaryDisplayText(cleanedTextLocal, { final: true });
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
     if (
-      hasAssistantVisibleReply({ text: cleanedTextLocal, mediaUrls: mediaUrlsLocal, audioAsVoice })
+      hasAssistantVisibleReply({ text: displayTextLocal, mediaUrls: mediaUrlsLocal, audioAsVoice })
     ) {
       ctx.emitBlockReply(
         {
-          text: cleanedTextLocal,
+          text: displayTextLocal,
           mediaUrls: mediaUrlsLocal?.length ? mediaUrlsLocal : undefined,
           audioAsVoice,
           replyToId,
@@ -1629,11 +1627,11 @@ export function handleMessageEnd(
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
     !suppressMessageToolOnlySourceReplyOutput &&
-    text &&
+    finalAssistantText &&
     onBlockReply &&
     (ctx.state.blockReplyBreak === "message_end" ||
       hasBufferedBlockReply ||
-      text !== ctx.state.lastBlockReplyText ||
+      finalAssistantText !== ctx.state.lastBlockReplyText ||
       hasMedia)
   ) {
     if (hasBufferedBlockReply && ctx.blockChunker?.hasBuffered()) {
@@ -1657,7 +1655,7 @@ export function handleMessageEnd(
             }
           : ctx.consumeReplyDirectives("", { final: true }),
       );
-    } else if (text !== ctx.state.lastBlockReplyText || hasMedia) {
+    } else if (finalAssistantText !== ctx.state.lastBlockReplyText || hasMedia) {
       // Guard: for text_end channels, if text_end already delivered content
       // (lastBlockReplyText is set), skip this safety send. The text comparison
       // here uses a different stripping pipeline (stripBlockTags with reset state)
@@ -1675,7 +1673,9 @@ export function handleMessageEnd(
         );
       } else {
         // Check for duplicates before emitting (same logic as emitBlockChunk).
-        const normalizedText = normalizeTextForComparison(hasMedia ? cleanedText : text);
+        const normalizedText = normalizeTextForComparison(
+          hasMedia ? cleanedText : finalAssistantText,
+        );
         if (
           isMessagingToolDuplicateNormalized(
             normalizedText,
@@ -1683,14 +1683,18 @@ export function handleMessageEnd(
           )
         ) {
           ctx.log.debug(
-            `Skipping message_end block reply - already sent via messaging tool: ${truncateUtf16Safe(text, 50)}...`,
+            `Skipping message_end block reply - already sent via messaging tool: ${truncateUtf16Safe(finalAssistantText, 50)}...`,
           );
         } else {
           const alreadyDeliveredFinalText = Boolean(
             hasMedia && cleanedText && cleanedText === ctx.state.lastBlockReplyText,
           );
-          ctx.state.lastBlockReplyText = hasMedia ? cleanedText || text : text;
-          ctx.state.lastDeliveredBlockReplyText = hasMedia ? cleanedText || text : text;
+          ctx.state.lastBlockReplyText = hasMedia
+            ? cleanedText || finalAssistantText
+            : finalAssistantText;
+          ctx.state.lastDeliveredBlockReplyText = hasMedia
+            ? cleanedText || finalAssistantText
+            : finalAssistantText;
           ctx.state.toolExecutionSinceLastBlockReply = false;
           emitSplitResultAsBlockReply(
             hasMedia && parsedText
@@ -1698,7 +1702,7 @@ export function handleMessageEnd(
                   ...parsedText,
                   text: alreadyDeliveredFinalText ? "" : cleanedText,
                 }
-              : ctx.consumeReplyDirectives(text, { final: true }),
+              : ctx.consumeReplyDirectives(finalAssistantText, { final: true }),
           );
         }
       }
