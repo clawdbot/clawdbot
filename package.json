@@ -2001,6 +2001,7 @@
     "localization:catalogs:detect": "node --import tsx scripts/localization-catalogs.ts detect",
     "localization:catalogs:gate": "node --import tsx scripts/localization-catalogs.ts detect --fail-on-drift",
     "localization:catalogs:refresh": "node --import tsx scripts/localization-catalogs.ts refresh --write",
+    "localization:surfaces:check": "node --import tsx scripts/localization-surfaces.ts",
     "ui:i18n:baseline": "node --import tsx scripts/control-ui-i18n-verify.ts baseline",
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",

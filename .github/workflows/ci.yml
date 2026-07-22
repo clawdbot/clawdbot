@@ -1505,6 +1505,13 @@ jobs:
           install-bun: "false"
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+      - name: Check localization surface dispositions
+        run: |
+          if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["localization:surfaces:check"] ? 0 : 1)'; then
+            pnpm localization:surfaces:check
+          else
+            echo "Selected historical target predates the surface-disposition gate."
+          fi
       - name: Check adopted localization catalogs
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

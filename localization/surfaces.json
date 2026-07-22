@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "adapters": [
+    {
+      "id": "wizard-catalog-sources",
+      "owner": "wizard",
+      "roots": ["src/wizard/i18n/catalogs"],
+      "extensions": [".json"],
+      "excludedRoots": ["src/wizard/i18n/catalogs/generated"]
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "wizard-core",
+      "owner": "wizard",
+      "source": "src/wizard/i18n/catalogs/en.json",
+      "disposition": "adopted",
+      "catalogArea": "wizard-core"
+    }
+  ]
+}
