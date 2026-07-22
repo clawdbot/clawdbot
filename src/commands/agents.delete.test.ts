@@ -214,7 +214,7 @@ describe("agents delete command", () => {
     runtime.exit.mockClear();
   });
 
-  it("routes deletion of a non-default main agent through the Gateway", async () => {
+  it("refuses deleting main even when another agent is default", async () => {
     await withStateDirEnv("openclaw-agents-delete-gateway-", async ({ stateDir }) => {
       const now = Date.now();
       const cfg: OpenClawConfig = {
@@ -235,33 +235,13 @@ describe("agents delete command", () => {
         deletedAgentId: "main",
         sessions,
       });
-      gatewayMocks.callGateway.mockResolvedValue({
-        ok: true,
-        agentId: "main",
-        removedBindings: 0,
-        removed: [{ path: path.join(stateDir, "agents", "ops", "agent"), method: "trash" }],
-        failed: [{ path: path.join(stateDir, "workspace-ops"), reason: "trash unavailable" }],
-      });
-
       await agentsDeleteCommand({ id: "main", force: true, json: true }, runtime);
 
-      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
-      const gatewayCall = gatewayMocks.callGateway.mock.calls[0]?.[0];
-      expect(gatewayCall?.method).toBe("agents.delete");
-      expect(gatewayCall?.params).toEqual({ agentId: "main", deleteFiles: true });
-      expect(gatewayCall?.requiredMethods).toEqual(["agents.delete"]);
+      expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
       expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith('"main" cannot be deleted.');
+      expect(runtime.exit).toHaveBeenCalledWith(1);
       expectSessionStore(storePath, sessions, "main");
-      const output = readJsonLogs()[0];
-      expect(output?.agentId).toBe("main");
-      expect(output?.removedBindings).toBe(0);
-      expect(output?.removed).toEqual([
-        { path: path.join(stateDir, "agents", "ops", "agent"), method: "trash" },
-      ]);
-      expect(output?.failed).toEqual([
-        { path: path.join(stateDir, "workspace-ops"), reason: "trash unavailable" },
-      ]);
-      expect(output?.transport).toBe("gateway");
     });
   });
 

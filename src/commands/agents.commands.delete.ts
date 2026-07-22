@@ -25,7 +25,7 @@ import {
   isGatewayCredentialsRequiredError,
   isGatewayTransportError,
 } from "../gateway/call.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -95,6 +95,13 @@ export async function agentsDeleteCommand(
   const agentId = normalizeAgentId(input);
   if (agentId !== input) {
     runtime.log(`Normalized agent id to "${agentId}".`);
+  }
+  // agents/main/agent also owns the shipped shared legacy auth store.
+  // Keep main undeletable until named agents make auth-store ownership explicit.
+  if (agentId === LEGACY_IMPLICIT_AGENT_ID) {
+    runtime.error(`"${LEGACY_IMPLICIT_AGENT_ID}" cannot be deleted.`);
+    runtime.exit(1);
+    return;
   }
   if (findAgentEntryIndex(listAgentEntries(cfg), agentId) < 0) {
     runtime.error(

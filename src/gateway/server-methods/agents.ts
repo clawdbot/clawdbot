@@ -81,7 +81,7 @@ import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import {
   readAgentDeletionJournal,
   type AgentDeletionJournalCleanupPath,
@@ -1034,6 +1034,16 @@ export const agentsHandlers: GatewayRequestHandlers = {
 
     const cfg = context.getRuntimeConfig();
     const agentId = normalizeAgentId(params.agentId);
+    // agents/main/agent also owns the shipped shared legacy auth store.
+    // Keep main undeletable until named agents make auth-store ownership explicit.
+    if (agentId === LEGACY_IMPLICIT_AGENT_ID) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `"${LEGACY_IMPLICIT_AGENT_ID}" cannot be deleted`),
+      );
+      return;
+    }
     const existingJournal = readAgentDeletionJournal(agentId);
     if (
       !isConfiguredAgent(cfg, agentId) &&

@@ -2886,6 +2886,9 @@ describe("agents.delete", () => {
   });
 
   it("rejects deleting the main agent", async () => {
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+    };
     const { respond, promise } = makeCall("agents.delete", {
       agentId: "main",
     });
