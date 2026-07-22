@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
   killProcessTree: vi.fn((pid: number) => {
     const child = spawnRegistry.get(pid);
-    if (child) queueMicrotask(() => child.emit("close", 0, null));
+    if (child) {
+      queueMicrotask(() => child.emit("close", 0, null));
+    }
   }),
 }));
 
@@ -116,7 +118,9 @@ describe("startGmailWatcher", () => {
     mocks.killProcessTree.mockReset();
     mocks.killProcessTree.mockImplementation((pid: number) => {
       const child = spawnRegistry.get(pid);
-      if (child) queueMicrotask(() => child.emit("close", 0, null));
+      if (child) {
+        queueMicrotask(() => child.emit("close", 0, null));
+      }
     });
     mocks.spawn.mockImplementation(() => {
       const child = new EventEmitter();
