@@ -279,6 +279,22 @@ function hasCoverage(coverage) {
   return Boolean(coverage);
 }
 
+function resolveConfiguredAgents(config) {
+  const entries = config.agents?.entries;
+  if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+    return entries;
+  }
+  const list = config.agents?.list;
+  if (!Array.isArray(list)) {
+    return null;
+  }
+  return Object.fromEntries(
+    list
+      .filter((agent) => typeof agent?.id === "string" && agent.id.length > 0)
+      .map((agent) => [agent.id, agent]),
+  );
+}
+
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -389,20 +405,17 @@ function assertConfigSurvived() {
   }
 
   if (acceptsIntent(coverage, "agents")) {
-    const legacyAgents = config.agents?.list ?? [];
-    const mainAgent =
-      config.agents?.entries?.main ?? legacyAgents.find((agent) => agent?.id === "main");
-    const opsAgent =
-      config.agents?.entries?.ops ?? legacyAgents.find((agent) => agent?.id === "ops");
-    assert(mainAgent, "main agent missing");
-    assert(opsAgent, "ops agent missing");
+    const agents = resolveConfiguredAgents(config);
+    assert(agents, "agents.entries or agents.list missing during upgrade assertions");
+    assert(agents.main, "main agent missing");
+    assert(agents.ops, "ops agent missing");
     if (hasCoverage(coverage)) {
       assert(config.agents?.defaults?.contextTokens === 64000, "default contextTokens changed");
     } else {
-      assert(mainAgent.contextTokens === 64000, "main agent contextTokens changed");
+      assert(agents.main.contextTokens === 64000, "main agent contextTokens changed");
     }
     if (!hasCoverage(coverage) || !coverage.skippedIntents?.includes("agent-modern-preferences")) {
-      assert(opsAgent.fastModeDefault === true, "ops fastModeDefault changed");
+      assert(agents.ops.fastModeDefault === true, "ops fastModeDefault changed");
     }
   }
 
