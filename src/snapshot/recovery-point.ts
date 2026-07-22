@@ -12,6 +12,9 @@ import {
 } from "./snapshot-provider.js";
 
 export const RECOVERY_POINT_VERSION = "openclaw-recovery-point/v1";
+export const RECOVERY_POINT_ACCEPTANCE_VERSION = "openclaw-recovery-point-acceptance/v1";
+
+const RECOVERY_POINT_INVENTORY_VERSION = "openclaw-runtime-sqlite-inventory/v1";
 
 const MAX_OWNER_MANIFEST_BYTES = 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -20,6 +23,7 @@ const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9._/-]{0,254}$/u;
 const obligationSchema = z
   .object({
     id: z.string().regex(SAFE_ID_PATTERN),
+    kind: z.enum(["secret-ref", "plugin-dependency", "runtime-cache"]),
     owner: z.string().regex(SAFE_ID_PATTERN),
     readinessRequired: z.boolean(),
   })
@@ -30,6 +34,7 @@ const componentBaseSchema = {
   artifactSha256: z.string().regex(SHA256_PATTERN),
   artifactSizeBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   ownerManifestSha256: z.string().regex(SHA256_PATTERN),
+  ownerManifestSizeBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   compatibility: z.string().regex(SAFE_ID_PATTERN),
   dependsOn: z.array(z.string().regex(SAFE_ID_PATTERN)),
   capturedAt: z.string(),
@@ -60,6 +65,13 @@ const recoveryPointManifestSchema = z
     version: z.literal(RECOVERY_POINT_VERSION),
     recoveryPointId: z.string().regex(SHA256_PATTERN),
     createdAt: z.string(),
+    inventory: z
+      .object({
+        version: z.literal(RECOVERY_POINT_INVENTORY_VERSION),
+        requiredComponentIds: z.array(z.string().regex(SAFE_ID_PATTERN)).min(2),
+      })
+      .strict(),
+    protection: z.object({ mode: z.literal("host-protected") }).strict(),
     components: z.array(recoveryPointComponentSchema).min(1),
     obligations: z
       .object({
@@ -71,9 +83,31 @@ const recoveryPointManifestSchema = z
   })
   .strict();
 
+const recoveryPointAcceptanceSchema = z
+  .object({
+    version: z.literal(RECOVERY_POINT_ACCEPTANCE_VERSION),
+    acceptanceSetId: z.string().regex(SHA256_PATTERN),
+    recoveryPointId: z.string().regex(SHA256_PATTERN),
+    aggregateManifestSha256: z.string().regex(SHA256_PATTERN),
+    aggregateManifestSizeBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    components: z.array(
+      z
+        .object({
+          componentId: z.string().regex(SAFE_ID_PATTERN),
+          ownerManifestSha256: z.string().regex(SHA256_PATTERN),
+          ownerManifestSizeBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+          artifactSha256: z.string().regex(SHA256_PATTERN),
+          artifactSizeBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
 export type RecoveryPointObligation = z.infer<typeof obligationSchema>;
 export type RecoveryPointComponent = z.infer<typeof recoveryPointComponentSchema>;
 export type RecoveryPointManifest = z.infer<typeof recoveryPointManifestSchema>;
+export type RecoveryPointAcceptance = z.infer<typeof recoveryPointAcceptanceSchema>;
 
 export type RecoveryPointSqliteSnapshot = {
   readonly provider: SqliteSnapshotProvider;
@@ -88,6 +122,7 @@ export type RecoveryPointObligations = {
 
 export async function createRecoveryPointManifest(params: {
   snapshots: readonly RecoveryPointSqliteSnapshot[];
+  expectedAgentIds: readonly string[];
   obligations?: RecoveryPointObligations;
   now?: () => Date;
 }): Promise<RecoveryPointManifest> {
@@ -98,11 +133,17 @@ export async function createRecoveryPointManifest(params: {
 
   const components = await Promise.all(params.snapshots.map(buildVerifiedComponent));
   components.sort(compareComponents);
-  assertRequiredSqliteInventory(components);
+  const requiredComponentIds = normalizeRequiredComponentIds(params.expectedAgentIds);
+  assertRequiredSqliteInventory(components, requiredComponentIds);
 
   const manifestWithoutId = {
     version: RECOVERY_POINT_VERSION,
     createdAt: now.toISOString(),
+    inventory: {
+      version: RECOVERY_POINT_INVENTORY_VERSION,
+      requiredComponentIds,
+    },
+    protection: { mode: "host-protected" },
     components,
     obligations: normalizeObligations(params.obligations),
   };
@@ -134,10 +175,12 @@ export function verifyRecoveryPointManifest(value: unknown): RecoveryPointManife
     }
   }
   assertCanonicalComponentOrder(manifest.components);
-  assertRequiredSqliteInventory(manifest.components);
+  assertCanonicalRequiredInventory(manifest.inventory.requiredComponentIds);
+  assertRequiredSqliteInventory(manifest.components, manifest.inventory.requiredComponentIds);
   assertDependencies(manifest.components);
   assertCanonicalObligationOrder(manifest.obligations);
   assertObligationIds(manifest.obligations);
+  assertSupportedObligations(manifest.obligations);
 
   const { recoveryPointId: _recoveryPointId, ...manifestWithoutId } = manifest;
   const expectedId = digestRecoveryPoint(manifestWithoutId);
@@ -152,14 +195,42 @@ export function verifyRecoveryPointManifest(value: unknown): RecoveryPointManife
 export async function verifyRecoveryPoint(params: {
   manifest: unknown;
   snapshots: readonly RecoveryPointSqliteSnapshot[];
-}): Promise<RecoveryPointManifest> {
+  expectedAgentIds: readonly string[];
+}): Promise<{ manifest: RecoveryPointManifest; acceptance: RecoveryPointAcceptance }> {
   const manifest = verifyRecoveryPointManifest(params.manifest);
+  const requiredComponentIds = normalizeRequiredComponentIds(params.expectedAgentIds);
+  if (!isDeepStrictEqual(manifest.inventory.requiredComponentIds, requiredComponentIds)) {
+    throw new Error("Recovery point inventory does not match the state owner's expected agents.");
+  }
   const actualComponents = await Promise.all(params.snapshots.map(buildVerifiedComponent));
   actualComponents.sort(compareComponents);
+  assertRequiredSqliteInventory(actualComponents, requiredComponentIds);
   if (!isDeepStrictEqual(actualComponents, manifest.components)) {
     throw new Error("Recovery point SQLite components do not match the verified owner snapshots.");
   }
-  return manifest;
+  return { manifest, acceptance: createRecoveryPointAcceptance(manifest) };
+}
+
+export function createRecoveryPointAcceptance(value: unknown): RecoveryPointAcceptance {
+  const manifest = verifyRecoveryPointManifest(value);
+  const manifestBytes = Buffer.from(stableStringify(manifest), "utf8");
+  const acceptanceWithoutId = {
+    version: RECOVERY_POINT_ACCEPTANCE_VERSION,
+    recoveryPointId: manifest.recoveryPointId,
+    aggregateManifestSha256: sha256Hex(manifestBytes),
+    aggregateManifestSizeBytes: manifestBytes.byteLength,
+    components: manifest.components.map((component) => ({
+      componentId: component.id,
+      ownerManifestSha256: component.ownerManifestSha256,
+      ownerManifestSizeBytes: component.ownerManifestSizeBytes,
+      artifactSha256: component.artifactSha256,
+      artifactSizeBytes: component.artifactSizeBytes,
+    })),
+  };
+  return recoveryPointAcceptanceSchema.parse({
+    ...acceptanceWithoutId,
+    acceptanceSetId: sha256Hex(stableStringify(acceptanceWithoutId)),
+  });
 }
 
 async function buildVerifiedComponent(
@@ -178,10 +249,16 @@ async function buildVerifiedComponent(
       `SQLite owner manifest changed during recovery-point composition: ${snapshot.ref.path}`,
     );
   }
-  return componentFromSnapshotManifest(secondVerification.manifest, secondManifestRead.sha256);
+  return componentFromSnapshotManifest(
+    secondVerification.manifest,
+    secondManifestRead.sha256,
+    secondManifestRead.sizeBytes,
+  );
 }
 
-async function readOwnerManifest(ref: SnapshotRef): Promise<{ parsed: unknown; sha256: string }> {
+async function readOwnerManifest(
+  ref: SnapshotRef,
+): Promise<{ parsed: unknown; sha256: string; sizeBytes: number }> {
   const snapshotRoot = await root(ref.path);
   const manifestRead = await snapshotRoot.read(SNAPSHOT_MANIFEST_FILENAME, {
     hardlinks: "reject",
@@ -192,6 +269,7 @@ async function readOwnerManifest(ref: SnapshotRef): Promise<{ parsed: unknown; s
     return {
       parsed: JSON.parse(manifestRead.buffer.toString("utf8")) as unknown,
       sha256: sha256Hex(manifestRead.buffer),
+      sizeBytes: manifestRead.buffer.byteLength,
     };
   } catch (error) {
     throw new Error(`Verified SQLite owner manifest is not valid JSON: ${ref.path}`, {
@@ -203,11 +281,13 @@ async function readOwnerManifest(ref: SnapshotRef): Promise<{ parsed: unknown; s
 function componentFromSnapshotManifest(
   manifest: SnapshotManifest,
   ownerManifestSha256: string,
+  ownerManifestSizeBytes: number,
 ): RecoveryPointComponent {
   const common = {
     artifactSha256: manifest.artifact.sha256,
     artifactSizeBytes: manifest.artifact.sizeBytes,
     ownerManifestSha256,
+    ownerManifestSizeBytes,
     dependsOn: [],
     capturedAt: manifest.createdAt,
     required: true,
@@ -241,23 +321,67 @@ function normalizeObligations(obligations: RecoveryPointObligations | undefined)
     ephemeral: (obligations?.ephemeral ?? []).toSorted(compareObligations),
   };
   assertObligationIds(normalized);
+  assertSupportedObligations(normalized);
   return normalized;
 }
 
-function assertRequiredSqliteInventory(components: readonly RecoveryPointComponent[]): void {
-  const globalCount = components.filter((component) => component.kind === "sqlite-global").length;
-  const agentCount = components.filter((component) => component.kind === "sqlite-agent").length;
-  if (globalCount !== 1 || agentCount < 1) {
-    throw new Error(
-      "Recovery point V1 requires exactly one global and at least one agent SQLite component.",
-    );
+function normalizeRequiredComponentIds(expectedAgentIds: readonly string[]): string[] {
+  if (expectedAgentIds.length === 0) {
+    throw new Error("Recovery point V1 requires at least one expected agent.");
   }
+  const normalizedAgentIds = expectedAgentIds.map((agentId) => normalizeAgentId(agentId));
+  for (let index = 0; index < expectedAgentIds.length; index += 1) {
+    if (
+      !isValidAgentId(expectedAgentIds[index] ?? "") ||
+      normalizedAgentIds[index] !== expectedAgentIds[index]
+    ) {
+      throw new Error(`Recovery point expected agent id is invalid: ${expectedAgentIds[index]}.`);
+    }
+  }
+  const uniqueAgentIds = new Set(normalizedAgentIds);
+  if (uniqueAgentIds.size !== normalizedAgentIds.length) {
+    throw new Error("Recovery point expected agent inventory contains duplicates.");
+  }
+  return [
+    "sqlite/global",
+    ...normalizedAgentIds.toSorted(compareCodeUnits).map((agentId) => `sqlite/agent/${agentId}`),
+  ];
+}
+
+function assertCanonicalRequiredInventory(requiredComponentIds: readonly string[]): void {
+  const agentIds = requiredComponentIds.map((componentId, index) => {
+    if (index === 0 && componentId === "sqlite/global") {
+      return undefined;
+    }
+    return componentId.startsWith("sqlite/agent/")
+      ? componentId.slice("sqlite/agent/".length)
+      : null;
+  });
+  if (agentIds.some((agentId) => agentId === null)) {
+    throw new Error("Recovery point required-component inventory is invalid.");
+  }
+  const expected = normalizeRequiredComponentIds(
+    agentIds.filter((agentId): agentId is string => agentId !== undefined),
+  );
+  if (!isDeepStrictEqual(requiredComponentIds, expected)) {
+    throw new Error("Recovery point required-component inventory is not canonical.");
+  }
+}
+
+function assertRequiredSqliteInventory(
+  components: readonly RecoveryPointComponent[],
+  requiredComponentIds: readonly string[],
+): void {
   const ids = new Set<string>();
   for (const component of components) {
     if (ids.has(component.id)) {
       throw new Error(`Recovery point contains duplicate component id: ${component.id}.`);
     }
     ids.add(component.id);
+  }
+  const componentIds = components.map((component) => component.id);
+  if (!isDeepStrictEqual(componentIds, requiredComponentIds)) {
+    throw new Error("Recovery point SQLite components do not match the required inventory.");
   }
 }
 
@@ -337,6 +461,33 @@ function assertObligationIds(obligations: {
         throw new Error(`Recovery point contains duplicate obligation id: ${obligation.id}.`);
       }
       ids.add(obligation.id);
+    }
+  }
+}
+
+function assertSupportedObligations(obligations: {
+  external: readonly RecoveryPointObligation[];
+  reconstructed: readonly RecoveryPointObligation[];
+  ephemeral: readonly RecoveryPointObligation[];
+}): void {
+  const supported = new Set([
+    "external:secret-ref:secrets",
+    "external:plugin-dependency:plugins",
+    "reconstructed:plugin-dependency:plugins",
+    "ephemeral:runtime-cache:openclaw-runtime",
+  ]);
+  const treatments = [
+    ["external", obligations.external],
+    ["reconstructed", obligations.reconstructed],
+    ["ephemeral", obligations.ephemeral],
+  ] as const;
+  for (const [treatment, entries] of treatments) {
+    for (const obligation of entries) {
+      if (!supported.has(`${treatment}:${obligation.kind}:${obligation.owner}`)) {
+        throw new Error(
+          `Recovery point obligation ${obligation.id} has unsupported treatment, kind, or owner.`,
+        );
+      }
     }
   }
 }

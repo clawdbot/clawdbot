@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import { stableStringify } from "../agents/stable-stringify.js";
 import {
+  createRecoveryPointAcceptance,
   createRecoveryPointManifest,
   verifyRecoveryPoint,
   verifyRecoveryPointManifest,
@@ -31,28 +32,51 @@ describe("recovery point composition", () => {
     });
     const now = () => new Date("2026-07-21T16:00:00.000Z");
     const obligations = {
-      external: [{ id: "secret/provider-api-key", owner: "secrets", readinessRequired: true }],
-      reconstructed: [{ id: "plugin/optional-source", owner: "plugins", readinessRequired: false }],
+      external: [
+        {
+          id: "secret/provider-api-key",
+          kind: "secret-ref",
+          owner: "secrets",
+          readinessRequired: true,
+        },
+      ],
+      reconstructed: [
+        {
+          id: "plugin/optional-source",
+          kind: "plugin-dependency",
+          owner: "plugins",
+          readinessRequired: false,
+        },
+      ],
     } as const;
 
     const first = await createRecoveryPointManifest({
       snapshots: [agent.snapshot, global.snapshot],
+      expectedAgentIds: ["main"],
       obligations,
       now,
     });
     const second = await createRecoveryPointManifest({
       snapshots: [global.snapshot, agent.snapshot],
+      expectedAgentIds: ["main"],
       obligations,
       now,
     });
 
     expect(first).toEqual(second);
     expect(first.recoveryPointId).toMatch(/^[a-f0-9]{64}$/u);
+    expect(first.inventory).toEqual({
+      version: "openclaw-runtime-sqlite-inventory/v1",
+      requiredComponentIds: ["sqlite/global", "sqlite/agent/main"],
+    });
+    expect(first.protection).toEqual({ mode: "host-protected" });
     expect(first.components.map((component) => component.id)).toEqual([
       "sqlite/global",
       "sqlite/agent/main",
     ]);
     expect(first.obligations.external).toEqual(obligations.external);
+    expect(first.components.every((component) => component.ownerManifestSizeBytes > 0)).toBe(true);
+    expect(createRecoveryPointAcceptance(first)).toEqual(createRecoveryPointAcceptance(second));
     expect(global.verify).toHaveBeenCalledTimes(4);
     expect(agent.verify).toHaveBeenCalledTimes(4);
   });
@@ -67,18 +91,27 @@ describe("recovery point composition", () => {
     });
     const manifest = await createRecoveryPointManifest({
       snapshots: [global.snapshot, agent.snapshot],
+      expectedAgentIds: ["main"],
       now: () => new Date("2026-07-21T16:00:00.000Z"),
     });
 
     await expect(
-      verifyRecoveryPoint({ manifest, snapshots: [agent.snapshot, global.snapshot] }),
-    ).resolves.toEqual(manifest);
+      verifyRecoveryPoint({
+        manifest,
+        snapshots: [agent.snapshot, global.snapshot],
+        expectedAgentIds: ["main"],
+      }),
+    ).resolves.toEqual({ manifest, acceptance: createRecoveryPointAcceptance(manifest) });
 
     const mismatched = structuredClone(manifest);
     mismatched.components[1]!.artifactSha256 = "c".repeat(64);
     mismatched.recoveryPointId = recomputeIdentity(mismatched);
     await expect(
-      verifyRecoveryPoint({ manifest: mismatched, snapshots: [global.snapshot, agent.snapshot] }),
+      verifyRecoveryPoint({
+        manifest: mismatched,
+        snapshots: [global.snapshot, agent.snapshot],
+        expectedAgentIds: ["main"],
+      }),
     ).rejects.toThrow("do not match the verified owner snapshots");
   });
 
@@ -92,10 +125,11 @@ describe("recovery point composition", () => {
     });
     const manifest = await createRecoveryPointManifest({
       snapshots: [global.snapshot, agent.snapshot],
+      expectedAgentIds: ["main"],
       obligations: {
         external: [
-          { id: "secret/z", owner: "secrets", readinessRequired: true },
-          { id: "secret/a", owner: "secrets", readinessRequired: true },
+          { id: "secret/z", kind: "secret-ref", owner: "secrets", readinessRequired: true },
+          { id: "secret/a", kind: "secret-ref", owner: "secrets", readinessRequired: true },
         ],
       },
       now: () => new Date("2026-07-21T16:00:00.000Z"),
@@ -139,6 +173,7 @@ describe("recovery point composition", () => {
     };
     secretShaped.obligations.external.push({
       id: "secret/provider-api-key",
+      kind: "secret-ref",
       owner: "secrets",
       readinessRequired: true,
       value: "must-not-appear",
@@ -168,7 +203,10 @@ describe("recovery point composition", () => {
     });
 
     await expect(
-      createRecoveryPointManifest({ snapshots: [global.snapshot, agent.snapshot] }),
+      createRecoveryPointManifest({
+        snapshots: [global.snapshot, agent.snapshot],
+        expectedAgentIds: ["main"],
+      }),
     ).rejects.toThrow("changed during recovery-point composition");
   });
 
@@ -179,14 +217,81 @@ describe("recovery point composition", () => {
       userVersion: 1,
       byte: "a",
     });
-    await expect(createRecoveryPointManifest({ snapshots: [generic.snapshot] })).rejects.toThrow(
-      "Generic SQLite snapshots are not eligible",
-    );
+    await expect(
+      createRecoveryPointManifest({ snapshots: [generic.snapshot], expectedAgentIds: ["main"] }),
+    ).rejects.toThrow("Generic SQLite snapshots are not eligible");
 
     const global = await createSnapshotFixture({ role: "global", userVersion: 7, byte: "b" });
-    await expect(createRecoveryPointManifest({ snapshots: [global.snapshot] })).rejects.toThrow(
-      "at least one agent",
-    );
+    await expect(
+      createRecoveryPointManifest({ snapshots: [global.snapshot], expectedAgentIds: ["main"] }),
+    ).rejects.toThrow("do not match the required inventory");
+  });
+
+  it("rejects incomplete, extra, and self-consistent but owner-mismatched inventories", async () => {
+    const global = await createSnapshotFixture({ role: "global", userVersion: 7, byte: "a" });
+    const main = await createSnapshotFixture({
+      role: "agent",
+      agentId: "main",
+      userVersion: 11,
+      byte: "b",
+    });
+    const research = await createSnapshotFixture({
+      role: "agent",
+      agentId: "research",
+      userVersion: 12,
+      byte: "c",
+    });
+
+    await expect(
+      createRecoveryPointManifest({
+        snapshots: [global.snapshot, main.snapshot],
+        expectedAgentIds: ["main", "research"],
+      }),
+    ).rejects.toThrow("do not match the required inventory");
+    await expect(
+      createRecoveryPointManifest({
+        snapshots: [global.snapshot, main.snapshot, research.snapshot],
+        expectedAgentIds: ["main"],
+      }),
+    ).rejects.toThrow("do not match the required inventory");
+
+    const manifest = await createRecoveryPointManifest({
+      snapshots: [global.snapshot, main.snapshot],
+      expectedAgentIds: ["main"],
+    });
+    await expect(
+      verifyRecoveryPoint({
+        manifest,
+        snapshots: [global.snapshot, main.snapshot],
+        expectedAgentIds: ["main", "research"],
+      }),
+    ).rejects.toThrow("does not match the state owner's expected agents");
+  });
+
+  it("rejects unsupported obligation treatment, kind, and owner combinations", async () => {
+    const global = await createSnapshotFixture({ role: "global", userVersion: 7, byte: "a" });
+    const agent = await createSnapshotFixture({
+      role: "agent",
+      agentId: "main",
+      userVersion: 11,
+      byte: "b",
+    });
+    await expect(
+      createRecoveryPointManifest({
+        snapshots: [global.snapshot, agent.snapshot],
+        expectedAgentIds: ["main"],
+        obligations: {
+          reconstructed: [
+            {
+              id: "secret/provider-api-key",
+              kind: "secret-ref",
+              owner: "secrets",
+              readinessRequired: true,
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow("unsupported treatment, kind, or owner");
   });
 });
 
