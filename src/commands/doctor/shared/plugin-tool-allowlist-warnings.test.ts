@@ -169,6 +169,25 @@ describe("collectPluginToolAllowlistWarnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("resolves configured profiles before reporting sandboxed MCP warnings", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+        mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
+        tools: {
+          profiles: {
+            "status-only": { extends: "minimal" },
+          },
+          profile: "status-only",
+          sandbox: { tools: { alsoAllow: ["web_fetch"] } },
+        },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
   it("still warns when the profile allows MCP tools but sandbox policy hides them", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {

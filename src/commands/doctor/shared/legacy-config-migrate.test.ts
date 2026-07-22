@@ -1243,6 +1243,25 @@ describe("profile configured tool section migrate", () => {
     ]);
   });
 
+  it("does not apply the legacy built-in repair to config-defined profiles", () => {
+    const res = migrateLegacyConfigForTest({
+      tools: {
+        profile: "research-assistant",
+        profiles: {
+          "research-assistant": {
+            extends: "minimal",
+            alsoAllow: ["exec", "process"],
+          },
+        },
+        allow: ["read", "exec", "process"],
+        exec: { security: "allowlist" },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
   it("merges same-scope alsoAllow when it contains explicit configured-section grants", () => {
     const res = migrateLegacyConfigForTest({
       tools: {

@@ -56,9 +56,12 @@ export function resolveWebSearchToolPolicy(
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile, params.config?.tools?.profiles),
+    profileAlsoAllow,
+  );
   const providerProfilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(providerProfile),
+    resolveToolProfilePolicy(providerProfile, params.config?.tools?.profiles),
     providerProfileAlsoAllow,
   );
   const groupPolicyParams = {

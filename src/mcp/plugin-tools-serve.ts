@@ -33,7 +33,7 @@ function resolvePluginToolPolicy(config: OpenClawConfig): {
   toolDenylist?: string[];
 } {
   const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(config.tools?.profile),
+    resolveToolProfilePolicy(config.tools?.profile, config.tools?.profiles),
     config.tools?.alsoAllow,
   );
   const globalPolicy = pickSandboxToolPolicy(config.tools);

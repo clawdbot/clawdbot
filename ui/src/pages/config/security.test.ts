@@ -50,6 +50,7 @@ function createProps(overrides: Partial<SecurityViewProps> = {}): SecurityViewPr
       browserEnabled: true,
       toolProfile: "coding",
     },
+    toolProfiles: [],
     configBusy: false,
     canPairDevice: true,
     onPairMobile: vi.fn(),
@@ -114,6 +115,24 @@ describe("renderSecurity", () => {
     expect(onToolProfileChange).not.toHaveBeenCalled();
     const browserRow = expectRowByTitle(container, "Browser enabled");
     expect(browserRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps configured profiles available when another profile is selected", () => {
+    const onToolProfileChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderSecurity(
+        createProps({
+          toolProfiles: ["research-assistant"],
+          onToolProfileChange,
+        }),
+      ),
+      container,
+    );
+
+    selectRadio(expectButtonByText(container, "research-assistant"));
+    expect(onToolProfileChange).toHaveBeenCalledWith("research-assistant");
   });
 
   it("shows gateway auth and device auth as dot statuses, not pills", () => {

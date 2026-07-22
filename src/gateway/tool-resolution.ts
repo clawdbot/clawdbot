@@ -125,8 +125,11 @@ export function resolveGatewayScopedTools(params: {
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  const profilePolicy = resolveToolProfilePolicy(profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+  const profilePolicy = resolveToolProfilePolicy(profile, params.cfg.tools?.profiles);
+  const providerProfilePolicy = resolveToolProfilePolicy(
+    providerProfile,
+    params.cfg.tools?.profiles,
+  );
   const surface = params.surface ?? "http";
   const nodeExecSurface = surface === "loopback" && params.includeNodeExecTool === true;
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];

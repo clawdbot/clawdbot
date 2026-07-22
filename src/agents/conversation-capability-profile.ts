@@ -234,8 +234,11 @@ export function resolveConversationCapabilityProfile(
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
-  const profilePolicy = resolveToolProfilePolicy(effective.profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
+  const profilePolicy = resolveToolProfilePolicy(effective.profile, params.config?.tools?.profiles);
+  const providerProfilePolicy = resolveToolProfilePolicy(
+    effective.providerProfile,
+    params.config?.tools?.profiles,
+  );
   const configuredOverridePolicies = [
     effective.globalPolicy,
     effective.globalProviderPolicy,

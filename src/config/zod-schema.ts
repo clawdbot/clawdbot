@@ -14,8 +14,74 @@ function installZodDefaultLocale(): void {
 }
 installZodDefaultLocale();
 
+const BUILT_IN_TOOL_PROFILES = new Set(["minimal", "coding", "messaging", "full"]);
+
 export const OpenClawSchema = z.strictObject(OpenClawSchemaShape).superRefine((cfg, ctx) => {
+  const configuredProfiles = cfg.tools?.profiles ?? {};
+  const configuredProfileIds = new Set(Object.keys(configuredProfiles));
+  const knownProfileIds = new Set([...BUILT_IN_TOOL_PROFILES, ...configuredProfileIds]);
+  const validateProfileReference = (profile: string | undefined, path: PropertyKey[]) => {
+    if (profile && !knownProfileIds.has(profile)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path,
+        message: `Unknown tool profile "${profile}".`,
+      });
+    }
+  };
+
+  for (const [profileId, definition] of Object.entries(configuredProfiles)) {
+    if (BUILT_IN_TOOL_PROFILES.has(profileId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["tools", "profiles", profileId],
+        message: `Configured tool profile "${profileId}" cannot replace a built-in profile.`,
+      });
+    }
+    validateProfileReference(definition.extends, ["tools", "profiles", profileId, "extends"]);
+
+    const seen = new Set<string>();
+    let current: string | undefined = profileId;
+    while (current && configuredProfileIds.has(current)) {
+      if (seen.has(current)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["tools", "profiles", profileId, "extends"],
+          message: `Tool profile inheritance for "${profileId}" contains a cycle.`,
+        });
+        break;
+      }
+      seen.add(current);
+      current = configuredProfiles[current]?.extends;
+    }
+  }
+
+  validateProfileReference(cfg.tools?.profile, ["tools", "profile"]);
+  for (const [providerId, policy] of Object.entries(cfg.tools?.byProvider ?? {})) {
+    validateProfileReference(policy.profile, ["tools", "byProvider", providerId, "profile"]);
+  }
+
   const agents = listAgentEntries(cfg as OpenClawConfig);
+  for (const agent of agents) {
+    validateProfileReference(agent.tools?.profile, [
+      "agents",
+      "entries",
+      agent.id,
+      "tools",
+      "profile",
+    ]);
+    for (const [providerId, policy] of Object.entries(agent.tools?.byProvider ?? {})) {
+      validateProfileReference(policy.profile, [
+        "agents",
+        "entries",
+        agent.id,
+        "tools",
+        "byProvider",
+        providerId,
+        "profile",
+      ]);
+    }
+  }
   const agentIds = new Set(agents.map((agent) => agent.id));
   const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
   if (agents.length === 0) {

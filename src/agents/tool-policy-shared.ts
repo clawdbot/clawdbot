@@ -16,6 +16,14 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
+export type ToolProfileDefinition = {
+  extends: string;
+  alsoAllow?: string[];
+  deny?: string[];
+};
+
+export type ToolProfileDefinitions = Record<string, ToolProfileDefinition>;
+
 const TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
   "apply-patch": "apply_patch",
@@ -98,9 +106,47 @@ export function expandToolGroups(list?: string[]) {
   return uniqueStrings(expanded);
 }
 
-/** Resolves a built-in tool profile policy by id. */
-export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
-  return resolveCoreToolProfilePolicy(profile);
+/** Resolves a built-in or configured tool profile policy by id. */
+export function resolveToolProfilePolicy(
+  profile?: string,
+  definitions?: ToolProfileDefinitions,
+): ToolProfilePolicy | undefined {
+  const corePolicy = resolveCoreToolProfilePolicy(profile);
+  if (corePolicy) {
+    return corePolicy;
+  }
+  if (!profile || !definitions) {
+    return undefined;
+  }
+
+  const chain: ToolProfileDefinition[] = [];
+  const seen = new Set<string>();
+  let current = profile;
+  while (true) {
+    if (seen.has(current)) {
+      return undefined;
+    }
+    seen.add(current);
+    const definition = Object.hasOwn(definitions, current) ? definitions[current] : undefined;
+    if (!definition) {
+      return undefined;
+    }
+    chain.push(definition);
+    const parentPolicy = resolveCoreToolProfilePolicy(definition.extends);
+    if (parentPolicy) {
+      let resolved = parentPolicy;
+      for (const entry of chain.toReversed()) {
+        const allow = uniqueStrings([...(resolved.allow ?? []), ...(entry.alsoAllow ?? [])]);
+        const deny = uniqueStrings([...(resolved.deny ?? []), ...(entry.deny ?? [])]);
+        resolved = {
+          allow: allow.length > 0 ? allow : undefined,
+          deny: deny.length > 0 ? deny : undefined,
+        };
+      }
+      return resolved;
+    }
+    current = definition.extends;
+  }
 }
 
 export type { ToolProfileId };

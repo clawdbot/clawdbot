@@ -55,7 +55,7 @@ export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   }
   // tools.fs presence does not grant access; require profile or alsoAllow (#47487).
   const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(profile),
+    resolveToolProfilePolicy(profile, globalTools?.profiles),
     profileAlsoAllow.size > 0 ? Array.from(profileAlsoAllow) : undefined,
   );
   const globalPolicy = pickSandboxToolPolicy(globalTools);

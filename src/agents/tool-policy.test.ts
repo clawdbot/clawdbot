@@ -39,6 +39,38 @@ describe("tool-policy", () => {
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 
+  it("resolves configured profile inheritance with accumulated denies", () => {
+    const profiles = {
+      researcher: {
+        extends: "minimal",
+        alsoAllow: ["group:web", "read"],
+        deny: ["web_fetch"],
+      },
+      "read-only-researcher": {
+        extends: "researcher",
+        alsoAllow: ["web_fetch"],
+        deny: ["write"],
+      },
+    };
+
+    expect(resolveToolProfilePolicy("read-only-researcher", profiles)).toEqual({
+      allow: expect.arrayContaining(["session_status", "group:web", "read", "web_fetch"]),
+      deny: ["web_fetch", "write"],
+    });
+  });
+
+  it("fails closed for invalid configured profile graphs", () => {
+    expect(
+      resolveToolProfilePolicy("first", {
+        first: { extends: "second" },
+        second: { extends: "first" },
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveToolProfilePolicy("missing-parent", { "missing-parent": { extends: "nope" } }),
+    ).toBeUndefined();
+  });
+
   it("includes core tool groups in group:openclaw", () => {
     const group = TOOL_GROUPS["group:openclaw"];
     expect(group).toContain("browser");

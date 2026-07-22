@@ -216,7 +216,12 @@ function buildToolsCatalogResult(params: {
   }
   return {
     agentId,
-    profiles: PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
+    profiles: [
+      ...PROFILE_OPTIONS.map((profile) => ({ id: profile.id, label: profile.label })),
+      ...Object.keys(params.cfg.tools?.profiles ?? {})
+        .toSorted((a, b) => a.localeCompare(b))
+        .map((id) => ({ id, label: id })),
+    ],
     groups,
   };
 }

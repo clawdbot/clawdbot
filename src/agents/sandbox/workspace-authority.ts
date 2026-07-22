@@ -83,9 +83,12 @@ function resolveWorkspaceToolPolicies(params: {
     modelId: params.modelId,
   });
   return [
-    mergeAlsoAllowPolicy(resolveToolProfilePolicy(effective.profile), effective.profileAlsoAllow),
     mergeAlsoAllowPolicy(
-      resolveToolProfilePolicy(effective.providerProfile),
+      resolveToolProfilePolicy(effective.profile, params.config.tools?.profiles),
+      effective.profileAlsoAllow,
+    ),
+    mergeAlsoAllowPolicy(
+      resolveToolProfilePolicy(effective.providerProfile, params.config.tools?.profiles),
       effective.providerProfileAlsoAllow,
     ),
     effective.globalPolicy,

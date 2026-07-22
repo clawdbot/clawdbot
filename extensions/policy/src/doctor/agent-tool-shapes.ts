@@ -5,7 +5,6 @@ import {
   SUPPORTED_TOOL_EXEC_ASK,
   SUPPORTED_TOOL_EXEC_HOST,
   SUPPORTED_TOOL_EXEC_SECURITY,
-  SUPPORTED_TOOL_PROFILES,
 } from "./policy-constants.js";
 import {
   policyShapeFinding,
@@ -145,7 +144,7 @@ export function toolPosturePolicyShapeFinding(
     );
   }
   const profileAllowFinding = policyStringArrayPropertyShapeFinding(profiles.allow, {
-    allowed: SUPPORTED_TOOL_PROFILES,
+    isAllowed: (value) => /^[a-z][a-z0-9_-]{0,63}$/.test(value),
     policyDocName: params.policyDocName,
     policyPath: params.policyPath,
     property: `${propertyPrefix}.profiles.allow`,

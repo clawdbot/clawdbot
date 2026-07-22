@@ -74,6 +74,7 @@ export function policyStringArrayPropertyShapeFinding(
   value: unknown,
   params: {
     readonly allowed?: readonly string[];
+    readonly isAllowed?: (value: string) => boolean;
     readonly property: string;
     readonly policyDocName: string;
     readonly policyPath: string;
@@ -96,7 +97,11 @@ export function policyStringArrayPropertyShapeFinding(
     if (typeof entry !== "string" || entry.trim() === "") {
       return true;
     }
-    return params.allowed !== undefined && !params.allowed.includes(entry.trim());
+    const trimmed = entry.trim();
+    return (
+      (params.allowed !== undefined && !params.allowed.includes(trimmed)) ||
+      (params.isAllowed !== undefined && !params.isAllowed(trimmed))
+    );
   });
   if (invalidIndex < 0) {
     return undefined;

@@ -1081,6 +1081,9 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.isUpdateBusy();
       return renderSecurity({
         security: extractQuickSettingsSecurity(configObject),
+        toolProfiles: Object.keys(
+          asConfigRecord(asConfigRecord(configObject.tools)?.profiles) ?? {},
+        ),
         configBusy,
         canPairDevice:
           runtimeState.connected &&

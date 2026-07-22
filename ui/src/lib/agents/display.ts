@@ -296,6 +296,7 @@ type ConfigSnapshot = {
   };
   tools?: {
     profile?: string;
+    profiles?: unknown;
     allow?: string[];
     alsoAllow?: string[];
     deny?: string[];
@@ -673,6 +674,10 @@ export function matchesList(name: string, list?: string[]) {
   return false;
 }
 
-export function resolveToolProfile(profile: string) {
-  return resolveToolProfilePolicy(profile) ?? undefined;
+export function resolveToolProfile(profile: string, definitions?: unknown) {
+  const configuredDefinitions =
+    definitions && typeof definitions === "object" && !Array.isArray(definitions)
+      ? (definitions as Parameters<typeof resolveToolProfilePolicy>[1])
+      : undefined;
+  return resolveToolProfilePolicy(profile, configuredDefinitions) ?? undefined;
 }

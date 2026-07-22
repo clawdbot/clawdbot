@@ -24,6 +24,7 @@ export type SecurityOverview = {
 
 type SecurityViewProps = {
   security: SecurityOverview;
+  toolProfiles: string[];
   configBusy: boolean;
   canPairDevice: boolean;
   onPairMobile?: () => void;
@@ -40,6 +41,11 @@ function renderSecurityOverview(props: SecurityViewProps) {
     value: profile.id as string,
     label: t(profile.labelKey),
   }));
+  for (const profile of props.toolProfiles.toSorted((a, b) => a.localeCompare(b))) {
+    if (!profileOptions.some((option) => option.value === profile)) {
+      profileOptions.push({ value: profile, label: profile });
+    }
+  }
   if (!profileOptions.some((option) => option.value === normalizedToolProfile)) {
     profileOptions.push({ value: normalizedToolProfile, label: normalizedToolProfile });
   }

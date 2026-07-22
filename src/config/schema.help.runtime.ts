@@ -368,7 +368,15 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.safeBinProfiles":
     "Optional per-binary safe-bin profiles (positional limits + allowed/denied flags).",
   "tools.profile":
-    "Global tool profile name used to select a predefined tool policy baseline before applying allow/deny overrides. Use this for consistent environment posture across agents and keep profile names stable.",
+    "Global built-in or configured tool profile used as the baseline before applying allow/deny overrides. Use this for consistent environment posture across agents and keep profile names stable.",
+  "tools.profiles":
+    "Reusable named tool profiles. Each entry extends one built-in or configured profile and may add alsoAllow and deny entries; deny wins across the inheritance chain.",
+  "tools.profiles.*.extends":
+    "Parent built-in or configured profile for this named tool profile. Profile inheritance must be acyclic.",
+  "tools.profiles.*.alsoAllow":
+    "Additional tools or groups added to the inherited profile allowlist.",
+  "tools.profiles.*.deny":
+    "Tools or groups denied after profile inheritance. Deny entries win over inherited and added allows.",
   "tools.alsoAllow":
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":

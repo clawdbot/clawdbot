@@ -11,7 +11,11 @@ import {
   isToolAllowedByPolicies,
   isToolAllowedByPolicyName,
 } from "../../../agents/tool-policy-match.js";
-import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+import {
+  mergeAlsoAllowPolicy,
+  resolveToolProfilePolicy,
+  type ToolProfileDefinitions,
+} from "../../../agents/tool-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   AgentToolsConfig,
@@ -130,9 +134,15 @@ function resolveMessageToolAvailability(params: {
       : [];
   const profileAlsoAllow = [...configuredAlsoAllow, ...(params.runtimeAlsoAllow ?? [])];
   const providerProfileAlsoAllow = [...providerAlsoAllow, ...(params.runtimeAlsoAllow ?? [])];
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile, params.cfg.tools?.profiles),
+    profileAlsoAllow,
+  );
   const providerProfilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(agentProviderPolicy?.profile ?? providerPolicy?.profile),
+    resolveToolProfilePolicy(
+      agentProviderPolicy?.profile ?? providerPolicy?.profile,
+      params.cfg.tools?.profiles,
+    ),
     providerProfileAlsoAllow,
   );
   return isToolAllowedByPolicies("message", [
@@ -378,6 +388,7 @@ function formatProfileConfiguredSectionGrantAdvice(params: {
 }
 
 function collectProfileConfiguredToolSectionScopeWarnings(params: {
+  profileDefinitions?: ToolProfileDefinitions;
   tools?: Record<string, unknown> | null;
   inheritedTools?: Record<string, unknown> | null;
   pathLabel: string;
@@ -407,7 +418,10 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
   const alsoAllow = Array.isArray(tools?.alsoAllow)
     ? tools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
     : params.inheritedAlsoAllow;
-  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(profile, params.profileDefinitions),
+    alsoAllow,
+  );
   if (!profilePolicy) {
     return [];
   }
@@ -434,6 +448,7 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
 }
 
 function collectByProviderConfiguredToolSectionWarnings(params: {
+  profileDefinitions?: ToolProfileDefinitions;
   tools?: Record<string, unknown> | null;
   inheritedTools?: Record<string, unknown> | null;
   pathLabel: string;
@@ -461,7 +476,10 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
     );
     const alsoAllow =
       readPreviewStringList(policy.alsoAllow) ?? readPreviewStringList(inheritedPolicy?.alsoAllow);
-    const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+    const profilePolicy = mergeAlsoAllowPolicy(
+      resolveToolProfilePolicy(profile, params.profileDefinitions),
+      alsoAllow,
+    );
     if (!profilePolicy) {
       return [];
     }
@@ -519,6 +537,7 @@ function resolveProviderPolicyEntryForPreview(params: {
 }
 
 function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
+  profileDefinitions?: ToolProfileDefinitions;
   inheritedTools?: Record<string, unknown> | null;
   inheritedPathLabel: string;
   overridingTools?: Record<string, unknown> | null;
@@ -570,7 +589,10 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
     const alsoAllow =
       readPreviewStringList(overridingPolicy?.alsoAllow) ??
       readPreviewStringList(inheritedPolicy.alsoAllow);
-    const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+    const profilePolicy = mergeAlsoAllowPolicy(
+      resolveToolProfilePolicy(profile, params.profileDefinitions),
+      alsoAllow,
+    );
     if (!profilePolicy) {
       return [];
     }
@@ -605,6 +627,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
 /** Warn when configured tool sections no longer widen restrictive tool profiles. */
 function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
+  const profileDefinitions = cfg.tools?.profiles;
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
   const globalAlsoAllow = Array.isArray(globalTools?.alsoAllow)
     ? globalTools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
@@ -617,10 +640,12 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
 
   warnings.push(
     ...collectProfileConfiguredToolSectionScopeWarnings({
+      profileDefinitions,
       tools: globalTools,
       pathLabel: "tools",
     }),
     ...collectByProviderConfiguredToolSectionWarnings({
+      profileDefinitions,
       tools: globalTools,
       pathLabel: "tools",
       configuredEntries: globalConfiguredEntries,
@@ -642,6 +667,7 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
     const agentConfiguredEntries = [...globalConfiguredEntries, ...ownAgentConfiguredEntries];
     warnings.push(
       ...collectProfileConfiguredToolSectionScopeWarnings({
+        profileDefinitions,
         tools: agentTools,
         inheritedTools: globalTools,
         pathLabel: agentPath,
@@ -651,12 +677,14 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
         inheritedAlsoAllow: globalAlsoAllow,
       }),
       ...collectByProviderConfiguredToolSectionWarnings({
+        profileDefinitions,
         tools: agentTools,
         inheritedTools: globalTools,
         pathLabel: agentPath,
         configuredEntries: agentConfiguredEntries,
       }),
       ...collectInheritedByProviderConfiguredToolSectionWarnings({
+        profileDefinitions,
         inheritedTools: globalTools,
         inheritedPathLabel: "tools",
         overridingTools: agentTools,

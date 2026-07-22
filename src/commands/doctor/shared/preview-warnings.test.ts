@@ -1106,6 +1106,23 @@ describe("doctor preview warnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("resolves configured profiles when checking configured tool sections", async () => {
+    const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
+      tools: {
+        profiles: {
+          "message-only": { extends: "messaging" },
+        },
+        profile: "message-only",
+        exec: {
+          mode: "allowlist",
+        },
+      },
+    });
+
+    const warning = expectSingleWarningContaining(warnings, 'tools.profile is "message-only"');
+    expect(warning).toContain('tools.alsoAllow: ["exec", "process"]');
+  });
+
   it("does not warn for configured tool sections when the profile id is unknown", async () => {
     const malformedConfig = {
       tools: {

@@ -828,8 +828,14 @@ function collectProfileConfiguredSectionRepairGrants(params: {
   const explicitPolicy = {
     allow: uniqueStrings([...ownAllow, ...(explicitAlsoAllow ?? [])]),
   };
+  const resolvedProfilePolicy = resolveToolProfilePolicy(profile);
+  if (!resolvedProfilePolicy) {
+    // Config-defined profiles use the current configured-section semantics and
+    // therefore cannot require this legacy built-in-profile migration.
+    return [];
+  }
   const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(profile),
+    resolvedProfilePolicy,
     explicitAlsoAllow ?? params.inheritedAlsoAllow ?? [],
   );
   return uniqueStrings(

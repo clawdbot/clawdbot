@@ -448,9 +448,19 @@ const ToolsWebSchema = z
   .strict()
   .optional();
 
-const ToolProfileSchema = z
-  .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
-  .optional();
+export const ToolProfileIdSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9_-]{0,63}$/, "must be a lowercase tool profile id");
+
+const ToolProfileSchema = ToolProfileIdSchema.optional();
+
+const ToolProfileDefinitionSchema = z
+  .object({
+    extends: ToolProfileIdSchema,
+    alsoAllow: z.array(z.string()).optional(),
+    deny: z.array(z.string()).optional(),
+  })
+  .strict();
 
 type AllowlistPolicy = {
   allow?: string[];
@@ -960,6 +970,7 @@ export const AgentEntrySchema = z
 export const ToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
+    profiles: z.record(ToolProfileIdSchema, ToolProfileDefinitionSchema).optional(),
     web: ToolsWebSchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,

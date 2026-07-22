@@ -71,6 +71,7 @@ type CatalogGroup = {
 };
 type CatalogPayload = {
   agentId?: string;
+  profiles?: Array<{ id: string; label: string }>;
   groups: CatalogGroup[];
 };
 
@@ -152,6 +153,29 @@ describe("tools.catalog handler", () => {
     expect(groups.some((group) => group.source === "plugin")).toBe(false);
     const media = groups.find((group) => group.id === "media");
     expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
+  });
+
+  it("includes configured profiles after the built-in profile options", async () => {
+    const request = createInvokeParams(
+      { includePlugins: false },
+      {
+        tools: {
+          profiles: {
+            zeta: { extends: "minimal" },
+            alpha: { extends: "coding" },
+          },
+        },
+      },
+    );
+    await request.invoke();
+    expect(expectCatalogPayload(request.respond).profiles?.map((profile) => profile.id)).toEqual([
+      "minimal",
+      "coding",
+      "messaging",
+      "full",
+      "alpha",
+      "zeta",
+    ]);
   });
 
   it("omits agents_wait until Swarm is enabled for the catalog agent", async () => {

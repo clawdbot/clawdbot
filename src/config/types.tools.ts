@@ -157,6 +157,17 @@ export type MediaToolsConfig = {
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
+export type ToolProfileDefinitionConfig = {
+  /** Built-in or configured profile inherited by this profile. */
+  extends: string;
+  /** Additional tool names or groups added to the inherited allowlist. */
+  alsoAllow?: string[];
+  /** Tool names or groups denied after inheritance; deny wins. */
+  deny?: string[];
+};
+
+export type ToolProfileDefinitionsConfig = Record<string, ToolProfileDefinitionConfig>;
+
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
@@ -236,8 +247,8 @@ export type ToolAllowDenyPolicyConfig = {
 };
 
 export type ToolPolicyConfig = ToolAllowDenyPolicyConfig & {
-  /** Built-in profile used as the base policy before allow/deny merges. */
-  profile?: ToolProfileId;
+  /** Built-in or configured profile used as the base policy before allow/deny merges. */
+  profile?: string;
 };
 
 export type GroupToolPolicyConfig = ToolAllowDenyPolicyConfig;
@@ -369,7 +380,7 @@ export type SessionsSpawnToolsConfig = {
 
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
-  profile?: ToolProfileId;
+  profile?: string;
   allow?: string[];
   /** Additional allowlist entries merged into allow and/or profile allowlist. */
   alsoAllow?: string[];
@@ -404,7 +415,9 @@ export type AgentToolsConfig = {
 
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
-  profile?: ToolProfileId;
+  profile?: string;
+  /** Reusable named profiles that extend built-in or configured profiles. */
+  profiles?: ToolProfileDefinitionsConfig;
   allow?: string[];
   /** Additional allowlist entries merged into allow and/or profile allowlist. */
   alsoAllow?: string[];

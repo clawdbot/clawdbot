@@ -164,7 +164,7 @@ talk.realtime.model talk.realtime.providers.*.apiKey talk.realtime.speakerVoice 
 tools.alsoAllow tools.deny tools.exec
 tools.fs tools.media.audio tools.media.image tools.media.video tools.message
 tools.exec.reviewer.model.primary tools.media.models.*.model
-tools.media.models.*.request.auth.token tools.profile tools.sessions
+tools.media.models.*.request.auth.token tools.profile tools.profiles tools.profiles.*.alsoAllow tools.profiles.*.deny tools.profiles.*.extends tools.sessions
 tools.web transcripts.enabled
 tts.auto tts.persona tts.personas.*.providers.*.apiKey tts.provider
 tts.providers.* tts.providers.*.apiKey

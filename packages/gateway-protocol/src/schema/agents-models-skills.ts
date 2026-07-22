@@ -805,12 +805,7 @@ export const ToolsInvokeParamsSchema = closedObject({
 
 /** Tool profile shown in catalog views. */
 export const ToolCatalogProfileSchema = closedObject({
-  id: Type.Union([
-    Type.Literal("minimal"),
-    Type.Literal("coding"),
-    Type.Literal("messaging"),
-    Type.Literal("full"),
-  ]),
+  id: NonEmptyString,
   label: NonEmptyString,
 });
 

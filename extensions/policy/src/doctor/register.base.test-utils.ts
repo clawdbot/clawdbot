@@ -430,7 +430,7 @@ describe("registerPolicyDoctorChecks", () => {
     ],
     [
       "tools profiles allow invalid",
-      { tools: { profiles: { allow: ["mesaging"] } } },
+      { tools: { profiles: { allow: ["Bad Profile"] } } },
       "oc://policy.jsonc/tools/profiles/allow/#0",
     ],
     [
