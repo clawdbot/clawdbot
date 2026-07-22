@@ -20,6 +20,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir, shortenHomeInString } from "../utils.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
 import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
+import {
+  COMPLETION_SHELLS,
+  isCompletionInstalled,
+  removeCompletionInstall,
+  resolveCompletionProfilePath,
+} from "../cli/completion-runtime.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
 
@@ -113,6 +119,29 @@ function logBackupRecommendation(runtime: RuntimeEnv) {
 }
 
 /** Runs the uninstall flow for selected service/state/workspace/app scopes. */
+// Removes the OpenClaw completion block from every shell profile that carries it,
+// so uninstall stops leaving a source line for a now-deleted completions file.
+async function removeShellCompletion(runtime: RuntimeEnv, dryRun?: boolean) {
+  for (const shell of COMPLETION_SHELLS) {
+    try {
+      if (dryRun) {
+        if (await isCompletionInstalled(shell)) {
+          runtime.log(
+            `[dry-run] remove shell completion from ${shortenHomeInString(resolveCompletionProfilePath(shell))}`,
+          );
+        }
+        continue;
+      }
+      const { profilePath, changed } = await removeCompletionInstall(shell);
+      if (changed) {
+        runtime.log(`Removed shell completion from ${shortenHomeInString(profilePath)}`);
+      }
+    } catch {
+      // Best-effort: never fail an uninstall because one profile could not be rewritten.
+    }
+  }
+}
+
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
   const { scopes, hadExplicit } = buildScopeSelection(opts);
   const interactive = !opts.nonInteractive;
@@ -214,6 +243,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
       runtime,
       { dryRun, preservePaths: scopes.has("workspace") ? [] : workspaceDirs },
     );
+    await removeShellCompletion(runtime, dryRun);
   }
 
   if (scopes.has("workspace")) {
