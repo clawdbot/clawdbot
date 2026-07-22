@@ -547,16 +547,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             ackReaction: "👀",
             ackReactionScope: "direct",
             inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
+            statusReactions: { enabled: true },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
         } as OpenClawConfig,
@@ -622,16 +613,7 @@ describe("signal createSignalEventHandler inbound context", () => {
               ackReaction: "👀",
               ackReactionScope: "direct",
               inbound: { debounceMs: 0 },
-              statusReactions: {
-                enabled: true,
-                timing: {
-                  debounceMs: 0,
-                  doneHoldMs: 0,
-                  errorHoldMs: 0,
-                  stallSoftMs: 5_000,
-                  stallHardMs: 15_000,
-                },
-              },
+              statusReactions: { enabled: true },
             },
             channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
           } as OpenClawConfig,
@@ -877,16 +859,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             ackReaction: "👀",
             ackReactionScope: "direct",
             inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
+            statusReactions: { enabled: true },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
         } as OpenClawConfig,
@@ -1080,16 +1053,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             ackReaction: "👀",
             ackReactionScope: "direct",
             inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
+            statusReactions: { enabled: true },
           },
           channels: {
             signal: {
@@ -1222,16 +1186,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             ackReaction: "👀",
             ackReactionScope: "direct",
             inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
+            statusReactions: { enabled: true },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
         } as OpenClawConfig,
@@ -1279,16 +1234,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             ackReaction: "👀",
             ackReactionScope: "direct",
             inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
+            statusReactions: { enabled: true },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
         } as OpenClawConfig,
@@ -1316,6 +1262,8 @@ describe("signal createSignalEventHandler inbound context", () => {
     ).map((call) => call[2]);
     expect(sentEmojis).toContain("❌");
     expect(sentEmojis).not.toContain("✅");
+    expect(sentEmojis.at(-1)).toBe("👀");
+    expect(removeReactionSignalMock).not.toHaveBeenCalled();
   });
 
   it("targets Signal group status reactions with groupId and message author", async () => {
@@ -1326,16 +1274,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             ackReaction: "👀",
             ackReactionScope: "group-all",
             inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
+            statusReactions: { enabled: true },
           },
           channels: {
             signal: {
@@ -1382,16 +1321,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             ackReaction: "👀",
             groupChat: { mentionPatterns: ["@bot"] },
             inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
+            statusReactions: { enabled: true },
           },
           channels: {
             signal: {
@@ -1440,16 +1370,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             ackReaction: "👀",
             ackReactionScope: "direct",
             inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
+            statusReactions: { enabled: true },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
         } as OpenClawConfig,
@@ -1483,16 +1404,7 @@ describe("signal createSignalEventHandler inbound context", () => {
             ackReaction: "👀",
             ackReactionScope: "direct",
             inbound: { debounceMs: 0 },
-            statusReactions: {
-              enabled: true,
-              timing: {
-                debounceMs: 0,
-                doneHoldMs: 0,
-                errorHoldMs: 0,
-                stallSoftMs: 60_000,
-                stallHardMs: 120_000,
-              },
-            },
+            statusReactions: { enabled: true },
           },
           channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
         } as OpenClawConfig,
