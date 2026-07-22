@@ -13,14 +13,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { clearSessionStoreCacheForTest, type SessionEntry } from "../../config/sessions.js";
 import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  saveSessionStore,
-  type SessionEntry,
-} from "../../config/sessions.js";
+  loadSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentAttempt } from "./attempt-execution.js";
 
@@ -132,6 +132,10 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
   let storePath: string;
   let sessionKey: string;
 
+  function persistSessionEntry() {
+    replaceSessionEntrySync({ storePath, sessionKey }, sessionStore[sessionKey] as SessionEntry);
+  }
+
   beforeEach(async () => {
     const { resetContinuationWorkDispatchForTests } =
       await import("../../auto-reply/continuation/work-dispatch.js");
@@ -150,7 +154,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     } as SessionEntry;
     sessionKey = `agent:main:subagent:746-trap:${crypto.randomUUID()}`;
     sessionStore = { [sessionKey]: sessionEntry };
-    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    persistSessionEntry();
     clearSessionStoreCacheForTest();
   });
 
@@ -165,6 +169,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     resetSystemEventsForTest();
     clearRuntimeConfigSnapshot();
     clearSessionStoreCacheForTest();
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -248,10 +253,10 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     await runEmbeddedAttempt(makeContinuationEnabledConfig());
 
     clearSessionStoreCacheForTest();
-    const persisted = loadSessionStore(storePath, { skipCache: true });
+    const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(sessionStore[sessionKey]?.continuationChainCount).toBe(1);
-    expect(persisted[sessionKey]?.continuationChainCount).toBe(1);
-    expect(persisted[sessionKey]?.continuationChainTokens).toBe(2);
+    expect(persisted?.continuationChainCount).toBe(1);
+    expect(persisted?.continuationChainTokens).toBe(2);
   });
 
   it("schedules every same-turn continue_work tool election with independent delays", async () => {
@@ -337,7 +342,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     // cappedCount:2 — the exact case the spawn-init lane used to drop silently.
     sessionEntry.continuationChainCount = 1;
     sessionStore[sessionKey] = sessionEntry;
-    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    persistSessionEntry();
     clearSessionStoreCacheForTest();
     // The continuation budget reads the live runtime-config snapshot (see
     // resolveLiveContinuationRuntimeConfig); set it to the at-cap config so the
@@ -375,7 +380,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
   it("stays silent for a single capped continue_work election on spawn-init", async () => {
     sessionEntry.continuationChainCount = 1;
     sessionStore[sessionKey] = sessionEntry;
-    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    persistSessionEntry();
     clearSessionStoreCacheForTest();
     setRuntimeConfigSnapshot(makeAtCapContinuationConfig());
 
@@ -407,7 +412,7 @@ describe("runAgentAttempt spawn-init continueWorkOpts plumbing", () => {
     // gateway restart is involved.
     sessionEntry.continuationChainCount = 1;
     sessionStore[sessionKey] = sessionEntry;
-    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    persistSessionEntry();
     clearSessionStoreCacheForTest();
     setRuntimeConfigSnapshot(makeAtCapContinuationConfig());
 
