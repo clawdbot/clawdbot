@@ -1,5 +1,11 @@
 /** Unit tests for requester-scoped MCP connection resolver helpers. */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   applyMcpConnectionOverride,
   buildMcpRequesterRuntimeCacheKey,
@@ -14,6 +20,7 @@ afterEach(() => {
   testing.setMcpServerConnectionResolversForTest();
   testing.setMcpConnectionResolverTimeoutMsForTest();
   testing.setMcpConnectionRevalidateMsForTest();
+  resetPluginRuntimeStateForTest();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -33,6 +40,58 @@ describe("mcp connection resolver helpers", () => {
     });
     expect(Object.keys(staticServers)).toEqual(["shared", "zebra"]);
     expect(requesterScopedServerNames).toEqual(["user-mail"]);
+  });
+
+  it("keeps connection resolvers from pinned live registries", async () => {
+    const pinnedRegistry = createEmptyPluginRegistry();
+    pinnedRegistry.mcpServerConnectionResolvers.push({
+      pluginId: "startup-mail",
+      source: "test",
+      resolver: {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://mcp.example.test/startup" }),
+      },
+    });
+    pinnedRegistry.mcpServerConnectionResolvers.push({
+      pluginId: "startup-drive",
+      source: "test",
+      resolver: {
+        serverName: "user-drive",
+        resolve: async () => ({ url: "https://mcp.example.test/stale-drive" }),
+      },
+    });
+    const activeRegistry = createEmptyPluginRegistry();
+    activeRegistry.mcpServerConnectionResolvers.push({
+      pluginId: "active-drive",
+      source: "test",
+      resolver: {
+        serverName: "user-drive",
+        resolve: async () => ({ url: "https://mcp.example.test/active" }),
+      },
+    });
+
+    setActivePluginRegistry(pinnedRegistry);
+    pinActivePluginHttpRouteRegistry(pinnedRegistry);
+    setActivePluginRegistry(activeRegistry);
+
+    const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope({
+      shared: { command: "true" },
+      "user-drive": { transport: "streamable-http" },
+      "user-mail": { transport: "streamable-http" },
+    });
+    expect(Object.keys(staticServers)).toEqual(["shared"]);
+    expect(requesterScopedServerNames).toEqual(["user-drive", "user-mail"]);
+    await expect(
+      resolveRequesterScopedMcpConnections({
+        serverNames: ["user-mail", "user-drive"],
+        requesterSenderId: "sender",
+      }),
+    ).resolves.toEqual(
+      new Map([
+        ["user-drive", { url: "https://mcp.example.test/active" }],
+        ["user-mail", { url: "https://mcp.example.test/startup" }],
+      ]),
+    );
   });
 
   it("fails closed without requesterSenderId and drops null resolutions", async () => {
