@@ -336,16 +336,3 @@ export function sameDefaultInferenceRoute(
 ): boolean {
   return isDeepStrictEqual(left, right);
 }
-
-/** Compares a verified pre-roster route with the same route under its newly named agent owner. */
-export function sameDefaultInferenceRouteIgnoringAgentIdentity(
-  left: DefaultInferenceRouteProjection,
-  right: DefaultInferenceRouteProjection,
-): boolean {
-  if (!left.route || !right.route) {
-    return left.route === right.route;
-  }
-  const { agentDir: _leftDir, agentId: _leftId, ...leftRoute } = left.route;
-  const { agentDir: _rightDir, agentId: _rightId, ...rightRoute } = right.route;
-  return isDeepStrictEqual(leftRoute, rightRoute);
-}

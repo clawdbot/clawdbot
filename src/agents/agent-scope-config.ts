@@ -194,18 +194,6 @@ export function resolveAgentWorkspaceDir(
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
 }
 
-/** Resolves a config-inspection workspace without inventing an agent for an empty roster. */
-export function resolveAgentWorkspaceDirForConfigInspection(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  if (listAgentEntries(cfg).length > 0) {
-    return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg), env);
-  }
-  const configured = cfg.agents?.defaults?.workspace?.trim();
-  return configured ? resolveUserPath(configured, env) : resolveDefaultAgentWorkspaceDir(env);
-}
-
 export function resolveAgentDir(
   cfg: OpenClawConfig,
   agentId: string,

@@ -1,5 +1,4 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
-import { hasValidRawAgentIdCharacters } from "../agents/agent-create.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -481,16 +480,19 @@ export async function executeSetup(
     );
   }
   const workspace = resolveUserPath(operation.workspace ?? process.cwd());
-  const rawAgentName = operation.agentId?.trim() || "main";
-  if (!hasValidRawAgentIdCharacters(rawAgentName)) {
-    throw new Error(`Agent id "${rawAgentName}" has no valid id characters.`);
-  }
   return await applyPersistentOperation({
     auditOperation: "openclaw.setup",
     operation,
     runtime,
     opts,
     run: async (ctx) => {
+      const before = await readConfigFileSnapshotLazy();
+      const { ensureOnboardingAgent } = await import("../commands/onboard-agent.js");
+      await ensureOnboardingAgent({
+        config: before.sourceConfig ?? before.config,
+        workspace,
+        baseConfig: before.sourceConfig ?? before.config,
+      });
       const applySetup =
         ctx.deps?.applySetup ?? (await import("./setup-apply.js")).applySystemAgentSetup;
       const surface = ctx.deps?.setupSurface ?? "cli";
@@ -501,7 +503,6 @@ export async function executeSetup(
           await applySetup(
             {
               workspace,
-              agentName: rawAgentName,
               expectedInferenceRoute: verified.route,
               surface,
               runtime: ctx.runtime,
@@ -510,7 +511,6 @@ export async function executeSetup(
           ),
       );
       const after = await readConfigFileSnapshotLazy();
-      const agentId = applied.agentId;
       ctx.runtime.log(`Updated ${after.path || applied.configPath || "config"}`);
       for (const line of applied.lines) {
         ctx.runtime.log(line);
@@ -519,11 +519,9 @@ export async function executeSetup(
       return {
         summary: "Bootstrapped setup workspace",
         bootstrapPending: applied.bootstrapPending,
-        agentId,
         configPath: after.path || applied.configPath,
         details: {
           workspace,
-          agentId,
           model: verified.modelRef,
           modelSource: "live-verified default model",
           inferenceLatencyMs: verified.latencyMs,

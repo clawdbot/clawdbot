@@ -1,5 +1,5 @@
 // Collects dangerous config flag findings across agents and runtime config.
-import { resolveAgentWorkspaceDirForConfigInspection } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectPluginConfigContractMatches } from "../plugins/config-contract-matches.js";
 import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
@@ -30,7 +30,7 @@ export function collectEnabledInsecureOrDangerousFlags(
 
   const configContracts = resolvePluginConfigContractsById({
     config: cfg,
-    workspaceDir: resolveAgentWorkspaceDirForConfigInspection(cfg),
+    workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
     env: process.env,
     pluginIds,
   });

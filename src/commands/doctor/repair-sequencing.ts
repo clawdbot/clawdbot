@@ -4,11 +4,6 @@ import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
-import {
-  formatLegacyMainSessionMigrationOutcome,
-  isLegacyMainSessionMigrationUnresolved,
-  migrateLegacyDefaultMainSessionKeys,
-} from "../../config/sessions/legacy-main-session-key-migration.js";
 import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
@@ -22,7 +17,6 @@ import {
   maybeRepairStaleManagedNpmBundledPlugins,
 } from "../doctor-plugin-registry.js";
 import { collectActiveToolSchemaProjectionWarnings } from "./shared/active-tool-schema-warnings.js";
-import { maybeRepairAgentRoster } from "./shared/agent-roster-repair.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
@@ -87,18 +81,6 @@ export async function runDoctorRepairSequence(params: {
       warningNotes.push(sanitizeLines(mutation.warnings));
     }
   };
-
-  applyMutation(maybeRepairAgentRoster(state.candidate, env));
-  const mainSessionKeyMigration = await migrateLegacyDefaultMainSessionKeys(state.candidate, env);
-  for (const outcome of mainSessionKeyMigration.outcomes) {
-    const message = formatLegacyMainSessionMigrationOutcome(outcome);
-    if (!message) {
-      continue;
-    }
-    (isLegacyMainSessionMigrationUnresolved(outcome) ? warningNotes : changeNotes).push(
-      sanitizeLines([message]),
-    );
-  }
 
   for (const mutation of await collectChannelDoctorRepairMutations({
     cfg: state.candidate,

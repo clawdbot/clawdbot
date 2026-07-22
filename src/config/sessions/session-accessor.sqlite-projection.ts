@@ -81,62 +81,6 @@ function loadSessionArchiveRuntime() {
   return sessionArchiveRuntimePromise;
 }
 
-export type SqliteSessionKeyMigrationOutcome =
-  | { status: "migrated"; entry: SessionEntry }
-  | { status: "missing" | "canonical-exists" | "aliases-disagree" | "legacy-present" };
-
-/** Atomically rename exact legacy session-entry keys without alias canonicalization. */
-export async function migrateSqliteSessionEntryKeys(params: {
-  agentId: string;
-  storePath: string;
-  canonicalKey: string;
-  legacyKeys: readonly string[];
-  dryRun?: boolean;
-}): Promise<SqliteSessionKeyMigrationOutcome> {
-  const resolved = resolveSqliteScope({
-    agentId: params.agentId,
-    sessionKey: params.canonicalKey,
-    storePath: params.storePath,
-  });
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    let outcome: SqliteSessionKeyMigrationOutcome = { status: "missing" };
-    runOpenClawAgentWriteTransaction(
-      (transactionDb) => {
-        const legacyEntries = uniqueStrings(params.legacyKeys).flatMap((sessionKey) => {
-          const entry = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
-          return entry ? [{ sessionKey, entry }] : [];
-        });
-        if (legacyEntries.length === 0) {
-          return;
-        }
-        if (readExactSessionEntryRow(transactionDb, params.canonicalKey)) {
-          outcome = { status: "canonical-exists" };
-          return;
-        }
-        if (new Set(legacyEntries.map(({ entry }) => entry.sessionId)).size > 1) {
-          outcome = { status: "aliases-disagree" };
-          return;
-        }
-        if (params.dryRun) {
-          outcome = { status: "legacy-present" };
-          return;
-        }
-        const selected = legacyEntries.toSorted(
-          (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
-        )[0]!.entry;
-        writeSessionEntry(transactionDb, params.canonicalKey, cloneSessionEntry(selected));
-        for (const { sessionKey } of legacyEntries) {
-          deleteSqliteSessionEntryRows(transactionDb, sessionKey);
-        }
-        outcome = { status: "migrated", entry: cloneSessionEntry(selected) };
-      },
-      toDatabaseOptions(resolved),
-      { operationLabel: "session.key-migration" },
-    );
-    return outcome;
-  });
-}
-
 export async function applySqliteSessionEntryReplacements<T>(params: {
   activeSessionKey?: string;
   agentId?: string;

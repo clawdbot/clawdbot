@@ -20,7 +20,6 @@ import { t } from "./i18n/index.js";
 import { runWizardWithPromptNavigation } from "./navigation-prompter.js";
 import type { WizardPrompter } from "./prompts.js";
 import { offerLiveModelVerification } from "./setup.inference-verification.js";
-import { persistSetupAgentStage, stageSetupWizardAgent } from "./setup.agent.js";
 import {
   detectSetupMigrationSources,
   listSetupMigrationOptions,
@@ -88,7 +87,9 @@ async function runSetupWizardOnce(
       : {}
     : {};
   baseConfig = await requireRiskAcknowledgement({ opts, prompter, config: baseConfig });
-  // Ordinary reruns preserve agents.list/bindings; only reset or import may shrink them (#84692).
+  // Ordinary onboard reruns must preserve existing agents.list / bindings. Only
+  // explicit reset or import flows are allowed to shrink the config — see issue
+  // openclaw#84692.
   let pendingPluginInstallMigrationBaseConfig: OpenClawConfig | undefined = baseConfig;
   const writeSetupConfigFile = async (
     config: OpenClawConfig,
@@ -500,29 +501,21 @@ async function runSetupWizardOnce(
     workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE,
   );
 
+  const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
+    await loadOnboardConfigModule();
   const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,
     prompter,
   });
-  const agentStage = await stageSetupWizardAgent({
-    config: baseConfig,
-    prompter,
-    workspaceDir,
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
+    baseConfig,
     requestedWorkspaceDir,
-    allowWorkspaceChange,
-    skipBootstrap: opts.skipBootstrap,
-  });
-  let nextConfig = agentStage.config;
-  const persistSetupCandidate = async (config: OpenClawConfig, commit = false) =>
-    await persistSetupAgentStage({
-      baseConfig,
-      commit,
-      config,
-      stage: agentStage,
-      writeConfig: writeSetupConfigFile,
-    });
-
+    { allowWorkspaceChange },
+  );
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
   if (!keepExistingModelConfig) {
     const modelAuth = await runSetupModelAuthStep({
       config: nextConfig,
@@ -547,11 +540,16 @@ async function runSetupWizardOnce(
   });
   nextConfig = gateway.nextConfig;
   const settings = gateway.settings;
+  const { ensureOnboardingConfig } = await import("../commands/onboard-agent.js");
+  nextConfig = (await ensureOnboardingConfig(nextConfig, workspaceDir, usedImportFlow, baseConfig))
+    .config;
 
   // Persist auth + gateway decisions now: channel/search/skills steps can pair
   // devices or install plugins, and a crash or cancel there must not force the
   // user to redo provider setup from scratch.
-  nextConfig = await persistSetupCandidate(nextConfig);
+  nextConfig = await writeSetupConfigFile(nextConfig, {
+    allowConfigSizeDrop: false,
+  });
 
   let liveModelVerified = false;
   // keepExistingModelConfig is latched before auth setup, so this distinguishes
@@ -569,7 +567,8 @@ async function runSetupWizardOnce(
       prompter,
       runtime,
       workspaceDir: verificationTarget.workspaceDir,
-      writeConfig: persistSetupCandidate,
+      writeConfig: async (config) =>
+        await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
       required: usedImportFlow && keepExistingModelConfig,
     });
     nextConfig = verification.config;
@@ -600,19 +599,19 @@ async function runSetupWizardOnce(
     });
   }
 
-  nextConfig = await persistSetupCandidate(nextConfig);
+  nextConfig = await writeSetupConfigFile(nextConfig, {
+    allowConfigSizeDrop: false,
+  });
   let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
-  if (!agentStage.firstAgent) {
-    const { logConfigUpdated } = await loadConfigLoggingModule();
-    logConfigUpdated(runtime);
-    await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
-      skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
-      skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-      agentId: onboardingTarget.agentId,
-    });
-  }
+  const { logConfigUpdated } = await loadConfigLoggingModule();
+  logConfigUpdated(runtime);
+  await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
+    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+    agentId: onboardingTarget.agentId,
+  });
 
-  if (!usedImportFlow && !agentStage.firstAgent) {
+  if (!usedImportFlow) {
     const { runSetupMemoryImportStep } = await import("./setup.memory-import.js");
     await runSetupMemoryImportStep({ config: nextConfig, prompter, runtime });
   }
@@ -662,27 +661,17 @@ async function runSetupWizardOnce(
       workspaceDir: onboardingTarget.workspaceDir,
     });
   }
+
   if (!opts.skipHooks) {
     const { enableDefaultOnboardingInternalHooks } = await import("../commands/onboard-hooks.js");
     nextConfig = enableDefaultOnboardingInternalHooks(nextConfig);
   }
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  nextConfig = await persistSetupCandidate(nextConfig, true);
+  nextConfig = await writeSetupConfigFile(nextConfig, {
+    allowConfigSizeDrop: false,
+  });
   onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
-  if (agentStage.firstAgent) {
-    const { logConfigUpdated } = await loadConfigLoggingModule();
-    logConfigUpdated(runtime);
-    await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
-      skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
-      skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-      agentId: onboardingTarget.agentId,
-    });
-  }
-  if (!usedImportFlow && agentStage.firstAgent) {
-    const { runSetupMemoryImportStep } = await import("./setup.memory-import.js");
-    await runSetupMemoryImportStep({ config: nextConfig, prompter, runtime });
-  }
   commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");

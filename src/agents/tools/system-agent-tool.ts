@@ -192,7 +192,7 @@ const SystemAgentToolSchema = Type.Object({
   model: Type.Optional(Type.String({ description: "provider/model ref" })),
   workspace: Type.Optional(Type.String({ description: "Workspace directory" })),
   agentId: Type.Optional(
-    Type.String({ description: "Agent id for setup/create_agent/open_agent/set_default_model" }),
+    Type.String({ description: "Agent id for create_agent/open_agent/set_default_model" }),
   ),
   channel: Type.Optional(
     Type.String({
@@ -314,12 +314,10 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     case "plugin_uninstall":
       return { kind: "plugin-uninstall", pluginId: requireParam(params, "pluginId") };
     case "setup": {
-      const agentId = readStringParam(params, "agentId")?.trim();
       const workspace = readStringParam(params, "workspace")?.trim();
       const model = readStringParam(params, "model")?.trim();
       return {
         kind: "setup",
-        ...(agentId ? { agentId } : {}),
         ...(workspace ? { workspace } : {}),
         ...(model ? { model } : {}),
       };

@@ -5,9 +5,10 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import type { NormalizedUsage } from "../agents/usage.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayModelPricingCacheFingerprint } from "../gateway/model-pricing-cache-state.js";
@@ -350,7 +351,10 @@ function loadModelsJsonCostIndex(options?: {
   allowPluginNormalization?: boolean;
 }): Map<string, ModelCostConfig> {
   const useRawEntries = options?.allowPluginNormalization === false;
-  const agentDir = options?.agentDir ?? resolveDefaultAgentDir({});
+  const agentDir = options?.agentDir;
+  if (!agentDir) {
+    return EMPTY_PROVIDER_COST_INDEX;
+  }
   const modelsPath = path.join(agentDir, "models.json");
   try {
     let modelsJsonCostCache = modelsJsonCostCacheByAgentDir.get(agentDir);
@@ -388,6 +392,18 @@ function loadModelsJsonCostIndex(options?: {
   } catch {
     return EMPTY_PROVIDER_COST_INDEX;
   }
+}
+
+function resolveCostAgentDir(config?: OpenClawConfig, agentDir?: string): string | undefined {
+  if (agentDir) {
+    return agentDir;
+  }
+  if (config?.agents?.list?.length) {
+    return resolveAgentDir(config, resolveDefaultAgentId(config));
+  }
+  // Config-less and pricing-only lookups are shipped APIs for the historical
+  // main models.json. Full runtime configs resolve their roster default above.
+  return path.join(resolveStateDir(), "agents", "main", "agent");
 }
 
 function findConfiguredProviderCost(params: {
@@ -591,15 +607,21 @@ export function resolveModelCostConfigFingerprint(
   config?: OpenClawConfig,
   agentDir?: string,
 ): string {
+  const resolvedAgentDir = resolveCostAgentDir(config, agentDir);
   return stableCostFingerprintValue({
     configuredRaw: serializeCostIndex(
       getProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
     ),
     configuredNormalized: serializeCostIndex(getProviderCostIndex(config?.models?.providers)),
     modelsJsonRaw: serializeCostIndex(
-      loadModelsJsonCostIndex({ agentDir, allowPluginNormalization: false }),
+      loadModelsJsonCostIndex({
+        agentDir: resolvedAgentDir,
+        allowPluginNormalization: false,
+      }),
     ),
-    modelsJsonNormalized: serializeCostIndex(loadModelsJsonCostIndex({ agentDir })),
+    modelsJsonNormalized: serializeCostIndex(
+      loadModelsJsonCostIndex({ agentDir: resolvedAgentDir }),
+    ),
     gatewayPricing: getGatewayModelPricingCacheFingerprint(),
   });
 }
@@ -619,11 +641,12 @@ export function resolveModelCostConfig(params: {
   if (!rawKey) {
     return undefined;
   }
+  const agentDir = resolveCostAgentDir(params.config, params.agentDir);
 
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
   const rawModelsJsonCost = loadModelsJsonCostIndex({
-    agentDir: params.agentDir,
+    agentDir,
     allowPluginNormalization: false,
   }).get(rawKey);
   if (rawModelsJsonCost) {
@@ -645,7 +668,7 @@ export function resolveModelCostConfig(params: {
   if (shouldUseNormalizedCostLookup(params)) {
     const key = toResolvedModelKey(params);
     if (key && key !== rawKey) {
-      const modelsJsonCost = loadModelsJsonCostIndex({ agentDir: params.agentDir }).get(key);
+      const modelsJsonCost = loadModelsJsonCostIndex({ agentDir }).get(key);
       if (modelsJsonCost) {
         return modelsJsonCost;
       }

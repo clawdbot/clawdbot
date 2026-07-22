@@ -55,7 +55,7 @@ export function loadConfigFromContext(
           timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
         });
       }
-      return {};
+      return migratePersistedImplicitMainRoster({}).config as OpenClawConfig;
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
     const parsed = deps.json5.parse(raw);

@@ -425,5 +425,5 @@ function formatSetupPlanDescription(
   operation: Extract<SystemAgentOperation, { kind: "setup" }>,
 ): string {
   const workspace = shortenHomePath(resolveUserPath(operation.workspace ?? process.cwd()));
-  return `bootstrap OpenClaw setup for agent ${normalizeAgentId(operation.agentId ?? "main")} in workspace ${workspace}`;
+  return `bootstrap OpenClaw setup for workspace ${workspace}`;
 }

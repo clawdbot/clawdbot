@@ -1,7 +1,7 @@
 /** Prepares secrets runtime snapshots from config, auth stores, plugins, and env. */
 import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDirForConfigInspection } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
@@ -77,7 +77,11 @@ async function resolveLoadablePluginOrigins(params: {
   env: NodeJS.ProcessEnv;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): Promise<ReadonlyMap<string, PluginOrigin>> {
-  const workspaceDir = resolveAgentWorkspaceDirForConfigInspection(params.config, params.env);
+  const workspaceDir = resolveAgentWorkspaceDir(
+    params.config,
+    resolveDefaultAgentId(params.config),
+    params.env,
+  );
   const { listPluginOriginsFromMetadataSnapshot, loadPluginMetadataSnapshot } =
     await loadRuntimeManifestHelpers();
   const snapshot =

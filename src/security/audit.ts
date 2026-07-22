@@ -4,7 +4,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
@@ -624,12 +624,6 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
-function resolveAuditDefaultAgentId(cfg: OpenClawConfig): string | undefined {
-  const agents = listAgentEntries(cfg);
-  const defaults = agents.filter((agent) => agent.default === true);
-  return defaults.length === 1 ? defaults[0]?.id : undefined;
-}
-
 function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
@@ -652,7 +646,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   }
 
   const agents = listAgentEntries(cfg);
-  const defaultAgentId = resolveAuditDefaultAgentId(cfg);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   const riskyAgents = agents
     .filter(
       (entry) =>
@@ -1012,7 +1006,7 @@ function hasOwnSkillsAllowlist(entry: object | undefined): boolean {
 
 function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpBoundaryScope[] {
   const agents = listAgentEntries(cfg);
-  const defaultAgentId = resolveAuditDefaultAgentId(cfg);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   const defaultsHaveSkillAllowlist = hasOwnSkillsAllowlist(cfg.agents?.defaults);
   const candidates = [
     ...(defaultsHaveSkillAllowlist && defaultAgentId
@@ -1262,7 +1256,7 @@ async function createAuditExecutionContext(
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
-  const defaultAgentId = resolveAuditDefaultAgentId(cfg);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   const configuredDefaultWorkspace = cfg.agents?.defaults?.workspace?.trim();
   const workspaceDir =
     opts.workspaceDir ??

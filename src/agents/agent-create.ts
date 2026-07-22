@@ -6,11 +6,7 @@ import {
   findAgentEntryIndex,
   listAgentEntries,
 } from "../commands/agents.config.js";
-import {
-  readConfigFileSnapshot,
-  transformConfigFileWithRetry,
-  withConfigMutationExclusive,
-} from "../config/config.js";
+import { transformConfigFileWithRetry, withConfigMutationExclusive } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,6 +23,8 @@ import {
   sanitizeAgentIdentityLine,
 } from "./identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "./workspace.js";
+
+const RESERVED_BOOTSTRAP_AGENT_ID = "main";
 
 type CreateAgentResult =
   | {
@@ -46,7 +44,6 @@ type CreateAgentResult =
         | "reserved-id"
         | "already-exists"
         | "deletion-pending"
-        | "legacy-session-migration-required"
         | "invalid-bindings"
         | "unsafe-identity-file";
       agentId?: string;
@@ -71,6 +68,7 @@ type CreateAgentParams = {
 };
 
 class DuplicateAgentError extends Error {}
+class ConcurrentBootstrapRosterError extends Error {}
 class InvalidAgentBindingsError extends Error {}
 
 function createError(
@@ -84,6 +82,14 @@ function createError(
 /** True when raw user input contains a character that can survive agent-id normalization. */
 export function hasValidRawAgentIdCharacters(value: string): boolean {
   return /[a-z0-9]/iu.test(value);
+}
+
+function isInjectedBootstrapMainEntry(entry: CreateAgentEntry | undefined): boolean {
+  return (
+    entry?.id === RESERVED_BOOTSTRAP_AGENT_ID &&
+    entry.default === true &&
+    Object.keys(entry).every((key) => key === "id" || key === "default")
+  );
 }
 
 async function writeIdentityFile(params: {
@@ -117,7 +123,11 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     return createError("invalid-name", `agent name "${rawName}" has no valid id characters`);
   }
   const agentId = normalizeAgentId(rawId);
-  if (isReservedSystemAgentId(agentId)) {
+  const isBootstrapMain = agentId === RESERVED_BOOTSTRAP_AGENT_ID && params.entry?.default === true;
+  if (
+    (!isBootstrapMain && agentId === RESERVED_BOOTSTRAP_AGENT_ID) ||
+    isReservedSystemAgentId(agentId)
+  ) {
     return createError("reserved-id", `"${agentId}" is reserved`, agentId);
   }
 
@@ -139,7 +149,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     : undefined;
   const transformConfig = params.transformConfig ?? transformConfigFileWithRetry;
 
-  let repairedMainMaterialized = false;
   try {
     return await withConfigMutationExclusive(async (lockedConfig) => {
       const deletion = readAgentDeletionJournal(agentId);
@@ -149,53 +158,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           `agent "${agentId}" deletion cleanup is still pending`,
           agentId,
         );
-      }
-      if (
-        agentId === "main" &&
-        listAgentEntries(lockedConfig).some(
-          (entry) => entry.default === true && normalizeAgentId(entry.id) !== "main",
-        )
-      ) {
-        const {
-          formatLegacyMainSessionMigrationOutcome,
-          isLegacyMainSessionMigrationUnresolved,
-          migrateLegacyDefaultMainSessionKeys,
-        } = await import("../config/sessions/legacy-main-session-key-migration.js");
-        const migration = await migrateLegacyDefaultMainSessionKeys(lockedConfig);
-        const unresolved = migration.outcomes.filter(isLegacyMainSessionMigrationUnresolved);
-        if (unresolved.length > 0) {
-          return createError(
-            "legacy-session-migration-required",
-            `Cannot create agent "main" while legacy main-session ownership diverges. ${unresolved
-              .map((outcome) => formatLegacyMainSessionMigrationOutcome(outcome))
-              .join(" ")} Export or delete one of the named session keys, then retry.`,
-            agentId,
-          );
-        }
-      }
-      const persistedConfigExists = (await readConfigFileSnapshot()).exists;
-      const { maybeRepairAgentRoster } =
-        await import("../commands/doctor/shared/agent-roster-repair.js");
-      const plannedRepair = persistedConfigExists
-        ? maybeRepairAgentRoster(lockedConfig)
-        : { config: lockedConfig, changes: [] };
-      if (plannedRepair.changes.length > 0 && agentId === "main") {
-        const repaired = await transformConfig<boolean>({
-          afterWrite: { mode: "auto" },
-          maxAttempts: 1,
-          transform: async (currentConfig) => {
-            const repair = maybeRepairAgentRoster(currentConfig);
-            let nextConfig = repair.config;
-            if (params.entry && repair.changes.length > 0) {
-              const list = listAgentEntries(nextConfig);
-              const index = findAgentEntryIndex(list, agentId);
-              list[index] = { ...list[index], ...params.entry, id: agentId };
-              nextConfig = { ...nextConfig, agents: { ...nextConfig.agents, list } };
-            }
-            return { nextConfig, result: repair.changes.length > 0 };
-          },
-        });
-        repairedMainMaterialized = repaired.result === true;
       }
       let tombstoneClaimed = false;
       if (
@@ -210,26 +172,54 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       const committed = await transformConfig<CreateAgentResult>({
         afterWrite: { mode: "auto" },
         maxAttempts: 1,
-        transform: async (currentConfig) => {
-          const repair = persistedConfigExists
-            ? maybeRepairAgentRoster(currentConfig)
-            : { config: currentConfig, changes: [] };
-          const creationConfig = agentId === "main" ? currentConfig : repair.config;
-          if (findAgentEntryIndex(listAgentEntries(creationConfig), agentId) >= 0) {
+        transform: async (currentConfig, context) => {
+          const currentEntries = listAgentEntries(currentConfig);
+          const existingIndex = findAgentEntryIndex(currentEntries, agentId);
+          if (existingIndex >= 0 && !isBootstrapMain) {
             throw new DuplicateAgentError();
+          }
+          if (isBootstrapMain && existingIndex < 0 && currentEntries.length > 0) {
+            throw new ConcurrentBootstrapRosterError();
+          }
+
+          const existingEntry = currentEntries[existingIndex];
+          if (
+            existingIndex >= 0 &&
+            isBootstrapMain &&
+            (!isInjectedBootstrapMainEntry(existingEntry) || context.snapshot.exists)
+          ) {
+            return {
+              nextConfig: currentConfig,
+              result: {
+                status: "existing",
+                agentId,
+                name: existingEntry?.name ?? safeName,
+                workspace: resolveAgentWorkspaceDir(currentConfig, agentId),
+                agentDir: resolveAgentDir(currentConfig, agentId),
+                bootstrapPending: false,
+              },
+            };
           }
 
           const workspaceDir =
-            explicitWorkspace ?? resolveAgentWorkspaceDir(creationConfig, agentId);
-          const agentDir = explicitAgentDir ?? resolveAgentDir(creationConfig, agentId);
-          let nextConfig = applyAgentConfig(creationConfig, {
-            agentId,
-            name: safeName,
-            workspace: workspaceDir,
-            agentDir,
-            model,
-            identity,
-          });
+            explicitWorkspace ?? resolveAgentWorkspaceDir(currentConfig, agentId);
+          const agentDir = explicitAgentDir ?? resolveAgentDir(currentConfig, agentId);
+          const materializeInjectedMain =
+            existingIndex >= 0 &&
+            isBootstrapMain &&
+            isInjectedBootstrapMainEntry(existingEntry) &&
+            !context.snapshot.exists;
+          let nextConfig =
+            existingIndex < 0 || materializeInjectedMain
+              ? applyAgentConfig(currentConfig, {
+                  agentId,
+                  name: safeName,
+                  workspace: workspaceDir,
+                  agentDir,
+                  model,
+                  identity,
+                })
+              : currentConfig;
           if (params.entry) {
             const list = listAgentEntries(nextConfig);
             const index = findAgentEntryIndex(list, agentId);
@@ -285,7 +275,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           return {
             nextConfig,
             result: {
-              status: "created",
+              status: existingIndex >= 0 ? "existing" : "created",
               agentId,
               name: safeName,
               workspace: workspace.dir,
@@ -309,21 +299,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {
-      if (repairedMainMaterialized && agentId === "main") {
-        const snapshot = await import("../config/config.js").then((module) =>
-          module.readConfigFileSnapshot(),
-        );
-        const config = snapshot.sourceConfig ?? snapshot.config;
-        return {
-          status: "existing",
-          agentId,
-          name: safeName,
-          workspace: resolveAgentWorkspaceDir(config, agentId),
-          agentDir: resolveAgentDir(config, agentId),
-          bootstrapPending: false,
-        };
-      }
       return createError("already-exists", `agent "${agentId}" already exists`, agentId);
+    }
+    if (error instanceof ConcurrentBootstrapRosterError) {
+      return createError(
+        "already-exists",
+        "agent roster changed during bootstrap; retry onboarding with the current roster",
+        agentId,
+      );
     }
     if (error instanceof InvalidAgentBindingsError) {
       return createError("invalid-bindings", error.message, agentId);

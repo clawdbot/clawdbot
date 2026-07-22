@@ -15,7 +15,7 @@ import {
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { resolveOAuthPath } from "../config/paths.js";
+import { resolveOAuthPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -67,11 +67,8 @@ export function collectCandidateAgentDirs(
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
 ): string[] {
   const dirs = new Set<string>();
-  const agentIds = listAgentIds(config);
-  if (agentIds.length > 0) {
-    dirs.add(resolveUserPath(resolveDefaultAgentDir(config, env), env));
-  }
-  for (const agentId of agentIds) {
+  dirs.add(resolveUserPath(resolveDefaultAgentDir(config, env), env));
+  for (const agentId of listAgentIds(config)) {
     dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
   }
   return [...dirs];
@@ -119,7 +116,14 @@ function hasCandidateAuthProfileStoreSources(params: {
   agentDirs?: string[];
 }): boolean {
   const candidateDirs = resolveCandidateAgentDirs(params);
-  const mainAgentDir = resolveUserPath(resolveDefaultAgentDir({}, params.env), params.env);
+  // The shipped no-argument auth store is fixed at agents/main/agent even when
+  // another roster entry is default, so the fast path must probe it separately.
+  const mainAgentDir = path.join(
+    resolveStateDir(params.env as NodeJS.ProcessEnv),
+    "agents",
+    "main",
+    "agent",
+  );
   return (
     candidateDirs.some((agentDir) => hasCandidateAuthProfileStoreSource(agentDir)) ||
     hasCandidateAuthProfileStoreSource(mainAgentDir) ||

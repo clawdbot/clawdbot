@@ -438,22 +438,15 @@ async function runGuidedOnboardingFlow(
   } else {
     // Announced default: apply the same setup plan the conversational "yes"
     // would, then hand off to the hatch instead of parking in the OpenClaw chat.
+    const { ensureOnboardingAgent } = await import("./onboard-agent.js");
+    await ensureOnboardingAgent({ config: existingConfig, workspace, baseConfig: existingConfig });
     const applySetup =
       deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
-    const firstAgentName =
-      (existingConfig.agents?.list?.length ?? 0) === 0
-        ? await prompter.text({
-            message: "What should we call your first agent?",
-            initialValue: "main",
-            validate: (value) => (value?.trim() ? undefined : "Agent name is required"),
-          })
-        : undefined;
     const applyProgress = prompter.progress(t("wizard.guided.settingUp"));
     try {
       const applied = await withConsoleSubsystemsSuppressed(() =>
         applySetup({
           workspace,
-          ...(firstAgentName ? { agentName: firstAgentName } : {}),
           ...(allowWorkspaceChange ? { allowWorkspaceChange: true } : {}),
           surface: "cli",
           runtime,

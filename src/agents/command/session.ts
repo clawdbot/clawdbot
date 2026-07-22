@@ -31,6 +31,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
   classifySessionKeyShape,
+  DEFAULT_AGENT_ID,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   normalizeMainKey,
@@ -42,8 +43,6 @@ import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
 import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
-
-const LEGACY_HARDCODED_AGENT_ID = "main";
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
@@ -136,16 +135,7 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
   storePath: string;
   cloneOnWrite?: boolean;
 }): SessionKeyResolution | undefined {
-  const configuredDefaults = (opts.cfg.agents?.list ?? []).filter(
-    (entry) => entry.default === true,
-  );
-  if (
-    configuredDefaults.length !== 1 ||
-    normalizeAgentId(configuredDefaults[0]?.id) !== opts.defaultAgentId ||
-    opts.defaultAgentId === LEGACY_HARDCODED_AGENT_ID ||
-    !opts.sessionKey ||
-    listAgentIds(opts.cfg).includes(LEGACY_HARDCODED_AGENT_ID)
-  ) {
+  if (opts.defaultAgentId === DEFAULT_AGENT_ID || !opts.sessionKey) {
     return undefined;
   }
   const defaultMainSessionKey = buildAgentMainSessionKey({
@@ -156,40 +146,44 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
     return undefined;
   }
 
-  // Historical hardcoded writers stored agent:main:* for non-main defaults (observed prod state).
-  // Keep this remap or upgrades lose their main session.
-  // Doctor migrates it; replace this branch with a startup-owned migration in a follow-up PR.
   const legacyStorePath = resolveStorePath(opts.cfg.session?.store, {
-    agentId: LEGACY_HARDCODED_AGENT_ID,
+    agentId: DEFAULT_AGENT_ID,
   });
   const legacyKeys = [
-    buildAgentMainSessionKey({
-      agentId: LEGACY_HARDCODED_AGENT_ID,
-      mainKey: opts.mainKey,
-    }),
-    buildAgentMainSessionKey({ agentId: LEGACY_HARDCODED_AGENT_ID, mainKey: "main" }),
+    buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: opts.mainKey }),
+    buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: "main" }),
   ];
-  const findFreshest = (store: Record<string, SessionEntry>) =>
-    legacyKeys
-      .flatMap((key) => (store[key] ? [{ key, entry: store[key] }] : []))
-      .toSorted((left, right) => (right.entry?.updatedAt ?? 0) - (left.entry?.updatedAt ?? 0))[0];
-  let legacyStore = opts.sessionStore;
-  if (legacyStorePath !== opts.storePath) {
-    try {
-      legacyStore = loadCommandSessionStore({
-        agentId: LEGACY_HARDCODED_AGENT_ID,
-        storePath: legacyStorePath,
-        ...(opts.cloneOnWrite ? { clone: false } : {}),
-      });
-    } catch {
-      return undefined;
+  if (legacyStorePath === opts.storePath) {
+    for (const legacyKey of legacyKeys) {
+      const legacyEntry = opts.sessionStore[legacyKey];
+      if (legacyEntry) {
+        const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
+        sessionStore[opts.sessionKey] = { ...legacyEntry };
+        return {
+          sessionKey: opts.sessionKey,
+          sessionStore,
+          storePath: opts.storePath,
+        };
+      }
     }
+    return undefined;
   }
-  const legacy = findFreshest(legacyStore);
-  if (legacy?.entry) {
-    const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
-    sessionStore[opts.sessionKey] = { ...legacy.entry };
-    return { sessionKey: opts.sessionKey, sessionStore, storePath: opts.storePath };
+  const legacyStore = loadCommandSessionStore({
+    agentId: DEFAULT_AGENT_ID,
+    storePath: legacyStorePath,
+    ...(opts.cloneOnWrite ? { clone: false } : {}),
+  });
+  for (const legacyKey of legacyKeys) {
+    const legacyEntry = legacyStore[legacyKey];
+    if (legacyEntry) {
+      const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
+      sessionStore[opts.sessionKey] = { ...legacyEntry };
+      return {
+        sessionKey: opts.sessionKey,
+        sessionStore,
+        storePath: opts.storePath,
+      };
+    }
   }
   return undefined;
 }
@@ -333,21 +327,19 @@ export function resolveSessionKeyForRequest(opts: {
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
 
-  const legacyMainSession = resolveLegacyMainStoreSessionForDefaultAgent({
-    cfg: opts.cfg,
-    defaultAgentId,
-    mainKey,
-    sessionKey:
-      sessionKey ??
-      (!requestedSessionId
-        ? resolveExplicitAgentSessionKey({ cfg: opts.cfg, agentId: defaultAgentId })
-        : undefined),
-    sessionStore,
-    storePath,
-    cloneOnWrite: opts.clone === false,
-  });
-  if (legacyMainSession) {
-    return legacyMainSession;
+  if (ctx && !requestedAgentId && !requestedSessionId && !explicitSessionKey) {
+    const legacyMainSession = resolveLegacyMainStoreSessionForDefaultAgent({
+      cfg: opts.cfg,
+      defaultAgentId,
+      mainKey,
+      sessionKey,
+      sessionStore,
+      storePath,
+      cloneOnWrite: opts.clone === false,
+    });
+    if (legacyMainSession) {
+      return legacyMainSession;
+    }
   }
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was

@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefix } from "../../infra/crypto-digest.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -25,7 +26,6 @@ import {
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
-import { resolveDefaultAgentDir } from "../agent-scope-config.js";
 
 type AuthProfileDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -37,7 +37,9 @@ type AuthProfileDatabase = Pick<
 const PRIMARY_ROW_KEY = "primary";
 
 function resolveAgentDir(agentDir?: string): string {
-  return resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
+  return agentDir
+    ? resolveUserPath(agentDir)
+    : path.join(resolveStateDir(), "agents", "main", "agent");
 }
 
 function inferAgentIdFromDir(agentDir: string): string {

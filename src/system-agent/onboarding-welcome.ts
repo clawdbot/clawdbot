@@ -30,13 +30,13 @@ const READY_WELCOME_QUESTION: SystemAgentChatQuestion = {
 };
 
 const SETUP_WELCOME_QUESTION: SystemAgentChatQuestion = {
-  id: "onboarding-agent-name",
-  header: "Name your agent",
-  question: "What should we call your first agent?",
+  id: "onboarding-apply-setup",
+  header: "Ready when you are",
+  question: "Should I set all of that up now?",
   options: [
-    { label: "Main", reply: "Use main and set it up", recommended: true },
+    { label: "Yes — set it up", reply: "yes", recommended: true },
     {
-      label: "Review setup",
+      label: "What will you change?",
       reply: "what exactly will you set up?",
       description: "Ask before anything is written.",
     },
@@ -126,7 +126,7 @@ export async function buildOnboardingWelcome(params: {
   const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
   const workspace = resolveUserPath(requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE);
 
-  params.engine.propose({ kind: "setup", agentId: "main", workspace });
+  params.engine.propose({ kind: "setup", workspace });
   const welcome = [
     "## Hi, I'm OpenClaw — let's hatch your agent.",
     "",
@@ -136,8 +136,7 @@ export async function buildOnboardingWelcome(params: {
     `- Workspace: ${shortenHomePath(workspace)}`,
     "- Gateway: runs locally, private to this machine (token auth).",
     "",
-    "What should we call your first agent? Say a name, or choose **Main** to use the classic default.",
-    "I'll normalize the name into its agent id, show you the exact plan, and wait for approval before writing anything.",
+    "Say **yes** and I'll set all of that up now.",
     "",
     "Heads up: your agent gets real access to this machine — https://docs.openclaw.ai/security",
     "Afterwards: `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list), then `talk to agent` to meet your agent.",

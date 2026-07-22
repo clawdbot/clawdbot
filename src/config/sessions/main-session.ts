@@ -8,8 +8,7 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionScope } from "./types.js";
 
-const LEGACY_HARDCODED_AGENT_ID = "main";
-
+const FALLBACK_DEFAULT_AGENT_ID = "main";
 export const SESSION_ROUTING_CHANGED_ERROR_REASON = "session-routing-changed";
 
 /** Builds the canonical main session key for an agent. */
@@ -72,30 +71,20 @@ export function canonicalizeMainSessionAlias(params: {
   const agentMainSessionKey = buildMainSessionKey(agentId, mainKey);
   const agentMainAliasKey = buildMainSessionKey(agentId, "main");
 
-  // Shipped writers hardcoded agent:main:* even for non-main defaults. Keep this
-  // remap until doctor is guaranteed to migrate session keys on every upgrade.
-  const legacyMainKey = buildMainSessionKey(LEGACY_HARDCODED_AGENT_ID, mainKey);
-  const legacyMainAliasKey = buildMainSessionKey(LEGACY_HARDCODED_AGENT_ID, "main");
-  const roster = (
-    params.cfg as
-      | ({ agents?: { list?: Array<{ id: string; default?: boolean }> } } & typeof params.cfg)
-      | undefined
-  )?.agents?.list;
-  const hasConfiguredMain = roster?.some(
-    (entry) => normalizeAgentId(entry.id) === LEGACY_HARDCODED_AGENT_ID,
-  );
-  const configuredDefault = roster?.find((entry) => entry.default === true);
-  const allowLegacyMainAlias =
-    agentId !== LEGACY_HARDCODED_AGENT_ID &&
-    !hasConfiguredMain &&
-    normalizeAgentId(configuredDefault?.id ?? "") === agentId;
+  // Also recognize legacy keys built with the hardcoded DEFAULT_AGENT_ID ("main")
+  // when the configured agent differs. resolveSessionKey() historically used
+  // DEFAULT_AGENT_ID="main" for all write paths, producing "agent:main:<mainKey>"
+  // even when the configured agent is e.g. "ops". See #29683.
+  const legacyMainKey = buildMainSessionKey(FALLBACK_DEFAULT_AGENT_ID, mainKey);
+  const legacyMainAliasKey = buildMainSessionKey(FALLBACK_DEFAULT_AGENT_ID, "main");
 
   const isMainAlias =
     raw === "main" ||
     raw === mainKey ||
     raw === agentMainSessionKey ||
     raw === agentMainAliasKey ||
-    (allowLegacyMainAlias && (raw === legacyMainKey || raw === legacyMainAliasKey));
+    raw === legacyMainKey ||
+    raw === legacyMainAliasKey;
 
   if (params.cfg?.session?.scope === "global" && isMainAlias) {
     return "global";

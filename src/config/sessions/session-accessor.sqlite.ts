@@ -28,10 +28,8 @@ export {
   applySqliteSessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements,
   applySqliteSessionStoreProjection,
-  migrateSqliteSessionEntryKeys,
   purgeSqliteDeletedAgentSessionEntries,
 } from "./session-accessor.sqlite-projection.js";
-export type { SqliteSessionKeyMigrationOutcome } from "./session-accessor.sqlite-projection.js";
 export {
   forkSqliteSessionEntryFromParentTarget,
   forkSqliteSessionTranscriptFromParent,

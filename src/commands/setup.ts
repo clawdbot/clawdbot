@@ -7,6 +7,7 @@
 import fs from "node:fs/promises";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { ConfigWriteOptions, ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -33,11 +34,6 @@ type EnsureAgentWorkspace = (params: {
 }) => Promise<{ dir: string }>;
 
 type SetupCommandDeps = {
-  createAgent?: (params: {
-    entry: { id: string; default: true; name: string; workspace: string };
-  }) => Promise<
-    { status: "created" | "existing"; agentId: string } | { status: "error"; message: string }
-  >;
   createConfigIO?: () => ConfigIO;
   defaultAgentWorkspaceDir?: string | (() => string | Promise<string>);
   ensureAgentWorkspace?: EnsureAgentWorkspace;
@@ -150,7 +146,7 @@ export async function setupCommand(
     return;
   }
 
-  const cfg = snapshot.sourceConfig;
+  const cfg = migratePersistedImplicitMainRoster(snapshot.sourceConfig).config as OpenClawConfig;
   const defaults = cfg.agents?.defaults ?? {};
 
   const workspace =
@@ -160,7 +156,6 @@ export async function setupCommand(
     ...cfg,
     agents: {
       ...cfg.agents,
-      list: cfg.agents?.list ?? [],
       defaults: {
         ...defaults,
         workspace,
@@ -171,6 +166,11 @@ export async function setupCommand(
       mode: cfg.gateway?.mode ?? "local",
     },
   };
+
+  if (!snapshot.exists) {
+    const { ensureOnboardingAgent } = await import("./onboard-agent.js");
+    next = (await ensureOnboardingAgent({ config: next, workspace, baseConfig: cfg })).config;
+  }
 
   if (
     !snapshot.exists ||
@@ -208,25 +208,6 @@ export async function setupCommand(
     runtime.log(`Config OK: ${await formatConfigPath(configPath)}`);
   }
 
-  let createdAgentId: string | undefined;
-  if ((next.agents?.list?.length ?? 0) === 0) {
-    const create = deps.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
-    const created = await create({
-      entry: { id: "main", default: true, name: "main", workspace },
-    });
-    if (created.status === "error") {
-      throw new Error(created.message);
-    }
-    createdAgentId = created.agentId;
-    next = {
-      ...next,
-      agents: {
-        ...next.agents,
-        list: [{ id: created.agentId, default: true, name: "main", workspace }],
-      },
-    };
-  }
-
   const ws = await (deps.ensureAgentWorkspace ?? ensureDefaultAgentWorkspace)({
     dir: workspace,
     ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
@@ -234,10 +215,13 @@ export async function setupCommand(
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
+  const defaultAgentId = next.agents?.list?.find((entry) => entry.default === true)?.id;
+  if (!defaultAgentId) {
+    throw new Error("Setup requires a default agent after config migration.");
+  }
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )(createdAgentId ?? resolveDefaultAgentId(next));
+  )(defaultAgentId);
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   runtime.log("");

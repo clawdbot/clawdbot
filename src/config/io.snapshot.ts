@@ -57,7 +57,8 @@ export async function readConfigFileSnapshotInternal(
   maybeLoadDotEnvForConfig(deps.env);
   const envBeforeRead = snapshotEnv(deps.env);
   if (!deps.fs.existsSync(configPath)) {
-    const config = {};
+    const migrated = migratePersistedImplicitMainRoster({});
+    const config = coerceConfig(migrated.config);
     const legacyIssues: LegacyConfigIssue[] = [];
     return await finalizeReadConfigSnapshotInternalResult(deps, {
       snapshot: createConfigFileSnapshot({
@@ -65,7 +66,7 @@ export async function readConfigFileSnapshotInternal(
         exists: false,
         raw: null,
         parsed: {},
-        sourceConfig: {},
+        sourceConfig: config,
         valid: true,
         runtimeConfig: config,
         hash: hashConfigRaw(null),

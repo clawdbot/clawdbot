@@ -5,7 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createAgent, hasValidRawAgentIdCharacters } from "../agents/agent-create.js";
+import { createAgent } from "../agents/agent-create.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -15,7 +15,6 @@ import {
   buildPortableAuthProfileStoreForAgentCopy,
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
-import { copyPortableAuthProfiles } from "../agents/auth-profiles/copy-portable.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
@@ -25,7 +24,7 @@ import {
   commitConfigWithPendingPluginInstalls,
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -58,6 +57,29 @@ type AgentBindingResult = ReturnType<typeof applyAgentBindings>;
 
 function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): AgentBindingResult {
   return { config, added: [], updated: [], skipped: [], conflicts: [] };
+}
+
+async function copyPortableAuthProfiles(params: {
+  destAgentDir: string;
+  sourceAgentDir: string;
+}): Promise<{ copied: number; skipped: number }> {
+  const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir);
+  if (!sourceStore || Object.keys(sourceStore.profiles).length === 0) {
+    return { copied: 0, skipped: 0 };
+  }
+  const portable = buildPortableAuthProfileStoreForAgentCopy(sourceStore);
+  if (portable.copiedProfileIds.length === 0) {
+    return { copied: 0, skipped: portable.skippedProfileIds.length };
+  }
+  await fs.mkdir(params.destAgentDir, { recursive: true });
+  saveAuthProfileStore(portable.store, params.destAgentDir, {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
+  return {
+    copied: portable.copiedProfileIds.length,
+    skipped: portable.skippedProfileIds.length,
+  };
 }
 
 function formatSkippedOAuthProfilesMessage(params: {
@@ -99,11 +121,6 @@ export async function agentsAddCommand(
       runtime.error(
         `Agent name is required in non-interactive mode. Run ${formatCliCommand("openclaw agents add <id> --workspace <path>")}.`,
       );
-      runtime.exit(1);
-      return;
-    }
-    if (!hasValidRawAgentIdCharacters(nameInput)) {
-      runtime.error(`Agent name "${nameInput}" has no valid id characters.`);
       runtime.exit(1);
       return;
     }
@@ -188,7 +205,7 @@ export async function agentsAddCommand(
             return "Required";
           }
           const normalized = normalizeAgentId(value);
-          if (isReservedSystemAgentId(normalized)) {
+          if (normalized === LEGACY_IMPLICIT_AGENT_ID || isReservedSystemAgentId(normalized)) {
             return `"${normalized}" is reserved. Choose another name.`;
           }
           return undefined;
@@ -196,12 +213,8 @@ export async function agentsAddCommand(
       }));
 
     const agentName = normalizeOptionalString(name) ?? "";
-    if (!hasValidRawAgentIdCharacters(agentName)) {
-      await prompter.outro(`Agent name "${agentName}" has no valid id characters.`);
-      return;
-    }
     const agentId = normalizeAgentId(agentName);
-    if (isReservedSystemAgentId(agentId)) {
+    if (agentId === LEGACY_IMPLICIT_AGENT_ID || isReservedSystemAgentId(agentId)) {
       await prompter.outro(`"${agentId}" is reserved. Choose another name.`);
       return;
     }
@@ -223,9 +236,7 @@ export async function agentsAddCommand(
       }
     }
 
-    const workspaceResolutionConfig =
-      listAgentEntries(cfg).length === 0 ? applyAgentConfig(cfg, { agentId }) : cfg;
-    const workspaceDefault = resolveAgentWorkspaceDir(workspaceResolutionConfig, agentId);
+    const workspaceDefault = resolveAgentWorkspaceDir(cfg, agentId);
     const workspaceInput = await prompter.text({
       message: "Workspace directory",
       initialValue: workspaceDefault,
@@ -243,12 +254,12 @@ export async function agentsAddCommand(
       agentDir,
     });
 
-    const defaultAgentId = listAgentEntries(cfg).length > 0 ? resolveDefaultAgentId(cfg) : agentId;
+    const defaultAgentId = resolveDefaultAgentId(cfg);
     if (defaultAgentId !== agentId) {
       const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
       const sourceAuthPath = resolveAuthStorePath(sourceAgentDir);
       const destAuthPath = resolveAuthStorePath(agentDir);
-      const mainAuthPath = resolveAuthStorePath(undefined);
+      const mainAuthPath = resolveAuthStorePath();
       const sameAuthPath =
         normalizeLowercaseStringOrEmpty(path.resolve(sourceAuthPath)) ===
         normalizeLowercaseStringOrEmpty(path.resolve(destAuthPath));
@@ -396,32 +407,11 @@ export async function agentsAddCommand(
       }
     }
 
-    const firstAgent = listAgentEntries(cfg).length === 0;
-    const stagedFirstAgentEntry = firstAgent
-      ? listAgentEntries(nextConfig).find((entry) => normalizeAgentId(entry.id) === agentId)
-      : undefined;
-    const configToCommit = firstAgent
-      ? { ...nextConfig, agents: { ...nextConfig.agents, list: [] } }
-      : nextConfig;
     const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig: configToCommit,
+      nextConfig,
       ...(baseHash !== undefined ? { baseHash } : {}),
     });
     nextConfig = committed.config;
-    if (firstAgent) {
-      const created = await createAgent({
-        ...(stagedFirstAgentEntry ? { entry: stagedFirstAgentEntry } : {}),
-        name: agentName,
-        workspace: workspaceDir,
-      });
-      if (created.status === "error") {
-        throw new Error(created.message);
-      }
-      nextConfig = {
-        ...nextConfig,
-        agents: { ...nextConfig.agents, list: [{ id: created.agentId, default: true }] },
-      };
-    }
     logConfigUpdated(runtime);
     const target = resolveOnboardingAgentTarget(nextConfig, agentId);
     await ensureOnboardingAgentWorkspace(target, runtime, {

@@ -4,11 +4,7 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import {
-  resolveAgentWorkspaceDir,
-  resolveAgentWorkspaceDirForConfigInspection,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   type ChannelDmAllowFromMode,
   resolveChannelDmAllowFrom,
@@ -57,6 +53,7 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
+import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import {
   isModelPolicyCompatSelector,
@@ -963,7 +960,10 @@ function createIdentityAvatarIssue(index: number, message: string): ConfigValida
   return withConfigIssuePath({ path: formatConfigPath(pathSegments), message }, pathSegments);
 }
 
-function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
+function validateIdentityAvatar(
+  config: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): ConfigValidationIssue[] {
   const agents = config.agents?.list;
   if (!Array.isArray(agents) || agents.length === 0) {
     return [];
@@ -1006,6 +1006,7 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     const workspaceDir = resolveAgentWorkspaceDir(
       config,
       entry.id ?? resolveDefaultAgentId(config),
+      env,
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
       issues.push(
@@ -1122,6 +1123,7 @@ export function validateConfigObjectRaw(
     touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
     validateBundledChannels?: boolean;
     preservedLegacyRootKeys?: readonly string[];
+    env?: NodeJS.ProcessEnv;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
@@ -1165,7 +1167,7 @@ export function validateConfigObjectRaw(
       ],
     };
   }
-  const avatarIssues = validateIdentityAvatar(validatedConfig);
+  const avatarIssues = validateIdentityAvatar(validatedConfig, opts?.env);
   if (avatarIssues.length > 0) {
     return { ok: false, issues: avatarIssues };
   }
@@ -1250,7 +1252,8 @@ export function validateConfigObjectWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, {
+  const migrated = migratePersistedImplicitMainRoster(raw).config;
+  return validateConfigObjectWithPluginsBase(migrated, {
     applyDefaults: true,
     env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
@@ -1265,7 +1268,8 @@ export function validateConfigObjectRawWithPlugins(
   raw: unknown,
   params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, {
+  const migrated = migratePersistedImplicitMainRoster(raw).config;
+  return validateConfigObjectWithPluginsBase(migrated, {
     applyDefaults: false,
     env: params?.env,
     pluginValidation: params?.pluginValidation ?? "full",
@@ -1283,6 +1287,7 @@ function validateConfigObjectWithPluginsBase(
   const base = validateConfigObjectRaw(raw, {
     sourceRaw: opts.sourceRaw,
     preservedLegacyRootKeys: opts.preservedLegacyRootKeys,
+    env: opts.env,
   });
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
@@ -1380,7 +1385,7 @@ function validateConfigObjectWithPluginsBase(
       registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
       return registryInfo;
     }
-    const workspaceDir = resolveAgentWorkspaceDirForConfigInspection(config, opts.env);
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config), opts.env);
     const registry = resolvePluginMetadataSnapshot({
       config,
       workspaceDir: workspaceDir ?? undefined,

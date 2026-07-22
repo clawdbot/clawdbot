@@ -11,14 +11,13 @@ import {
 } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
   type ParsedAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-
-const LEGACY_HARDCODED_AGENT_ID = "main";
 
 /** Canonicalize an opaque session key into the agent-scoped store namespace. */
 export function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
@@ -43,10 +42,7 @@ function shouldRemapLegacyDefaultMainAlias(
   options?: { storeAgentId?: string },
 ): boolean {
   const agentId = normalizeAgentId(parsed.agentId);
-  if (
-    agentId !== LEGACY_HARDCODED_AGENT_ID ||
-    listAgentIds(cfg).includes(LEGACY_HARDCODED_AGENT_ID)
-  ) {
+  if (agentId !== DEFAULT_AGENT_ID || listAgentIds(cfg).includes(DEFAULT_AGENT_ID)) {
     return false;
   }
   const defaultAgentId = resolveDefaultStoreAgentId(cfg);
@@ -70,9 +66,6 @@ function resolveParsedSessionStoreKey(
       sessionKey: normalizeSessionKeyPreservingOpaquePeerIds(raw),
     };
   }
-  // Historical hardcoded writers stored agent:main:* for non-main defaults (observed prod state).
-  // Keep this remap or upgrades lose their main session.
-  // Doctor migrates it; replace this branch with a startup-owned migration in a follow-up PR.
   const agentId = resolveDefaultStoreAgentId(cfg);
   const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
   return { agentId, sessionKey: `agent:${agentId}:${rest}` };

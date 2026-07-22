@@ -103,7 +103,7 @@ export async function agentsDeleteCommand(
     runtime.exit(1);
     return;
   }
-  if (listAgentEntries(cfg).length > 0 && agentId === resolveDefaultAgentId(cfg)) {
+  if (agentId === resolveDefaultAgentId(cfg)) {
     runtime.error(
       `Agent "${agentId}" is the default and cannot be deleted. Reassign default first.`,
     );
