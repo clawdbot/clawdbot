@@ -4,7 +4,12 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  listAgentEntriesWithSource,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   type ChannelDmAllowFromMode,
   resolveChannelDmAllowFrom,
@@ -955,8 +960,14 @@ function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   return isPathWithinRoot(workspaceRoot, resolved);
 }
 
-function createIdentityAvatarIssue(index: number, message: string): ConfigValidationIssue {
-  const pathSegments = ["agents", "list", index, "identity", "avatar"] as const;
+function createIdentityAvatarIssue(
+  source: ReturnType<typeof listAgentEntriesWithSource>[number]["source"],
+  message: string,
+): ConfigValidationIssue {
+  const pathSegments =
+    source.kind === "entries"
+      ? (["agents", "entries", source.key, "identity", "avatar"] as const)
+      : (["agents", "list", source.index, "identity", "avatar"] as const);
   return withConfigIssuePath({ path: formatConfigPath(pathSegments), message }, pathSegments);
 }
 
@@ -964,15 +975,12 @@ function validateIdentityAvatar(
   config: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): ConfigValidationIssue[] {
-  const agents = config.agents?.list;
-  if (!Array.isArray(agents) || agents.length === 0) {
+  const agents = listAgentEntriesWithSource(config);
+  if (agents.length === 0) {
     return [];
   }
   const issues: ConfigValidationIssue[] = [];
-  for (const [index, entry] of agents.entries()) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
+  for (const { entry, source } of agents) {
     const avatarRaw = entry.identity?.avatar;
     if (typeof avatarRaw !== "string") {
       continue;
@@ -987,7 +995,7 @@ function validateIdentityAvatar(
     if (avatar.startsWith("~")) {
       issues.push(
         createIdentityAvatarIssue(
-          index,
+          source,
           "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
         ),
       );
@@ -997,7 +1005,7 @@ function validateIdentityAvatar(
     if (hasScheme && !isWindowsAbsolutePath(avatar)) {
       issues.push(
         createIdentityAvatarIssue(
-          index,
+          source,
           "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
         ),
       );
@@ -1010,7 +1018,7 @@ function validateIdentityAvatar(
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
       issues.push(
-        createIdentityAvatarIssue(index, "identity.avatar must stay within the agent workspace."),
+        createIdentityAvatarIssue(source, "identity.avatar must stay within the agent workspace."),
       );
     }
   }
@@ -1102,10 +1110,12 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     "agents.defaults.modelPolicy.allow",
     defaultAliases,
   );
-  for (const [index, agent] of (config.agents?.list ?? []).entries()) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(config)) {
+    const pathPrefix =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
     validateRefs(
       agent.modelPolicy?.allow,
-      `agents.list.${index}.modelPolicy.allow`,
+      `${pathPrefix}.modelPolicy.allow`,
       collectAliases(defaultModels, agent.models),
     );
   }
@@ -1217,9 +1227,7 @@ function attachAgentListProjection(config: OpenClawConfig): OpenClawConfig {
   Object.defineProperty(config.agents, "list", {
     configurable: true,
     enumerable: false,
-    value: Object.entries(config.agents.entries ?? {}).map(([id, entry]) =>
-      Object.assign({ id }, entry),
-    ),
+    value: listAgentEntries(config),
     writable: false,
   });
   return config;
@@ -1895,10 +1903,10 @@ function validateConfigObjectWithPluginsBase(
     config.agents?.defaults?.heartbeat?.target,
     "agents.defaults.heartbeat.target",
   );
-  if (Array.isArray(config.agents?.list)) {
-    for (const [index, entry] of config.agents.list.entries()) {
-      validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
-    }
+  for (const { entry, source } of listAgentEntriesWithSource(config)) {
+    const pathPrefix =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+    validateHeartbeatTarget(entry?.heartbeat?.target, `${pathPrefix}.heartbeat.target`);
   }
 
   validateWebSearchProvider();

@@ -1,7 +1,7 @@
 // Applies safe automatic fixes for supported security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { createConfigIO, replaceConfigFile } from "../config/config.js";
@@ -338,8 +338,7 @@ async function collectSecurityPermissionTargets(params: {
 
   const ids = new Set<string>();
   ids.add(resolveDefaultAgentId(params.cfg));
-  const list = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
-  for (const agent of list ?? []) {
+  for (const agent of listAgentEntries(params.cfg)) {
     if (!agent || typeof agent !== "object") {
       continue;
     }

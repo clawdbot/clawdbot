@@ -8,6 +8,7 @@ import {
   normalizeOptionalAgentRuntimeId,
 } from "../agents/agent-runtime-id.js";
 import {
+  listAgentEntries,
   listAgentIds,
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
@@ -130,11 +131,12 @@ function configuredRefTargetsAgent(params: {
   agentId: string;
 }): boolean {
   const match = /^agents\.list\.(\d+)\./.exec(params.path);
-  if (!match) {
-    return true;
+  if (match) {
+    const entry = listAgentEntries(params.cfg)[Number(match[1])];
+    return Boolean(entry && normalizeAgentId(entry.id) === params.agentId);
   }
-  const entry = params.cfg.agents?.list?.[Number(match[1])];
-  return Boolean(entry && normalizeAgentId(entry.id) === params.agentId);
+  const keyedMatch = /^agents\.entries\.([^.]+)\./.exec(params.path);
+  return !keyedMatch || normalizeAgentId(keyedMatch[1] ?? "") === params.agentId;
 }
 
 function configuredRefIsEffectiveForAgent(params: {

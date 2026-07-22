@@ -25,6 +25,7 @@ import {
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
@@ -975,8 +976,9 @@ function readConfiguredExecPolicy(context: PreparedCliRunContext): {
   agentId: string;
 } {
   const agentId = context.params.agentId ?? resolveAgentIdFromSessionKey(context.params.sessionKey);
-  const agentExec = context.params.config?.agents?.list?.find((agent) => agent.id === agentId)
-    ?.tools?.exec;
+  const agentExec = context.params.config
+    ? resolveAgentConfig(context.params.config, agentId)?.tools?.exec
+    : undefined;
   const exec = agentExec ?? context.params.config?.tools?.exec;
   const configured = resolveExecModePolicy({
     mode: exec?.mode,

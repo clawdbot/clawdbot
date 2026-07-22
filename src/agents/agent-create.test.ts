@@ -158,11 +158,38 @@ describe("createAgent", () => {
     });
     expect(mocks.persisted).toMatchObject({
       agents: {
-        list: expect.arrayContaining([
-          expect.objectContaining({ id: "researcher", model: "openai/gpt-5.5" }),
-        ]),
+        entries: {
+          researcher: expect.objectContaining({ model: "openai/gpt-5.5" }),
+        },
       },
     });
+    expect((mocks.persisted.agents as { list?: unknown }).list).toBeUndefined();
+  });
+
+  it("preserves every legacy-list agent when staging a new entry", async () => {
+    mocks.config = {
+      agents: {
+        list: [
+          { id: "main", default: true, name: "Main" },
+          { id: "ops", name: "Ops" },
+        ],
+      },
+    };
+
+    await createAgent({
+      entry: { id: "researcher", name: "Researcher", model: "openai/gpt-5.5" },
+    });
+
+    expect(mocks.persisted).toMatchObject({
+      agents: {
+        entries: {
+          main: { default: true, name: "Main" },
+          ops: { name: "Ops" },
+          researcher: expect.objectContaining({ model: "openai/gpt-5.5" }),
+        },
+      },
+    });
+    expect((mocks.persisted.agents as { list?: unknown }).list).toBeUndefined();
   });
 
   it("provisions the injected main roster only through a bootstrap entry", async () => {
@@ -178,7 +205,7 @@ describe("createAgent", () => {
     ).resolves.toMatchObject({ status: "existing", agentId: "main" });
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
     expect(mocks.persisted).toMatchObject({
-      agents: { list: [expect.objectContaining({ id: "main", workspace: "/tmp/main-work" })] },
+      agents: { entries: { main: expect.objectContaining({ workspace: "/tmp/main-work" }) } },
     });
   });
 

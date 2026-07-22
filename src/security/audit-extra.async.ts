@@ -642,17 +642,9 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const agentIds = Array.isArray(params.cfg.agents?.list)
-    ? params.cfg.agents?.list
-        .map(
-          (a) =>
-            normalizeOptionalString(
-              a && typeof a === "object" ? (a as { id?: unknown }).id : undefined,
-            ) ?? "",
-        )
-        .filter(Boolean)
-    : [];
-  const defaultAgentId = (await loadAgentScopeModule()).resolveDefaultAgentId(params.cfg);
+  const agentScope = await loadAgentScopeModule();
+  const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
+  const defaultAgentId = agentScope.resolveDefaultAgentId(params.cfg);
   const ids = uniqueStrings([defaultAgentId, ...agentIds]).map((id) => normalizeAgentId(id));
 
   for (const agentId of ids) {

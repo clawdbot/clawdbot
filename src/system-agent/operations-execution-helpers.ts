@@ -342,13 +342,13 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     return true;
   }
   const { readConfigFileSnapshot } = await loadConfigModule();
-  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
+  const { listAgentEntries, resolveDefaultAgentId } = await import("../agents/agent-scope.js");
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
     return true;
   }
   const config = snapshot.sourceConfig ?? snapshot.config;
-  const entry = config?.agents?.list?.[Number(listIndexSegment)];
+  const entry = config ? listAgentEntries(config)[Number(listIndexSegment)] : undefined;
   if (!entry?.id) {
     // Unknown or id-less entry: cannot prove it is off the default route.
     return true;

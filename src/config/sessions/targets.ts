@@ -1,7 +1,7 @@
 // Session store target discovery maps configured and on-disk agent stores to canonical targets.
 import fsSync from "node:fs";
 import path from "node:path";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import {
   isValidAgentId,
@@ -115,8 +115,7 @@ export function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[
   for (const agentId of cfg.acp?.allowedAgents ?? []) {
     addAcpAgentId(agentId);
   }
-  const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of configuredAgents) {
+  for (const agent of listAgentEntries(cfg)) {
     if (agent.runtime?.type === "acp") {
       addAcpAgentId(agent.runtime.acp?.agent ?? agent.id);
     }

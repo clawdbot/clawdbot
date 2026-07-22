@@ -9,6 +9,7 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
+  listAgentEntries,
   listAgentIds,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
@@ -345,7 +346,7 @@ export function listAgentsForGateway(
 } {
   const basic = listGatewayAgentsBasic(cfg);
   const configuredById = new Map<string, { identity?: GatewayAgentRow["identity"] }>();
-  for (const entry of cfg.agents?.list ?? []) {
+  for (const entry of listAgentEntries(cfg)) {
     if (!entry?.id) {
       continue;
     }

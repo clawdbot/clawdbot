@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 // Defines core dangerous config flag metadata for security audits.
 import { DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -103,13 +104,11 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
       : undefined,
     "agents.defaults.sandbox.docker",
   );
-  if (Array.isArray(cfg.agents?.list)) {
-    for (const [index, agent] of cfg.agents.list.entries()) {
-      collectSandboxDockerDangerousFlags(
-        isRecord(agent?.sandbox?.docker) ? agent.sandbox.docker : undefined,
-        `${getAgentDangerousFlagPathSegment(agent, index)}.sandbox.docker`,
-      );
-    }
+  for (const [index, agent] of listAgentEntries(cfg).entries()) {
+    collectSandboxDockerDangerousFlags(
+      isRecord(agent?.sandbox?.docker) ? agent.sandbox.docker : undefined,
+      `${getAgentDangerousFlagPathSegment(agent, index)}.sandbox.docker`,
+    );
   }
 
   const pluginEntries = cfg.plugins?.entries;

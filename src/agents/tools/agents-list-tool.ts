@@ -7,7 +7,7 @@ import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agent-scope-config.js";
+import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveSubagentAllowedTargetIds } from "../subagent-target-policy.js";
@@ -105,7 +105,7 @@ export function createAgentsListTool(opts?: {
         resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
         cfg?.agents?.defaults?.subagents?.allowAgents;
 
-      const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
+      const configuredAgents = listAgentEntries(cfg);
       const configuredIds = listAgentIds(cfg);
       const configuredNameMap = new Map<string, string>();
       for (const entry of configuredAgents) {

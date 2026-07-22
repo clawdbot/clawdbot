@@ -1,5 +1,5 @@
 // Skill Workshop diagnostics explain which effective policy layer hides its agent tool.
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationCapabilityProfile,
   type ResolvedConversationCapabilityProfile,
@@ -30,13 +30,17 @@ type AgentToolsLocation = {
 };
 
 function findAgentTools(config: OpenClawConfig, agentId: string): AgentToolsLocation | undefined {
-  const index = config.agents?.list?.findIndex(
-    (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
+  const listed = listAgentEntriesWithSource(config).find(
+    ({ entry }) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
   );
-  const tools = index !== undefined && index >= 0 ? config.agents?.list?.[index]?.tools : undefined;
-  return index !== undefined && index >= 0 && tools
-    ? { path: `agents.list[${index}].tools`, tools }
-    : undefined;
+  if (!listed?.entry.tools) {
+    return undefined;
+  }
+  const path =
+    listed.source.kind === "entries"
+      ? `agents.entries.${listed.source.key}.tools`
+      : `agents.list[${listed.source.index}].tools`;
+  return { path, tools: listed.entry.tools };
 }
 
 function providerPolicyPath(params: {

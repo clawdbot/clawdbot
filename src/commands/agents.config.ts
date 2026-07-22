@@ -9,6 +9,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  toAgentEntriesRecord,
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { AgentIdentityFile } from "../agents/identity-file.js";
@@ -36,15 +37,6 @@ export type AgentSummary = {
 };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-
-function toAgentEntries(list: AgentEntry[]): Record<string, Omit<AgentEntry, "id">> {
-  return Object.fromEntries(
-    list.map((entry) => {
-      const { id, ...config } = entry;
-      return [id, config];
-    }),
-  );
-}
 
 export type AgentIdentity = AgentIdentityFile;
 export { listAgentEntries };
@@ -170,11 +162,12 @@ export function applyAgentConfig(
   } else {
     nextList.push(nextEntry);
   }
+  const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};
   return {
     ...cfg,
     agents: {
-      ...cfg.agents,
-      entries: toAgentEntries(nextList),
+      ...agentsConfig,
+      entries: toAgentEntriesRecord(nextList),
     },
   };
 }
@@ -212,7 +205,7 @@ export function pruneAgentConfig(
         : entry,
     );
   }
-  const nextAgents = nextAgentsList.length > 0 ? toAgentEntries(nextAgentsList) : undefined;
+  const nextAgents = nextAgentsList.length > 0 ? toAgentEntriesRecord(nextAgentsList) : undefined;
 
   const bindings = cfg.bindings ?? [];
   const filteredBindings = bindings.filter((binding) => normalizeAgentId(binding.agentId) !== id);
@@ -229,8 +222,9 @@ export function pruneAgentConfig(
         },
       }
     : cfg.agents?.defaults;
+  const { list: _legacyList, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
-    ? { ...cfg.agents, defaults: nextDefaults, entries: nextAgents }
+    ? { ...agentsConfig, defaults: nextDefaults, entries: nextAgents }
     : nextAgents
       ? { entries: nextAgents }
       : undefined;

@@ -927,4 +927,27 @@ describe("exec approvals policy helpers", () => {
       requestedSource: "agents.list.main.tools.exec.ask",
     });
   });
+
+  it("includes keyed agents with exec overrides", () => {
+    const snapshots = collectExecPolicyScopeSnapshots({
+      cfg: {
+        agents: {
+          entries: {
+            main: { default: true },
+            runner: { tools: { exec: { ask: "always" } } },
+          },
+        },
+      } satisfies OpenClawConfig,
+      approvals: { version: 1 },
+    });
+
+    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual([
+      "tools.exec",
+      "agent:runner",
+    ]);
+    expectFields(snapshots[1]?.ask, {
+      requested: "always",
+      requestedSource: "agents.list.runner.tools.exec.ask",
+    });
+  });
 });

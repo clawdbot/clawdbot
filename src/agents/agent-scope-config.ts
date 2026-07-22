@@ -28,7 +28,10 @@ export type ResolvedAgentConfig = {
   agentDir?: string;
   model?: AgentEntry["model"];
   models?: AgentEntry["models"];
+  params?: AgentEntry["params"];
+  runtime?: AgentEntry["runtime"];
   modelPolicy?: AgentEntry["modelPolicy"];
+  agentRuntime?: AgentEntry["agentRuntime"];
   utilityModel?: AgentEntry["utilityModel"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
@@ -152,6 +155,24 @@ export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEn
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
+/** Resolves the authored entry object for in-place canonical config mutations. */
+export function resolveMutableAgentEntry(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Pick<AgentEntry, "model"> | undefined {
+  const id = normalizeAgentId(agentId);
+  const roster = readAgentRosterProperty(cfg);
+  if (roster?.kind === "entries" && roster.value && typeof roster.value === "object") {
+    const entries = roster.value as AgentEntriesConfig;
+    const key = Object.keys(entries).find((candidate) => normalizeAgentId(candidate) === id);
+    return key ? entries[key] : undefined;
+  }
+  if (roster?.kind === "list" && Array.isArray(roster.value)) {
+    return (roster.value as AgentEntry[]).find((entry) => normalizeAgentId(entry?.id) === id);
+  }
+  return undefined;
+}
+
 /** Resolves merged config for one agent id. */
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
@@ -172,7 +193,10 @@ export function resolveAgentConfig(
         ? entry.model
         : undefined,
     ...(entry.models ? { models: entry.models } : {}),
+    ...(entry.params ? { params: entry.params } : {}),
+    ...(entry.runtime ? { runtime: entry.runtime } : {}),
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
+    ...(entry.agentRuntime ? { agentRuntime: entry.agentRuntime } : {}),
     utilityModel: readStringValue(entry.utilityModel),
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,

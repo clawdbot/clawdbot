@@ -16,6 +16,7 @@ import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
+import { toAgentEntriesRecord } from "./agent-scope-config.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import {
   createAgentIdentityConfig,
@@ -241,7 +242,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
               agentDir,
               identity,
             };
-            nextConfig = { ...nextConfig, agents: { ...nextConfig.agents, list } };
+            const { list: _legacyList, ...agentsConfig } = nextConfig.agents ?? {};
+            nextConfig = {
+              ...nextConfig,
+              agents: {
+                ...agentsConfig,
+                entries: toAgentEntriesRecord(list),
+              },
+            };
           }
           const bindingParse = parseBindingSpecs({
             agentId,
