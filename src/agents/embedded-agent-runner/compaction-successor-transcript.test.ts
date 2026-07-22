@@ -559,8 +559,18 @@ describe("rotateTranscriptAfterCompaction", () => {
 });
 
 describe("shouldRotateCompactionTranscript", () => {
-  it("keeps transcript rotation opt-in behind the existing config key", () => {
-    expect(shouldRotateCompactionTranscript()).toBe(false);
+  it("rotates by default, opting out only on an explicit false (#112476)", () => {
+    // Unset must rotate: otherwise a long-lived session grows past the context window
+    // into an unrecoverable every-turn-compaction spiral.
+    expect(shouldRotateCompactionTranscript()).toBe(true);
+    expect(
+      shouldRotateCompactionTranscript({ agents: { defaults: { compaction: {} } } }),
+    ).toBe(true);
+    expect(
+      shouldRotateCompactionTranscript({
+        agents: { defaults: { compaction: { truncateAfterCompaction: false } } },
+      }),
+    ).toBe(false);
     expect(
       shouldRotateCompactionTranscript({
         agents: { defaults: { compaction: { truncateAfterCompaction: true } } },
