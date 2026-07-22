@@ -175,11 +175,27 @@ export async function setupCommand(
     };
   }
   if (shouldWriteWorkspace) {
+    const entries = next.agents?.entries
+      ? Object.fromEntries(
+          Object.entries(next.agents.entries).map(([id, entry]) => [
+            id,
+            entry.default === true
+              ? {
+                  ...entry,
+                  // createAgent seeds an explicit workspace on the default entry;
+                  // keep that higher-precedence value aligned with the default.
+                  workspace,
+                }
+              : entry,
+          ]),
+        )
+      : undefined;
     next = {
       ...next,
       agents: {
         ...next.agents,
         defaults: { ...next.agents?.defaults, workspace },
+        ...(entries ? { entries } : {}),
       },
     };
   }
@@ -192,7 +208,12 @@ export async function setupCommand(
     next = (await ensureOnboardingAgent({ config: next, workspace, baseConfig: cfg })).config;
   }
 
-  if (!snapshot.exists || shouldWriteWorkspace || shouldWriteGatewayMode) {
+  if (
+    !snapshot.exists ||
+    shouldPersistRoster ||
+    shouldWriteWorkspace ||
+    shouldWriteGatewayMode
+  ) {
     // Preserve all existing config fields and touch only workspace/gateway mode
     // defaults that this command owns.
     const replaceConfig = deps.replaceConfigFile ?? writeDefaultConfigFile;

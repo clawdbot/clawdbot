@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { createConfigIO } from "../config/io.js";
 import { replaceConfigFile } from "../config/mutate.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { setupCommand } from "./setup.js";
 
 function createSetupDeps(home: string) {
@@ -116,6 +118,24 @@ describe("setupCommand", () => {
     });
   });
 
+  it("updates the default entry workspace created by fresh setup", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const deps = createSetupDeps(home);
+      const initialWorkspace = path.join(home, "initial-workspace");
+      const nextWorkspace = path.join(home, "next-workspace");
+
+      await setupCommand({ workspace: initialWorkspace }, runtime, deps);
+      await setupCommand({ workspace: nextWorkspace }, runtime, deps);
+
+      const config = JSON.parse(
+        await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
+      ) as OpenClawConfig;
+      expect(resolveAgentWorkspaceDir(config, "main")).toBe(nextWorkspace);
+      expect(config.agents?.list?.find((entry) => entry.default)?.workspace).toBe(nextWorkspace);
+    });
+  });
+
   it("adds gateway.mode=local to an existing config without overwriting workspace", async () => {
     await withTempHome(async (home) => {
       const runtime = {
@@ -185,6 +205,34 @@ describe("setupCommand", () => {
 
       expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
       expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("ops");
+    });
+  });
+
+  it("persists a roster when existing setup settings already match", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const workspace = path.join(home, "workspace");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: { defaults: { workspace } },
+          gateway: { mode: "local" },
+        }),
+      );
+      const deps = {
+        ensureAgentWorkspace: vi.fn(async () => ({ dir: workspace })),
+        formatConfigPath: (value: string) => value,
+        mkdir: vi.fn(async () => {}),
+        resolveSessionTranscriptsDir: vi.fn(() => path.join(home, "sessions")),
+      };
+
+      await setupCommand(undefined, runtime, deps);
+
+      const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(config.agents?.list).toEqual([{ id: "main", default: true }]);
     });
   });
 
