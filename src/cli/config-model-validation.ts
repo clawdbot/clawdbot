@@ -1,4 +1,6 @@
 import {
+  listAgentEntries,
+  listAgentEntriesWithSource,
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveDefaultAgentId,
@@ -37,15 +39,6 @@ type ConfigModelRefCheckResult = {
   refsTotal: number;
   errors: string[];
 };
-
-type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
-
-function resolveAgentEntries(config: OpenClawConfig): AgentEntriesConfig | undefined {
-  const entries: unknown = config.agents?.entries;
-  return entries && typeof entries === "object" && !Array.isArray(entries)
-    ? (entries as AgentEntriesConfig)
-    : undefined;
-}
 
 function isPathPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
@@ -102,20 +95,17 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
     model: config.agents?.defaults?.model,
     path: "agents.defaults.model",
   });
-  const agentEntries = resolveAgentEntries(config);
-  if (agentEntries) {
-    for (const [agentId, agent] of Object.entries(agentEntries)) {
-      if (!agent || typeof agent !== "object" || Array.isArray(agent)) {
-        continue;
-      }
-      refs.push(
-        ...collectTextModelConfigRefs({
-          model: (agent as { model?: unknown }).model,
-          path: `agents.entries.${agentId}.model`,
-          agentId,
-        }),
-      );
-    }
+  for (const { entry: agent, source } of listAgentEntriesWithSource(config)) {
+    const agentId = agent.id;
+    const agentPath =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+    refs.push(
+      ...collectTextModelConfigRefs({
+        model: agent.model,
+        path: `${agentPath}.model`,
+        agentId,
+      }),
+    );
   }
   for (const ref of refs) {
     // Runtime preserves an auth-profile suffix only for configured primaries. Fallback
@@ -133,8 +123,8 @@ function collectTextModelRefs(config: OpenClawConfig): TouchedModelRef[] {
 
 function modelRefComparisonKey(ref: TouchedModelRef): string {
   if (ref.agentId) {
-    const prefix = `agents.entries.${ref.agentId}.`;
-    const relativePath = ref.path.startsWith(prefix) ? ref.path.slice(prefix.length) : ref.path;
+    const modelOffset = ref.path.indexOf(".model");
+    const relativePath = modelOffset >= 0 ? ref.path.slice(modelOffset + 1) : ref.path;
     return `agent:${normalizeAgentId(ref.agentId)}:${relativePath}`;
   }
   return `path:${ref.path}`;
@@ -145,11 +135,9 @@ function collectTouchedTextModelRefs(params: {
   previousConfig?: OpenClawConfig;
   touchedPaths: readonly (readonly string[])[];
 }): TouchedModelRef[] {
-  const agentEntries = resolveAgentEntries(params.config);
-  if (
-    !agentEntries ||
-    Object.values(agentEntries).filter((entry) => entry?.default === true).length !== 1
-  ) {
+  const listedAgentEntries = listAgentEntriesWithSource(params.config);
+  const agentEntries = listedAgentEntries.map(({ entry }) => entry);
+  if (agentEntries.filter((entry) => entry.default === true).length !== 1) {
     // Draft validation runs before roster schema errors are reported.
     return [];
   }
@@ -213,8 +201,13 @@ function collectTouchedTextModelRefs(params: {
   if (defaultRefs.length === 0) {
     return touchedRefs;
   }
-  for (const agentId of Object.keys(agentEntries)) {
-    const agentEntryPath = ["agents", "entries", agentId];
+  for (const { entry, source } of listedAgentEntries) {
+    const agentId = entry.id;
+    const agentEntryPath = [
+      "agents",
+      source.kind,
+      source.kind === "entries" ? source.key : String(source.index),
+    ];
     const agentModelPath = [...agentEntryPath, "model"];
     const ownershipTouched = params.touchedPaths.some(
       (touchedPath) =>
@@ -230,9 +223,9 @@ function collectTouchedTextModelRefs(params: {
       const inherits = defaultRef.fallback
         ? resolveAgentModelFallbacksOverride(params.config, agentId) === undefined
         : resolveAgentExplicitModelPrimary(params.config, agentId) === undefined;
-      const previousAgentExists = Object.keys(
-        params.previousConfig ? (resolveAgentEntries(params.previousConfig) ?? {}) : {},
-      ).some((entryId) => normalizeAgentId(entryId) === normalizeAgentId(agentId));
+      const previousAgentExists = (
+        params.previousConfig ? listAgentEntries(params.previousConfig) : []
+      ).some((previousEntry) => normalizeAgentId(previousEntry.id) === normalizeAgentId(agentId));
       const previouslyInherited =
         previousAgentExists && params.previousConfig
           ? defaultRef.fallback
@@ -314,11 +307,8 @@ function expandInheritedDefaultRefs(
   config: OpenClawConfig,
   refs: TouchedModelRef[],
 ): TouchedModelRef[] {
-  const agentEntries = resolveAgentEntries(config);
-  if (
-    !agentEntries ||
-    Object.values(agentEntries).filter((entry) => entry?.default === true).length !== 1
-  ) {
+  const agentEntries = listAgentEntries(config);
+  if (agentEntries.filter((entry) => entry.default === true).length !== 1) {
     return refs;
   }
   const defaultAgentId = resolveDefaultAgentId(config);
@@ -336,8 +326,8 @@ function expandInheritedDefaultRefs(
       push(ref);
       continue;
     }
-    const defaultAgentConfigured = Object.keys(agentEntries).some(
-      (agentId) => normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId),
+    const defaultAgentConfigured = agentEntries.some(
+      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId),
     );
     const defaultAgentInherits =
       !defaultAgentConfigured ||
@@ -347,7 +337,7 @@ function expandInheritedDefaultRefs(
     if (defaultAgentInherits) {
       push(ref);
     }
-    for (const agentId of Object.keys(agentEntries)) {
+    for (const { id: agentId } of agentEntries) {
       if (normalizeAgentId(agentId) === normalizeAgentId(defaultAgentId)) {
         continue;
       }

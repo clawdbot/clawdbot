@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
@@ -88,9 +90,10 @@ const mockConfig = vi.hoisted(() => {
     },
     setConfig(config: TestConfig) {
       const agents = (config.agents ?? {}) as Record<string, unknown>;
+      const roster = listAgentEntries(config as OpenClawConfig);
       config.agents = {
         ...agents,
-        entries: agents.entries ?? { main: { default: true } },
+        entries: roster.length > 0 ? toAgentEntriesRecord(roster) : { main: { default: true } },
       };
       state.config = structuredClone(config);
     },
@@ -935,8 +938,8 @@ describe("parseSystemAgentOperation", () => {
       expect(requireRecord(agents.defaults, "defaults").model).toEqual({
         primary: "anthropic/global-default",
       });
-      const entries = agents.entries as Record<string, { model: unknown }>;
-      expect(entries.work?.model).toEqual({
+      const work = listAgentEntries(config as OpenClawConfig).find((entry) => entry.id === "work");
+      expect(work?.model).toEqual({
         primary: "openai/gpt-5.5",
       });
       return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 9 };
@@ -952,8 +955,10 @@ describe("parseSystemAgentOperation", () => {
     expect(requireRecord(agents.defaults, "defaults").model).toEqual({
       primary: "anthropic/global-default",
     });
-    const entries = agents.entries as Record<string, { model: unknown }>;
-    expect(entries.work?.model).toEqual({
+    const work = listAgentEntries(mockConfig.currentConfig() as OpenClawConfig).find(
+      (entry) => entry.id === "work",
+    );
+    expect(work?.model).toEqual({
       primary: "openai/gpt-5.5",
     });
   });

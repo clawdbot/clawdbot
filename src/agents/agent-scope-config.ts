@@ -13,7 +13,13 @@ import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+export type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
+export type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
+export type ListedAgentEntry = {
+  entry: AgentEntry;
+  source: { kind: "entries"; key: string } | { kind: "list"; index: number };
+};
 
 /** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
@@ -54,16 +60,60 @@ function stripNullBytes(s: string): string {
 }
 
 /** Lists valid configured agent entries from config. */
-export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
-  const entries = cfg.agents?.entries;
-  if (entries && typeof entries === "object") {
-    return Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry));
+export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntry[] {
+  const roster = readAgentRosterProperty(cfg);
+  if (roster?.kind === "entries" && roster.value && typeof roster.value === "object") {
+    return Object.entries(roster.value).map(([id, entry]) => ({
+      entry: Object.assign({ id }, entry),
+      source: { kind: "entries", key: id },
+    }));
   }
-  const list = cfg.agents?.list;
-  if (!Array.isArray(list)) {
+  if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
     return [];
   }
-  return list.filter((entry): entry is AgentEntry => entry !== null && typeof entry === "object");
+  return roster.value.flatMap((entry, index) =>
+    entry !== null && typeof entry === "object"
+      ? [{ entry: entry as AgentEntry, source: { kind: "list" as const, index } }]
+      : [],
+  );
+}
+
+/** Lists valid configured agent entries from either supported representation. */
+export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
+  return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
+}
+
+/** Converts either supported roster representation into the canonical keyed shape. */
+export function toAgentEntriesRecord(entries: readonly AgentEntry[]): AgentEntriesConfig {
+  return Object.fromEntries(
+    entries.map((entry) => {
+      const { id, ...config } = entry;
+      return [id, config];
+    }),
+  );
+}
+
+/** Reads the explicitly owned raw roster without normalizing malformed values. */
+export function readAgentRosterProperty(raw: unknown): AgentRosterProperty | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const agents = (raw as { agents?: unknown }).agents;
+  if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
+    return undefined;
+  }
+  if (Object.hasOwn(agents, "entries")) {
+    return { kind: "entries", value: (agents as Record<string, unknown>)["entries"] };
+  }
+  if (Object.hasOwn(agents, "list")) {
+    return { kind: "list", value: (agents as Record<string, unknown>)["list"] };
+  }
+  return undefined;
+}
+
+/** True when raw config explicitly owns either supported roster representation. */
+export function hasAgentRosterProperty(raw: unknown): boolean {
+  return readAgentRosterProperty(raw) !== undefined;
 }
 
 /** Lists unique configured agent ids. */
@@ -97,7 +147,7 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   return normalizeAgentId(defaults[0]!.id);
 }
 
-function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
+export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }

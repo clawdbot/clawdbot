@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listAgentEntries,
+  resolveAgentEntry,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -110,7 +115,7 @@ vi.mock("../infra/exec-approvals.js", () => ({
 vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveAgentDir: (config: OpenClawConfig, agentId: string) =>
-    config.agents?.entries?.[agentId]?.agentDir ?? `/agents/${agentId}`,
+    resolveAgentEntry(config, agentId)?.agentDir ?? `/agents/${agentId}`,
 }));
 
 import { applySystemAgentModelSelection, applySystemAgentSetup } from "./setup-apply.js";
@@ -136,22 +141,21 @@ function snapshot(hash: string | null, config: OpenClawConfig): ConfigSnapshot {
 }
 
 function withMainRoster(config: OpenClawConfig): OpenClawConfig {
-  const entries = config.agents?.entries;
-  if (entries && Object.keys(entries).length > 0) {
-    if (Object.values(entries).filter((agent) => agent.default === true).length === 1) {
+  const roster = listAgentEntries(config);
+  if (roster.length > 0) {
+    if (roster.filter((agent) => agent.default === true).length === 1) {
       return config;
     }
-    const nextEntries = structuredClone(entries);
-    for (const entry of Object.values(nextEntries)) {
+    const nextRoster = structuredClone(roster);
+    for (const entry of nextRoster) {
       delete entry.default;
     }
-    const firstId = Object.keys(nextEntries)[0]!;
-    nextEntries[firstId]!.default = true;
+    nextRoster[0]!.default = true;
     return {
       ...config,
       agents: {
         ...config.agents,
-        entries: nextEntries,
+        entries: toAgentEntriesRecord(nextRoster),
       },
     };
   }

@@ -1,17 +1,23 @@
 // First-run main-agent creation through the canonical agent service.
 import { createAgent } from "../agents/agent-create.js";
+import {
+  listAgentEntries,
+  resolveDefaultAgentId,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { createMergePatch } from "../config/io.write-prepare.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 function isInjectedMainRoster(config: OpenClawConfig): boolean {
-  const roster = config.agents?.entries ?? {};
-  const entry = roster.main;
+  const roster = listAgentEntries(config);
+  const entry = roster[0];
   return (
-    Object.keys(roster).length === 1 &&
+    roster.length === 1 &&
+    entry?.id === "main" &&
     entry?.default === true &&
-    Object.keys(entry).every((key) => key === "default")
+    Object.keys(entry).every((key) => key === "id" || key === "default")
   );
 }
 
@@ -24,11 +30,12 @@ function mergeOnboardingCandidate(params: {
   // Keep this runtime-shaped. The canonical config writer projects only this
   // patch onto snapshot.parsed, preserving include ownership and env refs.
   const merged = applyMergePatch(params.currentRuntime, proposalPatch) as OpenClawConfig;
+  const { list: _legacyList, ...agents } = merged.agents ?? {};
   return {
     ...merged,
     agents: {
-      ...merged.agents,
-      entries: params.currentRuntime.agents?.entries,
+      ...agents,
+      entries: toAgentEntriesRecord(listAgentEntries(params.currentRuntime)),
     },
   };
 }
@@ -39,17 +46,16 @@ export async function ensureOnboardingAgent(params: {
   preserveCandidateRoster?: boolean;
   baseConfig?: OpenClawConfig;
 }): Promise<{ config: OpenClawConfig; agentId: string; bootstrapPending: boolean }> {
+  const candidateRoster = listAgentEntries(params.config);
   if (
-    Object.keys(params.config.agents?.entries ?? {}).length > 0 &&
+    candidateRoster.length > 0 &&
     (params.preserveCandidateRoster || !isInjectedMainRoster(params.config))
   ) {
-    const defaultAgent = Object.entries(params.config.agents?.entries ?? {}).find(
-      ([, entry]) => entry.default === true,
-    );
-    if (!defaultAgent) {
-      throw new Error("Onboarding candidate roster has no default agent.");
-    }
-    return { config: params.config, agentId: defaultAgent[0], bootstrapPending: false };
+    return {
+      config: params.config,
+      agentId: resolveDefaultAgentId(params.config),
+      bootstrapPending: false,
+    };
   }
   const before = await readConfigFileSnapshot();
   if (before.exists && !before.valid) {
@@ -57,17 +63,14 @@ export async function ensureOnboardingAgent(params: {
   }
   const effective = before.config;
   const candidateBase = params.baseConfig ?? effective;
-  const existing = Object.entries(effective.agents?.entries ?? {}).find(
-    ([, entry]) => entry.default === true,
-  );
-  if (before.exists && existing) {
+  if (before.exists && listAgentEntries(effective).length > 0) {
     return {
       config: mergeOnboardingCandidate({
         base: candidateBase,
         candidate: params.config,
         currentRuntime: effective,
       }),
-      agentId: existing[0],
+      agentId: resolveDefaultAgentId(effective),
       bootstrapPending: false,
     };
   }

@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveDefaultAgentId,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import { resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -74,32 +78,6 @@ function resolveFixtureStoreAgentId(cfg: OpenClawConfig, deletedAgentId: string)
   return deletedAgentId;
 }
 
-function canonicalizeAgentEntriesForTest(cfg: OpenClawConfig): OpenClawConfig {
-  const list = (cfg.agents as { list?: Array<Record<string, unknown>> } | undefined)?.list;
-  if (!Array.isArray(list)) {
-    return cfg;
-  }
-  const { list: _list, ...agents } = cfg.agents as NonNullable<OpenClawConfig["agents"]> & {
-    list?: unknown;
-  };
-  return {
-    ...cfg,
-    agents: {
-      ...agents,
-      entries: Object.fromEntries(
-        list.flatMap((entry) => {
-          const id = typeof entry.id === "string" ? entry.id : "";
-          if (!id) {
-            return [];
-          }
-          const { id: _id, ...value } = entry;
-          return [[id, value]];
-        }),
-      ),
-    },
-  };
-}
-
 async function arrangeAgentsDeleteTest(params: {
   stateDir: string;
   cfg: OpenClawConfig;
@@ -108,35 +86,20 @@ async function arrangeAgentsDeleteTest(params: {
 }) {
   const deletedAgentId = params.deletedAgentId ?? "ops";
   const authored = structuredClone(params.cfg);
-  authored.agents ??= {};
-  const agents = authored.agents as NonNullable<OpenClawConfig["agents"]> & {
-    list?: Array<Record<string, unknown>>;
-    entries?: Record<string, Record<string, unknown>>;
-  };
-  if (Array.isArray(agents.list) && !agents.list.some((entry) => entry.default === true)) {
-    const existingDefault = agents.list.find((entry) => entry.id !== deletedAgentId);
+  const roster = listAgentEntries(authored);
+  if (!roster.some((entry) => entry.default === true)) {
+    const existingDefault = roster.find((entry) => entry.id !== deletedAgentId);
     if (existingDefault) {
       existingDefault.default = true;
     } else {
-      agents.list.unshift({ id: "main", default: true });
+      roster.unshift({ id: "main", default: true });
     }
-  } else if (
-    agents.entries &&
-    !Object.values(agents.entries).some((entry) => entry.default === true)
-  ) {
-    const existingDefaultId = Object.keys(agents.entries).find((id) => id !== deletedAgentId);
-    if (existingDefaultId) {
-      agents.entries[existingDefaultId] = {
-        ...agents.entries[existingDefaultId],
-        default: true,
-      };
-    } else {
-      agents.entries.main = { default: true };
-    }
-  } else if (!agents.entries) {
-    agents.entries = { main: { default: true } };
   }
-  const cfg = canonicalizeAgentEntriesForTest(authored);
+  const { list: _legacyList, ...agents } = authored.agents ?? {};
+  const cfg: OpenClawConfig = {
+    ...authored,
+    agents: { ...agents, entries: toAgentEntriesRecord(roster) },
+  };
   const storeAgentId = resolveFixtureStoreAgentId(cfg, deletedAgentId);
   const storePath = resolveStorePath(cfg.session?.store, { agentId: deletedAgentId });
   for (const [sessionKey, entry] of Object.entries(params.sessions)) {

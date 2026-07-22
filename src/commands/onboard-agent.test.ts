@@ -61,7 +61,7 @@ describe("onboarding main-agent creation", () => {
       config: {
         agents: {
           defaults: { model: "openai/gpt-5.5" },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
         gateway: { mode: "local", controlUi: { enabled: true } },
       },

@@ -1,27 +1,23 @@
+import { hasAgentRosterProperty, listAgentEntries } from "../agents/agent-scope-config.js";
 import { isRecord } from "../utils.js";
 import { INCLUDE_KEY } from "./includes.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 function hasAuthoredRoster(snapshot: ConfigFileSnapshot): boolean {
-  const agents = isRecord(snapshot.parsed) ? snapshot.parsed.agents : undefined;
-  return isRecord(agents) && (Object.hasOwn(agents, "entries") || Object.hasOwn(agents, "list"));
+  return hasAgentRosterProperty(snapshot.parsed);
 }
 
 /** Whether include/env resolution produced a non-empty roster before raw migrations. */
 export function hasResolvedRosterBeforeMigrations(snapshot: ConfigFileSnapshot): boolean {
-  const entries = snapshot.sourceConfigBeforeMigrations?.agents?.entries;
-  const list = snapshot.sourceConfigBeforeMigrations?.agents?.list;
-  return Boolean((entries && Object.keys(entries).length > 0) || (list && list.length > 0));
+  return listAgentEntries(snapshot.sourceConfigBeforeMigrations ?? {}).length > 0;
 }
 
 /** Whether an include, rather than the authored root, owns agents.entries. */
 export function configIncludeOwnsAgentRoster(snapshot: ConfigFileSnapshot): boolean {
-  const resolvedAgents = snapshot.sourceConfigBeforeMigrations?.agents;
-  const hasResolvedRosterProperty = Boolean(
-    resolvedAgents &&
-    (Object.hasOwn(resolvedAgents, "entries") || Object.hasOwn(resolvedAgents, "list")),
-  );
-  if (hasAuthoredRoster(snapshot) || !hasResolvedRosterProperty) {
+  if (
+    hasAuthoredRoster(snapshot) ||
+    !hasAgentRosterProperty(snapshot.sourceConfigBeforeMigrations)
+  ) {
     return false;
   }
   if (!isRecord(snapshot.parsed)) {

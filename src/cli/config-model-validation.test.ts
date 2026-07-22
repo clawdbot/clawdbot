@@ -691,6 +691,31 @@ describe("config model validation", () => {
     ]);
   });
 
+  it("uses list index paths for list-shaped agent model refs", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefsRaw({
+      config: {
+        agents: {
+          list: [{ id: "ops", default: true, model: "provider-a/model" }],
+        },
+      },
+      touchedPaths: [["agents", "list", "0", "model"]],
+      resolveModelRef,
+    });
+
+    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.list.0.model",
+        value: "provider-a/model",
+        agentId: "ops",
+        fallback: false,
+      },
+    });
+  });
+
   it("does not validate unrelated or media model keys", async () => {
     const resolveModelRef = vi.fn(async () => undefined);
 

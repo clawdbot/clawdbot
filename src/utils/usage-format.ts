@@ -5,7 +5,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -398,7 +402,7 @@ function resolveCostAgentDir(config?: OpenClawConfig, agentDir?: string): string
   if (agentDir) {
     return agentDir;
   }
-  if (config?.agents?.entries && Object.keys(config.agents.entries).length > 0) {
+  if (config && listAgentEntries(config).length > 0) {
     return resolveAgentDir(config, resolveDefaultAgentId(config));
   }
   // Config-less and pricing-only lookups are shipped APIs for the historical

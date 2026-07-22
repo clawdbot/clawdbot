@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 
 /** Every missing or empty roster is the shipped implicit-main shape. */
 export function migratePersistedImplicitMainRoster(raw: unknown): {
@@ -21,12 +22,19 @@ export function migratePersistedImplicitMainRoster(raw: unknown): {
       ? (root.agents as Record<string, unknown>)
       : {};
   let convertedLegacyList = false;
-  if (!Object.hasOwn(agents, "entries") && Array.isArray(agents.list)) {
-    if (agents.list.some((value) => !value || typeof value !== "object" || Array.isArray(value))) {
+  let legacyRosterOrder: string[] | undefined;
+  let rosterProperty = readAgentRosterProperty({ ...root, agents });
+  if (rosterProperty?.kind === "list") {
+    if (!Array.isArray(rosterProperty.value)) {
+      return { config: raw, changed: false, diagnostics: [] };
+    }
+    const legacyList = rosterProperty.value;
+    if (legacyList.some((value) => !value || typeof value !== "object" || Array.isArray(value))) {
       return { config: raw, changed: false, diagnostics: [] };
     }
     const legacyIds = new Set<string>();
-    for (const value of agents.list) {
+    const legacyOrder: string[] = [];
+    for (const value of legacyList) {
       const entry = value as Record<string, unknown>;
       if (typeof entry.id !== "string" || entry.id.trim() !== entry.id || !entry.id) {
         return { config: raw, changed: false, diagnostics: [] };
@@ -36,20 +44,24 @@ export function migratePersistedImplicitMainRoster(raw: unknown): {
         return { config: raw, changed: false, diagnostics: [] };
       }
       legacyIds.add(normalizedId);
+      legacyOrder.push(entry.id);
     }
-    const entries: Record<string, Record<string, unknown>> = {};
-    for (const value of agents.list) {
-      const entry = value as Record<string, unknown>;
-      const { id: _id, ...config } = entry;
-      entries[entry.id as string] = config;
-    }
+    legacyRosterOrder = legacyOrder;
+    const entries = Object.fromEntries(
+      legacyList.map((value) => {
+        const entry = value as Record<string, unknown>;
+        const { id, ...config } = entry;
+        return [id as string, config];
+      }),
+    );
     const { list: _list, ...rest } = agents;
     agents = { ...rest, entries };
     convertedLegacyList = true;
+    rosterProperty = readAgentRosterProperty({ ...root, agents });
   }
-  const entries = agents.entries;
+  const entries = rosterProperty?.kind === "entries" ? rosterProperty.value : undefined;
   if (
-    !Object.hasOwn(agents, "entries") ||
+    !rosterProperty ||
     (entries &&
       typeof entries === "object" &&
       !Array.isArray(entries) &&
@@ -65,9 +77,11 @@ export function migratePersistedImplicitMainRoster(raw: unknown): {
     return { config: raw, changed: false, diagnostics: [] };
   }
   const roster = entries as Record<string, unknown>;
-  const validIds = Object.entries(roster).flatMap(([id, entry]) =>
-    entry && typeof entry === "object" && !Array.isArray(entry) ? [id] : [],
-  );
+  const validIds =
+    legacyRosterOrder ??
+    Object.entries(roster).flatMap(([id, entry]) =>
+      entry && typeof entry === "object" && !Array.isArray(entry) ? [id] : [],
+    );
   if (validIds.length === 0) {
     return { config: raw, changed: false, diagnostics: [] };
   }

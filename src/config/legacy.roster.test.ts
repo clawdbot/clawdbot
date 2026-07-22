@@ -96,6 +96,45 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
+  it.each([
+    {
+      label: "missing default",
+      list: [{ id: "10" }, { id: "2" }],
+    },
+    {
+      label: "duplicate defaults",
+      list: [
+        { id: "10", default: true },
+        { id: "2", default: true },
+      ],
+    },
+  ])("preserves original list order for numeric ids with $label", ({ list }) => {
+    const migrated = migratePersistedImplicitMainRoster({ agents: { list } });
+    expect(migrated.changed).toBe(true);
+    expect(migrated.config).toMatchObject({
+      agents: {
+        entries: {
+          "2": {},
+          "10": { default: true },
+        },
+      },
+    });
+  });
+
+  it("preserves a __proto__ agent as an own keyed entry", () => {
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: { list: [{ id: "__proto__" }] },
+    });
+    const config = migrated.config as {
+      agents: { entries: Record<string, { default?: boolean }> };
+    };
+
+    expect(Object.hasOwn(config.agents.entries, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(config.agents.entries, "__proto__")?.value).toEqual({
+      default: true,
+    });
+  });
+
   it("leaves malformed legacy list entries for schema validation", () => {
     const malformed = { agents: { list: [null, { id: "ops", default: true }] } };
     expect(migratePersistedImplicitMainRoster(malformed)).toEqual({

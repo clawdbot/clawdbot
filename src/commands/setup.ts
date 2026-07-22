@@ -5,6 +5,12 @@
  * running the full onboarding wizard.
  */
 import fs from "node:fs/promises";
+import {
+  listAgentEntries,
+  resolveAgentEntry,
+  resolveDefaultAgentId,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   configIncludeOwnsAgentRoster,
@@ -159,9 +165,10 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const defaultEntryWorkspace = Object.values(resolvedConfig.agents?.entries ?? {})
-    .find((entry) => entry.default === true)
-    ?.workspace?.trim();
+  const defaultEntryWorkspace = resolveAgentEntry(
+    resolvedConfig,
+    resolveDefaultAgentId(resolvedConfig),
+  )?.workspace?.trim();
   const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
 
   const workspace =
@@ -176,32 +183,28 @@ export async function setupCommand(
   // diff against snapshot.parsed, never resolved include/env values wholesale.
   let next: OpenClawConfig = snapshot.exists ? resolvedConfig : cfg;
   if (shouldPersistRoster) {
+    const { list: _legacyList, ...agents } = next.agents ?? {};
     next = {
       ...next,
-      agents: { ...next.agents, entries: cfg.agents?.entries },
+      agents: { ...agents, entries: toAgentEntriesRecord(listAgentEntries(cfg)) },
     };
   }
   if (shouldWriteWorkspace) {
-    const entries = next.agents?.entries
-      ? Object.fromEntries(
-          Object.entries(next.agents.entries).map(([id, entry]) => [
-            id,
-            entry.default === true
-              ? {
-                  ...entry,
-                  // createAgent seeds an explicit workspace on the default entry;
-                  // keep that higher-precedence value aligned with the default.
-                  workspace,
-                }
-              : entry,
-          ]),
-        )
-      : undefined;
+    const roster = structuredClone(listAgentEntries(next));
+    for (const entry of roster) {
+      if (entry.default === true) {
+        // createAgent seeds an explicit workspace on the default entry;
+        // keep that higher-precedence value aligned with the default.
+        entry.workspace = workspace;
+      }
+    }
+    const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
+    const { list: _legacyList, ...agents } = next.agents ?? {};
     next = {
       ...next,
       agents: {
-        ...next.agents,
-        defaults: { ...next.agents?.defaults, workspace },
+        ...agents,
+        defaults: { ...agents.defaults, workspace },
         ...(entries ? { entries } : {}),
       },
     };
@@ -262,12 +265,7 @@ export async function setupCommand(
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
-  const defaultAgentId = Object.entries(
-    next.agents?.entries ?? resolvedConfig.agents?.entries ?? {},
-  ).find(([, entry]) => entry.default === true)?.[0];
-  if (!defaultAgentId) {
-    throw new Error("Setup requires a default agent after config migration.");
-  }
+  const defaultAgentId = resolveDefaultAgentId(next);
   const sessionsDir = await (
     deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
   )(defaultAgentId);

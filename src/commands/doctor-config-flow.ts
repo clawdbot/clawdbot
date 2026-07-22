@@ -1,6 +1,7 @@
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
@@ -176,11 +177,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (snapshot.exists && rosterMigration.changed && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
     const migrated = migratePersistedImplicitMainRoster(candidate).config as OpenClawConfig;
+    const migratedRoster = readAgentRosterProperty(migrated);
+    const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
     const { list: _legacyList, ...candidateAgents } = candidate.agents ?? {};
     const rosterRepair = {
       config: {
         ...candidate,
-        agents: { ...candidateAgents, entries: migrated.agents?.entries },
+        agents: {
+          ...candidateAgents,
+          entries: migratedEntries as NonNullable<OpenClawConfig["agents"]>["entries"],
+        },
       },
       changes: ["Persisted agents.entries with exactly one explicit default agent."],
     };

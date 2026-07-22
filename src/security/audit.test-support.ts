@@ -1,4 +1,4 @@
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { runSecurityAudit } from "./audit.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
@@ -11,21 +11,22 @@ export async function collectSecurityAuditFindings(
 ): Promise<SecurityAuditFinding[]> {
   const roster = listAgentEntries(config);
   const effectiveDefaultId = roster.find((entry) => entry.default === true)?.id ?? roster[0]?.id;
+  const normalizedRoster = roster.map((entry) => {
+    const normalized = { ...entry };
+    if (entry.id === effectiveDefaultId) {
+      normalized.default = true;
+    } else {
+      delete normalized.default;
+    }
+    return normalized;
+  });
+  const { list: _legacyList, ...agents } = config.agents ?? {};
   const loadedConfig: OpenClawConfig = {
     ...config,
     agents: {
-      ...config.agents,
+      ...agents,
       entries:
-        roster.length > 0
-          ? Object.fromEntries(
-              roster.map(({ id, ...entry }) => [
-                id,
-                id === effectiveDefaultId
-                  ? { ...entry, default: true }
-                  : Object.fromEntries(Object.entries(entry).filter(([key]) => key !== "default")),
-              ]),
-            )
-          : { main: { default: true } },
+        roster.length > 0 ? toAgentEntriesRecord(normalizedRoster) : { main: { default: true } },
     },
   };
   const report = await runSecurityAudit({

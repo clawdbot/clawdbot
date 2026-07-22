@@ -32,6 +32,7 @@ import {
 } from "./agent-scope-config.js";
 export {
   listAgentEntries,
+  listAgentEntriesWithSource,
   listAgentIds,
   resolveAgentConfig,
   resolveAgentContextLimits,

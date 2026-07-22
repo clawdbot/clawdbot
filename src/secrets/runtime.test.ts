@@ -447,8 +447,9 @@ describe("secrets runtime snapshot", () => {
               ssh: { target: "peter@example.com:22" },
             },
           },
-          entries: {
-            worker: {
+          list: [
+            {
+              id: "worker",
               default: true,
               enabled: false,
               sandbox: {
@@ -461,7 +462,7 @@ describe("secrets runtime snapshot", () => {
                 },
               },
             },
-          },
+          ],
         },
       }),
       env: { DISABLED_WORKER_SSH_IDENTITY: "DISABLED WORKER PRIVATE KEY" },
@@ -469,7 +470,7 @@ describe("secrets runtime snapshot", () => {
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
-    expect(snapshot.config.agents?.entries?.worker?.sandbox?.ssh?.identityData).toBe(
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
       "DISABLED WORKER PRIVATE KEY",
     );
   });

@@ -1,3 +1,4 @@
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 // Non-interactive onboarding test helpers build runtime stubs that throw instead of exiting.
 import type { RuntimeEnv } from "../runtime.js";
@@ -33,10 +34,14 @@ export function createThrowingRuntime(): NonInteractiveRuntime {
 }
 
 export async function mockOnboardingAgent(params: { config: OpenClawConfig; workspace: string }) {
-  const roster = Object.entries(params.config.agents?.entries ?? {});
-  const existing = roster.find(([, entry]) => entry.default === true) ?? roster[0];
+  const roster = listAgentEntries(params.config);
+  const existing = roster.find((entry) => entry.default === true) ?? roster[0];
   if (existing) {
-    return { config: params.config, agentId: existing[0], bootstrapPending: false };
+    return {
+      config: params.config,
+      agentId: existing.id,
+      bootstrapPending: false,
+    };
   }
   return {
     config: {
