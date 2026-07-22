@@ -880,6 +880,7 @@ export const en: TranslationMap = {
       },
       profiles: {
         minimal: "Minimal",
+        productivity: "Productivity",
         coding: "Coding",
         messaging: "Messaging",
         full: "Full",

@@ -51,6 +51,7 @@ openclaw doctor
 Common causes:
 
 - `tools.profile: "minimal"` allows only `session_status`.
+- `tools.profile: "productivity"` allows file, web, memory, session-inspection, planning, cron, and image-understanding tools without command execution, messaging, delegation, or plugin/MCP tools.
 - `tools.profile: "messaging"` is narrow, for chat-only agents.
 - `tools.profile: "coding"` is the default for new local configs (repo, file,
   shell, and runtime work).

@@ -20,14 +20,16 @@ sidebarTitle: "Tools and custom providers"
 Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 </Note>
 
-| Profile     | Includes                                                                                                                                                                                                                                                |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status` only                                                                                                                                                                                                                                   |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate`                |
-| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `ask_user` |
-| `full`      | No restriction (same as unset)                                                                                                                                                                                                                          |
+| Profile        | Includes                                                                                                                                                                                                                                                |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`      | `session_status` only                                                                                                                                                                                                                                   |
+| `productivity` | File read/write/edit/patch, web search/fetch, memory search/read, session list/history/status, goals/plans, `cron`, and image understanding. Excludes command execution, messaging, delegation, browser/device control, and plugin/MCP tools.           |
+| `coding`       | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate`                |
+| `messaging`    | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `ask_user` |
+| `full`         | No restriction (same as unset)                                                                                                                                                                                                                          |
 
 `coding` and `messaging` also implicitly allow `bundle-mcp` (configured MCP servers).
+`productivity` does not; add exact plugin or MCP tool IDs with `tools.alsoAllow` when needed. A tool profile selects capabilities; it does not confine file access. Pair write-capable profiles with `tools.fs.workspaceOnly: true` or sandboxing when files must stay inside the workspace.
 
 ### Tool groups
 

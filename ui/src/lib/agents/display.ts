@@ -220,6 +220,7 @@ const FALLBACK_TOOL_SECTIONS: FallbackToolSection[] = [
 // labels stay translated and consistent.
 export const PROFILE_OPTIONS = [
   { id: "minimal", labelKey: "agents.toolCatalog.profiles.minimal" },
+  { id: "productivity", labelKey: "agents.toolCatalog.profiles.productivity" },
   { id: "coding", labelKey: "agents.toolCatalog.profiles.coding" },
   { id: "messaging", labelKey: "agents.toolCatalog.profiles.messaging" },
   { id: "full", labelKey: "agents.toolCatalog.profiles.full" },

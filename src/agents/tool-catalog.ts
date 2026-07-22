@@ -25,7 +25,7 @@ import {
 } from "./tool-description-presets.js";
 
 /** Built-in tool profile ids exposed in config and UI. */
-export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+export type ToolProfileId = "minimal" | "productivity" | "coding" | "messaging" | "full";
 
 /** Allow/deny policy generated from a built-in tool profile. */
 type ToolProfilePolicy = {
@@ -72,28 +72,28 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "read",
     description: "Read file contents",
     sectionId: "fs",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
   },
   {
     id: "write",
     label: "write",
     description: "Create or overwrite files",
     sectionId: "fs",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
   },
   {
     id: "edit",
     label: "edit",
     description: "Make precise edits",
     sectionId: "fs",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
   },
   {
     id: "apply_patch",
     label: "apply_patch",
     description: "Patch files",
     sectionId: "fs",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
   },
   {
     id: "exec",
@@ -122,7 +122,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_search",
     description: "Search the web",
     sectionId: "web",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -130,7 +130,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "web_fetch",
     description: "Fetch web content",
     sectionId: "web",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -146,7 +146,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "memory_search",
     description: "Semantic search",
     sectionId: "memory",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -154,7 +154,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "memory_get",
     description: "Read memory files",
     sectionId: "memory",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -170,7 +170,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_list",
     description: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
-    profiles: ["coding", "messaging"],
+    profiles: ["productivity", "coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -178,7 +178,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "sessions_history",
     description: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
-    profiles: ["coding", "messaging"],
+    profiles: ["productivity", "coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -258,7 +258,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "session_status",
     description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
-    profiles: ["minimal", "coding", "messaging"],
+    profiles: ["minimal", "productivity", "coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -345,7 +345,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "cron",
     description: CRON_TOOL_DISPLAY_SUMMARY,
     sectionId: "automation",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -393,7 +393,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "get_goal",
     description: "Get current thread goal",
     sectionId: "agents",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -401,7 +401,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "create_goal",
     description: "Create a thread goal",
     sectionId: "agents",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -409,7 +409,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "update_goal",
     description: "Complete or block a thread goal",
     sectionId: "agents",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -417,7 +417,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "update_plan",
     description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -442,7 +442,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "image",
     description: "Image understanding",
     sectionId: "media",
-    profiles: ["coding"],
+    profiles: ["productivity", "coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -493,6 +493,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   minimal: {
     allow: listCoreToolIdsForProfile("minimal"),
   },
+  productivity: {
+    allow: listCoreToolIdsForProfile("productivity"),
+  },
   coding: {
     allow: [...listCoreToolIdsForProfile("coding"), "bundle-mcp"],
   },
@@ -527,6 +530,7 @@ export const CORE_TOOL_GROUPS = buildCoreToolGroupMap();
 /** Profile options shown in model/tool configuration UIs. */
 export const PROFILE_OPTIONS = [
   { id: "minimal", label: "Minimal" },
+  { id: "productivity", label: "Productivity" },
   { id: "coding", label: "Coding" },
   { id: "messaging", label: "Messaging" },
   { id: "full", label: "Full" },

@@ -63,7 +63,13 @@ export const SUPPORTED_AGENT_WORKSPACE_DENY_TOOLS = [
   "apply_patch",
 ] as const;
 
-export const SUPPORTED_TOOL_PROFILES = ["minimal", "coding", "messaging", "full"] as const;
+export const SUPPORTED_TOOL_PROFILES = [
+  "minimal",
+  "productivity",
+  "coding",
+  "messaging",
+  "full",
+] as const;
 
 export const SUPPORTED_TOOL_EXEC_SECURITY = ["deny", "allowlist", "full"] as const;
 
