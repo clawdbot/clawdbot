@@ -173,24 +173,17 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
     legacyKeys
       .flatMap((key) => (store[key] ? [{ key, entry: store[key] }] : []))
       .toSorted((left, right) => (right.entry?.updatedAt ?? 0) - (left.entry?.updatedAt ?? 0))[0];
-  if (legacyStorePath === opts.storePath) {
-    const legacy = findFreshest(opts.sessionStore);
-    if (legacy?.entry) {
-      const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
-      sessionStore[opts.sessionKey] = { ...legacy.entry };
-      return { sessionKey: opts.sessionKey, sessionStore, storePath: opts.storePath };
+  let legacyStore = opts.sessionStore;
+  if (legacyStorePath !== opts.storePath) {
+    try {
+      legacyStore = loadCommandSessionStore({
+        agentId: LEGACY_HARDCODED_AGENT_ID,
+        storePath: legacyStorePath,
+        ...(opts.cloneOnWrite ? { clone: false } : {}),
+      });
+    } catch {
+      return undefined;
     }
-    return undefined;
-  }
-  let legacyStore: Record<string, SessionEntry>;
-  try {
-    legacyStore = loadCommandSessionStore({
-      agentId: LEGACY_HARDCODED_AGENT_ID,
-      storePath: legacyStorePath,
-      ...(opts.cloneOnWrite ? { clone: false } : {}),
-    });
-  } catch {
-    return undefined;
   }
   const legacy = findFreshest(legacyStore);
   if (legacy?.entry) {

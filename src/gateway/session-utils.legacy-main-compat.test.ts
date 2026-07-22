@@ -1,8 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
@@ -120,4 +122,21 @@ test("gateway honors an explicit non-default agent before legacy fallback", asyn
   expect(target.agentId).toBe("worker");
   expect(target.storePath).toBe(workerStorePath);
   expect(target.store[target.canonicalKey]?.sessionId).toBe("worker");
+});
+
+test("gateway lookup does not create a missing retired-main database", () => {
+  const stateDir = tempDirs.make("openclaw-gateway-missing-main-");
+  const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
+  const cfg = {
+    agents: { list: [{ id: "ops", default: true }] },
+    session: { store: storeTemplate },
+  } satisfies OpenClawConfig;
+  const legacyStorePath = resolveStorePath(storeTemplate, { agentId: "main" });
+  const legacySqlitePath = resolveSqliteTargetFromSessionStorePath(legacyStorePath, {
+    agentId: "main",
+  }).path;
+
+  resolveGatewaySessionStoreTargetWithStore({ cfg, key: "main" });
+
+  expect(fs.existsSync(legacySqlitePath)).toBe(false);
 });
