@@ -1193,7 +1193,7 @@ describe("TUI PTY real backends", () => {
   );
 
   registerGatewayTest(
-    "renders a non-deliverable direct reply failure through the real Gateway and TUI",
+    "recovers a directive-only reply through the real Gateway and TUI",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("emptyReply", onTestFinished);
       try {
@@ -1208,30 +1208,37 @@ describe("TUI PTY real backends", () => {
 
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () =>
-            fixture.run.output().includes("did not produce a visible reply") ? true : null,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
           onTimeout: () =>
             new Error(
-              `empty-reply fallback was not rendered\nrequests=${JSON.stringify(
+              `empty-reply continuation did not reach the model\nrequests=${JSON.stringify(
                 fixture.mockModel.requests(),
                 null,
                 2,
               )}\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
             ),
         });
-        expect(fixture.mockModel.requests()).toHaveLength(1);
+        expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
+          "The previous attempt did not produce a user-visible answer.",
+        );
+        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+        const completedOffset = fixture.run.output().lastIndexOf("FOLLOWUP_RUN_COMPLETE");
         expect(fixture.run.output()).not.toContain("[[reply_to_current]]");
+        expect(fixture.run.output()).not.toContain("did not produce a visible reply");
 
-        await fixture.run.write("turn after empty reply\r");
+        await fixture.run.write("turn after recovered empty reply\r");
         await waitFor({
           timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          read: () => (fixture.mockModel.requests().length === 3 ? true : null),
           onTimeout: () =>
             new Error(
-              `TUI stayed blocked after empty-reply fallback\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+              `TUI stayed blocked after empty-reply recovery\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
             ),
         });
-        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+        expect(JSON.stringify(fixture.mockModel.requests()[2]?.body)).toContain(
+          "turn after recovered empty reply",
+        );
+        await waitForOutputAfter(fixture.run, "FOLLOWUP_RUN_COMPLETE", completedOffset);
 
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
