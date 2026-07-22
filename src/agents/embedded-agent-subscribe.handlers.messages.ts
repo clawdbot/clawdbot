@@ -759,9 +759,24 @@ function emitResolvedCommentaryDisplay(
     return;
   }
   const text = resolveCommentaryDisplayText(rawText, { final: params.final });
+  const previousAssistantText = ctx.state.lastStreamedAssistantCleaned ?? "";
+  const canAppendToAssistantDisplay =
+    ctx.state.emittedAssistantUpdate && text.startsWith(previousAssistantText);
+  const delta = canAppendToAssistantDisplay
+    ? resolveTextAppendDelta(previousAssistantText, text)
+    : "";
   ctx.state.assistantDisplayPhasePending = false;
   ctx.state.lastStreamedCommentary = text;
-  ctx.state.commentaryStreamedWithDelta = false;
+  ctx.state.commentaryStreamedWithDelta = canAppendToAssistantDisplay;
+  if (delta) {
+    ctx.emitAssistantStreamData(
+      buildAssistantStreamData({
+        delta,
+        phase: "commentary",
+        itemId: params.itemId,
+      }),
+    );
+  }
   ctx.emitAssistantStreamData(
     buildAssistantStreamData({
       text,
@@ -1095,6 +1110,16 @@ export function handleMessageUpdate(
   ) {
     const previousStreamContentIndex = ctx.state.lastAssistantStreamContentIndex;
     const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
+    const isDelayedUnphasedAnthropicTextEnd =
+      evtType === "text_end" &&
+      isAnthropicAssistantMessage(partialAssistant) &&
+      deliveryPhase !== "commentary" &&
+      previousStreamContentIndex !== undefined &&
+      streamContentIndex !== undefined &&
+      streamContentIndex < previousStreamContentIndex;
+    if (isDelayedUnphasedAnthropicTextEnd) {
+      return;
+    }
     const contentIndexChanged =
       previousStreamContentIndex !== undefined &&
       streamContentIndex !== undefined &&
@@ -1501,13 +1526,13 @@ export function handleMessageEnd(
       : "";
   const trimmedReasoning = rawThinking ? rawThinking.trim() : "";
   const trimmedText = text.trim();
-  const displayText = resolveCommentaryDisplayText(text, { final: true });
-  const trimmedDisplayText = displayText.trim();
   const parsedText = (() => {
-    if (!trimmedDisplayText) {
+    if (!trimmedText) {
       return null;
     }
-    return parseReplyDirectives(splitTrailingDirective(trimmedDisplayText, { final: true }).text);
+    const parsed = parseReplyDirectives(splitTrailingDirective(trimmedText, { final: true }).text);
+    const displayText = resolveCommentaryDisplayText(parsed.text, { final: true });
+    return displayText === parsed.text ? parsed : { ...parsed, text: displayText };
   })();
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
@@ -1551,7 +1576,7 @@ export function handleMessageEnd(
 
   const silentExpectedWithoutSentinel =
     ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
-  const finalAssistantText = silentExpectedWithoutSentinel ? "" : displayText;
+  const finalAssistantText = silentExpectedWithoutSentinel ? "" : cleanedText;
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
   ctx.finalizeAssistantTexts({
@@ -1627,7 +1652,7 @@ export function handleMessageEnd(
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
     !suppressMessageToolOnlySourceReplyOutput &&
-    finalAssistantText &&
+    (finalAssistantText || hasMedia) &&
     onBlockReply &&
     (ctx.state.blockReplyBreak === "message_end" ||
       hasBufferedBlockReply ||
@@ -1697,7 +1722,7 @@ export function handleMessageEnd(
             : finalAssistantText;
           ctx.state.toolExecutionSinceLastBlockReply = false;
           emitSplitResultAsBlockReply(
-            hasMedia && parsedText
+            hasReplyDirectiveMetadataResult(parsedText)
               ? {
                   ...parsedText,
                   text: alreadyDeliveredFinalText ? "" : cleanedText,

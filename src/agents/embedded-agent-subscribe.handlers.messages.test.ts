@@ -930,6 +930,52 @@ describe("handleMessageUpdate text signatures", () => {
     },
   );
 
+  it.each(["anthropic-messages", "openai-completions"])(
+    "preserves the released %s false-positive suffix for append-only consumers",
+    async (api) => {
+      const onAgentEvent = vi.fn();
+      const context = createMessageUpdateContext({ onAgentEvent });
+
+      handleMessageUpdate(context, {
+        type: "message_update",
+        message: {
+          role: "assistant",
+          api,
+          content: [{ type: "text", text: "Ordinary C" }],
+        },
+        assistantMessageEvent: { type: "text_delta", delta: "Ordinary C" },
+      } as never);
+      await handleMessageEnd(context, {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          api,
+          phase: "commentary",
+          content: [{ type: "text", text: "Ordinary C" }],
+        },
+      } as never);
+
+      expect(onAgentEvent.mock.calls.map((call) => call[0]?.data)).toMatchObject([
+        { delta: "Ordinary " },
+        {
+          delta: "C",
+          phase: "commentary",
+        },
+        {
+          text: "Ordinary C",
+          delta: "",
+          replace: true,
+          phase: "commentary",
+        },
+      ]);
+      expect(
+        onAgentEvent.mock.calls.some(
+          (call) => call[0]?.data?.replace && Boolean(call[0]?.data?.delta),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("releases an ordinary phase-pending Completions prefix at text_end", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
@@ -1027,7 +1073,7 @@ describe("handleMessageUpdate text signatures", () => {
     ]);
   });
 
-  it("recomputes deferred unclassified Anthropic blocks after content-index resets", () => {
+  it("does not replay deferred unclassified Anthropic blocks at text_end", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
     context.resetAssistantMessageState = vi.fn(() => {
@@ -1073,16 +1119,7 @@ describe("handleMessageUpdate text signatures", () => {
     emit("text_end", 0, "AB", "", partial("AB", "A"));
     emit("text_end", 1, "A", "", partial("AB", "A"));
 
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
-      {
-        stream: "assistant",
-        data: { text: "AB", delta: "AB" },
-      },
-      {
-        stream: "assistant",
-        data: { text: "A", delta: "A" },
-      },
-    ]);
+    expect(onAgentEvent).not.toHaveBeenCalled();
   });
 
   it("keeps nested bracket delegate prefixes off the commentary event bus", () => {
