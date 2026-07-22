@@ -2,11 +2,8 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
-import android.database.ContentObserver
-import android.os.Handler
-import android.os.Looper
+import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
 import android.os.SystemClock
-import android.provider.Settings
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
@@ -14,7 +11,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -29,7 +25,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.PathParser
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -300,27 +295,6 @@ internal fun WorkingClawIcon(
     }
   }
 }
-
-@Composable
-private fun rememberSystemAnimationsEnabled(): Boolean {
-  val context = LocalContext.current
-  val resolver = context.contentResolver
-  var scale by remember(resolver) { mutableFloatStateOf(readAnimatorDurationScale(resolver)) }
-  DisposableEffect(resolver) {
-    val observer =
-      object : ContentObserver(Handler(Looper.getMainLooper())) {
-        override fun onChange(selfChange: Boolean) {
-          scale = readAnimatorDurationScale(resolver)
-        }
-      }
-    resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, observer)
-    scale = readAnimatorDurationScale(resolver)
-    onDispose { resolver.unregisterContentObserver(observer) }
-  }
-  return scale > 0f
-}
-
-private fun readAnimatorDurationScale(resolver: android.content.ContentResolver): Float = Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
 
 @Composable
 internal fun rememberWorkingElapsedMs(observedAtElapsedMs: Long): Long {
