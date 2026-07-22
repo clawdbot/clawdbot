@@ -8,7 +8,7 @@ import {
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
   handleMessageEnd,
-  handleMessageUpdate,
+  handleMessageUpdate as handleMessageUpdateImpl,
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.js";
@@ -23,6 +23,10 @@ import {
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+
+function handleMessageUpdate(...args: Parameters<typeof handleMessageUpdateImpl>): void {
+  void handleMessageUpdateImpl(...args);
+}
 
 function createMessageUpdateContext(
   params: {

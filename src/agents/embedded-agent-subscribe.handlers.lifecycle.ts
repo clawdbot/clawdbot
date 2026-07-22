@@ -264,7 +264,7 @@ export function handleAgentEnd(
 
   const flushPendingMediaAndChannel = () => {
     if (!isCurrentDeliveryGeneration()) {
-      return;
+      return undefined;
     }
     if (ctx.params.onBlockReply) {
       const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);

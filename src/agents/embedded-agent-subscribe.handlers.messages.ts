@@ -1679,11 +1679,10 @@ export function handleMessageEnd(
           final: true,
         })
       : undefined;
-  const finalTextMatchesDelivered = Boolean(
+  const finalTextMatchesDelivered =
     textEndDeliveredVisibleText != null &&
     normalizeTextForComparison(finalAssistantText) ===
-      normalizeTextForComparison(textEndDeliveredVisibleText),
-  );
+      normalizeTextForComparison(textEndDeliveredVisibleText);
   const finalTextCorrection = finalTextMatchesDelivered
     ? ""
     : textEndDeliveredVisibleText && finalAssistantText.startsWith(textEndDeliveredVisibleText)
@@ -1719,9 +1718,8 @@ export function handleMessageEnd(
       !deliveredReplyDirectives?.replyToCurrent &&
       !deferredReplyDirectives?.replyToCurrent,
     );
-    const hasUndeliveredReplyTarget = Boolean(
-      hasUndeliveredReplyToId || hasUndeliveredReplyToTag || hasUndeliveredReplyToCurrent,
-    );
+    const hasUndeliveredReplyTarget =
+      hasUndeliveredReplyToId || hasUndeliveredReplyToTag || hasUndeliveredReplyToCurrent;
     const hasMetadata =
       undeliveredMediaUrls.length > 0 || undeliveredAudioAsVoice || hasUndeliveredReplyTarget;
     const result = parsedText
@@ -1757,11 +1755,10 @@ export function handleMessageEnd(
     text: finalAssistantText,
     addedDuringMessage,
     chunkerHasBuffered,
-    reconcileCurrentMessage: Boolean(
+    reconcileCurrentMessage:
       ctx.state.blockReplyBreak === "text_end" &&
       addedDuringMessage &&
       finalAssistantText !== currentMessageAssistantText,
-    ),
   });
 
   const onBlockReply = ctx.params.onBlockReply;
