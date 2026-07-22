@@ -104,6 +104,11 @@ export async function deliverPrivateCommandReply(params: {
         mirror: false,
         isGroup: false,
         replyKind: "final",
+        requestMessageId:
+          params.commandParams.ctx.MessageSidFull ??
+          params.commandParams.ctx.MessageSid ??
+          params.commandParams.ctx.MessageSidFirst ??
+          params.commandParams.ctx.MessageSidLast,
       }),
     ),
   );

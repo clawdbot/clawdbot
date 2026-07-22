@@ -109,6 +109,11 @@ export async function emitResetCommandHooks(params: {
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
         replyKind: "final",
+        requestMessageId:
+          params.ctx.MessageSidFull ??
+          params.ctx.MessageSid ??
+          params.ctx.MessageSidFirst ??
+          params.ctx.MessageSidLast,
       });
       routedReply = true;
     }

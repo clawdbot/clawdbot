@@ -301,6 +301,7 @@ describe("routeReply", () => {
       cfg: {} as never,
       replyKind: "block",
       runId: "run-1",
+      requestMessageId: "inbound-1",
     });
 
     expect(res.ok).toBe(true);
@@ -317,6 +318,7 @@ describe("routeReply", () => {
         sessionKey: "agent:test",
         senderId: "sender-1",
         runId: "run-1",
+        messageId: "inbound-1",
       },
     });
     expect(lastDelivery()).not.toHaveProperty("skipMessageSendingHooks");

@@ -91,6 +91,9 @@ export type CanonicalSentMessageHookContext = {
   sessionKey?: string;
   runId?: string;
   messageId?: string;
+  requestMessageId?: string;
+  replyToId?: string;
+  threadId?: string | number;
   trace?: DiagnosticTraceContext;
   callDepth?: number;
   isGroup?: boolean;
@@ -223,6 +226,9 @@ export function buildCanonicalSentMessageHookContext(params: {
   sessionKey?: string;
   runId?: string;
   messageId?: string;
+  requestMessageId?: string;
+  replyToId?: string;
+  threadId?: string | number;
   trace?: DiagnosticTraceContext;
   callDepth?: number;
   isGroup?: boolean;
@@ -239,6 +245,9 @@ export function buildCanonicalSentMessageHookContext(params: {
     sessionKey: params.sessionKey,
     runId: params.runId,
     messageId: params.messageId,
+    requestMessageId: params.requestMessageId,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
     trace: params.trace,
     callDepth: params.callDepth,
     isGroup: params.isGroup,
@@ -499,8 +508,11 @@ export function toPluginMessageSentEvent(
     content: canonical.content,
     success: canonical.success,
     ...(canonical.messageId ? { messageId: canonical.messageId } : {}),
+    ...(canonical.requestMessageId ? { requestMessageId: canonical.requestMessageId } : {}),
     ...(canonical.sessionKey ? { sessionKey: canonical.sessionKey } : {}),
     ...(canonical.runId ? { runId: canonical.runId } : {}),
+    ...(canonical.replyToId ? { replyToId: canonical.replyToId } : {}),
+    ...(canonical.threadId !== undefined ? { threadId: canonical.threadId } : {}),
     ...(canonical.error ? { error: canonical.error } : {}),
   };
   assignTraceFields(event, canonical.trace);

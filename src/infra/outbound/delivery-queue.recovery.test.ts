@@ -1400,6 +1400,19 @@ describe("delivery-queue recovery", () => {
         bestEffort: true,
         gifPlayback: true,
         silent: true,
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "demo-channel-a",
+          sessionKey: "agent:main:main",
+          runId: "run-1",
+          context: {
+            channelId: "demo-channel-a",
+            conversationId: "+1",
+            sessionKey: "agent:main:main",
+            runId: "run-1",
+            messageId: "inbound-1",
+          },
+        },
         gatewayClientScopes: ["operator.write"],
         mirror: {
           sessionKey: "agent:main:main",
@@ -1430,6 +1443,7 @@ describe("delivery-queue recovery", () => {
       replyToMode?: string;
       formatting?: unknown;
       gatewayClientScopes?: string[];
+      replyPayloadSendingHook?: unknown;
       mirror?: unknown;
       session?: unknown;
     };
@@ -1445,6 +1459,19 @@ describe("delivery-queue recovery", () => {
       chunkMode: "newline",
     });
     expect(deliverInput.gatewayClientScopes).toEqual(["operator.write"]);
+    expect(deliverInput.replyPayloadSendingHook).toEqual({
+      kind: "final",
+      channel: "demo-channel-a",
+      sessionKey: "agent:main:main",
+      runId: "run-1",
+      context: {
+        channelId: "demo-channel-a",
+        conversationId: "+1",
+        sessionKey: "agent:main:main",
+        runId: "run-1",
+        messageId: "inbound-1",
+      },
+    });
     expect(deliverInput.mirror).toEqual({
       sessionKey: "agent:main:main",
       text: "a",

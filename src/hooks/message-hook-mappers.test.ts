@@ -542,7 +542,10 @@ describe("message hook mappers", () => {
       accountId: "acc-1",
       sessionKey: "session-1",
       messageId: "out-1",
+      requestMessageId: "in-1",
       runId: "run-out-1",
+      replyToId: "thread-1",
+      threadId: "thread-1",
       isGroup: true,
       groupId: "demo-chat:chat:456",
     });
@@ -554,14 +557,18 @@ describe("message hook mappers", () => {
       sessionKey: "session-1",
       runId: "run-out-1",
       messageId: "out-1",
+      replyToId: "thread-1",
     });
     expect(toPluginMessageSentEvent(canonical)).toEqual({
       to: "demo-chat:chat:456",
       content: "reply",
       success: false,
       messageId: "out-1",
+      requestMessageId: "in-1",
       sessionKey: "session-1",
       runId: "run-out-1",
+      replyToId: "thread-1",
+      threadId: "thread-1",
       error: "network error",
     });
     expect(toInternalMessageSentContext(canonical)).toEqual({

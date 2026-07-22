@@ -451,6 +451,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         mirror: false,
         replyKind: kind,
         runId: params.runId,
+        requestMessageId:
+          params.ctx.MessageSidFull ??
+          params.ctx.MessageSid ??
+          params.ctx.MessageSidFirst ??
+          params.ctx.MessageSidLast,
       });
       if (!result.ok) {
         if (tracksVisibleText) {

@@ -35,11 +35,8 @@ export type PluginHookMessageContext = {
    * `crypto.randomUUID()`. Currently populated for inbound message hooks
    * (`inbound_claim`, `message_received`) and for agent-runtime hooks that
    * already receive the run id (e.g. `agent_end`, `llm_input`, `llm_output`).
-   * It is **not yet** plumbed through the outbound delivery path, so
-   * plugins observing `message_sending` / `message_sent` should not rely
-   * on `runId` to correlate against `agent_end`; use `sessionKey` for
-   * outbound→inbound correlation today (with the caveat that it cannot
-   * disambiguate concurrent turns in the same session).
+   * Routed replies preserve it through the durable outbound path. Other
+   * outbound sources may omit it, so plugins must still treat it as optional.
    */
   runId?: string;
   messageId?: string;
@@ -139,8 +136,13 @@ export type PluginHookMessageSentEvent = {
   content: string;
   success: boolean;
   messageId?: string;
+  /** Exact inbound provider message that triggered a routed reply. */
+  requestMessageId?: string;
   sessionKey?: string;
   runId?: string;
+  /** Reply destination requested for this delivery. */
+  replyToId?: string;
+  threadId?: string | number;
   trace?: DiagnosticTraceContext;
   traceId?: string;
   spanId?: string;

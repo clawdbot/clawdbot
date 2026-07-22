@@ -1100,6 +1100,10 @@ function createMessageSentEmitter(params: {
   to: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
+  runId?: string;
+  requestMessageId?: string;
+  replyToId?: string;
+  threadId?: string | number;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
 }): { emitMessageSent: (event: MessageSentEvent) => void; hasMessageSentHooks: boolean } {
@@ -1125,7 +1129,11 @@ function createMessageSentEmitter(params: {
       // keeps the contract documented in `PluginHookMessageContext`
       // honest for both outbound delivery hooks.
       sessionKey: params.sessionKeyForInternalHooks,
+      runId: params.runId,
       messageId: event.messageId,
+      requestMessageId: params.requestMessageId,
+      replyToId: params.replyToId,
+      threadId: params.threadId,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
     });
@@ -2104,6 +2112,10 @@ async function deliverOutboundPayloadsCore(
     to,
     accountId,
     sessionKeyForInternalHooks,
+    runId: params.replyPayloadSendingHook?.runId,
+    requestMessageId: params.replyPayloadSendingHook?.context.messageId,
+    replyToId: params.replyToId ?? undefined,
+    threadId: params.threadId ?? undefined,
     mirrorIsGroup,
     mirrorGroupId,
   });

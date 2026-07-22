@@ -103,6 +103,8 @@ type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** Exact inbound provider message that triggered this routed reply. */
+  requestMessageId?: string;
 };
 
 type RouteReplyResult = {
@@ -293,6 +295,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           ...(params.requesterSenderId ? { senderId: params.requesterSenderId } : {}),
           ...(params.runId ? { runId: params.runId } : {}),
+          ...(params.requestMessageId ? { messageId: params.requestMessageId } : {}),
         },
       },
       replyToId: resolvedReplyToId ?? null,

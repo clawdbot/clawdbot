@@ -4959,6 +4959,64 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("preserves request, run, reply, and delivery identities in message_sent", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "outbound-1",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "hello" }],
+      replyToId: "thread-root-1",
+      threadId: "thread-root-1",
+      replyPayloadSendingHook: {
+        kind: "final",
+        runId: "run-1",
+        context: {
+          channelId: "matrix",
+          conversationId: "!room",
+          messageId: "inbound-1",
+          runId: "run-1",
+        },
+      },
+      session: { key: "agent:tank:main" },
+    });
+
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "outbound-1",
+        requestMessageId: "inbound-1",
+        runId: "run-1",
+        replyToId: "thread-root-1",
+        threadId: "thread-root-1",
+      }),
+      expect.objectContaining({
+        channelId: "matrix",
+        messageId: "outbound-1",
+        runId: "run-1",
+        replyToId: "thread-root-1",
+      }),
+    );
+  });
+
   it("omits sessionKey from the message_sent hook context when session is absent", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendText = vi.fn().mockResolvedValue({
