@@ -675,6 +675,8 @@ export const tr: TranslationMap = {
     openWorkboardCard: "Workboard kartını aç",
     dashboardAvailable: "Pano kullanılabilir",
     approvalNeeded: "Onay gerekli",
+    queuedMessage: "{count} mesaj gönderilmek üzere sıraya alındı",
+    queuedMessages: "{count} mesaj gönderilmek üzere sıraya alındı",
     noSessions: "Oturum bulunamadı.",
     noActiveSessions: "Etkin konu yok.",
     noArchivedSessions: "Arşivlenmiş oturum yok.",
@@ -3045,6 +3047,7 @@ export const tr: TranslationMap = {
     eventStale: "Eski oturum",
   },
   connection: {
+    queuedCount: "{count} sırada",
     reconnecting: "Yeniden bağlanıyor…",
     retryNow: "Şimdi yeniden dene",
     access: {
@@ -4227,6 +4230,8 @@ export const tr: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Çevrimdışı — mesajlar sıraya alınacak ve bağlantı geri geldiğinde gönderilecek.",
+      offlineQueuedHint:
+        "Çevrimdışı — {count} mesaj sırada; bağlantı yeniden kurulduğunda mesajlar gönderilir.",
       preparingModel: "Model hazırlanıyor...",
       responding: "{name} yanıtlıyor...",
       sendingMessage: "Mesaj gönderiliyor...",

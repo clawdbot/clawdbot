@@ -665,6 +665,8 @@ export const ar: TranslationMap = {
     openWorkboardCard: "فتح بطاقة Workboard",
     dashboardAvailable: "لوحة المعلومات متاحة",
     approvalNeeded: "الموافقة مطلوبة",
+    queuedMessage: "تمت إضافة رسالة واحدة إلى قائمة انتظار الإرسال ({count})",
+    queuedMessages: "تمت إضافة {count} رسائل إلى قائمة انتظار الإرسال",
     noSessions: "لم يتم العثور على جلسات.",
     noActiveSessions: "لا توجد محادثات نشطة.",
     noArchivedSessions: "لا توجد جلسات مؤرشفة.",
@@ -2998,6 +3000,7 @@ export const ar: TranslationMap = {
     eventStale: "جلسة قديمة",
   },
   connection: {
+    queuedCount: "{count} في قائمة الانتظار",
     reconnecting: "جارٍ إعادة الاتصال…",
     retryNow: "إعادة المحاولة الآن",
     access: {
@@ -4164,6 +4167,7 @@ export const ar: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "غير متصل — سيتم وضع الرسائل في قائمة الانتظار وإرسالها عند عودة الاتصال.",
+      offlineQueuedHint: "غير متصل — {count} في قائمة الانتظار؛ ستُرسل الرسائل عند عودة الاتصال.",
       preparingModel: "جارٍ إعداد النموذج...",
       responding: "{name} يرد...",
       sendingMessage: "جارٍ إرسال الرسالة...",
