@@ -678,6 +678,8 @@ export const uk: TranslationMap = {
     openWorkboardCard: "Відкрити картку Workboard",
     dashboardAvailable: "Панель доступна",
     approvalNeeded: "Потрібне схвалення",
+    queuedMessage: "{count} повідомлення в черзі на надсилання",
+    queuedMessages: "{count} повідомлень у черзі на надсилання",
     noSessions: "Сеансів не знайдено.",
     noActiveSessions: "Немає активних тем.",
     noArchivedSessions: "Немає заархівованих сесій.",
@@ -3043,6 +3045,7 @@ export const uk: TranslationMap = {
     eventStale: "Застарілий сеанс",
   },
   connection: {
+    queuedCount: "{count} у черзі",
     reconnecting: "Повторне підключення…",
     retryNow: "Повторити зараз",
     access: {
@@ -4220,6 +4223,8 @@ export const uk: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Офлайн — повідомлення буде поставлено в чергу й надіслано після відновлення з'єднання.",
+      offlineQueuedHint:
+        "Немає з’єднання — {count} у черзі; повідомлення буде надіслано після відновлення з’єднання.",
       preparingModel: "Підготовка моделі...",
       responding: "{name} відповідає...",
       sendingMessage: "Надсилання повідомлення...",

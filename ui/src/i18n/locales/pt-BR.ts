@@ -678,6 +678,8 @@ export const pt_BR: TranslationMap = {
     openWorkboardCard: "Abrir cartão do Workboard",
     dashboardAvailable: "Painel disponível",
     approvalNeeded: "Aprovação necessária",
+    queuedMessage: "{count} mensagem na fila para envio",
+    queuedMessages: "{count} mensagens na fila para envio",
     noSessions: "Nenhuma sessão encontrada.",
     noActiveSessions: "Nenhum thread ativo.",
     noArchivedSessions: "Nenhuma sessão arquivada.",
@@ -3045,6 +3047,7 @@ export const pt_BR: TranslationMap = {
     eventStale: "Sessão obsoleta",
   },
   connection: {
+    queuedCount: "{count} na fila",
     reconnecting: "Reconectando…",
     retryNow: "Tentar novamente agora",
     access: {
@@ -4228,6 +4231,8 @@ export const pt_BR: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Offline — as mensagens serão enfileiradas e enviadas quando a conexão retornar.",
+      offlineQueuedHint:
+        "Offline — {count} na fila; as mensagens serão enviadas quando a conexão for restabelecida.",
       preparingModel: "Preparando modelo...",
       responding: "{name} está respondendo...",
       sendingMessage: "Enviando mensagem...",

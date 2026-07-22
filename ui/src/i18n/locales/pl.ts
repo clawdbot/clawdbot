@@ -680,6 +680,8 @@ export const pl: TranslationMap = {
     openWorkboardCard: "Otwórz kartę Workboard",
     dashboardAvailable: "Pulpit dostępny",
     approvalNeeded: "Wymagane zatwierdzenie",
+    queuedMessage: "{count} wiadomość oczekuje na wysłanie",
+    queuedMessages: "{count} wiadomości oczekuje na wysłanie",
     noSessions: "Nie znaleziono sesji.",
     noActiveSessions: "Brak aktywnych wątków.",
     noArchivedSessions: "Brak zarchiwizowanych sesji.",
@@ -3056,6 +3058,7 @@ export const pl: TranslationMap = {
     eventStale: "Nieaktualna sesja",
   },
   connection: {
+    queuedCount: "{count} oczekujących",
     reconnecting: "Ponowne łączenie…",
     retryNow: "Spróbuj ponownie teraz",
     access: {
@@ -4239,6 +4242,8 @@ export const pl: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Offline — wiadomości zostaną umieszczone w kolejce i wysłane po przywróceniu połączenia.",
+      offlineQueuedHint:
+        "Offline — {count} oczekujących; wiadomości zostaną wysłane po przywróceniu połączenia.",
       preparingModel: "Przygotowywanie modelu...",
       responding: "{name} odpowiada...",
       sendingMessage: "Wysyłanie wiadomości...",
