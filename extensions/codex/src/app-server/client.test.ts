@@ -390,7 +390,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.145.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.145.1 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
