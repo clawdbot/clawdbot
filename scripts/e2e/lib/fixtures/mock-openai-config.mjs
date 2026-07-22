@@ -61,7 +61,10 @@ export function applyMockOpenAiModelConfig(cfg, params) {
       ...(params.includeImageDefaults
         ? {
             imageModel: { primary: modelRef, timeoutMs: 30_000 },
-            imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+            mediaModels: {
+              ...cfg.agents?.defaults?.mediaModels,
+              image: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+            },
           }
         : {}),
       models: {
@@ -72,6 +75,31 @@ export function applyMockOpenAiModelConfig(cfg, params) {
         },
       },
     },
+    ...(cfg.agents?.entries && typeof cfg.agents.entries === "object"
+      ? {
+          entries: Object.fromEntries(
+            Object.entries(cfg.agents.entries).map(([agentId, agent]) => [
+              agentId,
+              {
+                ...agent,
+                model: { ...agent.model, primary: modelRef },
+                models: {
+                  ...agent.models,
+                  [modelRef]: {
+                    ...agent.models?.[modelRef],
+                    agentRuntime: { id: "openclaw" },
+                    params: {
+                      ...agent.models?.[modelRef]?.params,
+                      transport: "sse",
+                      openaiWsWarmup: false,
+                    },
+                  },
+                },
+              },
+            ]),
+          ),
+        }
+      : {}),
     ...(Array.isArray(cfg.agents?.list)
       ? {
           list: cfg.agents.list.map((agent) => ({

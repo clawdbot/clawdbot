@@ -8,16 +8,18 @@ import {
 type MockConfig = {
   agents: {
     defaults: {
-      imageGenerationModel?: unknown;
       imageModel?: unknown;
+      mediaModels?: unknown;
       model?: unknown;
       models: Record<string, unknown>;
     };
-    list: Array<{
-      id: string;
-      model: { primary: string };
-      models: Record<string, { agentRuntime?: unknown; params: Record<string, unknown> }>;
-    }>;
+    entries: Record<
+      string,
+      {
+        model: { primary: string };
+        models: Record<string, { agentRuntime?: unknown; params: Record<string, unknown> }>;
+      }
+    >;
   };
   models: {
     providers: {
@@ -53,9 +55,8 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
             "openai/gpt-5.4": { params: { preserved: true } },
           },
         },
-        list: [
-          {
-            id: "release-agent",
+        entries: {
+          "release-agent": {
             model: { primary: "openai/gpt-5.4" },
             models: {
               "openai/gpt-5.5": {
@@ -63,7 +64,7 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
               },
             },
           },
-        ],
+        },
       },
       models: {
         providers: {
@@ -95,8 +96,10 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
       }),
     ]);
     expect(cfg.agents.defaults).toMatchObject({
-      imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
       imageModel: { primary: "openai/gpt-5.5", timeoutMs: 30_000 },
+      mediaModels: {
+        image: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+      },
       model: { primary: "openai/gpt-5.5" },
       models: {
         "openai/gpt-5.4": { params: { preserved: true } },
@@ -106,7 +109,7 @@ describe("scripts/e2e/lib/fixtures/mock-openai-config.mjs", () => {
         },
       },
     });
-    expect(cfg.agents.list[0]).toMatchObject({
+    expect(cfg.agents.entries["release-agent"]).toMatchObject({
       model: { primary: "openai/gpt-5.5" },
       models: {
         "openai/gpt-5.5": {
