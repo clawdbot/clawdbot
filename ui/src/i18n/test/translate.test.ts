@@ -117,6 +117,16 @@ describe("i18n", () => {
     expect(translate.t("common.health")).toBe("Health");
   });
 
+  it("distinguishes an active-locale translation from an English fallback", async () => {
+    translate.i18n.registerTranslation("zh-CN", {
+      gateway: { approval: { notFound: "审批请求不存在或已过期。" } },
+    });
+    await translate.i18n.setLocale("zh-CN");
+    expect(translate.i18n.hasTranslation("gateway.approval.notFound")).toBe(true);
+    expect(translate.i18n.hasTranslation("common.health")).toBe(false);
+    expect(translate.t("common.health")).toBe("Health");
+  });
+
   it("loads translations even when setting the same locale again", async () => {
     const internal = translate.i18n as unknown as {
       locale: string;

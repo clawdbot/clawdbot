@@ -8,9 +8,10 @@ import type {
   ExpiredApprovalSnapshot,
   PendingApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { ApprovalPage } from "./approval-page.ts";
 
@@ -152,6 +153,7 @@ afterEach(async () => {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  i18n.registerTranslation("zh-CN", zh_CN);
   await i18n.setLocale("en");
 });
 
@@ -536,6 +538,72 @@ describe("ApprovalPage", () => {
 
     expect(page.querySelector("h1")?.textContent).toBe("Approval unavailable");
     expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+  });
+
+  it("renders a reviewed descriptor from an owner-published locale catalog", async () => {
+    i18n.registerTranslation("zh-CN", {
+      ...zh_CN,
+      gateway: { approval: { notFound: "审批请求不存在或已过期。" } },
+    });
+    await i18n.setLocale("zh-CN");
+    const request = vi.fn(async () => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "approval not found",
+        details: {
+          reason: "APPROVAL_NOT_FOUND",
+          localization: { messageKey: "gateway.approval.notFound" },
+        },
+      });
+    });
+    const { page } = createPage({ client: { request } as unknown as GatewayBrowserClient });
+
+    await settle(page);
+
+    expect(page.querySelector(".approval-page__state--unavailable p")?.textContent).toBe(
+      "审批请求不存在或已过期。",
+    );
+  });
+
+  it("preserves canonical English when the active locale lacks a reviewed key", async () => {
+    await i18n.setLocale("de");
+    const request = vi.fn(async () => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "approval not found",
+        details: {
+          reason: "APPROVAL_NOT_FOUND",
+          localization: { messageKey: "gateway.approval.notFound" },
+        },
+      });
+    });
+    const { page } = createPage({ client: { request } as unknown as GatewayBrowserClient });
+
+    await settle(page);
+
+    expect(page.querySelector(".approval-page__state--unavailable p")?.textContent).toBe(
+      "approval not found",
+    );
+  });
+
+  it("does not expose an unreviewed Gateway descriptor", async () => {
+    const request = vi.fn(async () => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "internal approval lookup detail",
+        details: {
+          reason: "APPROVAL_NOT_FOUND",
+          localization: { messageKey: "gateway.unreviewed.message" },
+        },
+      });
+    });
+    const { page } = createPage({ client: { request } as unknown as GatewayBrowserClient });
+
+    await settle(page);
+
+    expect(page.querySelector(".approval-page__state--unavailable p")?.textContent).toBe(
+      "This approval could not be found or this device is not authorized to review it.",
+    );
   });
 
   it("reconciles canonical state when an applied result does not match the submitted decision", async () => {

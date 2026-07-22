@@ -233,6 +233,18 @@ class I18nManager {
     this.subscribers.forEach((sub) => sub(this.locale));
   }
 
+  public hasTranslation(key: string): boolean {
+    const keys = key.split(".");
+    let value: unknown = this.translations[this.locale];
+    for (const part of keys) {
+      if (!value || typeof value !== "object") {
+        return false;
+      }
+      value = (value as Record<string, unknown>)[part];
+    }
+    return typeof value === "string";
+  }
+
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
     let value: unknown = this.translations[this.locale] || this.translations[DEFAULT_LOCALE];
