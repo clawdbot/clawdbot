@@ -124,6 +124,8 @@ export type EmbeddedAgentSubscribeState = {
   };
   lastStreamedAssistant?: string;
   lastStreamedAssistantCleaned?: string;
+  lastStreamedCommentary?: string;
+  commentaryStreamedWithDelta: boolean;
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;

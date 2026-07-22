@@ -195,6 +195,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
     lastStreamedAssistant: undefined,
     lastStreamedAssistantCleaned: undefined,
+    lastStreamedCommentary: undefined,
+    commentaryStreamedWithDelta: false,
     emittedAssistantUpdate: false,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
@@ -444,6 +446,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.partialBlockState.pendingTagFragment = undefined;
     state.lastStreamedAssistant = undefined;
     state.lastStreamedAssistantCleaned = undefined;
+    state.lastStreamedCommentary = undefined;
+    state.commentaryStreamedWithDelta = false;
     state.emittedAssistantUpdate = false;
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;

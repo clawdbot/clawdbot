@@ -63,6 +63,8 @@ function createMessageUpdateContext(
       },
       lastStreamedAssistant: undefined,
       lastStreamedAssistantCleaned: undefined,
+      lastStreamedCommentary: undefined,
+      commentaryStreamedWithDelta: false,
       emittedAssistantUpdate: false,
       shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
       blockReplyBreak: "text_end",
@@ -703,7 +705,7 @@ describe("handleMessageUpdate text signatures", () => {
     } as never);
     handleMessageUpdate(context, {
       type: "message_update",
-      message: { role: "assistant", api: "anthropic-messages", content: [] },
+      message: commentaryPartial,
       assistantMessageEvent: {
         type: "text_end",
         content: narration,
@@ -722,6 +724,433 @@ describe("handleMessageUpdate text signatures", () => {
         }),
       }),
     );
+  });
+
+  it("strips continuation signals from commentary update snapshots", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const message = {
+      role: "assistant",
+      api: "openai-completions",
+      phase: "commentary",
+      content: [{ type: "text", text: "Working before tool.\nCONTINUE_WORK" }],
+    };
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message,
+    } as never);
+
+    expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+      stream: "assistant",
+      data: {
+        text: "Working before tool.",
+        replace: true,
+        phase: "commentary",
+      },
+    });
+    expect(context.noteLastAssistant).toHaveBeenCalledWith(message);
+  });
+
+  it("buffers continuation signal prefixes in Responses commentary streams", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const createPartial = (text: string) =>
+      createOpenAiResponsesPartial({
+        text,
+        id: "item-commentary",
+        signaturePhase: "commentary",
+        partialPhase: "commentary",
+      });
+    const prefixPartial = createPartial("Working before tool.\nCONTINUE_WOR");
+    const finalPartial = createPartial("Working before tool.\nCONTINUE_WORK");
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: prefixPartial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Working before tool.\nCONTINUE_WOR",
+        partial: prefixPartial,
+      },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: finalPartial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "K",
+        partial: finalPartial,
+      },
+    } as never);
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: {
+          delta: "Working before tool.\n",
+          phase: "commentary",
+          itemId: "item-commentary",
+        },
+      },
+      {
+        stream: "assistant",
+        data: {
+          text: "Working before tool.",
+          replace: true,
+          phase: "commentary",
+          itemId: "item-commentary",
+        },
+      },
+    ]);
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("CONTINUE_WOR");
+    expect(context.state.deltaBuffer).toBe("Working before tool.\nCONTINUE_WORK");
+  });
+
+  it("releases a buffered commentary prefix after it stops matching a continuation signal", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const createPartial = (text: string) =>
+      createOpenAiResponsesPartial({
+        text,
+        id: "item-commentary",
+        signaturePhase: "commentary",
+        partialPhase: "commentary",
+      });
+
+    for (const [text, delta] of [
+      ["C", "C"],
+      ["Carry on.", "arry on."],
+    ]) {
+      const partial = createPartial(text);
+      handleMessageUpdate(context, {
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          delta,
+          partial,
+        },
+      } as never);
+    }
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: {
+          delta: "Carry on.",
+          phase: "commentary",
+          itemId: "item-commentary",
+        },
+      },
+    ]);
+  });
+
+  it("buffers split continuation signals in Anthropic commentary streams", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const createEvent = (text: string, delta: string) =>
+      ({
+        type: "message_update",
+        message: { role: "assistant", api: "anthropic-messages", content: [] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta,
+          partial: {
+            role: "assistant",
+            api: "anthropic-messages",
+            phase: "commentary",
+            content: [{ type: "text", text }],
+          },
+        },
+      }) as never;
+
+    handleMessageUpdate(context, createEvent("CONTINUE_WOR", "CONTINUE_WOR"));
+    handleMessageUpdate(context, createEvent("CONTINUE_WORK", "K"));
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(context.state.deltaBuffer).toBe("CONTINUE_WORK");
+  });
+
+  it("keeps independently classified Anthropic commentary blocks partitioned", async () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    context.resetAssistantMessageState = vi.fn(() => {
+      context.state.deltaBuffer = "";
+      context.state.lastStreamedCommentary = undefined;
+      context.state.commentaryStreamedWithDelta = false;
+      context.state.lastAssistantStreamContentIndex = undefined;
+      context.state.lastAssistantStreamItemId = undefined;
+    });
+    const block = (text: string, id?: string) => ({
+      type: "text",
+      text,
+      ...(id ? { textSignature: JSON.stringify({ v: 1, id, phase: "commentary" }) } : {}),
+    });
+    const partial = (first: ReturnType<typeof block>, second: ReturnType<typeof block>) => ({
+      role: "assistant",
+      api: "anthropic-messages",
+      content: [first, second],
+    });
+    const emit = (
+      type: "text_delta" | "text_end",
+      contentIndex: number,
+      text: string,
+      delta: string,
+      eventPartial: ReturnType<typeof partial>,
+    ) => {
+      handleMessageUpdate(context, {
+        type: "message_update",
+        message: eventPartial,
+        assistantMessageEvent: {
+          type,
+          contentIndex,
+          ...(delta ? { delta } : { content: text }),
+          partial: eventPartial,
+        },
+      } as never);
+    };
+
+    emit("text_delta", 0, "AB", "AB", partial(block("AB"), block("")));
+    emit("text_delta", 1, "A", "A", partial(block("AB"), block("A")));
+    emit("text_end", 0, "AB", "", partial(block("AB", "commentary-0"), block("A")));
+    const finalMessage = partial(block("AB", "commentary-0"), block("A", "commentary-1"));
+    emit("text_end", 1, "A", "", finalMessage);
+    await handleMessageEnd(context, {
+      type: "message_end",
+      message: finalMessage,
+    } as never);
+
+    const commentaryEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => (event as { data?: { phase?: string } }).data?.phase === "commentary");
+    expect(commentaryEvents).toMatchObject([
+      {
+        stream: "assistant",
+        data: {
+          delta: "AB",
+          phase: "commentary",
+          itemId: "commentary-0",
+        },
+      },
+      {
+        stream: "assistant",
+        data: {
+          delta: "A",
+          phase: "commentary",
+          itemId: "commentary-1",
+        },
+      },
+    ]);
+  });
+
+  it("recomputes deferred unclassified Anthropic blocks after content-index resets", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    context.resetAssistantMessageState = vi.fn(() => {
+      context.state.deltaBuffer = "";
+      context.state.lastStreamedAssistant = undefined;
+      context.state.lastStreamedAssistantCleaned = undefined;
+      context.state.lastStreamedCommentary = undefined;
+      context.state.commentaryStreamedWithDelta = false;
+      context.state.lastAssistantStreamContentIndex = undefined;
+      context.state.lastAssistantStreamItemId = undefined;
+    });
+    const partial = (first: string, second: string) => ({
+      role: "assistant",
+      api: "anthropic-messages",
+      content: [
+        { type: "text", text: first },
+        { type: "text", text: second },
+      ],
+    });
+    const emit = (
+      type: "text_delta" | "text_end",
+      contentIndex: number,
+      text: string,
+      delta: string,
+      eventPartial: ReturnType<typeof partial>,
+    ) => {
+      handleMessageUpdate(context, {
+        type: "message_update",
+        message: eventPartial,
+        assistantMessageEvent: {
+          type,
+          contentIndex,
+          ...(delta ? { delta } : { content: text }),
+          partial: eventPartial,
+        },
+      } as never);
+    };
+
+    emit("text_delta", 0, "AB", "AB", partial("AB", ""));
+    emit("text_delta", 1, "A", "A", partial("AB", "A"));
+    onAgentEvent.mockClear();
+    emit("text_end", 0, "AB", "", partial("AB", "A"));
+    emit("text_end", 1, "A", "", partial("AB", "A"));
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { text: "AB", delta: "AB" },
+      },
+      {
+        stream: "assistant",
+        data: { text: "A", delta: "A" },
+      },
+    ]);
+  });
+
+  it("keeps nested bracket delegate prefixes off the commentary event bus", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const createPartial = (text: string) =>
+      createOpenAiResponsesPartial({
+        text,
+        id: "item-commentary",
+        signaturePhase: "commentary",
+        partialPhase: "commentary",
+      });
+    const prefix = "[[CONTINUE_DELEGATE: inspect [[foo]";
+
+    for (const [text, delta] of [
+      [prefix, prefix],
+      [`${prefix}]`, "]"],
+    ]) {
+      const partial = createPartial(text);
+      handleMessageUpdate(context, {
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          delta,
+          partial,
+        },
+      } as never);
+    }
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(context.state.deltaBuffer).toBe("[[CONTINUE_DELEGATE: inspect [[foo]]");
+  });
+
+  it("prefers an enclosing delegate marker over a nested work-marker prefix", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const text = "[[CONTINUE_DELEGATE: inspect [[CONTINUE_WORK";
+    const partial = createOpenAiResponsesPartial({
+      text,
+      id: "item-commentary",
+      signaturePhase: "commentary",
+      partialPhase: "commentary",
+    });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: text,
+        partial,
+      },
+    } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(context.state.deltaBuffer).toBe(text);
+  });
+
+  it.each(["[[CONTINUE_WORK", "[[CONTINUE_WORK:15"])(
+    "keeps split bracketed work marker %s off the commentary event bus",
+    (prefix) => {
+      const onAgentEvent = vi.fn();
+      const context = createMessageUpdateContext({ onAgentEvent });
+      const createPartial = (text: string) =>
+        createOpenAiResponsesPartial({
+          text,
+          id: "item-commentary",
+          signaturePhase: "commentary",
+          partialPhase: "commentary",
+        });
+
+      for (const [text, delta] of [
+        [prefix, prefix],
+        [`${prefix}]]`, "]]"],
+      ]) {
+        const partial = createPartial(text);
+        handleMessageUpdate(context, {
+          type: "message_update",
+          message: partial,
+          assistantMessageEvent: {
+            type: "text_delta",
+            contentIndex: 0,
+            delta,
+            partial,
+          },
+        } as never);
+      }
+
+      expect(onAgentEvent).not.toHaveBeenCalled();
+      expect(context.state.deltaBuffer).toBe(`${prefix}]]`);
+    },
+  );
+
+  it("flushes short false-positive commentary prefixes at item boundaries", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    context.resetAssistantMessageState = vi.fn(() => {
+      context.state.deltaBuffer = "";
+      context.state.lastStreamedCommentary = undefined;
+      context.state.commentaryStreamedWithDelta = false;
+      context.state.lastAssistantStreamContentIndex = undefined;
+      context.state.lastAssistantStreamItemId = undefined;
+    });
+    const firstPartial = createOpenAiResponsesPartial({
+      text: "Ordinary C",
+      id: "item-1",
+      signaturePhase: "commentary",
+      partialPhase: "commentary",
+    });
+    const secondPartial = createOpenAiResponsesPartial({
+      text: "",
+      id: "item-2",
+      signaturePhase: "commentary",
+      partialPhase: "commentary",
+    });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: firstPartial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Ordinary C",
+        partial: firstPartial,
+      },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: secondPartial,
+      assistantMessageEvent: {
+        type: "text_start",
+        contentIndex: 1,
+        partial: secondPartial,
+      },
+    } as never);
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { delta: "Ordinary ", phase: "commentary", itemId: "item-1" },
+      },
+      {
+        stream: "assistant",
+        data: { delta: "C", phase: "commentary", itemId: "item-1" },
+      },
+    ]);
   });
 
   it("uses incremental deltas for same-item phased streams", () => {
@@ -1735,6 +2164,149 @@ describe("handleMessageEnd", () => {
     expect(onAgentEvent).toHaveBeenCalled();
     expect(emitBlockReply).not.toHaveBeenCalled();
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
+  });
+
+  it("strips continuation signals from commentary message_end snapshots", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageEndContext({ onAgentEvent });
+    const message = {
+      role: "assistant",
+      api: "openai-completions",
+      phase: "commentary",
+      content: [{ type: "text", text: "Working before tool.\nCONTINUE_WORK" }],
+      usage: { input: 1, output: 1, total: 2 },
+    };
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+      stream: "assistant",
+      data: {
+        text: "Working before tool.",
+        replace: true,
+        phase: "commentary",
+      },
+    });
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("CONTINUE_WORK");
+    expect(ctx.noteCompletedAssistant).toHaveBeenCalledWith(expect.objectContaining(message));
+  });
+
+  it("keeps signal-only Responses commentary off the assistant event bus", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      state: { deltaBuffer: "CONTINUE_WORK" },
+    });
+    const message = {
+      role: "assistant",
+      api: "openai-responses",
+      phase: "commentary",
+      content: [{ type: "text", text: "CONTINUE_WORK" }],
+      usage: { input: 1, output: 1, total: 2 },
+    };
+
+    await handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(ctx.noteCompletedAssistant).toHaveBeenCalledWith(expect.objectContaining(message));
+  });
+
+  it("does not re-expose sensitive incomplete commentary markers at message_end", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      state: {
+        deltaBuffer: "Working before tool.\nCONTINUE_WOR",
+        lastStreamedCommentary: "Working before tool.\n",
+      },
+    });
+    const message = {
+      role: "assistant",
+      api: "openai-responses",
+      phase: "commentary",
+      content: [{ type: "text", text: "Working before tool.\nCONTINUE_WOR" }],
+      usage: { input: 1, output: 1, total: 2 },
+    };
+
+    await handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(ctx.noteCompletedAssistant).toHaveBeenCalledWith(expect.objectContaining(message));
+  });
+
+  it("releases short false-positive commentary prefixes as deltas at message_end", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      state: {
+        deltaBuffer: "Ordinary C",
+        lastStreamedCommentary: "Ordinary ",
+        commentaryStreamedWithDelta: true,
+      },
+    });
+    const message = {
+      role: "assistant",
+      api: "openai-responses",
+      phase: "commentary",
+      content: [{ type: "text", text: "Ordinary C" }],
+      usage: { input: 1, output: 1, total: 2 },
+    };
+
+    await handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+      stream: "assistant",
+      data: {
+        delta: "C",
+        phase: "commentary",
+      },
+    });
+  });
+
+  it("retains Anthropic commentary item IDs when message_end releases a suffix", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      state: {
+        deltaBuffer: "Ordinary C",
+        lastStreamedCommentary: "Ordinary ",
+        commentaryStreamedWithDelta: true,
+        lastAssistantStreamItemId: "anthropic-item",
+      },
+    });
+    const message = {
+      role: "assistant",
+      api: "anthropic-messages",
+      phase: "commentary",
+      content: [{ type: "text", text: "Ordinary C" }],
+      usage: { input: 1, output: 1, total: 2 },
+    };
+
+    await handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+      stream: "assistant",
+      data: {
+        delta: "C",
+        phase: "commentary",
+        itemId: "anthropic-item",
+      },
+    });
   });
 
   it("suppresses commentary message_end when phase exists only in textSignature metadata", () => {

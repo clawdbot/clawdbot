@@ -7,7 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import { stripContinuationSignal } from "../auto-reply/continuation/signal.js";
+import { CONTINUE_WORK_TOKEN, stripContinuationSignal } from "../auto-reply/continuation/signal.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
@@ -617,8 +617,132 @@ function mergeReplyDirectiveResults(
 
 function parseFullStreamingReplyText(text: string): string {
   const parsed = parseReplyDirectives(splitTrailingDirective(text).text).text;
-  const stripped = stripContinuationSignal(parsed);
-  return stripped.signal ? stripped.text : parsed;
+  return stripContinuationSignalFromDisplayText(parsed);
+}
+
+function stripContinuationSignalFromDisplayText(text: string): string {
+  const stripped = stripContinuationSignal(text);
+  return stripped.signal ? stripped.text : text;
+}
+
+type PendingContinuationSignal = {
+  start: number;
+  sensitive: boolean;
+};
+
+const CONTINUATION_MARKER_CONFIDENCE_PREFIX = "CONTINUE_";
+const CONTINUATION_DELEGATE_MARKER = "CONTINUE_DELEGATE:";
+
+function findPendingBracketContinuationSignal(text: string): PendingContinuationSignal | undefined {
+  let pendingSignal: PendingContinuationSignal | undefined;
+  for (let bracketStart = text.lastIndexOf("[["); bracketStart >= 0;) {
+    const markerText = text.slice(bracketStart + 2).trimStart();
+    const sensitive = markerText.startsWith(CONTINUATION_MARKER_CONFIDENCE_PREFIX);
+    if (
+      !markerText ||
+      CONTINUE_WORK_TOKEN.startsWith(markerText) ||
+      CONTINUATION_DELEGATE_MARKER.startsWith(markerText)
+    ) {
+      pendingSignal = { start: bracketStart, sensitive };
+    } else if (markerText.startsWith(CONTINUE_WORK_TOKEN)) {
+      const tail = markerText.slice(CONTINUE_WORK_TOKEN.length);
+      if (/^(?::\d+)?\s*\]\]\s*$/.test(tail)) {
+        return undefined;
+      }
+      if (/^(?::\d*)?\s*\]?\]?\s*$/.test(tail)) {
+        pendingSignal = { start: bracketStart, sensitive: true };
+      }
+    } else if (
+      markerText.startsWith(CONTINUATION_DELEGATE_MARKER) &&
+      !markerText.slice(CONTINUATION_DELEGATE_MARKER.length).includes("]]")
+    ) {
+      pendingSignal = { start: bracketStart, sensitive: true };
+    }
+    if (bracketStart === 0) {
+      break;
+    }
+    bracketStart = text.lastIndexOf("[[", bracketStart - 1);
+  }
+  if (pendingSignal) {
+    return pendingSignal;
+  }
+  if (text.endsWith("[")) {
+    return { start: text.length - 1, sensitive: false };
+  }
+  return undefined;
+}
+
+function findPendingContinuationSignal(text: string): PendingContinuationSignal | undefined {
+  const bracketSignal = findPendingBracketContinuationSignal(text);
+  if (bracketSignal) {
+    return bracketSignal;
+  }
+
+  const delayMatch = text.match(/\bCONTINUE_WORK:\d*$/);
+  if (delayMatch?.index !== undefined) {
+    return { start: delayMatch.index, sensitive: true };
+  }
+  const maxPrefixLength = Math.min(CONTINUE_WORK_TOKEN.length - 1, text.length);
+  for (let length = maxPrefixLength; length > 0; length -= 1) {
+    const start = text.length - length;
+    const suffix = text.slice(start);
+    if (
+      CONTINUE_WORK_TOKEN.startsWith(suffix) &&
+      (start === 0 || !/[A-Za-z0-9_]/.test(text[start - 1] ?? ""))
+    ) {
+      return {
+        start,
+        sensitive: suffix.startsWith(CONTINUATION_MARKER_CONFIDENCE_PREFIX),
+      };
+    }
+  }
+  return undefined;
+}
+
+function resolveCommentaryDisplayText(text: string, options?: { final?: boolean }): string {
+  const pendingSignal = findPendingContinuationSignal(text);
+  if (pendingSignal) {
+    if (options?.final && !pendingSignal.sensitive) {
+      return text;
+    }
+    return text.slice(0, pendingSignal.start);
+  }
+  return stripContinuationSignalFromDisplayText(text);
+}
+
+function emitCommentaryDisplayTransition(
+  ctx: EmbeddedAgentSubscribeContext,
+  rawText: string,
+  params: {
+    final?: boolean;
+    itemId?: string;
+    preferReplace?: boolean;
+  },
+): void {
+  const previousText = ctx.state.lastStreamedCommentary ?? "";
+  const nextText = resolveCommentaryDisplayText(rawText, { final: params.final });
+  ctx.state.lastStreamedCommentary = nextText;
+  if (nextText === previousText) {
+    return;
+  }
+  const appendDelta = resolveTextAppendDelta(previousText, nextText);
+  const useDelta = !params.preferReplace && appendDelta && nextText.startsWith(previousText);
+  const data = useDelta
+    ? buildAssistantStreamData({
+        delta: appendDelta,
+        phase: "commentary",
+        itemId: params.itemId,
+      })
+    : buildAssistantStreamData({
+        text: nextText,
+        replace: true,
+        phase: "commentary",
+        itemId: params.itemId,
+      });
+  if (useDelta) {
+    ctx.state.commentaryStreamedWithDelta = true;
+  }
+  ctx.emitAssistantStreamData(data);
 }
 
 function containsCompleteMediaDirectiveLine(text: string): boolean {
@@ -800,23 +924,22 @@ export function handleMessageUpdate(
   const isResponsesTextEvent =
     isResponsesApiAssistantMessage(eventAssistantMessage) &&
     (evtType === "text_start" || evtType === "text_delta" || evtType === "text_end");
+  const isAnthropicTextEvent =
+    isAnthropicAssistantMessage(eventAssistantMessage) &&
+    (evtType === "text_start" || evtType === "text_delta" || evtType === "text_end");
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(msg);
-  if (suppressVisibleAssistantOutput && !isResponsesTextEvent) {
-    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
-    if (commentaryText) {
-      appendRawStream({
-        ts: Date.now(),
-        event: "assistant_text_stream",
-        runId: ctx.params.runId,
-        sessionId: (ctx.params.session as { id?: string }).id,
-        evtType: "commentary_update",
-        delta: "",
-        content: commentaryText,
-      });
-      ctx.emitAssistantStreamData(
-        buildAssistantStreamData({ text: commentaryText, replace: true, phase: "commentary" }),
-      );
-    }
+  if (suppressVisibleAssistantOutput && !isResponsesTextEvent && !isAnthropicTextEvent) {
+    const rawCommentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_text_stream",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      evtType: "commentary_update",
+      delta: "",
+      content: rawCommentaryText,
+    });
+    emitCommentaryDisplayTransition(ctx, rawCommentaryText, { preferReplace: true });
     return;
   }
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
@@ -900,7 +1023,7 @@ export function handleMessageUpdate(
     content,
   });
 
-  const chunk = resolveAssistantTextChunk({
+  let chunk = resolveAssistantTextChunk({
     evtType,
     delta,
     content,
@@ -932,10 +1055,15 @@ export function handleMessageUpdate(
     !deliveryPhase && isOpenAiCompletionsAssistantMessage(partialAssistant);
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
+  const hasAnthropicContentIndex =
+    streamContentIndex !== undefined && isAnthropicAssistantMessage(partialAssistant);
   let streamItemChanged = false;
   let deliveryItemId = streamItemId;
   if (
-    (deliveryPhase || isPhasePendingResponsesTextItem || hasResponsesContentIndex) &&
+    (deliveryPhase ||
+      isPhasePendingResponsesTextItem ||
+      hasResponsesContentIndex ||
+      hasAnthropicContentIndex) &&
     (streamContentIndex !== undefined || streamItemId)
   ) {
     const previousStreamContentIndex = ctx.state.lastAssistantStreamContentIndex;
@@ -949,8 +1077,17 @@ export function handleMessageUpdate(
       Boolean(previousStreamItemId && streamItemId && previousStreamItemId !== streamItemId);
     if (contentIndexChanged || itemIdChangedWithoutIndexes) {
       streamItemChanged = true;
+      if (ctx.state.lastStreamedCommentary !== undefined) {
+        emitCommentaryDisplayTransition(ctx, ctx.state.deltaBuffer, {
+          final: true,
+          itemId: previousStreamItemId,
+        });
+      }
       void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
       ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+      if (evtType === "text_end" && isAnthropicAssistantMessage(partialAssistant)) {
+        chunk = coerceChatContentText(extractAssistantText(streamAssistant));
+      }
       emitAssistantMessageStart(ctx);
     } else if (
       previousStreamContentIndex !== undefined &&
@@ -970,29 +1107,17 @@ export function handleMessageUpdate(
     return;
   }
   if (deliveryPhase === "commentary") {
-    const isResponsesCommentary = isResponsesApiAssistantMessage(partialAssistant);
-    const hadResponsesCommentaryText = isResponsesCommentary && Boolean(ctx.state.deltaBuffer);
-    if (isResponsesCommentary && chunk) {
-      // Keep cumulative end events monotonic without feeding commentary into reply buffers.
+    if (chunk) {
       ctx.state.deltaBuffer += chunk;
+    } else if (!ctx.state.deltaBuffer) {
+      ctx.state.deltaBuffer = coerceChatContentText(
+        extractAssistantCommentaryText(streamAssistant),
+      );
     }
-    const commentaryText =
-      !chunk && (!isResponsesCommentary || !hadResponsesCommentaryText)
-        ? coerceChatContentText(extractAssistantCommentaryText(streamAssistant))
-        : undefined;
-    const commentaryData = chunk
-      ? buildAssistantStreamData({ delta: chunk, phase: "commentary", itemId: deliveryItemId })
-      : commentaryText
-        ? buildAssistantStreamData({
-            text: commentaryText,
-            replace: true,
-            phase: "commentary",
-            itemId: deliveryItemId,
-          })
-        : undefined;
-    if (commentaryData) {
-      ctx.emitAssistantStreamData(commentaryData);
-    }
+    emitCommentaryDisplayTransition(ctx, ctx.state.deltaBuffer, {
+      itemId: deliveryItemId,
+      preferReplace: !chunk,
+    });
     return;
   }
   if (isPhasePendingResponsesTextItem) {
@@ -1244,14 +1369,18 @@ export function handleMessageEnd(
   ctx.commitAssistantUsage();
   if (suppressVisibleAssistantOutput) {
     const isResponsesCommentary = isResponsesApiAssistantMessage(assistantMessage);
-    const commentaryMessage = isResponsesCommentary
+    const shouldScopeCommentary =
+      isResponsesCommentary || isAnthropicAssistantMessage(assistantMessage);
+    const commentaryMessage = shouldScopeCommentary
       ? scopeAssistantMessageToStreamBlock(
           assistantMessage as AssistantMessage,
           ctx.state.lastAssistantStreamContentIndex,
           ctx.state.lastAssistantStreamItemId,
         )
       : assistantMessage;
-    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(commentaryMessage));
+    const rawCommentaryText = coerceChatContentText(
+      extractAssistantCommentaryText(commentaryMessage),
+    );
     appendRawStream({
       ts: Date.now(),
       event: "assistant_message_end",
@@ -1260,20 +1389,11 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     });
-    const commentaryAlreadyStreamed =
-      isResponsesCommentary &&
-      Boolean(ctx.state.deltaBuffer) &&
-      ctx.state.deltaBuffer === commentaryText;
-    if (commentaryText && !commentaryAlreadyStreamed) {
-      ctx.emitAssistantStreamData(
-        buildAssistantStreamData({
-          text: commentaryText,
-          replace: true,
-          phase: "commentary",
-          itemId: isResponsesCommentary ? ctx.state.lastAssistantStreamItemId : undefined,
-        }),
-      );
-    }
+    emitCommentaryDisplayTransition(ctx, rawCommentaryText, {
+      final: true,
+      itemId: ctx.state.lastAssistantStreamItemId,
+      preferReplace: !ctx.state.commentaryStreamedWithDelta,
+    });
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()
@@ -1347,8 +1467,8 @@ export function handleMessageEnd(
     if (!parsed.text) {
       return parsed;
     }
-    const stripped = stripContinuationSignal(parsed.text);
-    return stripped.signal ? { ...parsed, text: stripped.text } : parsed;
+    const displayText = stripContinuationSignalFromDisplayText(parsed.text);
+    return displayText === parsed.text ? parsed : { ...parsed, text: displayText };
   })();
   const cleanedText = parsedText?.text ?? "";
   const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
