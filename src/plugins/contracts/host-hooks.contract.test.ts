@@ -2019,39 +2019,41 @@ describe("host-hook fixture plugin contract", () => {
         });
       },
     });
-    setActivePluginRegistry(registry.registry);
-    pinActivePluginSessionExtensionRegistry(registry.registry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
 
-    const calls: Array<[boolean, unknown, unknown]> = [];
-    void expectDefined(
-      pluginHostHookHandlers["plugins.uiDescriptors"],
-      'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
-    )({
-      params: {},
-      respond: (ok: boolean, payload: unknown, error: unknown) => {
-        calls.push([ok, payload, error]);
-      },
-    } as never);
+    try {
+      pinActivePluginSessionExtensionRegistry(registry.registry);
+      setActivePluginRegistry(createEmptyPluginRegistry());
 
-    expect(calls).toEqual([
-      [
-        true,
-        {
-          ok: true,
-          descriptors: [
-            {
-              id: "gateway-panel",
-              pluginId: "pinned-ui-fixture",
-              pluginName: "Pinned UI Fixture",
-              surface: "session",
-              label: "Gateway panel",
-            },
-          ],
+      const calls: Array<[boolean, unknown, unknown]> = [];
+      void expectDefined(
+        pluginHostHookHandlers["plugins.uiDescriptors"],
+        'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
+      )({
+        params: {},
+        respond: (ok: boolean, payload: unknown, error: unknown) => {
+          calls.push([ok, payload, error]);
         },
-        undefined,
-      ],
-    ]);
+      } as never);
+
+      expect(calls).toHaveLength(1);
+      const [ok, payload, error] = calls[0] ?? [];
+      expect(ok).toBe(true);
+      expect(error).toBeUndefined();
+      expect(payload).toEqual({
+        ok: true,
+        descriptors: [
+          {
+            id: "gateway-panel",
+            pluginId: "pinned-ui-fixture",
+            pluginName: "Pinned UI Fixture",
+            surface: "session",
+            label: "Gateway panel",
+          },
+        ],
+      });
+    } finally {
+      releasePinnedPluginSessionExtensionRegistry(registry.registry);
+    }
   });
 
   it("enforces command requiredScopes for gateway clients and command owners", async () => {
