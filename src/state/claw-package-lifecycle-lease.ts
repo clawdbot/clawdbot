@@ -195,6 +195,24 @@ export function maintainClawPackageLifecycleLease(
   };
 }
 
+async function releaseMaintainedClawPackageLifecycleLease(
+  lease: MaintainedClawPackageLifecycleLease,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      lease.release();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(formatErrorMessage(lastError));
+}
+
 export async function withClawPackageLifecycleLease<T>(
   artifact: ClawPackageLifecycleArtifact,
   operation: () => Promise<T>,
@@ -211,9 +229,10 @@ export async function withClawPackageLifecycleLease<T>(
     return result;
   } finally {
     try {
-      maintained.release();
+      await releaseMaintainedClawPackageLifecycleLease(maintained);
     } catch {
-      // Expiry recovers a lease whose cleanup cannot reach the shared database.
+      // Preserve the operation result. Expiry recovers cleanup that remains
+      // unreachable after the bounded retries.
     }
   }
 }
