@@ -235,6 +235,35 @@ function assertUpdateRunSelfUpgrade(summary: ReturnType<typeof createUpdateRunSe
   }
 }
 
+function assertAgentConfigSurvived(agents: Record<string, unknown>): void {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-agents-"));
+  try {
+    const configPath = join(root, "openclaw.json");
+    const coveragePath = join(root, "coverage.json");
+    writeJson(configPath, {
+      agents: {
+        defaults: { contextTokens: 64000 },
+        ...agents,
+      },
+    });
+    writeJson(coveragePath, {
+      acceptedIntents: ["agents"],
+      skippedIntents: [],
+    });
+
+    execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-config"], {
+      env: {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
+      },
+      stdio: "pipe",
+    });
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 describe("upgrade survivor assertions", () => {
   it("lists the dependency-free scenario contract", () => {
     const scenarios = JSON.parse(
@@ -305,6 +334,26 @@ describe("upgrade survivor assertions", () => {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
+  });
+
+  it.each([
+    {
+      label: "legacy agents.list",
+      value: {
+        list: [{ id: "main" }, { id: "ops", fastModeDefault: true }],
+      },
+    },
+    {
+      label: "canonical agents.entries",
+      value: {
+        entries: {
+          main: {},
+          ops: { fastModeDefault: true },
+        },
+      },
+    },
+  ])("asserts agent config survived with $label", ({ value }) => {
+    expect(() => assertAgentConfigSurvived(value)).not.toThrow();
   });
 
   it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
