@@ -625,6 +625,42 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.blockBuffer).toBe("");
   });
 
+  it("streams Anthropic text bytes once when text_start is replayed by the first delta", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    const partial = {
+      role: "assistant",
+      api: "anthropic-messages",
+      content: [{ type: "text", text: "Work" }],
+    };
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: {
+        type: "text_start",
+        contentIndex: 0,
+        partial,
+      },
+    } as never);
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: partial,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "Work",
+        partial,
+      },
+    } as never);
+
+    const deltas = onAgentEvent.mock.calls
+      .map(([event]) => (event as { data?: { delta?: string } }).data?.delta ?? "")
+      .join("");
+    expect(deltas).toBe("Work");
+    expect(context.state.deltaBuffer).toBe("Work");
+  });
+
   it("keeps same-index commentary snapshot extensions on the original live item key", async () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
@@ -1977,6 +2013,32 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it("emits audio-only directives as message-end block replies", () => {
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn(() => null),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "[[audio_as_voice]]" }],
+      },
+    } as never);
+
+    expect(emitBlockReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(emitBlockReply, "block reply")).toMatchObject({
+      text: "",
+      audioAsVoice: true,
+    });
+  });
+
   it("keeps duplicate-reply diagnostics free of lone surrogates", () => {
     const text = `${"a".repeat(49)}😀tail`;
     const ctx = createMessageEndContext({

@@ -1153,9 +1153,13 @@ export function handleMessageUpdate(
     ctx.state.lastAssistantStreamContentIndex = streamContentIndex;
     ctx.state.lastAssistantStreamItemId = deliveryItemId;
   }
-  // Responses text_start snapshots may already contain text replayed by the first delta.
+  // Responses and Anthropic text_start snapshots may contain text replayed by the first delta.
   // Keep starts lifecycle-only so commentary and final-answer lanes consume each byte once.
-  if (evtType === "text_start" && isResponsesApiAssistantMessage(partialAssistant)) {
+  if (
+    evtType === "text_start" &&
+    (isResponsesApiAssistantMessage(partialAssistant) ||
+      isAnthropicAssistantMessage(partialAssistant))
+  ) {
     return;
   }
   if (deliveryPhase === "commentary") {
@@ -1577,6 +1581,11 @@ export function handleMessageEnd(
   const silentExpectedWithoutSentinel =
     ctx.params.silentExpected && !isSilentReplyText(trimmedText, SILENT_REPLY_TOKEN);
   const finalAssistantText = silentExpectedWithoutSentinel ? "" : cleanedText;
+  const hasFinalAssistantReply = hasAssistantVisibleReply({
+    text: finalAssistantText,
+    mediaUrls,
+    audioAsVoice: parsedText?.audioAsVoice,
+  });
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
   ctx.finalizeAssistantTexts({
@@ -1652,7 +1661,7 @@ export function handleMessageEnd(
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
     !suppressMessageToolOnlySourceReplyOutput &&
-    (finalAssistantText || hasMedia) &&
+    hasFinalAssistantReply &&
     onBlockReply &&
     (ctx.state.blockReplyBreak === "message_end" ||
       hasBufferedBlockReply ||
