@@ -120,7 +120,10 @@ async function arrangeAgentsDeleteTest(params: {
     } else {
       agents.list.unshift({ id: "main", default: true });
     }
-  } else if (agents.entries && !Object.values(agents.entries).some((entry) => entry.default === true)) {
+  } else if (
+    agents.entries &&
+    !Object.values(agents.entries).some((entry) => entry.default === true)
+  ) {
     const existingDefaultId = Object.keys(agents.entries).find((id) => id !== deletedAgentId);
     if (existingDefaultId) {
       agents.entries[existingDefaultId] = {

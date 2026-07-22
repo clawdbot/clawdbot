@@ -1265,15 +1265,15 @@ describe("agents.delete", () => {
     mocks.fsRealpath.mockImplementation(async (pathname: string) => pathname);
     mocks.loadConfigReturn = {
       agents: {
-        entries: {
-          "test-agent": { workspace: "/workspace/test-agent" },
-          main: { default: true },
-        },
+        list: [
+          { id: "test-agent", workspace: "/workspace/test-agent" },
+          { id: "main", default: true },
+        ],
       },
     };
     mocks.findAgentEntryIndex.mockReturnValue(0);
     mocks.pruneAgentConfig.mockReturnValue({
-      config: { agents: { entries: { main: { default: true } } } },
+      config: { agents: { list: [{ id: "main", default: true }] } },
       removedBindings: 2,
     });
     mocks.movePathToTrash.mockReset().mockResolvedValue("/trashed");

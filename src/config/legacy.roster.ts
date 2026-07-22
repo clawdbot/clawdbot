@@ -1,3 +1,5 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+
 /** Every missing or empty roster is the shipped implicit-main shape. */
 export function migratePersistedImplicitMainRoster(raw: unknown): {
   config: unknown;
@@ -14,60 +16,103 @@ export function migratePersistedImplicitMainRoster(raw: unknown): {
   ) {
     return { config: raw, changed: false, diagnostics: [] };
   }
-  const agents =
+  let agents =
     root.agents && typeof root.agents === "object" && !Array.isArray(root.agents)
       ? (root.agents as Record<string, unknown>)
       : {};
-  if (!Object.hasOwn(agents, "list") || (Array.isArray(agents.list) && agents.list.length === 0)) {
+  let convertedLegacyList = false;
+  if (!Object.hasOwn(agents, "entries") && Array.isArray(agents.list)) {
+    if (agents.list.some((value) => !value || typeof value !== "object" || Array.isArray(value))) {
+      return { config: raw, changed: false, diagnostics: [] };
+    }
+    const legacyIds = new Set<string>();
+    for (const value of agents.list) {
+      const entry = value as Record<string, unknown>;
+      if (typeof entry.id !== "string" || entry.id.trim() !== entry.id || !entry.id) {
+        return { config: raw, changed: false, diagnostics: [] };
+      }
+      const normalizedId = normalizeAgentId(entry.id);
+      if (normalizedId !== entry.id || legacyIds.has(normalizedId)) {
+        return { config: raw, changed: false, diagnostics: [] };
+      }
+      legacyIds.add(normalizedId);
+    }
+    const entries: Record<string, Record<string, unknown>> = {};
+    for (const value of agents.list) {
+      const entry = value as Record<string, unknown>;
+      const { id: _id, ...config } = entry;
+      entries[entry.id as string] = config;
+    }
+    const { list: _list, ...rest } = agents;
+    agents = { ...rest, entries };
+    convertedLegacyList = true;
+  }
+  const entries = agents.entries;
+  if (
+    !Object.hasOwn(agents, "entries") ||
+    (entries &&
+      typeof entries === "object" &&
+      !Array.isArray(entries) &&
+      Object.keys(entries).length === 0)
+  ) {
     return {
-      config: { ...root, agents: { ...agents, list: [{ id: "main", default: true }] } },
+      config: { ...root, agents: { ...agents, entries: { main: { default: true } } } },
       changed: true,
-      diagnostics: [],
+      diagnostics: convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : [],
     };
   }
-  const list = agents.list;
-  if (!Array.isArray(list)) {
+  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
     return { config: raw, changed: false, diagnostics: [] };
   }
-  const validIndexes = list.flatMap((entry, index) =>
-    entry && typeof entry === "object" && !Array.isArray(entry) ? [index] : [],
+  const roster = entries as Record<string, unknown>;
+  const validIds = Object.entries(roster).flatMap(([id, entry]) =>
+    entry && typeof entry === "object" && !Array.isArray(entry) ? [id] : [],
   );
-  if (validIndexes.length === 0) {
+  if (validIds.length === 0) {
     return { config: raw, changed: false, diagnostics: [] };
   }
-  const hasInvalidDefaultMarker = validIndexes.some((index) => {
-    const entry = list[index] as Record<string, unknown>;
+  const hasInvalidDefaultMarker = validIds.some((id) => {
+    const entry = roster[id] as Record<string, unknown>;
     return Object.hasOwn(entry, "default") && typeof entry.default !== "boolean";
   });
   if (hasInvalidDefaultMarker) {
     return { config: raw, changed: false, diagnostics: [] };
   }
-  const defaultIndexes = validIndexes.filter(
-    (index) => (list[index] as Record<string, unknown>).default === true,
+  const defaultIds = validIds.filter(
+    (id) => (roster[id] as Record<string, unknown>).default === true,
   );
-  if (defaultIndexes.length === 1) {
-    return { config: raw, changed: false, diagnostics: [] };
+  if (defaultIds.length === 1) {
+    return convertedLegacyList
+      ? {
+          config: { ...root, agents },
+          changed: true,
+          diagnostics: ["Moved agents.list to keyed agents.entries."],
+        }
+      : { config: raw, changed: false, diagnostics: [] };
   }
-  const effectiveIndex = defaultIndexes[0] ?? validIndexes[0]!;
-  const repaired = list.map((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return entry;
-    }
-    const next = Object.assign({}, entry as Record<string, unknown>);
-    if (index === effectiveIndex) {
-      next.default = true;
-    } else {
-      delete next.default;
-    }
-    return next;
-  });
+  const effectiveId = defaultIds[0] ?? validIds[0]!;
+  const repaired = Object.fromEntries(
+    Object.entries(roster).map(([id, entry]) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return [id, entry];
+      }
+      const next = Object.assign({}, entry as Record<string, unknown>);
+      if (id === effectiveId) {
+        next.default = true;
+      } else {
+        delete next.default;
+      }
+      return [id, next];
+    }),
+  );
   return {
-    config: { ...root, agents: { ...agents, list: repaired } },
+    config: { ...root, agents: { ...agents, entries: repaired } },
     changed: true,
     diagnostics: [
-      defaultIndexes.length === 0
-        ? "Migrated agents.list by marking the first entry as default."
-        : `Migrated agents.list by keeping agents.list.${effectiveIndex} as default and clearing ${defaultIndexes.length - 1} duplicate marker(s).`,
+      ...(convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : []),
+      defaultIds.length === 0
+        ? `Migrated agents.entries by marking "${effectiveId}" as default.`
+        : `Migrated agents.entries by keeping "${effectiveId}" as default and clearing ${defaultIds.length - 1} duplicate marker(s).`,
     ],
   };
 }

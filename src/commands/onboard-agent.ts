@@ -6,12 +6,12 @@ import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 function isInjectedMainRoster(config: OpenClawConfig): boolean {
-  const roster = config.agents?.list ?? [];
+  const roster = config.agents?.entries ?? {};
+  const entry = roster.main;
   return (
-    roster.length === 1 &&
-    roster[0]?.id === "main" &&
-    roster[0]?.default === true &&
-    Object.keys(roster[0]).every((key) => key === "id" || key === "default")
+    Object.keys(roster).length === 1 &&
+    entry?.default === true &&
+    Object.keys(entry).every((key) => key === "default")
   );
 }
 
@@ -28,7 +28,7 @@ function mergeOnboardingCandidate(params: {
     ...merged,
     agents: {
       ...merged.agents,
-      list: params.currentRuntime.agents?.list,
+      entries: params.currentRuntime.agents?.entries,
     },
   };
 }
@@ -40,14 +40,16 @@ export async function ensureOnboardingAgent(params: {
   baseConfig?: OpenClawConfig;
 }): Promise<{ config: OpenClawConfig; agentId: string; bootstrapPending: boolean }> {
   if (
-    (params.config.agents?.list?.length ?? 0) > 0 &&
+    Object.keys(params.config.agents?.entries ?? {}).length > 0 &&
     (params.preserveCandidateRoster || !isInjectedMainRoster(params.config))
   ) {
-    const defaultAgent = params.config.agents?.list?.find((entry) => entry.default === true);
+    const defaultAgent = Object.entries(params.config.agents?.entries ?? {}).find(
+      ([, entry]) => entry.default === true,
+    );
     if (!defaultAgent) {
       throw new Error("Onboarding candidate roster has no default agent.");
     }
-    return { config: params.config, agentId: defaultAgent.id, bootstrapPending: false };
+    return { config: params.config, agentId: defaultAgent[0], bootstrapPending: false };
   }
   const before = await readConfigFileSnapshot();
   if (before.exists && !before.valid) {
@@ -55,7 +57,9 @@ export async function ensureOnboardingAgent(params: {
   }
   const effective = before.config;
   const candidateBase = params.baseConfig ?? effective;
-  const existing = effective.agents?.list?.find((entry) => entry.default === true);
+  const existing = Object.entries(effective.agents?.entries ?? {}).find(
+    ([, entry]) => entry.default === true,
+  );
   if (before.exists && existing) {
     return {
       config: mergeOnboardingCandidate({
@@ -63,7 +67,7 @@ export async function ensureOnboardingAgent(params: {
         candidate: params.config,
         currentRuntime: effective,
       }),
-      agentId: existing.id,
+      agentId: existing[0],
       bootstrapPending: false,
     };
   }

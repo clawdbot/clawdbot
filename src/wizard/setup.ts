@@ -538,11 +538,8 @@ async function runSetupWizardOnce(
     prompter,
     runtime,
   });
-  nextConfig = gateway.nextConfig;
-  const settings = gateway.settings;
-  const { ensureOnboardingConfig } = await import("../commands/onboard-agent.js");
-  nextConfig = (await ensureOnboardingConfig(nextConfig, workspaceDir, usedImportFlow, baseConfig))
-    .config;
+  const onboard = (await import("../commands/onboard-agent.js")).ensureOnboardingConfig;
+  nextConfig = (await onboard(gateway.nextConfig, workspaceDir, usedImportFlow, baseConfig)).config;
 
   // Persist auth + gateway decisions now: channel/search/skills steps can pair
   // devices or install plugins, and a crash or cancel there must not force the
@@ -682,7 +679,7 @@ async function runSetupWizardOnce(
     hadExistingConfig: snapshot.exists,
     nextConfig,
     workspaceDir: onboardingTarget.workspaceDir,
-    settings,
+    settings: gateway.settings,
     prompter,
     runtime,
   });

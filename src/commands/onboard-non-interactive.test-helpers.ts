@@ -33,18 +33,17 @@ export function createThrowingRuntime(): NonInteractiveRuntime {
 }
 
 export async function mockOnboardingAgent(params: { config: OpenClawConfig; workspace: string }) {
-  const existing =
-    params.config.agents?.list?.find((entry) => entry.default === true) ??
-    params.config.agents?.list?.[0];
+  const roster = Object.entries(params.config.agents?.entries ?? {});
+  const existing = roster.find(([, entry]) => entry.default === true) ?? roster[0];
   if (existing) {
-    return { config: params.config, agentId: existing.id, bootstrapPending: false };
+    return { config: params.config, agentId: existing[0], bootstrapPending: false };
   }
   return {
     config: {
       ...params.config,
       agents: {
         ...params.config.agents,
-        list: [{ id: "main", name: "main", workspace: params.workspace, default: true }],
+        entries: { main: { name: "main", workspace: params.workspace, default: true } },
       },
     },
     agentId: "main",

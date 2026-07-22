@@ -78,7 +78,7 @@ describe("setupCommand", () => {
           defaults: {
             workspace,
           },
-          list: [{ id: "main", default: true, workspace }],
+          entries: { main: { default: true, workspace } },
         },
         gateway: {
           mode: "local",
@@ -132,7 +132,7 @@ describe("setupCommand", () => {
         await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
       ) as OpenClawConfig;
       expect(resolveAgentWorkspaceDir(config, "main")).toBe(nextWorkspace);
-      expect(config.agents?.list?.find((entry) => entry.default)?.workspace).toBe(nextWorkspace);
+      expect(config.agents?.entries?.main?.workspace).toBe(nextWorkspace);
     });
   });
 
@@ -143,7 +143,7 @@ describe("setupCommand", () => {
       const configPath = path.join(configDir, "openclaw.json");
       const workspace = "/srv/ops";
       const raw = JSON.stringify({
-        agents: { list: [{ id: "ops", default: true, workspace }] },
+        agents: { entries: { ops: { default: true, workspace } } },
         gateway: { mode: "local" },
       });
       await fs.mkdir(configDir, { recursive: true });
@@ -160,7 +160,7 @@ describe("setupCommand", () => {
       await setupCommand({ workspace: nextWorkspace }, runtime, deps);
       const updated = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
       expect(resolveAgentWorkspaceDir(updated, "ops")).toBe(nextWorkspace);
-      expect(updated.agents?.list?.[0]?.workspace).toBe(nextWorkspace);
+      expect(updated.agents?.entries?.ops?.workspace).toBe(nextWorkspace);
     });
   });
 
@@ -174,7 +174,7 @@ describe("setupCommand", () => {
       await fs.writeFile(
         configPath,
         JSON.stringify({
-          agents: { list: [{ id: "ops", default: true, workspace }] },
+          agents: { entries: { ops: { default: true, workspace } } },
         }),
       );
       const deps = {
@@ -188,7 +188,7 @@ describe("setupCommand", () => {
 
       const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
       expect(config.agents?.defaults?.workspace).toBeUndefined();
-      expect(config.agents?.list?.[0]?.workspace).toBe(workspace);
+      expect(config.agents?.entries?.ops?.workspace).toBe(workspace);
       expect(config.gateway?.mode).toBe("local");
     });
   });
@@ -246,7 +246,7 @@ describe("setupCommand", () => {
         JSON.stringify({
           agents: {
             defaults: { workspace },
-            list: [{ id: "ops", default: true }],
+            entries: { ops: { default: true } },
           },
           gateway: { mode: "local" },
         }),
@@ -289,7 +289,7 @@ describe("setupCommand", () => {
       await setupCommand(undefined, runtime, deps);
 
       const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-      expect(config.agents?.list).toEqual([{ id: "main", default: true }]);
+      expect(config.agents?.entries).toEqual({ main: { default: true } });
     });
   });
 

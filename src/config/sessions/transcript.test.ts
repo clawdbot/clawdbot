@@ -1038,7 +1038,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
 
     await expect(
-      readRecentUserAssistantTextForSession({ sessionKey, storePath: fixture.storePath() }),
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      }),
     ).resolves.toEqual([]);
     const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
       agentId: "main",
@@ -1046,7 +1050,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
 
     await expect(
-      readRecentUserAssistantTextForSession({ sessionKey, storePath: fixture.storePath() }),
+      readRecentUserAssistantTextForSession({
+        agentId: "main",
+        sessionKey,
+        storePath: fixture.storePath(),
+      }),
     ).resolves.toEqual([
       { id: "root-user", role: "user", text: "keep this branch", timestamp: 1_000 },
       { id: "active-reply", role: "assistant", text: "active answer", timestamp: 2_000 },
@@ -1063,6 +1071,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
     await expect(
       readRecentUserAssistantTextForSession({
+        agentId: "main",
         sessionKey,
         storePath: fixture.storePath(),
         beforeTimestampMs: 2_500,

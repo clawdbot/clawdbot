@@ -295,7 +295,6 @@ describe("createAgent", () => {
       agents: {
         entries: {
           researcher: {
-            default: true,
             name: "Researcher",
             workspace: "/tmp/work",
             agentDir: "/tmp/agent-researcher",

@@ -398,7 +398,7 @@ function resolveCostAgentDir(config?: OpenClawConfig, agentDir?: string): string
   if (agentDir) {
     return agentDir;
   }
-  if (config?.agents?.list?.length) {
+  if (config?.agents?.entries && Object.keys(config.agents.entries).length > 0) {
     return resolveAgentDir(config, resolveDefaultAgentId(config));
   }
   // Config-less and pricing-only lookups are shipped APIs for the historical

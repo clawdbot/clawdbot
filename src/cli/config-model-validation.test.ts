@@ -150,7 +150,7 @@ describe("config model validation", () => {
       config: {
         agents: {
           defaults: { model: { primary: "openai/gpt-5.4-mini@work" } },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
@@ -162,7 +162,7 @@ describe("config model validation", () => {
       config: {
         agents: {
           defaults: { model: { primary: "openai/gpt-5.4-mini@work" } },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
       },
       ref: {
@@ -579,7 +579,7 @@ describe("config model validation", () => {
           },
           models: { "gpt-5": { alias: "legacy/" } },
         },
-        list: [{ id: "main", default: true }],
+        entries: { main: { default: true } },
       },
     };
 
@@ -596,7 +596,7 @@ describe("config model validation", () => {
               fallbacks: ["legacy/"],
             },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
@@ -719,7 +719,7 @@ describe("config model validation", () => {
           model: { primary: "openai/gpt-5.4-mini" },
           workspace: "/tmp/next-workspace",
         },
-        list: [{ id: "main", default: true }],
+        entries: { main: { default: true } },
       },
     };
 
@@ -728,7 +728,7 @@ describe("config model validation", () => {
       previousConfig: {
         agents: {
           defaults: { model: { primary: "openai/gpt-5.4-mini" } },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
       },
       touchedPaths: [["agents", "defaults"]],
@@ -889,7 +889,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
       },
       touchedPaths: [["agents", "entries", "ops", "workspace"]],
@@ -935,18 +935,15 @@ describe("config model validation", () => {
   it("leaves malformed roster drafts to schema validation", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
 
-    for (const list of [
-      {} as never,
-      [null] as never,
-      [
-        { id: "main", default: true },
-        { id: "ops", default: true },
-      ],
+    for (const entries of [
+      [] as never,
+      { bad: null } as never,
+      { main: { default: true }, ops: { default: true } },
     ]) {
       await expect(
         checkTouchedTextModelRefsRaw({
-          config: { agents: { list } },
-          touchedPaths: [["agents", "list"]],
+          config: { agents: { entries } },
+          touchedPaths: [["agents", "entries"]],
           resolveModelRef,
         }),
       ).resolves.toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });

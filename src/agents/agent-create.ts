@@ -52,7 +52,8 @@ type CreateAgentResult =
     };
 
 type CreateError = Extract<CreateAgentResult, { status: "error" }>;
-export type CreateAgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntryConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
+export type CreateAgentEntry = AgentEntryConfig & { id: string };
 
 type CreateAgentParams = {
   name?: string;

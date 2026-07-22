@@ -1031,7 +1031,7 @@ function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpB
             {
               kind: "agent" as const,
               id: entry.id,
-              skillSource: "agents.list[].skills",
+              skillSource: "agents.entries.*.skills",
               agentId: entry.id,
             },
           ];

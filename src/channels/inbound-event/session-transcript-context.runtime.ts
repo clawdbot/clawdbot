@@ -2,6 +2,7 @@ import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 
 type PromptMessage = Record<string, unknown>;
@@ -112,8 +113,12 @@ export async function mergeSessionTranscriptContext(params: {
   ) {
     return;
   }
+  const agentId = params.agentId?.trim() || resolveAgentIdFromSessionKey(params.sessionKey);
+  if (!agentId) {
+    throw new Error("Session transcript context requires an agent owner.");
+  }
   const turns = await readRecentUserAssistantTextForSession({
-    agentId: params.agentId,
+    agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     limit,

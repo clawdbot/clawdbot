@@ -599,7 +599,7 @@ describe("security audit config basics", () => {
     let report: Awaited<ReturnType<typeof runSecurityAudit>>;
     try {
       report = await runSecurityAudit({
-        config: {},
+        config: { agents: { entries: { main: { default: true } } } },
         sourceConfig: {},
         env: {},
         includeFilesystem: false,

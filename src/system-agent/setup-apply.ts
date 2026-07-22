@@ -395,10 +395,7 @@ export async function applySystemAgentSetup(
     const workspaceConflict = isBootstrapMain
       ? undefined
       : resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
-    const currentHasRoster =
-      hasPersistedConfig &&
-      rosterEntries.length > 0 &&
-      !isBootstrapMain;
+    const currentHasRoster = hasPersistedConfig && rosterEntries.length > 0 && !isBootstrapMain;
     const allowWorkspaceWrite =
       params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
     let setupBaseConfig = currentBaseConfig;

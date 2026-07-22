@@ -37,7 +37,7 @@ If you want to share credentials, copy auth-profiles.json instead of sharing the
       {
         agents: {
           entries: {
-            a: { agentDir: "~/.openclaw/agents/shared/agent" },
+            a: { agentDir: "~/.openclaw/agents/shared/agent", default: true },
             b: { agentDir: "~/.openclaw/agents/shared/agent" },
           },
         },

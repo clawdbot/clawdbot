@@ -162,7 +162,7 @@ export async function readConfigFileSnapshotInternal(
     }));
     const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
     envVarWarnings.push(
-      ...rosterMigration.diagnostics.map((message) => ({ path: "agents.list", message })),
+      ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;
     const validationConfigRaw = effectiveConfigRaw;

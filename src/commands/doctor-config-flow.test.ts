@@ -1599,7 +1599,7 @@ describe("doctor config flow", () => {
     const result = await runDoctorConfigWithInput({
       config: {
         gateway: { auth: { mode: "token", token: 123 } },
-        agents: { list: [{ id: "openclaw" }] },
+        agents: { entries: { openclaw: { default: true } } },
       },
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1613,7 +1613,7 @@ describe("doctor config flow", () => {
     const result = await runDoctorConfigWithInput({
       config: {
         agents: {
-          list: [{ id: "main", default: true, workspace: "/tmp/migrated-main" }],
+          entries: { main: { default: true, workspace: "/tmp/migrated-main" } },
         },
         gateway: { mode: "local" },
       },
@@ -1623,27 +1623,57 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.cfg.agents?.list).toEqual([
-      { id: "main", default: true, workspace: "/tmp/migrated-main" },
-    ]);
+    expect(result.cfg.agents?.entries).toEqual({
+      main: { default: true, workspace: "/tmp/migrated-main" },
+    });
+  });
+
+  it("removes a legacy list when Doctor persists keyed roster entries", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] } },
+      parsedConfig: {
+        agents: { list: [{ id: "ops", default: true, workspace: "/srv/ops" }] },
+      },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.entries).toEqual({
+      ops: { default: true, workspace: "/srv/ops" },
+    });
+    expect(result.cfg.agents).not.toHaveProperty("list");
   });
 
   it("preserves a roster supplied by an included config during repair", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { list: [{ id: "ops", default: true }] } },
+      config: { agents: { entries: { ops: { default: true } } } },
       parsedConfig: { $include: "./agents.json" },
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
     expect(result.shouldWriteConfig).toBe(false);
-    expect(result.cfg.agents?.list).toEqual([{ id: "ops", default: true }]);
+    expect(result.cfg.agents?.entries).toEqual({ ops: { default: true } });
+  });
+
+  it("preserves ownership of an explicitly empty included roster", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { entries: { main: { default: true } } } },
+      parsedConfig: { $include: "./agents.json" },
+      sourceConfigBeforeMigrations: { agents: { entries: {} } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(false);
+    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
   });
 
   it("persists an injected roster when a root include contributes only channels", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: { default: true } } },
         channels: { telegram: { enabled: true } },
       },
       parsedConfig: { $include: "./channels.json" },
@@ -1653,7 +1683,7 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.cfg.agents?.list).toEqual([{ id: "main", default: true }]);
+    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
   });
 
   it("repairs a locally authored roster when unrelated includes exist", async () => {
@@ -1661,10 +1691,10 @@ describe("doctor config flow", () => {
       config: {
         agents: {
           defaults: { workspace: "/tmp/ops" },
-          list: [{ id: "main", default: true }],
+          entries: { main: { default: true } },
         },
       },
-      parsedConfig: { $include: "./channels.json", agents: { list: [] } },
+      parsedConfig: { $include: "./channels.json", agents: { entries: {} } },
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1672,32 +1702,32 @@ describe("doctor config flow", () => {
     expect(result.shouldWriteConfig).toBe(true);
     expect(result.cfg.agents).toEqual({
       defaults: { workspace: "/tmp/ops" },
-      list: [{ id: "main", default: true }],
+      entries: { main: { default: true } },
     });
   });
 
   it("repairs a missing roster when only a nested channel include exists", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { list: [{ id: "main", default: true }] } },
+      config: { agents: { entries: { main: { default: true } } } },
       parsedConfig: { channels: { $include: "./channels.json" } },
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.cfg.agents?.list).toEqual([{ id: "main", default: true }]);
+    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
   });
 
   it("does not persist an implicit roster when no config file exists", async () => {
     const result = await runDoctorConfigWithInput({
-      config: { agents: { list: [{ id: "main", default: true }] } },
+      config: { agents: { entries: { main: { default: true } } } },
       exists: false,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
 
     expect(result.shouldWriteConfig).toBe(false);
-    expect(result.cfg.agents?.list).toEqual([{ id: "main", default: true }]);
+    expect(result.cfg.agents?.entries).toEqual({ main: { default: true } });
   });
 
   it("enables Doctor-only state migrations only for explicit repair", async () => {
@@ -1910,7 +1940,7 @@ describe("doctor config flow", () => {
             fallbacks: ["openai/gpt-5.4"],
           },
         },
-        list: [{ id: "ops", model: "openai/gpt-5.3" }],
+        entries: { ops: { default: true, model: "openai/gpt-5.3" } },
       },
     };
 
@@ -2181,7 +2211,7 @@ describe("doctor config flow", () => {
       config: {
         bridge: { bind: "auto" },
         gateway: { auth: { mode: "token", token: "ok", extra: true } },
-        agents: { list: [{ id: "openclaw" }] },
+        agents: { entries: { openclaw: { default: true } } },
         session: {
           maintenance: {
             rotateBytes: "10mb",

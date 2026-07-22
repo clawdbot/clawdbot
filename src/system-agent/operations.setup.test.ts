@@ -44,7 +44,7 @@ function expectAuditRecord(
 }
 
 const mockConfig = vi.hoisted(() => {
-  const initial = { agents: { list: [{ id: "main", default: true }] } };
+  const initial = { agents: { entries: { main: { default: true } } } };
   const state = {
     path: "/tmp/openclaw.json",
     exists: true,
@@ -74,13 +74,13 @@ const mockConfig = vi.hoisted(() => {
     reset() {
       state.path = "/tmp/openclaw.json";
       state.exists = true;
-      state.config = { agents: { list: [{ id: "main", default: true }] } };
+      state.config = { agents: { entries: { main: { default: true } } } };
       state.hash = "mock-hash-0";
     },
     missing(pathLocal: string) {
       state.path = pathLocal;
       state.exists = false;
-      state.config = { agents: { list: [{ id: "main", default: true }] } };
+      state.config = { agents: { entries: { main: { default: true } } } };
       state.hash = undefined;
     },
     currentConfig() {
@@ -88,7 +88,10 @@ const mockConfig = vi.hoisted(() => {
     },
     setConfig(config: TestConfig) {
       const agents = (config.agents ?? {}) as Record<string, unknown>;
-      config.agents = { ...agents, list: agents.list ?? [{ id: "main", default: true }] };
+      config.agents = {
+        ...agents,
+        entries: agents.entries ?? { main: { default: true } },
+      };
       state.config = structuredClone(config);
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
@@ -449,7 +452,7 @@ describe("parseSystemAgentOperation", () => {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.2"] },
         },
-        list: [{ id: "main", default: true, workspace: "/tmp/main" }],
+        entries: { main: { default: true, workspace: "/tmp/main" } },
       },
       gateway: { port: 18789 },
       models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },
@@ -507,10 +510,10 @@ describe("parseSystemAgentOperation", () => {
               ...requireRecord(requireRecord(current.agents, "agents").defaults, "defaults"),
               models: { "google/unrelated": { agentRuntime: { id: "openclaw" } } },
             },
-            list: [
-              { id: "main", default: true, workspace: "/tmp/main" },
-              { id: "work", workspace: "/tmp/work" },
-            ],
+            entries: {
+              main: { default: true, workspace: "/tmp/main" },
+              work: { workspace: "/tmp/work" },
+            },
           },
           channels: { telegram: { enabled: true } },
         });
@@ -554,10 +557,10 @@ describe("parseSystemAgentOperation", () => {
     expect(
       requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").model,
     ).toEqual({ primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.2"] });
-    expect(requireRecord(persisted.agents, "agents").list).toEqual([
-      { id: "main", default: true, workspace: "/tmp/main" },
-      { id: "work", workspace: "/tmp/work" },
-    ]);
+    expect(requireRecord(persisted.agents, "agents").entries).toEqual({
+      main: { default: true, workspace: "/tmp/main" },
+      work: { workspace: "/tmp/work" },
+    });
     expect(requireRecord(persisted.auth, "auth").profiles).toEqual({
       "google:other": { provider: "google", mode: "api_key" },
     });
@@ -598,17 +601,14 @@ describe("parseSystemAgentOperation", () => {
       initial: {
         agents: {
           defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          list: [{ id: "main", default: true }, { id: "work" }],
+          entries: { main: { default: true }, work: {} },
         },
       },
       change: (config: TestConfig) => {
         const next = structuredClone(config);
-        const list = requireRecord(next.agents, "agents").list as Array<{
-          id: string;
-          default?: boolean;
-        }>;
-        delete list[0]?.default;
-        list[1]!.default = true;
+        const entries = requireRecord(requireRecord(next.agents, "agents").entries, "entries");
+        delete requireRecord(entries.main, "main").default;
+        requireRecord(entries.work, "work").default = true;
         return next;
       },
     },

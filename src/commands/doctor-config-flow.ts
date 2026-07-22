@@ -176,12 +176,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (snapshot.exists && rosterMigration.changed && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
     const migrated = migratePersistedImplicitMainRoster(candidate).config as OpenClawConfig;
+    const { list: _legacyList, ...candidateAgents } = candidate.agents ?? {};
     const rosterRepair = {
       config: {
         ...candidate,
-        agents: { ...candidate.agents, list: migrated.agents?.list },
+        agents: { ...candidateAgents, entries: migrated.agents?.entries },
       },
-      changes: ["Persisted agents.list with exactly one explicit default agent."],
+      changes: ["Persisted agents.entries with exactly one explicit default agent."],
     };
     emitDoctorChangesPanel(rosterRepair.changes, shouldRepair);
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({

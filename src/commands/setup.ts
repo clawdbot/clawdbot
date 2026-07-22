@@ -6,11 +6,11 @@
  */
 import fs from "node:fs/promises";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { ConfigWriteOptions, ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
 import {
   configIncludeOwnsAgentRoster,
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
+import type { ConfigWriteOptions, ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
@@ -159,8 +159,8 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const defaultEntryWorkspace = resolvedConfig.agents?.list
-    ?.find((entry) => entry.default === true)
+  const defaultEntryWorkspace = Object.values(resolvedConfig.agents?.entries ?? {})
+    .find((entry) => entry.default === true)
     ?.workspace?.trim();
   const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
 
@@ -169,7 +169,7 @@ export async function setupCommand(
   // Bare setup is observational for an established roster. Only a caller
   // override or fresh bootstrap owns a persisted workspace change.
   const shouldWriteWorkspace =
-    !snapshot || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
+    !snapshot.exists || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
   const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
 
   // Keep the candidate runtime-shaped. replaceConfigFile persists only its
@@ -215,12 +215,7 @@ export async function setupCommand(
     next = (await ensureOnboardingAgent({ config: next, workspace, baseConfig: cfg })).config;
   }
 
-  if (
-    !snapshot.exists ||
-    shouldPersistRoster ||
-    shouldWriteWorkspace ||
-    shouldWriteGatewayMode
-  ) {
+  if (!snapshot.exists || shouldPersistRoster || shouldWriteWorkspace || shouldWriteGatewayMode) {
     // Preserve all existing config fields and touch only workspace/gateway mode
     // defaults that this command owns.
     const replaceConfig = deps.replaceConfigFile ?? writeDefaultConfigFile;
