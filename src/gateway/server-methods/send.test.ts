@@ -1823,6 +1823,27 @@ describe("gateway send mirroring", () => {
     expect(deliveryCall()?.session?.key).toBe("agent:work:whatsapp:resolved");
   });
 
+  it("passes mediaAccess.localRoots to deliverOutboundPayloads for gateway sends", async () => {
+    mockDeliverySuccess("m-media-access");
+
+    await runSend({
+      to: "+15551234567",
+      message: "caption",
+      mediaUrl: "file:///tmp/workspace/photo.png",
+      channel: "whatsapp",
+      agentId: "work",
+      idempotencyKey: "idem-media-access",
+    });
+
+    // Gateway send handler must pass mediaAccess so downstream
+    // resolveAgentScopedOutboundMediaAccess uses the provided roots
+    // instead of falling through to source-parent root expansion.
+    const mediaAccess = deliveryCall()?.mediaAccess;
+    expect(mediaAccess).toBeDefined();
+    expect(Array.isArray(mediaAccess.localRoots)).toBe(true);
+    expect(mediaAccess.localRoots.length).toBeGreaterThan(0);
+  });
+
   it("materializes buffer-only gateway sends before outbound delivery", async () => {
     mockDeliverySuccess("m-buffer-media");
 
