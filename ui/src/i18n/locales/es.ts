@@ -680,6 +680,8 @@ export const es: TranslationMap = {
     openWorkboardCard: "Abrir tarjeta de Workboard",
     dashboardAvailable: "Panel disponible",
     approvalNeeded: "Se requiere aprobación",
+    queuedMessage: "{count} mensaje en cola para enviar",
+    queuedMessages: "{count} mensajes en cola para enviar",
     noSessions: "No se encontraron sesiones.",
     noActiveSessions: "No hay hilos activos.",
     noArchivedSessions: "No hay sesiones archivadas.",
@@ -3064,6 +3066,7 @@ export const es: TranslationMap = {
     eventStale: "Sesión obsoleta",
   },
   connection: {
+    queuedCount: "{count} en cola",
     reconnecting: "Reconectando…",
     retryNow: "Reintentar ahora",
     access: {
@@ -4253,6 +4256,8 @@ export const es: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint:
         "Sin conexión: los mensajes se pondrán en cola y se enviarán cuando vuelva la conexión.",
+      offlineQueuedHint:
+        "Sin conexión — {count} en cola; los mensajes se enviarán cuando se restablezca la conexión.",
       preparingModel: "Preparando modelo...",
       responding: "{name} está respondiendo...",
       sendingMessage: "Enviando mensaje...",
