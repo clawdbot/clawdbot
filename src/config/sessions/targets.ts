@@ -5,6 +5,7 @@ import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import {
   isValidAgentId,
+  LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
@@ -70,7 +71,11 @@ function isWithinRoot(realPath: string, realRoot: string): boolean {
 }
 
 function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boolean {
-  return !/[a-z0-9]/i.test(dirName) || !isValidAgentId(agentId);
+  return (
+    !/[a-z0-9]/i.test(dirName) ||
+    !isValidAgentId(agentId) ||
+    (agentId === LEGACY_IMPLICIT_AGENT_ID && dirName !== LEGACY_IMPLICIT_AGENT_ID)
+  );
 }
 
 function resolveValidatedManagedFilePathSync(params: {

@@ -1354,9 +1354,12 @@ vi.mock("./doctor-config-preflight.js", async () => {
       runDoctorConfigPreflightOptionsMock(options);
       const injected = getDoctorConfigInputForTest();
       const configPath = injected?.path ?? resolveConfigPath();
-      let parsed: Record<string, unknown> = injected?.config
-        ? structuredClone(injected.config)
-        : {};
+      let parsed: Record<string, unknown> = injected?.parsed
+        ? structuredClone(injected.parsed)
+        : injected?.config
+          ? structuredClone(injected.config)
+          : {};
+      let injectedEffectiveConfig = injected?.config ? structuredClone(injected.config) : parsed;
       let exists = injected?.exists ?? false;
       if (!injected) {
         try {
@@ -1365,8 +1368,10 @@ vi.mock("./doctor-config-preflight.js", async () => {
             unknown
           >;
           exists = true;
+          injectedEffectiveConfig = parsed;
         } catch {
           parsed = {};
+          injectedEffectiveConfig = parsed;
         }
       }
       if (injected?.preflightMode === "fast") {
@@ -1375,13 +1380,13 @@ vi.mock("./doctor-config-preflight.js", async () => {
             exists,
             path: configPath,
             parsed,
-            config: parsed,
-            sourceConfig: parsed,
+            config: injectedEffectiveConfig,
+            sourceConfig: injectedEffectiveConfig,
             valid: true,
             warnings: [],
             legacyIssues: [],
           },
-          baseConfig: parsed,
+          baseConfig: injectedEffectiveConfig,
         };
       }
       if (injected?.preflightMode === "issues") {
@@ -1397,13 +1402,13 @@ vi.mock("./doctor-config-preflight.js", async () => {
             exists,
             path: configPath,
             parsed,
-            config: parsed,
-            sourceConfig: parsed,
+            config: injectedEffectiveConfig,
+            sourceConfig: injectedEffectiveConfig,
             valid: legacyIssues.length === 0,
             warnings: [],
             legacyIssues,
           },
-          baseConfig: parsed,
+          baseConfig: injectedEffectiveConfig,
         };
       }
       const legacyIssues = findLegacyConfigIssues(
@@ -1596,6 +1601,81 @@ describe("doctor config flow", () => {
     expect((result.cfg as Record<string, unknown>).gateway).toEqual({
       auth: { mode: "token", token: 123 },
     });
+  });
+
+  it("plans persistence of the injected main roster during doctor repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: {
+          list: [{ id: "main", default: true, workspace: "/tmp/migrated-main" }],
+        },
+        gateway: { mode: "local" },
+      },
+      parsedConfig: { gateway: { mode: "local" } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.list).toEqual([
+      { id: "main", default: true, workspace: "/tmp/migrated-main" },
+    ]);
+  });
+
+  it("preserves a roster supplied by an included config during repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { list: [{ id: "ops", default: true }] } },
+      parsedConfig: { $include: "./agents.json" },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(false);
+    expect(result.cfg.agents?.list).toEqual([{ id: "ops", default: true }]);
+  });
+
+  it("repairs a locally authored roster when unrelated includes exist", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        agents: {
+          defaults: { workspace: "/tmp/ops" },
+          list: [{ id: "main", default: true }],
+        },
+      },
+      parsedConfig: { $include: "./channels.json", agents: { list: [] } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents).toEqual({
+      defaults: { workspace: "/tmp/ops" },
+      list: [{ id: "main", default: true }],
+    });
+  });
+
+  it("repairs a missing roster when only a nested channel include exists", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { list: [{ id: "main", default: true }] } },
+      parsedConfig: { channels: { $include: "./channels.json" } },
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.cfg.agents?.list).toEqual([{ id: "main", default: true }]);
+  });
+
+  it("does not persist an implicit roster when no config file exists", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: { agents: { list: [{ id: "main", default: true }] } },
+      exists: false,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(false);
+    expect(result.cfg.agents?.list).toEqual([{ id: "main", default: true }]);
   });
 
   it("enables Doctor-only state migrations only for explicit repair", async () => {

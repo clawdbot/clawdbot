@@ -68,27 +68,49 @@ describe("onboarding main-agent creation", () => {
     });
   });
 
-  it("reuses an existing persisted roster without creating another agent", async () => {
+  it("keeps authored env references when reusing an existing roster", async () => {
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
+      sourceConfig: {
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: {
+          auth: { mode: "token", token: "${OPENCLAW_TOKEN}" },
+          controlUi: { enabled: true },
+        },
+      },
       config: {
         agents: { list: [{ id: "main", default: true }] },
-        gateway: { controlUi: { enabled: true } },
+        gateway: {
+          auth: { mode: "token", token: "resolved-secret" },
+          controlUi: { enabled: true },
+        },
       },
     });
 
     await expect(
       ensureOnboardingAgent({
-        config: { gateway: { mode: "local" } },
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          gateway: { auth: { mode: "token", token: "${OPENCLAW_TOKEN}" }, mode: "local" },
+        },
         workspace: "/tmp/work",
-        baseConfig: { agents: { list: [{ id: "main", default: true }] }, gateway: {} },
+        baseConfig: {
+          agents: { list: [{ id: "main", default: true }] },
+          gateway: { auth: { mode: "token", token: "${OPENCLAW_TOKEN}" } },
+        },
       }),
     ).resolves.toMatchObject({
       agentId: "main",
       bootstrapPending: false,
-      config: { gateway: { mode: "local", controlUi: { enabled: true } } },
+      config: {
+        gateway: {
+          auth: { token: "${OPENCLAW_TOKEN}" },
+          mode: "local",
+          controlUi: { enabled: true },
+        },
+      },
     });
     expect(mocks.createAgent).not.toHaveBeenCalled();
   });

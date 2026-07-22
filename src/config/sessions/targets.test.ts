@@ -530,8 +530,12 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
       const stateDir = path.join(home, ".openclaw");
       const mainSessionsDir = path.join(stateDir, "agents", "main", "sessions");
       const junkSessionsDir = path.join(stateDir, "agents", "###", "sessions");
+      const collisionSessionsDir = path.join(stateDir, "agents", "main!", "sessions");
+      const whitespaceSessionsDir = path.join(stateDir, "agents", "main ", "sessions");
       await fs.mkdir(mainSessionsDir, { recursive: true });
       await fs.mkdir(junkSessionsDir, { recursive: true });
+      await fs.mkdir(collisionSessionsDir, { recursive: true });
+      await fs.mkdir(whitespaceSessionsDir, { recursive: true });
       await replaceSessionEntry(
         { storePath: path.join(mainSessionsDir, "sessions.json"), sessionKey: "main" },
         { sessionId: "sid-main", updatedAt: Date.now() },
@@ -543,6 +547,22 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
           sessionKey: "main",
         },
         { sessionId: "sid-junk", updatedAt: Date.now() },
+      );
+      await replaceSessionEntry(
+        {
+          agentId: "main",
+          storePath: path.join(collisionSessionsDir, "sessions.json"),
+          sessionKey: "main",
+        },
+        { sessionId: "sid-collision", updatedAt: Date.now() },
+      );
+      await replaceSessionEntry(
+        {
+          agentId: "main",
+          storePath: path.join(whitespaceSessionsDir, "sessions.json"),
+          sessionKey: "main",
+        },
+        { sessionId: "sid-whitespace", updatedAt: Date.now() },
       );
 
       const cfg: OpenClawConfig = EXPLICIT_MAIN_CONFIG;
@@ -557,6 +577,16 @@ describe("resolveAllAgentSessionStoreTargetsSync", () => {
       ]);
       expect(
         targets.some((target) => target.storePath === path.join(junkSessionsDir, "sessions.json")),
+      ).toBe(false);
+      expect(
+        targets.some(
+          (target) => target.storePath === path.join(collisionSessionsDir, "sessions.json"),
+        ),
+      ).toBe(false);
+      expect(
+        targets.some(
+          (target) => target.storePath === path.join(whitespaceSessionsDir, "sessions.json"),
+        ),
       ).toBe(false);
     });
   });

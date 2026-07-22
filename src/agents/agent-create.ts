@@ -42,6 +42,7 @@ type CreateAgentResult =
       reason:
         | "invalid-name"
         | "reserved-id"
+        | "default-conflict"
         | "already-exists"
         | "deletion-pending"
         | "invalid-bindings"
@@ -68,7 +69,7 @@ type CreateAgentParams = {
 };
 
 class DuplicateAgentError extends Error {}
-class ConcurrentBootstrapRosterError extends Error {}
+class DefaultAgentConflictError extends Error {}
 class InvalidAgentBindingsError extends Error {}
 
 function createError(
@@ -175,14 +176,21 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         transform: async (currentConfig, context) => {
           const currentEntries = listAgentEntries(currentConfig);
           const existingIndex = findAgentEntryIndex(currentEntries, agentId);
+          const existingEntry = currentEntries[existingIndex];
+          const currentDefaults = currentEntries.filter((entry) => entry.default === true);
+          const stagedDefaultMatchesCurrent =
+            existingEntry?.default === true && currentDefaults.length === 1;
+          if (
+            params.entry?.default === true &&
+            currentEntries.length > 0 &&
+            !stagedDefaultMatchesCurrent
+          ) {
+            throw new DefaultAgentConflictError();
+          }
           if (existingIndex >= 0 && !isBootstrapMain) {
             throw new DuplicateAgentError();
           }
-          if (isBootstrapMain && existingIndex < 0 && currentEntries.length > 0) {
-            throw new ConcurrentBootstrapRosterError();
-          }
 
-          const existingEntry = currentEntries[existingIndex];
           if (
             existingIndex >= 0 &&
             isBootstrapMain &&
@@ -301,10 +309,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     if (error instanceof DuplicateAgentError) {
       return createError("already-exists", `agent "${agentId}" already exists`, agentId);
     }
-    if (error instanceof ConcurrentBootstrapRosterError) {
+    if (error instanceof DefaultAgentConflictError) {
       return createError(
-        "already-exists",
-        "agent roster changed during bootstrap; retry onboarding with the current roster",
+        "default-conflict",
+        `Cannot create agent "${agentId}" with default=true while a roster already exists. Reassign the default separately.`,
         agentId,
       );
     }

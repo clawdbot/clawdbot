@@ -35,6 +35,13 @@ export function migratePersistedImplicitMainRoster(raw: unknown): {
   if (validIndexes.length === 0) {
     return { config: raw, changed: false, diagnostics: [] };
   }
+  const hasInvalidDefaultMarker = validIndexes.some((index) => {
+    const entry = list[index] as Record<string, unknown>;
+    return Object.hasOwn(entry, "default") && typeof entry.default !== "boolean";
+  });
+  if (hasInvalidDefaultMarker) {
+    return { config: raw, changed: false, diagnostics: [] };
+  }
   const defaultIndexes = validIndexes.filter(
     (index) => (list[index] as Record<string, unknown>).default === true,
   );

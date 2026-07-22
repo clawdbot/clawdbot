@@ -1,6 +1,3 @@
-import path from "node:path";
-import { withFileLock } from "../infra/file-lock.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { ConfigIncludeError } from "./includes.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { maybeRecoverSuspiciousConfigRead } from "./io.observe-recovery.js";
@@ -164,45 +161,9 @@ export async function readConfigFileSnapshotInternal(
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
     const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw);
-    const sourceRosterMigration = migratePersistedImplicitMainRoster(effectiveParsed);
     envVarWarnings.push(
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.list", message })),
     );
-    if (
-      rosterMigration.changed &&
-      sourceRosterMigration.changed &&
-      !containsConfigIncludeDirective(effectiveParsed) &&
-      !deps.fs.lstatSync(configPath).isSymbolicLink()
-    ) {
-      let observedLockedSnapshot = false;
-      try {
-        await withFileLock(
-          configPath,
-          { stale: 30_000, retries: { retries: 40, factor: 1.2, minTimeout: 25, maxTimeout: 250 } },
-          async () => {
-            if (deps.fs.readFileSync(configPath, "utf8") !== raw) {
-              return false;
-            }
-            await replaceFileAtomic({
-              filePath: configPath,
-              content: `${JSON.stringify(sourceRosterMigration.config, null, 2)}\n`,
-              dirMode: 0o700,
-              mode: 0o600,
-              tempPrefix: path.basename(configPath),
-              copyFallbackOnPermissionError: true,
-              fileSystem: deps.fs,
-            });
-            return true;
-          },
-        );
-        observedLockedSnapshot = true;
-      } catch {
-        // Read-only deployments still receive the compatibility roster in memory.
-      }
-      if (observedLockedSnapshot) {
-        return await readConfigFileSnapshotInternal(context, options);
-      }
-    }
     const effectiveConfigRaw = rosterMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;

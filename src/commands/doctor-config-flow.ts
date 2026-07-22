@@ -2,6 +2,8 @@
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { INCLUDE_KEY } from "../config/includes.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -169,6 +171,42 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   pendingChanges = pendingChanges || legacyStep.state.pendingChanges;
   fixHints = legacyStep.state.fixHints;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
+  const rosterMigration = migratePersistedImplicitMainRoster(snapshot.parsed);
+  const parsedRoot =
+    snapshot.parsed && typeof snapshot.parsed === "object" && !Array.isArray(snapshot.parsed)
+      ? (snapshot.parsed as Record<string, unknown>)
+      : undefined;
+  const parsedAgents =
+    parsedRoot?.agents && typeof parsedRoot.agents === "object" && !Array.isArray(parsedRoot.agents)
+      ? (parsedRoot.agents as Record<string, unknown>)
+      : undefined;
+  const rosterIsAuthoredLocally = Boolean(parsedAgents && Object.hasOwn(parsedAgents, "list"));
+  const includeCanOwnRoster = Boolean(
+    (parsedRoot && Object.hasOwn(parsedRoot, INCLUDE_KEY)) ||
+    (parsedAgents && Object.hasOwn(parsedAgents, INCLUDE_KEY)),
+  );
+  if (
+    snapshot.exists &&
+    rosterMigration.changed &&
+    (!includeCanOwnRoster || rosterIsAuthoredLocally)
+  ) {
+    // Runtime roster normalization is read-only; doctor --fix owns persistence.
+    const migrated = migratePersistedImplicitMainRoster(candidate).config as OpenClawConfig;
+    const rosterRepair = {
+      config: {
+        ...candidate,
+        agents: { ...candidate.agents, list: migrated.agents?.list },
+      },
+      changes: ["Persisted agents.list with exactly one explicit default agent."],
+    };
+    emitDoctorChangesPanel(rosterRepair.changes, shouldRepair);
+    ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
+      state: { cfg, candidate, pendingChanges, fixHints },
+      mutation: rosterRepair,
+      shouldRepair,
+      fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
+    }));
+  }
   const { collectBlockedLegacyOpenAICodexProviderPlan } =
     await import("./doctor/shared/legacy-config-migrations.runtime.models.js");
   const blockedCodexProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(candidate);

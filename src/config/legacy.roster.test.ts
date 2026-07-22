@@ -1,27 +1,23 @@
-import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { createConfigIO, readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
+import { readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
 
 describe("persisted implicit-main roster migration", () => {
-  it("writes main for a persisted pre-roster config", async () => {
+  it("normalizes a commented pre-roster config in memory without rewriting it", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify({ gateway: { mode: "local" } }));
-      await fs.chmod(configPath, 0o600);
+      const raw = `// operator comment\n{ gateway: { mode: "local" } }\n`;
+      await fs.writeFile(configPath, raw);
       resetConfigRuntimeState();
 
       const snapshot = await readConfigFileSnapshot();
 
       expect(snapshot.sourceConfig.agents?.list).toEqual([{ id: "main", default: true }]);
-      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject({
-        agents: { list: [{ id: "main", default: true }] },
-      });
-      expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   });
 
@@ -52,9 +48,7 @@ describe("persisted implicit-main roster migration", () => {
       const snapshot = await readConfigFileSnapshot();
 
       expect(snapshot.sourceConfig.agents?.list).toEqual([{ id: "main", default: true }]);
-      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
-        agents: { list: [{ id: "main", default: true }] },
-      });
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({ agents: { list: [] } });
     });
   });
 
@@ -69,7 +63,15 @@ describe("persisted implicit-main roster migration", () => {
       list: [{ id: "ops" }, { id: "research", default: true }, { id: "writer", default: true }],
       expected: [{ id: "ops" }, { id: "research", default: true }, { id: "writer" }],
     },
-  ])("persists repaired $label markers before validation", async ({ list, expected }) => {
+    {
+      label: "false default markers",
+      list: [
+        { id: "ops", default: false },
+        { id: "research", default: false },
+      ],
+      expected: [{ id: "ops", default: true }, { id: "research" }],
+    },
+  ])("normalizes $label markers in memory", async ({ list, expected }) => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -81,7 +83,7 @@ describe("persisted implicit-main roster migration", () => {
       expect(snapshot.valid).toBe(true);
       expect(snapshot.sourceConfig.agents?.list).toEqual(expected);
       expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
-        agents: { list: expected },
+        agents: { list },
       });
     });
   });
@@ -100,35 +102,30 @@ describe("persisted implicit-main roster migration", () => {
       changed: false,
       diagnostics: [],
     });
+    const invalidMarker = { agents: { list: [{ id: "ops", default: "yes" }] } };
+    expect(migratePersistedImplicitMainRoster(invalidMarker)).toEqual({
+      config: invalidMarker,
+      changed: false,
+      diagnostics: [],
+    });
   });
 
-  it("rereads a concurrent edit observed after taking the migration lock", async () => {
+  it("leaves non-boolean default markers for schema validation", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify({ gateway: { mode: "local" } }));
-      const concurrentRaw = JSON.stringify({ agents: { list: [{ id: "ops", default: true }] } });
-      let configReads = 0;
-      const injectedFs = {
-        ...fsNode,
-        readFileSync: ((target: fsNode.PathOrFileDescriptor, options?: unknown) => {
-          if (target === configPath && configReads++ === 1) {
-            fsNode.writeFileSync(configPath, concurrentRaw);
-          }
-          return fsNode.readFileSync(target, options as never);
-        }) as typeof fsNode.readFileSync,
-      } as typeof fsNode;
-      const io = createConfigIO({
+      await fs.writeFile(
         configPath,
-        env: { HOME: home },
-        fs: injectedFs,
-        homedir: () => home,
-      });
+        JSON.stringify({ agents: { list: [{ id: "ops", default: "yes" }] } }),
+      );
+      resetConfigRuntimeState();
 
-      const snapshot = await io.readConfigFileSnapshot();
+      const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.sourceConfig.agents?.list).toEqual([{ id: "ops", default: true }]);
-      expect(await fs.readFile(configPath, "utf8")).toBe(concurrentRaw);
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.issues).toContainEqual(
+        expect.objectContaining({ path: "agents.list.0.default" }),
+      );
     });
   });
 });

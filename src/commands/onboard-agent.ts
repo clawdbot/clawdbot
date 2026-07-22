@@ -60,7 +60,7 @@ export async function ensureOnboardingAgent(params: {
       config: mergeOnboardingCandidate({
         base: candidateBase,
         candidate: params.config,
-        persisted: effective,
+        persisted: base,
       }),
       agentId: existing.id,
       bootstrapPending: false,

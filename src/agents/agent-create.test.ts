@@ -220,9 +220,26 @@ describe("createAgent", () => {
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 
+  it("rejects a default marker when a roster already exists", async () => {
+    const before = structuredClone(mocks.config);
+
+    await expect(
+      createAgent({
+        entry: { id: "researcher", name: "Researcher", default: true },
+      }),
+    ).resolves.toMatchObject({
+      status: "error",
+      reason: "default-conflict",
+      message: expect.stringContaining("Reassign the default separately"),
+    });
+    expect(mocks.config).toEqual(before);
+    expect(mocks.persisted).toEqual({});
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+  });
+
   it("rejects a concurrent non-main roster during main bootstrap", async () => {
     const transformConfig = vi.fn(async ({ transform }) =>
-      transform({ agents: { list: [{ id: "ops", default: true }] } }),
+      transform({ agents: { list: [{ id: "main" }, { id: "ops", default: true }] } }),
     );
 
     await expect(
@@ -232,8 +249,8 @@ describe("createAgent", () => {
       }),
     ).resolves.toMatchObject({
       status: "error",
-      reason: "already-exists",
-      message: expect.stringContaining("roster changed during bootstrap"),
+      reason: "default-conflict",
+      message: expect.stringContaining("Reassign the default separately"),
     });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
