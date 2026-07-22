@@ -1,9 +1,7 @@
 import fs from "node:fs";
-import path from "node:path";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { readLegacySessionStoreTarget } from "./legacy-store-readonly.js";
-import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
+import { resolveStorePath } from "./paths.js";
 import {
   deleteSqliteSessionEntryLifecycle,
   importSqliteSessionRows,
@@ -63,14 +61,6 @@ export type LegacyMainSessionKeyMigrationResult = {
 };
 
 type UnresolvedOutcome = Extract<LegacyMainSessionKeyMigrationOutcome, { resolved: false }>;
-type PendingMigration = {
-  key: string;
-  promise: Promise<LegacyMainSessionKeyMigrationResult>;
-  settled: boolean;
-};
-
-let pendingMigration: PendingMigration | undefined;
-let recordedUnresolved: { key: string; outcomes: UnresolvedOutcome[] } | undefined;
 
 function resolveTarget(
   cfg: OpenClawConfig,
@@ -88,17 +78,6 @@ function resolveTarget(
     return undefined;
   }
   return { defaultAgentId, mainKey: normalizeMainKey(cfg.session?.mainKey) };
-}
-
-function resolveCacheKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string {
-  const target = resolveTarget(cfg);
-  return JSON.stringify([
-    target?.defaultAgentId ?? null,
-    target?.mainKey ?? null,
-    cfg.session?.store ?? null,
-    env.OPENCLAW_STATE_DIR ?? null,
-    env.HOME ?? null,
-  ]);
 }
 
 function claim(params: {
@@ -140,56 +119,6 @@ function loadClaims(params: {
         ]
       : [];
   });
-}
-
-function readLegacyTranscriptEvents(params: {
-  agentId: string;
-  entry: SessionEntry;
-  storePath: string;
-}): ((append: (event: unknown) => void) => void) | undefined {
-  const transcriptPath = resolveSessionFilePath(params.entry.sessionId, params.entry, {
-    agentId: params.agentId,
-    sessionsDir: path.dirname(params.storePath),
-  });
-  if (!fs.existsSync(transcriptPath)) {
-    return undefined;
-  }
-  return (append) => {
-    for (const line of fs.readFileSync(transcriptPath, "utf-8").split(/\r?\n/u)) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        append(JSON.parse(trimmed) as unknown);
-      }
-    }
-  };
-}
-
-async function importLegacyJsonAliases(params: {
-  agentId: string;
-  legacyKeys: string[];
-  storePath: string;
-}): Promise<void> {
-  const legacyStore = readLegacySessionStoreTarget(params.storePath, params.agentId);
-  if (!legacyStore) {
-    return;
-  }
-  for (const sessionKey of params.legacyKeys) {
-    const entry = legacyStore[sessionKey];
-    if (!entry) {
-      continue;
-    }
-    await importSqliteSessionRows({
-      agentId: params.agentId,
-      entry,
-      sessionKey,
-      storePath: params.storePath,
-      readTranscriptEvents: readLegacyTranscriptEvents({
-        agentId: params.agentId,
-        entry,
-        storePath: params.storePath,
-      }),
-    });
-  }
 }
 
 async function removeAliases(params: {
@@ -286,13 +215,6 @@ async function migrateFromStore(params: {
 }): Promise<LegacyMainSessionKeyMigrationOutcome> {
   let aliases: ReturnType<typeof loadClaims>;
   try {
-    // The shared startup owner runs on command and TUI paths that do not run the full doctor
-    // importer. Import the exact shipped main aliases before deciding this source is empty.
-    await importLegacyJsonAliases({
-      agentId: params.sourceAgentId,
-      legacyKeys: params.legacyKeys,
-      storePath: params.sourceStorePath,
-    });
     aliases = loadClaims({
       agentId: params.sourceAgentId,
       legacyKeys: params.legacyKeys,
@@ -433,11 +355,10 @@ export async function migrateLegacyDefaultMainSessionKeys(
   }).path;
   const base = { canonicalKey, defaultAgentId: target.defaultAgentId, targetStorePath };
   const sources = [
-    ...(fs.existsSync(targetSqlitePath) || fs.existsSync(targetStorePath)
+    ...(fs.existsSync(targetSqlitePath)
       ? [{ sourceAgentId: target.defaultAgentId, sourceStorePath: targetStorePath }]
       : []),
-    ...(legacySqlitePath !== targetSqlitePath &&
-    (fs.existsSync(legacySqlitePath) || fs.existsSync(legacyStorePath))
+    ...(legacySqlitePath !== targetSqlitePath && fs.existsSync(legacySqlitePath)
       ? [{ sourceAgentId: LEGACY_AGENT_ID, sourceStorePath: legacyStorePath }]
       : []),
   ];
@@ -485,105 +406,4 @@ export function formatLegacyMainSessionMigrationOutcome(
     return `Legacy main aliases diverge: ${outcome.aliases.map((item) => `${item.sessionId} (${item.sessionKey} in ${item.storePath})`).join(", ")}.`;
   }
   return `Could not read legacy main-session store ${outcome.sourceStorePath}: ${outcome.error}`;
-}
-
-function recordUnresolved(key: string, result: LegacyMainSessionKeyMigrationResult): void {
-  recordedUnresolved = {
-    key,
-    outcomes: result.outcomes.filter(isLegacyMainSessionMigrationUnresolved),
-  };
-}
-
-/** Runs the automatic upgrade once per relevant runtime config before session access. */
-export function ensureLegacyDefaultMainSessionKeysMigrated(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<LegacyMainSessionKeyMigrationResult> {
-  const key = resolveCacheKey(cfg, env);
-  if (pendingMigration?.key === key) {
-    return pendingMigration.settled ? Promise.resolve({ outcomes: [] }) : pendingMigration.promise;
-  }
-  const promise = migrateLegacyDefaultMainSessionKeys(cfg, env)
-    .then((result) => {
-      recordUnresolved(key, result);
-      if (pendingMigration?.promise === promise) {
-        pendingMigration.settled = true;
-      }
-      return result;
-    })
-    .catch((error: unknown) => {
-      if (pendingMigration?.promise === promise) {
-        pendingMigration = undefined;
-      }
-      throw error;
-    });
-  pendingMigration = { key, promise, settled: false };
-  return promise;
-}
-
-export type UnresolvedLegacyMainSessionCompatRead = {
-  canonicalKey: string;
-  defaultAgentId: string;
-  entry: SessionEntry;
-  legacyKey: string;
-  storePath: string;
-};
-
-export function readUnresolvedLegacyMainSessionCompat(params: {
-  canonicalKey: string;
-  defaultAgentId: string;
-}): UnresolvedLegacyMainSessionCompatRead | undefined {
-  const outcomes = recordedUnresolved?.outcomes.filter(
-    (outcome) =>
-      outcome.canonicalKey === params.canonicalKey &&
-      outcome.defaultAgentId === params.defaultAgentId,
-  );
-  if (!outcomes?.length) {
-    return undefined;
-  }
-  // Compat reads exist only while the recorded migration state is unresolved.
-  // Remove this path once every recorded claim is resolved or explicitly discarded.
-  const candidates = outcomes.flatMap((outcome) => {
-    if (outcome.kind === "store-unreadable") {
-      return outcome.sourceStorePath === outcome.targetStorePath
-        ? outcome.legacyKeys.map((sessionKey) => ({
-            agentId: outcome.sourceAgentId,
-            sessionKey,
-            storePath: outcome.sourceStorePath,
-          }))
-        : [];
-    }
-    return outcome.aliases
-      .filter((item) => item.storePath === outcome.targetStorePath)
-      .map((item) => ({
-        agentId: item.agentId,
-        sessionKey: item.sessionKey,
-        storePath: item.storePath,
-      }));
-  });
-  const readable = candidates.flatMap((candidate) => {
-    try {
-      const found = loadExactSqliteSessionEntry(candidate);
-      return found ? [{ ...candidate, entry: found.entry }] : [];
-    } catch {
-      return [];
-    }
-  });
-  const selected = readable.toSorted(
-    (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
-  )[0];
-  return selected
-    ? {
-        canonicalKey: params.canonicalKey,
-        defaultAgentId: params.defaultAgentId,
-        entry: selected.entry,
-        legacyKey: selected.sessionKey,
-        storePath: selected.storePath,
-      }
-    : undefined;
-}
-
-export function resetLegacyDefaultMainSessionKeyMigrationForTest(): void {
-  pendingMigration = undefined;
-  recordedUnresolved = undefined;
 }

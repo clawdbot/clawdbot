@@ -1,10 +1,5 @@
 import { migrateOrphanedSessionKeys } from "../../infra/state-migrations.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import {
-  ensureLegacyDefaultMainSessionKeysMigrated,
-  formatLegacyMainSessionMigrationOutcome,
-  isLegacyMainSessionMigrationUnresolved,
-} from "./legacy-main-session-key-migration.js";
 import { sweepOrphanSessionStoreTemps } from "./store-temp-cleanup.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
@@ -24,13 +19,11 @@ export async function runSessionStartupMigration(params: {
   env?: NodeJS.ProcessEnv;
   log: SessionStartupMigrationLogger;
   deps?: {
-    ensureLegacyDefaultMainSessionKeysMigrated?: typeof ensureLegacyDefaultMainSessionKeysMigrated;
     migrateOrphanedSessionKeys?: typeof migrateOrphanedSessionKeys;
     resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
     sweepOrphanSessionStoreTemps?: typeof sweepOrphanSessionStoreTemps;
   };
 }): Promise<void> {
-  await runLegacyMainSessionKeyStartupMigration(params);
   const migrate = params.deps?.migrateOrphanedSessionKeys ?? migrateOrphanedSessionKeys;
   try {
     const result = await migrate({
@@ -69,47 +62,6 @@ export async function runSessionStartupMigration(params: {
   } catch (err) {
     params.log.warn(
       `session: stale session store temp cleanup failed during startup; continuing: ${String(err)}`,
-    );
-  }
-}
-
-/** Shared startup owner for the shipped agent:main:main compatibility migration. */
-export async function runLegacyMainSessionKeyStartupMigration(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  log: SessionStartupMigrationLogger;
-  deps?: {
-    ensureLegacyDefaultMainSessionKeysMigrated?: typeof ensureLegacyDefaultMainSessionKeysMigrated;
-  };
-}): Promise<void> {
-  const migrate =
-    params.deps?.ensureLegacyDefaultMainSessionKeysMigrated ??
-    ensureLegacyDefaultMainSessionKeysMigrated;
-  try {
-    const result = await migrate(params.cfg, params.env ?? process.env);
-    const resolved = result.outcomes.filter(
-      (outcome) => !isLegacyMainSessionMigrationUnresolved(outcome),
-    );
-    const unresolved = result.outcomes.filter(isLegacyMainSessionMigrationUnresolved);
-    const resolvedLines = resolved.flatMap((outcome) => {
-      const message = formatLegacyMainSessionMigrationOutcome(outcome);
-      return message ? [message] : [];
-    });
-    if (resolvedLines.length > 0) {
-      params.log.info(
-        `session: migrated legacy main-session keys:\n${resolvedLines.map((line) => `- ${line}`).join("\n")}`,
-      );
-    }
-    if (unresolved.length > 0) {
-      params.log.warn(
-        `session: unresolved legacy main-session key migration:\n${unresolved
-          .map((outcome) => `- ${formatLegacyMainSessionMigrationOutcome(outcome)}`)
-          .join("\n")}`,
-      );
-    }
-  } catch (error) {
-    params.log.warn(
-      `session: legacy main-session key migration failed during startup; continuing: ${String(error)}`,
     );
   }
 }

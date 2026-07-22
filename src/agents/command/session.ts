@@ -10,7 +10,6 @@ import {
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
-import { readUnresolvedLegacyMainSessionCompat } from "../../config/sessions/legacy-main-session-key-migration.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
@@ -30,6 +29,7 @@ import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  buildAgentMainSessionKey,
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
@@ -42,6 +42,8 @@ import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
 import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
+
+const LEGACY_HARDCODED_AGENT_ID = "main";
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
@@ -123,6 +125,80 @@ export function buildExplicitSessionIdSessionKey(params: {
   agentId?: string;
 }): string {
   return `agent:${normalizeAgentId(params.agentId)}:explicit:${params.sessionId.trim()}`;
+}
+
+function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
+  cfg: OpenClawConfig;
+  defaultAgentId: string;
+  mainKey: string;
+  sessionKey?: string;
+  sessionStore: Record<string, SessionEntry>;
+  storePath: string;
+  cloneOnWrite?: boolean;
+}): SessionKeyResolution | undefined {
+  const configuredDefaults = (opts.cfg.agents?.list ?? []).filter(
+    (entry) => entry.default === true,
+  );
+  if (
+    configuredDefaults.length !== 1 ||
+    normalizeAgentId(configuredDefaults[0]?.id) !== opts.defaultAgentId ||
+    opts.defaultAgentId === LEGACY_HARDCODED_AGENT_ID ||
+    !opts.sessionKey ||
+    listAgentIds(opts.cfg).includes(LEGACY_HARDCODED_AGENT_ID)
+  ) {
+    return undefined;
+  }
+  const defaultMainSessionKey = buildAgentMainSessionKey({
+    agentId: opts.defaultAgentId,
+    mainKey: opts.mainKey,
+  });
+  if (opts.sessionKey !== defaultMainSessionKey || opts.sessionStore[opts.sessionKey]) {
+    return undefined;
+  }
+
+  // Historical hardcoded writers stored agent:main:* for non-main defaults (observed prod state).
+  // Keep this remap or upgrades lose their main session.
+  // Doctor migrates it; replace this branch with a startup-owned migration in a follow-up PR.
+  const legacyStorePath = resolveStorePath(opts.cfg.session?.store, {
+    agentId: LEGACY_HARDCODED_AGENT_ID,
+  });
+  const legacyKeys = [
+    buildAgentMainSessionKey({
+      agentId: LEGACY_HARDCODED_AGENT_ID,
+      mainKey: opts.mainKey,
+    }),
+    buildAgentMainSessionKey({ agentId: LEGACY_HARDCODED_AGENT_ID, mainKey: "main" }),
+  ];
+  const findFreshest = (store: Record<string, SessionEntry>) =>
+    legacyKeys
+      .flatMap((key) => (store[key] ? [{ key, entry: store[key] }] : []))
+      .toSorted((left, right) => (right.entry?.updatedAt ?? 0) - (left.entry?.updatedAt ?? 0))[0];
+  if (legacyStorePath === opts.storePath) {
+    const legacy = findFreshest(opts.sessionStore);
+    if (legacy?.entry) {
+      const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
+      sessionStore[opts.sessionKey] = { ...legacy.entry };
+      return { sessionKey: opts.sessionKey, sessionStore, storePath: opts.storePath };
+    }
+    return undefined;
+  }
+  let legacyStore: Record<string, SessionEntry>;
+  try {
+    legacyStore = loadCommandSessionStore({
+      agentId: LEGACY_HARDCODED_AGENT_ID,
+      storePath: legacyStorePath,
+      ...(opts.cloneOnWrite ? { clone: false } : {}),
+    });
+  } catch {
+    return undefined;
+  }
+  const legacy = findFreshest(legacyStore);
+  if (legacy?.entry) {
+    const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
+    sessionStore[opts.sessionKey] = { ...legacy.entry };
+    return { sessionKey: opts.sessionKey, sessionStore, storePath: opts.storePath };
+  }
+  return undefined;
 }
 
 function collectSessionIdMatchesForRequest(opts: {
@@ -263,16 +339,22 @@ export function resolveSessionKeyForRequest(opts: {
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
-  if (sessionKey && storeAgentId === defaultAgentId && !sessionStore[sessionKey]) {
-    // Compat reads exist only while the recorded migration state is unresolved.
-    // Remove this exact-key bridge after the unresolved claim is resolved or discarded.
-    const compat = readUnresolvedLegacyMainSessionCompat({
-      canonicalKey: sessionKey,
-      defaultAgentId,
-    });
-    if (compat?.storePath === storePath) {
-      sessionStore[sessionKey] = structuredClone(compat.entry);
-    }
+
+  const legacyMainSession = resolveLegacyMainStoreSessionForDefaultAgent({
+    cfg: opts.cfg,
+    defaultAgentId,
+    mainKey,
+    sessionKey:
+      sessionKey ??
+      (!requestedSessionId
+        ? resolveExplicitAgentSessionKey({ cfg: opts.cfg, agentId: defaultAgentId })
+        : undefined),
+    sessionStore,
+    storePath,
+    cloneOnWrite: opts.clone === false,
+  });
+  if (legacyMainSession) {
+    return legacyMainSession;
   }
 
   // If a session id was provided, prefer to re-use its existing entry (by id) even when no key was

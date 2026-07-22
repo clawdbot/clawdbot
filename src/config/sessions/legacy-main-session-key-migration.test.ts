@@ -1,32 +1,25 @@
-import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
-  ensureLegacyDefaultMainSessionKeysMigrated,
   migrateLegacyDefaultMainSessionKeys,
-  readUnresolvedLegacyMainSessionCompat,
-  resetLegacyDefaultMainSessionKeyMigrationForTest,
+  type LegacyMainSessionKeyMigrationOutcome,
 } from "./legacy-main-session-key-migration.js";
 import { resolveStorePath } from "./paths.js";
 import {
-  appendTranscriptEvent,
   loadExactSessionEntry,
-  loadSessionEntry,
   loadTranscriptEvents,
   replaceTranscriptEvents,
 } from "./session-accessor.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { runSessionStartupMigration } from "./startup-migration.js";
 import type { SessionEntry } from "./types.js";
 
 const openDatabases = new Set<string>();
 
 afterEach(() => {
-  resetLegacyDefaultMainSessionKeyMigrationForTest();
   for (const databasePath of openDatabases) {
     closeOpenClawAgentDatabaseByPath(databasePath);
   }
@@ -76,67 +69,19 @@ async function seedSession(params: {
   );
 }
 
-async function runAutomaticStartup(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
-  const log = { info: vi.fn(), warn: vi.fn() };
-  await runSessionStartupMigration({
-    cfg,
-    env,
-    log,
-    deps: {
-      migrateOrphanedSessionKeys: async () => ({ changes: [], warnings: [] }),
-      resolveAllAgentSessionStoreTargetsSync: () => [],
-      sweepOrphanSessionStoreTemps: async () => 0,
-    },
-  });
-  return log;
-}
-
-async function expectCanonicalSession(params: {
-  agentId: string;
-  sessionId: string;
-  storePath: string;
-}): Promise<void> {
-  const sessionKey = `agent:${params.agentId}:main`;
-  expect(
-    loadSessionEntry({ agentId: params.agentId, storePath: params.storePath, sessionKey }),
-  ).toEqual(expect.objectContaining({ sessionId: params.sessionId }));
-  await expect(
-    loadTranscriptEvents({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey,
-      storePath: params.storePath,
-    }),
-  ).resolves.toHaveLength(2);
+function outcomeOfKind<TKind extends LegacyMainSessionKeyMigrationOutcome["kind"]>(
+  outcomes: LegacyMainSessionKeyMigrationOutcome[],
+  kind: TKind,
+): Extract<LegacyMainSessionKeyMigrationOutcome, { kind: TKind }> | undefined {
+  return outcomes.find(
+    (outcome): outcome is Extract<LegacyMainSessionKeyMigrationOutcome, { kind: TKind }> =>
+      outcome.kind === kind,
+  );
 }
 
 describe("legacy non-main default session key migration", () => {
-  it("preserves continuity through normal startup for a fixed shared store", async () => {
-    const { root, env } = createFixture("openclaw-main-key-shared-startup-");
-    const storePath = path.join(root, "sessions.sqlite");
-    const cfg = {
-      agents: { list: [{ id: "ops", default: true }] },
-      session: { store: storePath },
-    } satisfies OpenClawConfig;
-    await seedSession({
-      agentId: "ops",
-      sessionId: "shared-legacy",
-      sessionKey: "agent:main:main",
-      storePath,
-    });
-
-    const log = await runAutomaticStartup(cfg, env);
-
-    await expectCanonicalSession({ agentId: "ops", sessionId: "shared-legacy", storePath });
-    expect(
-      loadExactSessionEntry({ agentId: "ops", storePath, sessionKey: "agent:main:main" }),
-    ).toBeUndefined();
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("legacy main-session keys"));
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("preserves continuity through normal startup from the separate legacy main store", async () => {
-    const { env } = createFixture("openclaw-main-key-separate-startup-");
+  it("moves a separate legacy main store and its transcript to the configured default", async () => {
+    const { env } = createFixture("openclaw-main-key-separate-");
     const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
     const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
     const defaultStorePath = resolveStorePath(undefined, { agentId: "ops", env });
@@ -148,22 +93,24 @@ describe("legacy non-main default session key migration", () => {
       storePath: legacyStorePath,
     });
 
-    const log = await runAutomaticStartup(cfg, env);
+    const result = await migrateLegacyDefaultMainSessionKeys(cfg, env);
 
-    expect(log.warn.mock.calls).toEqual([]);
-    expect(log.info.mock.calls).toEqual([[expect.stringContaining("legacy main-session keys")]]);
+    expect(outcomeOfKind(result.outcomes, "migrated")).toBeDefined();
     expect(
       loadExactSessionEntry({
         agentId: "ops",
         storePath: defaultStorePath,
         sessionKey: "agent:ops:main",
+      })?.entry,
+    ).toMatchObject({ sessionId: "separate-legacy" });
+    await expect(
+      loadTranscriptEvents({
+        agentId: "ops",
+        sessionId: "separate-legacy",
+        sessionKey: "agent:ops:main",
+        storePath: defaultStorePath,
       }),
-    ).toBeDefined();
-    await expectCanonicalSession({
-      agentId: "ops",
-      sessionId: "separate-legacy",
-      storePath: defaultStorePath,
-    });
+    ).resolves.toHaveLength(2);
     expect(
       loadExactSessionEntry({
         agentId: "main",
@@ -171,87 +118,9 @@ describe("legacy non-main default session key migration", () => {
         sessionKey: "agent:main:main",
       }),
     ).toBeUndefined();
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("legacy main-session keys"));
-    expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("imports JSON-only legacy main history before the automatic key migration", async () => {
-    const { env } = createFixture("openclaw-main-key-json-startup-");
-    const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
-    const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
-    const defaultStorePath = resolveStorePath(undefined, { agentId: "ops", env });
-    const sessionId = "json-only-legacy";
-    const transcriptPath = path.join(path.dirname(legacyStorePath), `${sessionId}.jsonl`);
-    fs.mkdirSync(path.dirname(legacyStorePath), { recursive: true });
-    fs.writeFileSync(
-      legacyStorePath,
-      `${JSON.stringify({
-        "agent:main:main": {
-          sessionFile: transcriptPath,
-          sessionId,
-          updatedAt: 20,
-        },
-      })}\n`,
-    );
-    fs.writeFileSync(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", sessionId }),
-        JSON.stringify({ type: "custom", timestamp: "1970-01-01T00:00:00.020Z" }),
-      ].join("\n") + "\n",
-    );
-    trackStore(legacyStorePath, "main");
-    trackStore(defaultStorePath, "ops");
-
-    const log = await runAutomaticStartup(cfg, env);
-
-    await expectCanonicalSession({ agentId: "ops", sessionId, storePath: defaultStorePath });
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("legacy main-session keys"));
-    expect(log.warn).not.toHaveBeenCalled();
-  });
-
-  it("keeps an existing canonical collision and emits a diagnostic", async () => {
-    const { env } = createFixture("openclaw-main-key-collision-");
-    const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
-    const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
-    const defaultStorePath = resolveStorePath(undefined, { agentId: "ops", env });
-    await seedSession({
-      agentId: "main",
-      sessionId: "legacy",
-      sessionKey: "agent:main:main",
-      storePath: legacyStorePath,
-    });
-    await seedSession({
-      agentId: "ops",
-      sessionId: "canonical",
-      sessionKey: "agent:ops:main",
-      storePath: defaultStorePath,
-    });
-
-    const log = await runAutomaticStartup(cfg, env);
-
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("both claim main"));
-    await expectCanonicalSession({
-      agentId: "ops",
-      sessionId: "canonical",
-      storePath: defaultStorePath,
-    });
-    expect(
-      loadExactSessionEntry({
-        agentId: "main",
-        storePath: legacyStorePath,
-        sessionKey: "agent:main:main",
-      }),
-    ).toBeDefined();
-    expect(
-      readUnresolvedLegacyMainSessionCompat({
-        canonicalKey: "agent:ops:main",
-        defaultAgentId: "ops",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("removes a same-store alias when the canonical session identity is identical", async () => {
+  it("removes an identical same-store legacy alias", async () => {
     const { root, env } = createFixture("openclaw-main-key-identical-");
     const storePath = path.join(root, "sessions.sqlite");
     const cfg = {
@@ -273,9 +142,7 @@ describe("legacy non-main default session key migration", () => {
 
     const result = await migrateLegacyDefaultMainSessionKeys(cfg, env);
 
-    expect(result.outcomes).toEqual([
-      expect.objectContaining({ kind: "canonical-exists-identical", resolved: true }),
-    ]);
+    expect(outcomeOfKind(result.outcomes, "canonical-exists-identical")).toBeDefined();
     expect(
       loadExactSessionEntry({ agentId: "ops", storePath, sessionKey: "agent:main:main" }),
     ).toBeUndefined();
@@ -284,7 +151,44 @@ describe("legacy non-main default session key migration", () => {
     ).toBeDefined();
   });
 
-  it("records disagreeing aliases and selects only their exact compat keys", async () => {
+  it("keeps divergent canonical and legacy sessions unresolved", async () => {
+    const { env } = createFixture("openclaw-main-key-collision-");
+    const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
+    const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
+    const defaultStorePath = resolveStorePath(undefined, { agentId: "ops", env });
+    await seedSession({
+      agentId: "main",
+      sessionId: "legacy",
+      sessionKey: "agent:main:main",
+      storePath: legacyStorePath,
+    });
+    await seedSession({
+      agentId: "ops",
+      sessionId: "canonical",
+      sessionKey: "agent:ops:main",
+      storePath: defaultStorePath,
+    });
+
+    const result = await migrateLegacyDefaultMainSessionKeys(cfg, env);
+
+    expect(outcomeOfKind(result.outcomes, "canonical-exists-different")).toBeDefined();
+    expect(
+      loadExactSessionEntry({
+        agentId: "main",
+        storePath: legacyStorePath,
+        sessionKey: "agent:main:main",
+      }),
+    ).toBeDefined();
+    expect(
+      loadExactSessionEntry({
+        agentId: "ops",
+        storePath: defaultStorePath,
+        sessionKey: "agent:ops:main",
+      }),
+    ).toBeDefined();
+  });
+
+  it("keeps disagreeing same-store aliases unresolved", async () => {
     const { root, env } = createFixture("openclaw-main-key-aliases-");
     const storePath = path.join(root, "sessions.sqlite");
     const cfg = {
@@ -306,159 +210,15 @@ describe("legacy non-main default session key migration", () => {
       updatedAt: 20,
     });
 
-    const result = await ensureLegacyDefaultMainSessionKeysMigrated(cfg, env);
+    const result = await migrateLegacyDefaultMainSessionKeys(cfg, env);
 
-    expect(result.outcomes).toEqual([
-      expect.objectContaining({ kind: "aliases-disagree", resolved: false }),
-    ]);
+    expect(outcomeOfKind(result.outcomes, "aliases-disagree")).toBeDefined();
     expect(
-      readUnresolvedLegacyMainSessionCompat({
-        canonicalKey: "agent:ops:primary",
-        defaultAgentId: "ops",
-      }),
-    ).toMatchObject({ legacyKey: "agent:main:main", entry: { sessionId: "newer" } });
-    expect(
-      readUnresolvedLegacyMainSessionCompat({
-        canonicalKey: "agent:ops:unrelated",
-        defaultAgentId: "ops",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("materializes divergent cross-store history before keeping the claim unresolved", async () => {
-    const { env } = createFixture("openclaw-main-key-divergent-cross-store-");
-    const cfg = {
-      agents: { list: [{ id: "ops", default: true }] },
-      session: { mainKey: "primary" },
-    } satisfies OpenClawConfig;
-    const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
-    const defaultStorePath = resolveStorePath(undefined, { agentId: "ops", env });
-    await seedSession({
-      agentId: "main",
-      sessionId: "older",
-      sessionKey: "agent:main:primary",
-      storePath: legacyStorePath,
-      updatedAt: 10,
-    });
-    await seedSession({
-      agentId: "main",
-      sessionId: "newer",
-      sessionKey: "agent:main:main",
-      storePath: legacyStorePath,
-      updatedAt: 20,
-    });
-    trackStore(defaultStorePath, "ops");
-
-    const log = await runAutomaticStartup(cfg, env);
-    await expect(migrateLegacyDefaultMainSessionKeys(cfg, env)).resolves.toEqual({
-      outcomes: expect.arrayContaining([
-        expect.objectContaining({ kind: "aliases-disagree", resolved: false }),
-      ]),
-    });
-    expect(
-      loadExactSessionEntry({
-        agentId: "main",
-        sessionKey: "agent:main:primary",
-        storePath: legacyStorePath,
-      }),
+      loadExactSessionEntry({ agentId: "ops", storePath, sessionKey: "agent:main:primary" }),
     ).toBeDefined();
     expect(
-      loadExactSessionEntry({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        storePath: legacyStorePath,
-      }),
+      loadExactSessionEntry({ agentId: "ops", storePath, sessionKey: "agent:main:main" }),
     ).toBeDefined();
-    await appendTranscriptEvent(
-      {
-        agentId: "ops",
-        sessionId: "newer",
-        sessionKey: "agent:ops:primary",
-        storePath: defaultStorePath,
-      },
-      { type: "custom", timestamp: "1970-01-01T00:00:00.030Z" },
-    );
-
-    await expect(
-      loadTranscriptEvents({
-        agentId: "ops",
-        sessionId: "newer",
-        sessionKey: "agent:ops:primary",
-        storePath: defaultStorePath,
-      }),
-    ).resolves.toHaveLength(3);
-    await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        sessionId: "newer",
-        sessionKey: "agent:main:main",
-        storePath: legacyStorePath,
-      }),
-    ).resolves.toHaveLength(2);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("Legacy main aliases diverge"));
-    expect(
-      readUnresolvedLegacyMainSessionCompat({
-        canonicalKey: "agent:ops:primary",
-        defaultAgentId: "ops",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("records an unreadable store as an unresolved outcome", async () => {
-    const { root, env } = createFixture("openclaw-main-key-unreadable-");
-    const storePath = path.join(root, "sessions.sqlite");
-    fs.writeFileSync(storePath, "not sqlite");
-    const cfg = {
-      agents: { list: [{ id: "ops", default: true }] },
-      session: { store: storePath },
-    } satisfies OpenClawConfig;
-
-    const result = await ensureLegacyDefaultMainSessionKeysMigrated(cfg, env);
-
-    expect(result.outcomes).toEqual([
-      expect.objectContaining({
-        kind: "store-unreadable",
-        resolved: false,
-        sourceStorePath: storePath,
-      }),
-    ]);
-  });
-
-  it("keeps a cross-store cleanup failure unresolved for retry", async () => {
-    const { env } = createFixture("openclaw-main-key-cleanup-failure-");
-    const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
-    const legacyStorePath = resolveStorePath(undefined, { agentId: "main", env });
-    await seedSession({
-      agentId: "main",
-      sessionId: "locked-legacy",
-      sessionKey: "agent:main:main",
-      storePath: legacyStorePath,
-      entry: { modelSelectionLocked: true },
-    });
-
-    const result = await ensureLegacyDefaultMainSessionKeysMigrated(cfg, env);
-
-    expect(result.outcomes).toEqual([
-      expect.objectContaining({
-        kind: "store-unreadable",
-        resolved: false,
-        sourceStorePath: legacyStorePath,
-      }),
-    ]);
-  });
-
-  it("is cached after the first automatic check but doctor can retry directly", async () => {
-    const { env } = createFixture("openclaw-main-key-cache-");
-    const cfg = { agents: { list: [{ id: "ops", default: true }] } } satisfies OpenClawConfig;
-    await expect(ensureLegacyDefaultMainSessionKeysMigrated(cfg, env)).resolves.toEqual({
-      outcomes: [expect.objectContaining({ kind: "not-needed", resolved: true })],
-    });
-    await expect(ensureLegacyDefaultMainSessionKeysMigrated(cfg, env)).resolves.toEqual({
-      outcomes: [],
-    });
-    await expect(migrateLegacyDefaultMainSessionKeys(cfg, env)).resolves.toEqual({
-      outcomes: [expect.objectContaining({ kind: "not-needed", resolved: true })],
-    });
   });
 
   it("requires one explicit default before assigning legacy ownership", async () => {
