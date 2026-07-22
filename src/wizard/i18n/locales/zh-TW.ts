@@ -1,3 +1,5 @@
+import { catalogFamily } from "../catalog-family.js";
+import authoringCatalog from "../catalogs/generated/zh-TW.json" with { type: "json" };
 // Traditional Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
@@ -109,14 +111,7 @@ export const zh_TW = {
       serveHint: "面向你的 tailnet 裝置提供私有 HTTPS",
       warningTitle: "Tailscale 警告",
     },
-    completion: {
-      cacheFailed: "產生 completion 快取失敗。稍後執行 `{command}`。",
-      enable: "為 {cli} 啟用 {shell} shell completion？",
-      installed: "Shell completion 已安裝。{reloadHint}",
-      reloadPowerShell: "重新啟動 shell 或執行：{command}",
-      reloadShell: "重新啟動 shell 或執行：source {profile}",
-      title: "Shell completion",
-    },
+    completion: catalogFamily(authoringCatalog.messages, "wizard.completion"),
     migration: {
       apply: "現在套用這次遷移？",
       appliedTitle: "遷移已套用",

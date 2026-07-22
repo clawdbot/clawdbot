@@ -1,0 +1,115 @@
+name: Localization Catalog Refresh
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - localization/catalogs.json
+      - src/wizard/i18n/catalogs/en.json
+      - scripts/localization-catalogs.ts
+      - scripts/control-ui-i18n.ts
+      - packages/localization-core/src/catalog.ts
+      - .github/actions/create-generated-pr-tokens/action.yml
+      - .github/actions/publish-generated-pr/action.yml
+      - .github/workflows/localization-catalog-refresh.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: localization-catalog-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: >-
+      github.repository == 'openclaw/openclaw' &&
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve exact source commit
+        id: source
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha="$(timeout --signal=TERM --kill-after=10s 60s gh api "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)"
+          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unable to resolve the localization source to an exact commit." >&2
+            exit 1
+          fi
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout exact source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Require a trusted translation provider
+        env:
+          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" && -z "${OPENAI_API_KEY:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "Missing a repository translation-provider secret." >&2
+            exit 1
+          fi
+
+      - name: Refresh adopted catalog targets
+        env:
+          GITHUB_SHA: ${{ steps.source.outputs.sha }}
+          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: claude-opus-4-8
+          OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.6-sol' }}
+          OPENCLAW_CONTROL_UI_I18N_THINKING: low
+          OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
+        run: pnpm localization:catalogs:refresh
+
+      - name: Validate generated catalog targets
+        run: pnpm localization:catalogs:check
+
+      - name: Open or update generated catalog PR
+        uses: ./.github/actions/publish-generated-pr
+        with:
+          contents-client-id: Iv23liOECG0slfuhz093
+          contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
+          pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          base-branch: ${{ github.event.repository.default_branch }}
+          head-branch: automation/localization-catalog-refresh
+          commit-message: "chore(localization): refresh adopted catalogs"
+          pr-title: "chore(localization): refresh adopted catalogs"
+          auto-merge: "false"
+          generated-paths: src/wizard/i18n/catalogs/generated
+          invalidation-paths: |
+            localization/catalogs.json
+            src/wizard/i18n/catalogs/en.json
+            scripts/localization-catalogs.ts
+            scripts/control-ui-i18n.ts
+            packages/localization-core/src/catalog.ts
+            .github/workflows/localization-catalog-refresh.yml
+          pr-body: |
+            ## Summary
+
+            Refreshes owner-declared localization catalogs from an exact English source revision.
+
+            ## Safety
+
+            Generated output is validated for key, placeholder, protected-literal, and source-revision parity. Auto-merge is disabled; generated content does not approve itself.

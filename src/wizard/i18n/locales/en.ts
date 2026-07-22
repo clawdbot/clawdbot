@@ -1,3 +1,5 @@
+import { catalogFamily } from "../catalog-family.js";
+import authoringCatalog from "../catalogs/en.json" with { type: "json" };
 // English wizard translations provide default onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
@@ -110,14 +112,7 @@ export const en = {
       serveHint: "Private HTTPS for your tailnet (devices on Tailscale)",
       warningTitle: "Tailscale Warning",
     },
-    completion: {
-      cacheFailed: "Failed to generate completion cache. Run `{command}` later.",
-      enable: "Enable {shell} shell completion for {cli}?",
-      installed: "Shell completion installed. {reloadHint}",
-      reloadPowerShell: "Restart your shell or run: {command}",
-      reloadShell: "Restart your shell or run: source {profile}",
-      title: "Shell completion",
-    },
+    completion: catalogFamily(authoringCatalog.messages, "wizard.completion"),
     migration: {
       apply: "Apply this migration now?",
       appliedTitle: "Migration applied",
