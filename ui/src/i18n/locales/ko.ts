@@ -670,8 +670,8 @@ export const ko: TranslationMap = {
     openWorkboardCard: "Workboard 카드 열기",
     dashboardAvailable: "대시보드 사용 가능",
     approvalNeeded: "승인 필요",
-    queuedMessage: "보낼 메시지 {count}개가 대기 중입니다",
-    queuedMessages: "보낼 메시지 {count}개가 대기 중입니다",
+    queuedMessage: "{count}개 메시지가 전송 대기 중",
+    queuedMessages: "{count}개 메시지가 전송 대기 중",
     noSessions: "세션을 찾을 수 없습니다.",
     noActiveSessions: "활성 스레드가 없습니다.",
     noArchivedSessions: "보관된 세션이 없습니다.",
@@ -3679,6 +3679,16 @@ export const ko: TranslationMap = {
   },
   login: {
     subtitle: "Gateway 대시보드",
+    deviceAuthMigration: {
+      banner: "업데이트 후에도 이 브라우저에는 일회성 기기 승인이 필요합니다.",
+      action: "이 브라우저 보안 설정",
+      secureContextRequired:
+        "이 레거시 브라우저는 일시적으로 사용할 수 있습니다. HTTPS 또는 localhost로 다시 열어 기기 ID로 보안 설정하세요.",
+      pendingUnavailable:
+        "브라우저 페어링 요청을 아직 사용할 수 없습니다. 잠시 후 다시 시도하세요.",
+      loadFailed: "이 브라우저의 페어링 요청을 불러올 수 없습니다: {error}",
+      approvalFailed: "이 브라우저를 보안 설정할 수 없습니다: {error}",
+    },
     passwordPlaceholder: "선택 사항",
     showToken: "토큰 표시",
     hideToken: "토큰 숨기기",
@@ -4185,7 +4195,7 @@ export const ko: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "오프라인 — 메시지는 대기열에 저장되며 연결이 복구되면 전송됩니다.",
-      offlineQueuedHint: "오프라인 — {count}개 대기 중; 연결이 복구되면 메시지가 전송됩니다.",
+      offlineQueuedHint: "오프라인 — {count}개 대기 중, 연결이 복구되면 메시지가 전송됩니다.",
       preparingModel: "모델 준비 중...",
       responding: "{name}이(가) 응답하는 중...",
       sendingMessage: "메시지 전송 중...",

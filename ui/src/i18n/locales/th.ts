@@ -657,8 +657,8 @@ export const th: TranslationMap = {
     openWorkboardCard: "เปิดการ์ด Workboard",
     dashboardAvailable: "มีแดชบอร์ดพร้อมใช้งาน",
     approvalNeeded: "ต้องการการอนุมัติ",
-    queuedMessage: "มีข้อความ {count} รายการรอส่ง",
-    queuedMessages: "มีข้อความ {count} รายการรอส่ง",
+    queuedMessage: "{count} ข้อความอยู่ในคิวเพื่อส่ง",
+    queuedMessages: "{count} ข้อความอยู่ในคิวเพื่อส่ง",
     noSessions: "ไม่พบเซสชัน",
     noActiveSessions: "ไม่มีเธรดที่ใช้งานอยู่",
     noArchivedSessions: "ไม่มีเซสชันที่จัดเก็บ",
@@ -2980,7 +2980,7 @@ export const th: TranslationMap = {
     eventStale: "เซสชันหมดอายุ",
   },
   connection: {
-    queuedCount: "รอดำเนินการ {count} รายการ",
+    queuedCount: "{count} อยู่ในคิว",
     reconnecting: "กำลังเชื่อมต่อใหม่…",
     retryNow: "ลองอีกครั้งตอนนี้",
     access: {
@@ -3641,6 +3641,15 @@ export const th: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
+    deviceAuthMigration: {
+      banner: "เบราว์เซอร์นี้ยังต้องได้รับการอนุมัติอุปกรณ์แบบครั้งเดียวหลังจากการอัปเดต",
+      action: "รักษาความปลอดภัยเบราว์เซอร์นี้",
+      secureContextRequired:
+        "เบราว์เซอร์รุ่นเก่านี้ยังใช้งานได้ชั่วคราว เปิดใหม่ผ่าน HTTPS หรือ localhost เพื่อรักษาความปลอดภัยด้วยข้อมูลระบุตัวตนของอุปกรณ์",
+      pendingUnavailable: "คำขอจับคู่เบราว์เซอร์ยังไม่พร้อมใช้งาน ลองอีกครั้งในอีกสักครู่",
+      loadFailed: "ไม่สามารถโหลดคำขอจับคู่ของเบราว์เซอร์นี้ได้: {error}",
+      approvalFailed: "ไม่สามารถรักษาความปลอดภัยเบราว์เซอร์นี้ได้: {error}",
+    },
     passwordPlaceholder: "ไม่บังคับ",
     showToken: "แสดงโทเค็น",
     hideToken: "ซ่อนโทเค็น",
@@ -4132,7 +4141,7 @@ export const th: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "ออฟไลน์ — ข้อความจะถูกจัดคิวและส่งเมื่อการเชื่อมต่อกลับมา",
-      offlineQueuedHint: "ออฟไลน์ — มีข้อความรอส่ง {count} รายการ; ระบบจะส่งข้อความเมื่อเชื่อมต่ออีกครั้ง",
+      offlineQueuedHint: "ออฟไลน์ — {count} อยู่ในคิว ข้อความจะถูกส่งเมื่อการเชื่อมต่อกลับมา",
       preparingModel: "กำลังเตรียมโมเดล...",
       responding: "{name} กำลังตอบกลับ...",
       sendingMessage: "กำลังส่งข้อความ...",

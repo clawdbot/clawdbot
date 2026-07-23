@@ -3721,6 +3721,16 @@ export const pt_BR: TranslationMap = {
   },
   login: {
     subtitle: "Painel do Gateway",
+    deviceAuthMigration: {
+      banner: "Este navegador ainda precisa de aprovação única do dispositivo após a atualização.",
+      action: "Proteger este navegador",
+      secureContextRequired:
+        "Este navegador antigo permanece disponível temporariamente. Reabra-o via HTTPS ou localhost para protegê-lo com a identidade do dispositivo.",
+      pendingUnavailable:
+        "A solicitação de pareamento do navegador ainda não está disponível. Tente novamente em instantes.",
+      loadFailed: "Não foi possível carregar a solicitação de pareamento deste navegador: {error}",
+      approvalFailed: "Não foi possível proteger este navegador: {error}",
+    },
     passwordPlaceholder: "opcional",
     showToken: "Mostrar token",
     hideToken: "Ocultar token",
@@ -4232,7 +4242,7 @@ export const pt_BR: TranslationMap = {
       offlineHint:
         "Offline — as mensagens serão enfileiradas e enviadas quando a conexão retornar.",
       offlineQueuedHint:
-        "Offline — {count} na fila; as mensagens serão enviadas quando a conexão for restabelecida.",
+        "Offline — {count} na fila; as mensagens são enviadas quando a conexão retornar.",
       preparingModel: "Preparando modelo...",
       responding: "{name} está respondendo...",
       sendingMessage: "Enviando mensagem...",
