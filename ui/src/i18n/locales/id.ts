@@ -671,8 +671,8 @@ export const id: TranslationMap = {
     openWorkboardCard: "Buka kartu Workboard",
     dashboardAvailable: "Dasbor tersedia",
     approvalNeeded: "Perlu persetujuan",
-    queuedMessage: "{count} pesan mengantre untuk dikirim",
-    queuedMessages: "{count} pesan mengantre untuk dikirim",
+    queuedMessage: "{count} pesan dalam antrean untuk dikirim",
+    queuedMessages: "{count} pesan dalam antrean untuk dikirim",
     noSessions: "Tidak ada sesi yang ditemukan.",
     noActiveSessions: "Tidak ada thread aktif.",
     noArchivedSessions: "Tidak ada sesi yang diarsipkan.",
@@ -3031,7 +3031,7 @@ export const id: TranslationMap = {
     eventStale: "Sesi kedaluwarsa",
   },
   connection: {
-    queuedCount: "{count} mengantre",
+    queuedCount: "{count} dalam antrean",
     reconnecting: "Menghubungkan kembali…",
     retryNow: "Coba lagi sekarang",
     access: {
@@ -3701,6 +3701,15 @@ export const id: TranslationMap = {
   },
   login: {
     subtitle: "Dasbor Gateway",
+    deviceAuthMigration: {
+      banner: "Browser ini masih memerlukan persetujuan perangkat sekali pakai setelah pembaruan.",
+      action: "Amankan browser ini",
+      secureContextRequired:
+        "Browser lama ini tetap tersedia untuk sementara. Buka kembali melalui HTTPS atau localhost untuk mengamankannya dengan identitas perangkat.",
+      pendingUnavailable: "Permintaan pemasangan browser belum tersedia. Coba lagi sebentar.",
+      loadFailed: "Tidak dapat memuat permintaan pemasangan browser ini: {error}",
+      approvalFailed: "Tidak dapat mengamankan browser ini: {error}",
+    },
     passwordPlaceholder: "opsional",
     showToken: "Tampilkan token",
     hideToken: "Sembunyikan token",
@@ -4209,7 +4218,7 @@ export const id: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "Offline — pesan akan diantrekan dan dikirim saat koneksi kembali.",
-      offlineQueuedHint: "Offline — {count} mengantre; pesan akan dikirim saat koneksi kembali.",
+      offlineQueuedHint: "Offline — {count} dalam antrean; pesan dikirim saat koneksi kembali.",
       preparingModel: "Menyiapkan model...",
       responding: "{name} sedang merespons...",
       sendingMessage: "Mengirim pesan...",
