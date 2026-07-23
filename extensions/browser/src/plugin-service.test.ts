@@ -11,14 +11,19 @@ const SERVICE_CONTEXT = {
 };
 
 type StartLazyPluginServiceModuleParams = {
+  loadDefaultModule?: () => Promise<Record<string, unknown>>;
+  startExportNames?: string[];
   validateOverrideSpecifier?: (specifier: string) => string;
 };
 type StartLazyPluginServiceModuleParamsWithValidator = {
+  loadDefaultModule: () => Promise<Record<string, unknown>>;
+  startExportNames: string[];
   validateOverrideSpecifier: (specifier: string) => string;
 };
 
 const runtimeMocks = vi.hoisted(() => ({
   startLazyPluginServiceModule: vi.fn(async (_params: StartLazyPluginServiceModuleParams) => null),
+  startBrowserControlServiceFromConfig: vi.fn(async () => null),
   stopBrowserControlService: vi.fn(async () => undefined),
   createGatewayPageShareSink: vi.fn(() => ({ id: "gateway-page-share-sink" })),
   setPageShareSink: vi.fn(),
@@ -29,6 +34,7 @@ vi.mock("./sdk-node-runtime.js", () => ({
 }));
 
 vi.mock("./control-service.js", () => ({
+  startBrowserControlServiceFromConfig: runtimeMocks.startBrowserControlServiceFromConfig,
   stopBrowserControlService: runtimeMocks.stopBrowserControlService,
 }));
 
@@ -57,10 +63,18 @@ describe("createBrowserPluginService", () => {
       throw new Error("expected browser plugin service lazy loader call");
     }
     const [params] = call;
-    if (!params?.validateOverrideSpecifier) {
-      throw new Error("expected browser plugin service to pass validateOverrideSpecifier");
+    if (
+      !params?.validateOverrideSpecifier ||
+      !params.loadDefaultModule ||
+      !params.startExportNames
+    ) {
+      throw new Error("expected complete browser plugin service lazy loader params");
     }
-    return { validateOverrideSpecifier: params.validateOverrideSpecifier };
+    return {
+      loadDefaultModule: params.loadDefaultModule,
+      startExportNames: params.startExportNames,
+      validateOverrideSpecifier: params.validateOverrideSpecifier,
+    };
   }
 
   it("does not start the control server during gateway startup by default", async () => {
@@ -83,6 +97,25 @@ describe("createBrowserPluginService", () => {
     expect(runtimeMocks.setPageShareSink).toHaveBeenLastCalledWith(null);
   });
 
+  it("starts during gateway startup when an extension-driver profile is configured", async () => {
+    const service = createBrowserPluginService();
+
+    await service.start({
+      ...SERVICE_CONTEXT,
+      config: {
+        browser: {
+          profiles: {
+            chrome: { driver: "extension" },
+          },
+        },
+      },
+    });
+
+    expect(runtimeMocks.startLazyPluginServiceModule).toHaveBeenCalledOnce();
+    const module = await getStartParams().loadDefaultModule();
+    expect(module).toHaveProperty("startBrowserControlServiceFromConfig");
+  });
+
   for (const value of ["0", "", "disabled"]) {
     it(`does not start the control server for eager env value ${JSON.stringify(value)}`, async () => {
       vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
@@ -102,6 +135,18 @@ describe("createBrowserPluginService", () => {
 
     const params = getStartParams();
     expect(params.validateOverrideSpecifier(" ./server.js ")).toBe("./server.js");
+  });
+
+  it("preserves the standalone HTTP server for explicit eager startup", async () => {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
+    const service = createBrowserPluginService();
+
+    await service.start(SERVICE_CONTEXT);
+
+    const params = getStartParams();
+    const module = await params.loadDefaultModule();
+    expect(params.startExportNames[0]).toBe("startBrowserControlServerFromConfig");
+    expect(module).toHaveProperty("startBrowserControlServerFromConfig");
   });
 
   it("rejects unsafe browser override specifiers", async () => {
