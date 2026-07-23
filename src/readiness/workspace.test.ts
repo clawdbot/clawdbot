@@ -168,4 +168,25 @@ describe("createWorkspaceReadinessEvidenceResolver", () => {
     await expect(next).resolves.toMatchObject({ reason: "WorkspaceWritable" });
     expect(probe).toHaveBeenCalledTimes(2);
   });
+
+  it("bounds detached probes across repeated workspace generations", async () => {
+    const probe = vi.fn(() => new Promise<never>(() => {}));
+    const resolveEvidence = createWorkspaceReadinessEvidenceResolver({
+      cacheTtlMs: 0,
+      probeTimeoutMs: 5,
+      probe,
+    });
+
+    await expect(
+      resolveEvidence({ config: { agents: { defaults: { workspace: "/workspace-a" } } } }),
+    ).resolves.toMatchObject({ reason: "WorkspaceProbeTimedOut" });
+    await expect(
+      resolveEvidence({ config: { agents: { defaults: { workspace: "/workspace-b" } } } }),
+    ).resolves.toMatchObject({ reason: "WorkspaceProbeTimedOut" });
+    await expect(
+      resolveEvidence({ config: { agents: { defaults: { workspace: "/workspace-c" } } } }),
+    ).resolves.toMatchObject({ reason: "WorkspaceProbeTimedOut" });
+
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
 });
