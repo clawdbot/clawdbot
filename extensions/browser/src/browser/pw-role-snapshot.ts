@@ -65,6 +65,8 @@ export function getRoleSnapshotIdentityKeys<T extends RoleRef>(
   refs: Record<string, T>,
   mode: RoleSnapshotIdentityMode,
 ): Set<string> {
+  // Duplicate role+name elements are identified positionally by nth, so insertion can mark a
+  // sibling duplicate. This is acceptable: they are actor-indistinguishable without DOM backing.
   return new Set(
     Object.entries(refs).map(([ref, value]) =>
       mode === "aria" ? ref : `${value.role}\0${value.name ?? ""}\0${value.nth ?? 0}`,

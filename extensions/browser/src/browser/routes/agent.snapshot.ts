@@ -628,25 +628,23 @@ export function registerBrowserAgentSnapshotRoutes(
                   maxChars: plan.resolvedMaxChars,
                 }
               : undefined;
-          // Chrome MCP exposes only per-snapshot wrapped refs here, not a stable document id;
-          // URL is the residual fallback and same-URL reloads remain indistinguishable.
-          const fallbackDocumentIdentity = `url:${tab.url}`;
-          const createDeltaState = (documentIdentity: string) => {
-            const previousKeys = deltaFamily
-              ? getPreviousSnapshotKeys(ctx, {
-                  profile: profileCtx.profile.name,
-                  targetId: tab.targetId,
-                  documentIdentity,
-                  family: deltaFamily,
-                })
-              : undefined;
+          const createDeltaState = (documentIdentity?: string) => {
+            const previousKeys =
+              deltaFamily && documentIdentity
+                ? getPreviousSnapshotKeys(ctx, {
+                    profile: profileCtx.profile.name,
+                    targetId: tab.targetId,
+                    documentIdentity,
+                    family: deltaFamily,
+                  })
+                : undefined;
             return {
               delta:
                 deltaFamily && previousKeys !== undefined
                   ? { mode: deltaFamily.identity, previousKeys }
                   : undefined,
               record: (refs: RoleRefMap) => {
-                if (!deltaFamily) {
+                if (!deltaFamily || !documentIdentity) {
                   return;
                 }
                 recordSnapshotKeys(ctx, {
@@ -677,7 +675,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 nodes: flattenChromeMcpSnapshotToAriaNodes(snapshot, plan.limit),
               });
             }
-            const deltaState = createDeltaState(fallbackDocumentIdentity);
+            const deltaState = createDeltaState();
             const built = buildAiSnapshotFromChromeMcpSnapshot({
               root: snapshot,
               options: {
@@ -790,7 +788,7 @@ export function registerBrowserAgentSnapshotRoutes(
             }).catch(() => undefined);
           };
           const initialDocumentIdentity = await readDocumentIdentity();
-          const deltaState = createDeltaState(initialDocumentIdentity ?? fallbackDocumentIdentity);
+          const deltaState = createDeltaState(initialDocumentIdentity);
           const assertDocumentIdentityUnchanged = async () => {
             if (!initialDocumentIdentity) {
               return;
