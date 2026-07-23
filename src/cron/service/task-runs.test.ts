@@ -121,6 +121,7 @@ describe("cron task run terminal records", () => {
         const job = {
           id: "current-task-owner",
           name: "current task owner",
+          agentId: "   ",
           sessionKey: "agent:ops:main",
           sessionTarget: "current",
           wakeMode: "next-heartbeat",

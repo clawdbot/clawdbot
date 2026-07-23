@@ -74,6 +74,7 @@ function resolveCronTaskChildSessionKey(params: {
   job: CronJob;
   startedAt: number;
 }): string | undefined {
+  const explicitAgentId = params.job.agentId?.trim() || undefined;
   if (params.job.sessionTarget === "main") {
     return resolveMainSessionCronRunSessionKey(
       params.job,
@@ -86,7 +87,7 @@ function resolveCronTaskChildSessionKey(params: {
     return resolveCronAgentSessionKey({
       sessionKey: `cron:${params.job.id}`,
       agentId: requireCronAgentId(
-        params.job.agentId ?? scopedAgentId ?? resolveCurrentDefaultAgentId(params.state),
+        explicitAgentId ?? scopedAgentId ?? resolveCurrentDefaultAgentId(params.state),
       ),
     });
   }
@@ -101,7 +102,7 @@ function resolveCronTaskChildSessionKey(params: {
   }
   return resolveCronAgentSessionKey({
     sessionKey: `cron:${params.job.id}`,
-    agentId: requireCronAgentId(params.job.agentId ?? resolveCurrentDefaultAgentId(params.state)),
+    agentId: requireCronAgentId(explicitAgentId ?? resolveCurrentDefaultAgentId(params.state)),
   });
 }
 
