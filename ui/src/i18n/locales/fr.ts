@@ -687,8 +687,8 @@ export const fr: TranslationMap = {
     openWorkboardCard: "Ouvrir la carte Workboard",
     dashboardAvailable: "Tableau de bord disponible",
     approvalNeeded: "Approbation requise",
-    queuedMessage: "{count} message en attente d’envoi",
-    queuedMessages: "{count} messages en attente d’envoi",
+    queuedMessage: "{count} message en file d'attente à envoyer",
+    queuedMessages: "{count} messages en file d'attente à envoyer",
     noSessions: "Aucune session trouvée.",
     noActiveSessions: "Aucun fil actif.",
     noArchivedSessions: "Aucune session archivée.",
@@ -3094,7 +3094,7 @@ export const fr: TranslationMap = {
     eventStale: "Session inactive",
   },
   connection: {
-    queuedCount: "{count} en attente",
+    queuedCount: "{count} en file d'attente",
     reconnecting: "Reconnexion…",
     retryNow: "Réessayer maintenant",
     access: {
@@ -3774,6 +3774,17 @@ export const fr: TranslationMap = {
   },
   login: {
     subtitle: "Tableau de bord Gateway",
+    deviceAuthMigration: {
+      banner:
+        "Ce navigateur nécessite encore une approbation unique de l'appareil après la mise à jour.",
+      action: "Sécuriser ce navigateur",
+      secureContextRequired:
+        "Ce navigateur hérité reste disponible temporairement. Rouvrez-le via HTTPS ou localhost pour le sécuriser avec l'identité de l'appareil.",
+      pendingUnavailable:
+        "La demande d'appairage du navigateur n'est pas encore disponible. Réessayez dans un instant.",
+      loadFailed: "Impossible de charger la demande d'appairage de ce navigateur : {error}",
+      approvalFailed: "Impossible de sécuriser ce navigateur : {error}",
+    },
     passwordPlaceholder: "facultatif",
     showToken: "Afficher le jeton",
     hideToken: "Masquer le jeton",
@@ -4294,7 +4305,7 @@ export const fr: TranslationMap = {
       offlineHint:
         "Hors ligne — les messages seront mis en file d'attente et envoyés au retour de la connexion.",
       offlineQueuedHint:
-        "Hors ligne — {count} en attente ; les messages seront envoyés une fois la connexion rétablie.",
+        "Hors ligne — {count} en file d'attente ; les messages sont envoyés au retour de la connexion.",
       preparingModel: "Préparation du modèle...",
       responding: "{name} répond...",
       sendingMessage: "Envoi du message...",

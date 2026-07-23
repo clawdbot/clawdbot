@@ -668,8 +668,8 @@ export const hi: TranslationMap = {
     openWorkboardCard: "Workboard कार्ड खोलें",
     dashboardAvailable: "डैशबोर्ड उपलब्ध है",
     approvalNeeded: "अनुमोदन आवश्यक",
-    queuedMessage: "{count} संदेश भेजने के लिए कतार में है",
-    queuedMessages: "{count} संदेश भेजने के लिए कतार में हैं",
+    queuedMessage: "{count} संदेश भेजने के लिए कतारबद्ध",
+    queuedMessages: "{count} संदेश भेजने के लिए कतारबद्ध",
     noSessions: "कोई सत्र नहीं मिला।",
     noActiveSessions: "कोई सक्रिय थ्रेड नहीं।",
     noArchivedSessions: "कोई संग्रहित सत्र नहीं।",
@@ -2996,7 +2996,7 @@ export const hi: TranslationMap = {
     eventStale: "पुराना सत्र",
   },
   connection: {
-    queuedCount: "{count} कतार में",
+    queuedCount: "{count} कतारबद्ध",
     reconnecting: "फिर से कनेक्ट हो रहा है…",
     retryNow: "अभी फिर से प्रयास करें",
     access: {
@@ -3661,6 +3661,15 @@ export const hi: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
+    deviceAuthMigration: {
+      banner: "अपडेट के बाद इस ब्राउज़र को अभी भी एक बार डिवाइस अनुमोदन की आवश्यकता है।",
+      action: "इस ब्राउज़र को सुरक्षित करें",
+      secureContextRequired:
+        "यह लीगेसी ब्राउज़र अस्थायी रूप से उपलब्ध रहता है। इसे डिवाइस पहचान के साथ सुरक्षित करने के लिए HTTPS या localhost पर फिर से खोलें।",
+      pendingUnavailable: "ब्राउज़र पेयरिंग अनुरोध अभी उपलब्ध नहीं है। कुछ क्षण में पुनः प्रयास करें।",
+      loadFailed: "इस ब्राउज़र का पेयरिंग अनुरोध लोड नहीं किया जा सका: {error}",
+      approvalFailed: "इस ब्राउज़र को सुरक्षित नहीं किया जा सका: {error}",
+    },
     passwordPlaceholder: "वैकल्पिक",
     showToken: "टोकन दिखाएँ",
     hideToken: "टोकन छिपाएँ",
@@ -4161,7 +4170,7 @@ export const hi: TranslationMap = {
       placeholderWithAttachments: "संदेश जोड़ें या और छवियाँ पेस्ट करें...",
       placeholderDisconnected: "चैट शुरू करने के लिए gateway से कनेक्ट करें...",
       offlineHint: "ऑफ़लाइन — कनेक्शन वापस आने पर संदेश कतार में रखे जाएँगे और भेजे जाएँगे।",
-      offlineQueuedHint: "ऑफ़लाइन — {count} कतार में; कनेक्शन बहाल होने पर संदेश भेजे जाएंगे।",
+      offlineQueuedHint: "ऑफ़लाइन — {count} कतारबद्ध; कनेक्शन वापस आने पर संदेश भेजे जाते हैं।",
       preparingModel: "मॉडल तैयार हो रहा है...",
       responding: "{name} जवाब दे रहा है...",
       sendingMessage: "संदेश भेजा जा रहा है...",

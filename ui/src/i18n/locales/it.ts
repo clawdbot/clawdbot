@@ -3740,6 +3740,17 @@ export const it: TranslationMap = {
   },
   login: {
     subtitle: "Dashboard Gateway",
+    deviceAuthMigration: {
+      banner:
+        "Questo browser richiede ancora un'approvazione del dispositivo una tantum dopo l'aggiornamento.",
+      action: "Proteggi questo browser",
+      secureContextRequired:
+        "Questo browser legacy resta disponibile temporaneamente. Riaprilo tramite HTTPS o localhost per proteggerlo con l'identità del dispositivo.",
+      pendingUnavailable:
+        "La richiesta di associazione del browser non è ancora disponibile. Riprova tra poco.",
+      loadFailed: "Impossibile caricare la richiesta di associazione di questo browser: {error}",
+      approvalFailed: "Impossibile proteggere questo browser: {error}",
+    },
     passwordPlaceholder: "facoltativa",
     showToken: "Mostra token",
     hideToken: "Nascondi token",
@@ -4254,7 +4265,7 @@ export const it: TranslationMap = {
       offlineHint:
         "Offline — i messaggi verranno messi in coda e inviati al ritorno della connessione.",
       offlineQueuedHint:
-        "Offline — {count} in coda; i messaggi verranno inviati al ripristino della connessione.",
+        "Offline — {count} in coda; i messaggi vengono inviati al ritorno della connessione.",
       preparingModel: "Preparazione del modello...",
       responding: "{name} sta rispondendo...",
       sendingMessage: "Invio messaggio...",

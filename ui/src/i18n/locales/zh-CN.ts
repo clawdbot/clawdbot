@@ -645,8 +645,8 @@ export const zh_CN: TranslationMap = {
     openWorkboardCard: "打开 Workboard 卡片",
     dashboardAvailable: "仪表板可用",
     approvalNeeded: "需要审批",
-    queuedMessage: "{count} 条消息已加入发送队列",
-    queuedMessages: "{count} 条消息已加入发送队列",
+    queuedMessage: "{count} 条消息排队等待发送",
+    queuedMessages: "{count} 条消息排队等待发送",
     noSessions: "未找到会话。",
     noActiveSessions: "没有活动会话。",
     noArchivedSessions: "没有已归档会话。",
@@ -2954,7 +2954,7 @@ export const zh_CN: TranslationMap = {
     eventStale: "过期会话",
   },
   connection: {
-    queuedCount: "{count} 条已排队",
+    queuedCount: "{count} 条排队中",
     reconnecting: "正在重新连接…",
     retryNow: "立即重试",
     access: {
@@ -3613,6 +3613,15 @@ export const zh_CN: TranslationMap = {
   },
   login: {
     subtitle: "网关仪表盘",
+    deviceAuthMigration: {
+      banner: "更新后此浏览器仍需一次性设备批准。",
+      action: "保护此浏览器",
+      secureContextRequired:
+        "此旧版浏览器暂时仍可使用。请通过 HTTPS 或 localhost 重新打开，以使用设备身份对其进行保护。",
+      pendingUnavailable: "浏览器配对请求尚不可用。请稍后重试。",
+      loadFailed: "无法加载此浏览器的配对请求：{error}",
+      approvalFailed: "无法保护此浏览器：{error}",
+    },
     passwordPlaceholder: "可选",
     showToken: "显示令牌",
     hideToken: "隐藏令牌",
@@ -4099,7 +4108,7 @@ export const zh_CN: TranslationMap = {
       placeholderWithAttachments: "添加消息或继续粘贴图片...",
       placeholderDisconnected: "连接到 Gateway 后开始聊天...",
       offlineHint: "离线 — 消息将排队，连接恢复后发送。",
-      offlineQueuedHint: "离线 — {count} 条消息已排队；连接恢复后将发送。",
+      offlineQueuedHint: "离线 — {count} 条排队中；连接恢复后将发送消息。",
       preparingModel: "正在准备模型...",
       responding: "{name} 正在回复...",
       sendingMessage: "正在发送消息...",
