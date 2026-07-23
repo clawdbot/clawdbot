@@ -107,7 +107,9 @@ describe("createPluginReadinessResolver", () => {
 
     await resolve({ registry, config });
     settle?.();
-    await new Promise((resolveSettled) => setTimeout(resolveSettled, 0));
+    await new Promise((resolveSettled) => {
+      setTimeout(resolveSettled, 0);
+    });
     currentTime = 20;
     await resolve({ registry, config });
 
