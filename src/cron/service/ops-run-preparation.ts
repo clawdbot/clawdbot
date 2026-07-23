@@ -148,7 +148,6 @@ function admitsStreamSourceRun(
 async function skipInvalidPersistedManualRun(params: {
   state: CronServiceState;
   job: CronJob;
-  mode?: "due" | "force";
   runId?: string;
   terminalTracker?: ManualRunTerminalTracker;
   error: unknown;
@@ -200,7 +199,10 @@ async function skipInvalidPersistedManualRun(params: {
 
   recomputeNextRunsForMaintenance(params.state, {
     recomputeExpired: true,
-    ...(params.mode === "force"
+    // Operator runs never consume the paced slot (see applyJobResult), so an
+    // invalid-spec skip on an operator run must keep the pending expired slot
+    // rather than let maintenance advance past it.
+    ...(params.origin === "operator"
       ? {
           preserveExpiredPacedNextRunJobId: params.job.id,
         }
@@ -243,7 +245,7 @@ async function inspectManualRunPreflight(
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
-      await skipInvalidPersistedManualRun({ state, job, mode, runId, terminalTracker, error, origin });
+      await skipInvalidPersistedManualRun({ state, job, runId, terminalTracker, error, origin });
       return { ok: true, ran: false, reason: "invalid-spec" as const };
     }
     if (hasActiveCronRun(job)) {
@@ -327,7 +329,6 @@ export async function prepareManualRun(
       await skipInvalidPersistedManualRun({
         state,
         job,
-        mode,
         runId: opts?.runId,
         terminalTracker: opts?.terminalTracker,
         error,
@@ -465,7 +466,6 @@ export async function activatePreparedManualRun(
       await skipInvalidPersistedManualRun({
         state,
         job,
-        mode,
         runId: prepared.runId,
         terminalTracker: prepared.terminalTracker,
         error,
