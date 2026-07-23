@@ -420,7 +420,7 @@ async function writeNewBytes(filePath: string, value: Buffer): Promise<void> {
 async function readJsonIfPresent(
   rootPath: string,
   relativePath: string,
-): Promise<unknown | undefined> {
+): Promise<unknown> {
   try {
     return await readJson(rootPath, relativePath);
   } catch (error) {
