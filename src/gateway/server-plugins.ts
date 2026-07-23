@@ -496,15 +496,15 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   const scope = getPluginRuntimeGatewayRequestScope();
   const pluginId = scope?.pluginId?.trim();
   const trustedOfficial = canTrustedOfficialPluginRequestScopes(scope ?? {});
-  const receiptOwner = (
-    params.inputProvenance as { messageSentReceiptPluginId?: unknown } | undefined
-  )?.messageSentReceiptPluginId;
-  const configuredReceiptOwner =
+  const configuredAgentDispatch = Boolean(
     method === "agent" &&
+    pluginId &&
     scope?.pluginOrigin === "config" &&
     options?.scopes === undefined &&
-    receiptOwner === pluginId;
-  if (!trustedOfficial && !configuredReceiptOwner) {
+    getFallbackGatewayContext()?.getRuntimeConfig().plugins?.entries?.[pluginId]?.config
+      ?.gatewayAgentDispatchAllowed === true,
+  );
+  if (!trustedOfficial && !configuredAgentDispatch) {
     throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
   }
   const trustedRequestMessageId =

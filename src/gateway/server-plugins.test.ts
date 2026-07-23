@@ -1235,7 +1235,7 @@ describe("loadGatewayPlugins", () => {
     expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
-  test("lets a configured plugin start only an agent run whose required receipt it owns", async () => {
+  test("lets only an operator-authorized configured plugin start unscoped agent runs", async () => {
     loadOpenClawPlugins.mockReturnValue(
       addLoadedPlugin(createRegistry([]), {
         id: "configured-receipt-owner",
@@ -1243,9 +1243,18 @@ describe("loadGatewayPlugins", () => {
       }),
     );
     loadGatewayStartupPluginsForTest();
-    serverPluginsModule.setFallbackGatewayContext(
-      createTestContext("configured-receipt-owner-agent"),
-    );
+    serverPluginsModule.setFallbackGatewayContext({
+      ...createTestContext("configured-receipt-owner-agent"),
+      getRuntimeConfig: () => ({
+        plugins: {
+          entries: {
+            "configured-receipt-owner": {
+              config: { gatewayAgentDispatchAllowed: true },
+            },
+          },
+        },
+      }),
+    } as GatewayRequestContext);
     const runtime = runtimeModule.createPluginRuntime();
     const params = {
       message: "resume the admitted request",
@@ -1275,14 +1284,41 @@ describe("loadGatewayPlugins", () => {
         { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
         () =>
           runtime.gateway.request("agent", {
-            ...params,
+            message: "recover a declined Gmail turn",
+            sessionKey: "agent:main:gmail:thread:abc",
+            idempotencyKey: "decline-recovery-run",
+            deliver: false,
             inputProvenance: {
-              ...params.inputProvenance,
-              messageSentReceiptPluginId: "another-plugin",
+              kind: "inter_session",
+              sourceTool: "decline-recovery",
             },
           }),
       ),
+    ).resolves.toEqual({ runId: "run-1" });
+
+    serverPluginsModule.setFallbackGatewayContext({
+      ...createTestContext("configured-receipt-owner-denied"),
+      getRuntimeConfig: () => ({ plugins: { entries: {} } }),
+    } as GatewayRequestContext);
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("agent", params),
+      ),
     ).rejects.toThrow("bundled or trusted official plugins");
+
+    serverPluginsModule.setFallbackGatewayContext({
+      ...createTestContext("configured-receipt-owner-agent"),
+      getRuntimeConfig: () => ({
+        plugins: {
+          entries: {
+            "configured-receipt-owner": {
+              config: { gatewayAgentDispatchAllowed: true },
+            },
+          },
+        },
+      }),
+    } as GatewayRequestContext);
     await expect(
       gatewayRequestScopeModule.withPluginRuntimePluginScope(
         { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
@@ -1290,6 +1326,12 @@ describe("loadGatewayPlugins", () => {
           runtime.gateway.request("agent", params, {
             scopes: ["operator.admin"],
           }),
+      ),
+    ).rejects.toThrow("bundled or trusted official plugins");
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("health", {}),
       ),
     ).rejects.toThrow("bundled or trusted official plugins");
   });

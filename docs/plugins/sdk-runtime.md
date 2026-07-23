@@ -286,9 +286,13 @@ two-party event loops that do not go through the shared inbound reply runner.
     ```
 
     Requests use `operator.write` scope and do not grant admin scope. Calls from arbitrary external
-    plugins are rejected. Failed methods throw a `GatewayClientRequestError`, preserving structured
-    `details`, retry metadata, and the Gateway error code for recovery flows. Use `isAvailable()`
-    before choosing this path from tools that can also run in standalone agent processes.
+    plugins are rejected. An operator may explicitly allow one config-origin plugin to start
+    unscoped `agent` runs by setting
+    `plugins.entries.<id>.config.gatewayAgentDispatchAllowed: true`; that exception does not allow
+    other Gateway methods or caller-supplied scopes. Failed methods throw a
+    `GatewayClientRequestError`, preserving structured `details`, retry metadata, and the Gateway
+    error code for recovery flows. Use `isAvailable()` before choosing this path from tools that can
+    also run in standalone agent processes.
 
   </Accordion>
   <Accordion title="api.runtime.subagent">
