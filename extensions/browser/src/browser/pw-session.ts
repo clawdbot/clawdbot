@@ -41,6 +41,7 @@ export {
   createPageViaPlaywright,
   focusPageByTargetIdViaPlaywright,
   forceDisconnectPlaywrightForTarget,
+  getMainFrameDocumentIdentityViaPlaywright,
   getObservedBrowserStateViaPlaywright,
   listPagesViaPlaywright,
   refLocator,

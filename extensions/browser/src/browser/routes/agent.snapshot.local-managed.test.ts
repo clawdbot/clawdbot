@@ -20,6 +20,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 const cdpMocks = vi.hoisted(() => ({
+  getMainFrameDocumentIdentityViaCdp: vi.fn(async () => "cdp:test-document"),
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "private", depth: 0 }],
   })),
@@ -40,6 +41,7 @@ const navigationGuardMocks = vi.hoisted(() => ({
 
 vi.mock("../cdp.js", () => ({
   captureScreenshot: vi.fn(),
+  getMainFrameDocumentIdentityViaCdp: cdpMocks.getMainFrameDocumentIdentityViaCdp,
   snapshotAria: cdpMocks.snapshotAria,
   snapshotRoleViaCdp: cdpMocks.snapshotRoleViaCdp,
 }));
@@ -115,6 +117,7 @@ function getSnapshotGetHandler() {
 describe("local-managed browser snapshot routes", () => {
   beforeEach(() => {
     routeState.profileCtx.ensureTabAvailable.mockClear();
+    cdpMocks.getMainFrameDocumentIdentityViaCdp.mockReset().mockResolvedValue("cdp:test-document");
     cdpMocks.snapshotAria.mockClear();
     cdpMocks.snapshotRoleViaCdp.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
@@ -170,5 +173,21 @@ describe("local-managed browser snapshot routes", () => {
     expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
       expect.objectContaining({ maxChars: 123 }),
     );
+  });
+
+  it("rejects a snapshot when the main-frame loader changes during capture", async () => {
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValueOnce(undefined);
+    cdpMocks.getMainFrameDocumentIdentityViaCdp
+      .mockResolvedValueOnce("cdp:before")
+      .mockResolvedValueOnce("cdp:after");
+    const handler = getSnapshotGetHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai", interactive: "true" } }, response.res);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({
+      error: "Frame changed while its browser snapshot was being captured; retry.",
+    });
   });
 });

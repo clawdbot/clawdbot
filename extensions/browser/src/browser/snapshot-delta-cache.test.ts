@@ -13,19 +13,19 @@ function createContext(): BrowserRouteContext {
   return {} as BrowserRouteContext;
 }
 
-function cacheScope(url: string) {
-  return { profile: "openclaw", targetId: "tab-1", url, family };
+function cacheScope(documentIdentity: string) {
+  return { profile: "openclaw", targetId: "tab-1", documentIdentity, family };
 }
 
 describe("snapshot delta cache", () => {
-  it("starts an unmarked baseline after navigation", () => {
+  it("starts an unmarked baseline after a same-URL reload", () => {
     const ctx = createContext();
     recordSnapshotKeys(ctx, {
-      ...cacheScope("https://example.com/first"),
+      ...cacheScope("pw:document-1"),
       refs: { e1: { role: "button", name: "Save" } },
     });
 
-    const previousKeys = getPreviousSnapshotKeys(ctx, cacheScope("https://example.com/second"));
+    const previousKeys = getPreviousSnapshotKeys(ctx, cacheScope("pw:document-2"));
     const snapshot = annotateRoleSnapshotDelta({
       snapshot: '- button "Continue" [ref=e1]',
       refs: { e1: { role: "button", name: "Continue" } },
@@ -38,9 +38,9 @@ describe("snapshot delta cache", () => {
     expect(snapshot.newElements).toBeUndefined();
   });
 
-  it("marks elements added on a same-URL snapshot", () => {
+  it("marks elements added in the same document", () => {
     const ctx = createContext();
-    const scope = cacheScope("https://example.com/form");
+    const scope = cacheScope("pw:document-1");
     recordSnapshotKeys(ctx, {
       ...scope,
       refs: { e1: { role: "button", name: "Save" } },

@@ -197,7 +197,7 @@ extraction mode when a caller does not pass an explicit `snapshotFormat` or
 `mode`; see [Browser control API](/tools/browser-control) for per-call
 snapshot options.
 
-Repeated AI or role snapshots of the same tab, page URL, and option family mark
+Repeated AI or role snapshots of the same tab, document, and option family mark
 newly appeared ref-bearing elements with `[new]`. The first snapshot—and the
 first snapshot after navigation—establishes an unmarked baseline. Use
 `newElements` and the count footer to focus follow-up actions.

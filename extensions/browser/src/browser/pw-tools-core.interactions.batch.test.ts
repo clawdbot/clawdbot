@@ -7,6 +7,8 @@ let page: {
   isClosed: ReturnType<typeof vi.fn>;
   mainFrame: ReturnType<typeof vi.fn>;
   mouse: { click: ReturnType<typeof vi.fn> };
+  off: ReturnType<typeof vi.fn>;
+  on: ReturnType<typeof vi.fn>;
   url: ReturnType<typeof vi.fn>;
 } | null = null;
 let locator: Record<string, ReturnType<typeof vi.fn>> | null = null;
@@ -86,15 +88,30 @@ describe("batchViaPlaywright", () => {
     setPageClosed = (next) => {
       closed = next;
     };
+    const frameNavigatedHandlers = new Set<(frame: unknown) => void>();
+    const mainFrame = { url: () => currentUrl };
     setPageUrl = (next) => {
       currentUrl = next;
+      for (const handler of frameNavigatedHandlers) {
+        handler(mainFrame);
+      }
     };
     page = {
       evaluate: vi.fn(async () => {}),
       isClosed: vi.fn(() => closed),
       keyboard: { press: vi.fn(async () => {}) },
-      mainFrame: vi.fn(() => ({ url: () => currentUrl })),
+      mainFrame: vi.fn(() => mainFrame),
       mouse: { click: vi.fn(async () => {}) },
+      off: vi.fn((event: string, handler: (frame: unknown) => void) => {
+        if (event === "framenavigated") {
+          frameNavigatedHandlers.delete(handler);
+        }
+      }),
+      on: vi.fn((event: string, handler: (frame: unknown) => void) => {
+        if (event === "framenavigated") {
+          frameNavigatedHandlers.add(handler);
+        }
+      }),
       url: vi.fn(() => currentUrl),
     };
     locator = {
@@ -136,6 +153,64 @@ describe("batchViaPlaywright", () => {
     });
     expect(locator!.hover).not.toHaveBeenCalled();
     expect(page!.keyboard.press).not.toHaveBeenCalled();
+  });
+
+  it("aborts remaining actions after a same-URL reload", async () => {
+    locator!.click!.mockImplementationOnce(() => {
+      setPageUrl("https://example.com");
+    });
+
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      actions: [
+        { kind: "click", ref: "1" },
+        { kind: "hover", ref: "2" },
+      ],
+    });
+
+    expect(result).toEqual({
+      results: [{ ok: true, navigated: true, url: "https://example.com" }],
+      aborted: {
+        reason: "navigation",
+        afterAction: 1,
+        url: "https://example.com",
+        skipped: 1,
+      },
+    });
+    expect(locator!.hover).not.toHaveBeenCalled();
+    expect(page!.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+  });
+
+  it("aborts when a navigation commits after an action settles but before the next dispatch", async () => {
+    let closedChecks = 0;
+    page!.isClosed.mockImplementation(() => {
+      closedChecks += 1;
+      if (closedChecks === 2) {
+        setPageUrl("https://example.com/late");
+      }
+      return false;
+    });
+
+    const result = await batchViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      actions: [
+        { kind: "click", ref: "1" },
+        { kind: "hover", ref: "2" },
+      ],
+    });
+
+    expect(result).toEqual({
+      results: [{ ok: true, navigated: true, url: "https://example.com/late" }],
+      aborted: {
+        reason: "navigation",
+        afterAction: 1,
+        url: "https://example.com/late",
+        skipped: 1,
+      },
+    });
+    expect(locator!.hover).not.toHaveBeenCalled();
   });
 
   it("runs every action when the page URL stays unchanged", async () => {

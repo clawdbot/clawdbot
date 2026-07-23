@@ -328,7 +328,7 @@ OpenClaw supports two "snapshot" styles:
 - If Playwright is unavailable, ARIA snapshots can still be useful for
   inspection, but refs may not be actionable. Re-snapshot with `--format ai`
   or `--interactive` when you need action refs.
-- Consecutive AI and role snapshots for the same profile, tab, page URL, and
+- Consecutive AI and role snapshots for the same profile, tab, document, and
   option family append `[new]` to ref-bearing lines that were absent from the
   previous snapshot. Navigation starts a fresh unmarked baseline.
   The first snapshot establishes the baseline without markers; later responses
@@ -341,10 +341,10 @@ OpenClaw supports two "snapshot" styles:
 Ref behavior:
 
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
-- A batch stops after an action changes the page URL or closes the page. Its
-  `aborted` summary reports the action number and skipped count; take a fresh
-  snapshot before issuing dependent actions. Same-URL in-page state changes do
-  not trigger this guard.
+- A batch stops after a committed main-frame navigation—including a same-URL
+  reload—or after the page closes. Its `aborted` summary reports the action
+  number and skipped count; take a fresh snapshot before issuing dependent
+  actions, or use separate act calls when navigation is expected.
 - `/act` returns the current raw `targetId` after action-triggered replacement
   when it can prove the replacement tab. Keep using stable tab ids/labels for
   follow-up commands.

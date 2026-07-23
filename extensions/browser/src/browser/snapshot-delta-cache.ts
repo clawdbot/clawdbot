@@ -25,7 +25,7 @@ export type SnapshotDeltaFamily = {
 type SnapshotDeltaEntry = {
   profile: string;
   targetId: string;
-  url: string;
+  documentIdentity: string;
   keys: Set<string>;
 };
 
@@ -51,7 +51,12 @@ function cacheKey(params: {
 
 export function getPreviousSnapshotKeys(
   ctx: BrowserRouteContext,
-  params: { profile: string; targetId: string; url: string; family: SnapshotDeltaFamily },
+  params: {
+    profile: string;
+    targetId: string;
+    documentIdentity: string;
+    family: SnapshotDeltaFamily;
+  },
 ): ReadonlySet<string> | undefined {
   const cache = getCache(ctx);
   const key = cacheKey(params);
@@ -59,9 +64,9 @@ export function getPreviousSnapshotKeys(
   if (!entry) {
     return undefined;
   }
-  // Delta markers are same-document only. Navigation starts a fresh baseline
-  // so a new page is not reported as a tree full of newly appeared elements.
-  if (entry.url !== params.url) {
+  // Delta markers are same-document only. Navigation resets the baseline so a
+  // replacement document is not reported as a tree full of newly appeared elements.
+  if (entry.documentIdentity !== params.documentIdentity) {
     cache.delete(key);
     return undefined;
   }
@@ -75,7 +80,7 @@ export function recordSnapshotKeys(
   params: {
     profile: string;
     targetId: string;
-    url: string;
+    documentIdentity: string;
     family: SnapshotDeltaFamily;
     refs: RoleRefMap;
   },
@@ -86,7 +91,7 @@ export function recordSnapshotKeys(
   cache.set(key, {
     profile: params.profile,
     targetId: params.targetId,
-    url: params.url,
+    documentIdentity: params.documentIdentity,
     keys: getRoleSnapshotIdentityKeys(params.refs, params.family.identity),
   });
   while (cache.size > SNAPSHOT_DELTA_CACHE_MAX_ENTRIES) {

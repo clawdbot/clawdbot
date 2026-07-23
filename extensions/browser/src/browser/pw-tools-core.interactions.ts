@@ -2090,63 +2090,90 @@ export async function batchViaPlaywright(
     skipped === 0
       ? { results }
       : { results, aborted: { reason, afterAction, url, skipped } satisfies BrowserBatchAbort };
-  let lastUrl = page.mainFrame?.().url() ?? page.url();
-  for (const [index, action] of opts.actions.entries()) {
-    if (opts.signal?.aborted) {
-      throw opts.signal.reason ?? new Error("aborted");
+  let mainFrameNavigations = 0;
+  let navigationsAtLastDispatch = 0;
+  const currentMainFrameUrl = () => page.mainFrame?.().url() ?? page.url();
+  const onFrameNavigated = (frame: Frame) => {
+    if (frame === page.mainFrame?.()) {
+      mainFrameNavigations += 1;
     }
-    if (page.isClosed?.()) {
-      return finishAborted("closed", index, lastUrl, opts.actions.length - index);
+  };
+  const finishNavigation = (afterAction: number, skipped: number) => {
+    const url = currentMainFrameUrl();
+    const lastResult = results.at(-1);
+    if (lastResult) {
+      results[results.length - 1] = { ...lastResult, navigated: true, url };
     }
-    const beforeUrl = page.mainFrame?.().url() ?? page.url();
-    try {
-      await executeSingleAction(
-        action,
-        opts.cdpUrl,
-        opts.targetId,
-        opts.evaluateEnabled,
-        navigationPolicy,
-        depth,
-        opts.signal,
-      );
+    return finishAborted("navigation", afterAction, url, skipped);
+  };
+
+  // Snapshot refs are document-scoped, so any committed main-frame navigation
+  // ends the batch. A commit after the next action dispatch is inherently unguardable;
+  // callers that expect navigation can use separate act calls as the escape hatch.
+  page.on?.("framenavigated", onFrameNavigated);
+  try {
+    for (const [index, action] of opts.actions.entries()) {
+      if (opts.signal?.aborted) {
+        throw opts.signal.reason ?? new Error("aborted");
+      }
+      if (mainFrameNavigations > navigationsAtLastDispatch) {
+        return finishNavigation(index, opts.actions.length - index);
+      }
       if (page.isClosed?.()) {
+        return finishAborted("closed", index, currentMainFrameUrl(), opts.actions.length - index);
+      }
+      navigationsAtLastDispatch = mainFrameNavigations;
+      try {
+        await executeSingleAction(
+          action,
+          opts.cdpUrl,
+          opts.targetId,
+          opts.evaluateEnabled,
+          navigationPolicy,
+          depth,
+          opts.signal,
+        );
         results.push({ ok: true });
-        return finishAborted("closed", index + 1, beforeUrl, opts.actions.length - index - 1);
-      }
-      const afterUrl = page.mainFrame?.().url() ?? page.url();
-      lastUrl = afterUrl;
-      // Snapshot refs are document-scoped. A URL-changing navigation means later refs
-      // target another document; same-URL SPA state changes remain intentionally out of scope.
-      if (afterUrl !== beforeUrl) {
-        results.push({ ok: true, navigated: true, url: afterUrl });
-        return finishAborted("navigation", index + 1, afterUrl, opts.actions.length - index - 1);
-      }
-      results.push({ ok: true });
-    } catch (err) {
-      if (isBrowserObservedDialogBlockedError(err)) {
-        throw err;
-      }
-      if (isPolicyDenyNavigationError(err)) {
-        throw err;
-      }
-      const message = formatErrorMessage(err);
-      if (page.isClosed?.()) {
+        if (page.isClosed?.()) {
+          return finishAborted(
+            "closed",
+            index + 1,
+            currentMainFrameUrl(),
+            opts.actions.length - index - 1,
+          );
+        }
+        if (mainFrameNavigations > navigationsAtLastDispatch) {
+          return finishNavigation(index + 1, opts.actions.length - index - 1);
+        }
+      } catch (err) {
+        if (isBrowserObservedDialogBlockedError(err)) {
+          throw err;
+        }
+        if (isPolicyDenyNavigationError(err)) {
+          throw err;
+        }
+        const message = formatErrorMessage(err);
         results.push({ ok: false, error: message });
-        return finishAborted("closed", index + 1, beforeUrl, opts.actions.length - index - 1);
-      }
-      const afterUrl = page.mainFrame?.().url() ?? page.url();
-      lastUrl = afterUrl;
-      if (afterUrl !== beforeUrl) {
-        results.push({ ok: false, error: message, navigated: true, url: afterUrl });
-        return finishAborted("navigation", index + 1, afterUrl, opts.actions.length - index - 1);
-      }
-      results.push({ ok: false, error: message });
-      if (opts.stopOnError !== false) {
-        break;
+        if (page.isClosed?.()) {
+          return finishAborted(
+            "closed",
+            index + 1,
+            currentMainFrameUrl(),
+            opts.actions.length - index - 1,
+          );
+        }
+        if (mainFrameNavigations > navigationsAtLastDispatch) {
+          return finishNavigation(index + 1, opts.actions.length - index - 1);
+        }
+        if (opts.stopOnError !== false) {
+          break;
+        }
       }
     }
+    return { results };
+  } finally {
+    page.off?.("framenavigated", onFrameNavigated);
   }
-  return { results };
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
