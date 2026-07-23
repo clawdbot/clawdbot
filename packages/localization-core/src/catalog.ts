@@ -1,3 +1,4 @@
+import { IntlMessageFormat } from "intl-messageformat";
 import type { LocalizationContext } from "./context.js";
 import { OPENCLAW_LOCALE_REGISTRY_REVISION, type OpenClawLocale } from "./locale-registry.js";
 
@@ -9,20 +10,8 @@ export type LocalizedMessage = {
   fallback: string;
 };
 
-export type PluralCategory = "zero" | "one" | "two" | "few" | "many" | "other";
-
-export type CatalogMessage =
-  | string
-  | {
-      kind: "plural";
-      param: string;
-      cases: Partial<Record<PluralCategory, string>> & { other: string };
-    }
-  | {
-      kind: "select";
-      param: string;
-      cases: Readonly<Record<string, string>> & { other: string };
-    };
+// ICU MessageFormat text constrained by validateCatalog to OpenClaw's bounded v1 profile.
+export type CatalogMessage = string;
 
 export type LocalizationCatalog = Readonly<Record<string, CatalogMessage>>;
 
@@ -44,12 +33,31 @@ export type CatalogValidationIssue = {
   detail: string;
 };
 
+type IcuAstElement = {
+  type: number;
+  value?: string;
+  options?: Readonly<Record<string, { value: readonly IcuAstElement[] }>>;
+  pluralType?: string;
+};
+
+type ParsedMessage = {
+  kind: "string" | "plural" | "select";
+  param?: string;
+  cases: Readonly<Record<string, readonly string[]>>;
+  parameters: readonly string[];
+};
+
 const MESSAGE_KEY_PATTERN = /^[a-z][a-z0-9-]*(?:\.[A-Za-z0-9][A-Za-z0-9_-]*)+$/u;
 const PLACEHOLDER_PATTERN = /\{([A-Za-z0-9_]+)\}/gu;
 const FORBIDDEN_BIDI_CONTROL_PATTERN =
   /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u206a-\u206f]/u;
-const PLURAL_CATEGORIES = new Set<PluralCategory>(["zero", "one", "two", "few", "many", "other"]);
-const PLURAL_RULES = new Map<OpenClawLocale, Intl.PluralRules>();
+const PLURAL_CATEGORIES = new Set(["zero", "one", "two", "few", "many", "other"]);
+const ICU_LITERAL = 0;
+const ICU_ARGUMENT = 1;
+const ICU_SELECT = 5;
+const ICU_PLURAL = 6;
+const FORMATTER_CACHE_LIMIT = 512;
+const FORMATTER_CACHE = new Map<string, IntlMessageFormat>();
 
 export function createCatalogSnapshot(params: {
   catalogRevision: string;
@@ -59,7 +67,7 @@ export function createCatalogSnapshot(params: {
   const catalogs = Object.fromEntries(
     Object.entries(params.catalogs).map(([locale, catalog]) => [
       locale,
-      freezeCatalog(catalog ?? {}),
+      Object.freeze({ ...(catalog ?? {}) }),
     ]),
   ) as Partial<Record<OpenClawLocale, LocalizationCatalog>>;
 
@@ -80,7 +88,7 @@ export function renderLocalizedMessage(
   for (const locale of locales) {
     const entry = snapshot.catalogs[locale]?.[message.key];
     if (entry !== undefined) {
-      return renderCatalogEntry(entry, locale, message.params, fallback);
+      return formatMessage(entry, locale, message.params) ?? fallback;
     }
   }
   return fallback;
@@ -90,6 +98,10 @@ export function interpolateMessage(
   value: string,
   params?: Readonly<Record<string, MessageParam>>,
 ): string {
+  const formatted = formatMessage(value, "en", params);
+  if (formatted !== undefined) {
+    return formatted;
+  }
   if (!params) {
     return value;
   }
@@ -137,54 +149,29 @@ export function validateCatalog(params: {
   return Object.freeze(issues.map((issue) => Object.freeze(issue)));
 }
 
-function renderCatalogEntry(
-  entry: CatalogMessage,
-  locale: OpenClawLocale,
-  params: Readonly<Record<string, MessageParam>> | undefined,
-  fallback: string,
-): string {
-  if (typeof entry === "string") {
-    return interpolateMessage(entry, params);
-  }
-
-  const selector = params?.[entry.param];
-  if (entry.kind === "plural") {
-    if (typeof selector !== "number" || !Number.isFinite(selector)) {
-      return fallback;
+function formatMessage(
+  message: string,
+  locale: string,
+  params?: Readonly<Record<string, MessageParam>>,
+): string | undefined {
+  try {
+    const cacheKey = `${locale}\u0000${message}`;
+    let formatter = FORMATTER_CACHE.get(cacheKey);
+    if (!formatter) {
+      formatter = new IntlMessageFormat(message, locale, undefined, { ignoreTag: true });
+      if (FORMATTER_CACHE.size >= FORMATTER_CACHE_LIMIT) {
+        const oldestKey = FORMATTER_CACHE.keys().next().value;
+        if (oldestKey !== undefined) {
+          FORMATTER_CACHE.delete(oldestKey);
+        }
+      }
+      FORMATTER_CACHE.set(cacheKey, formatter);
     }
-    const category = getPluralRules(locale).select(selector) as PluralCategory;
-    const template = entry.cases[category] ?? entry.cases.other;
-    return typeof template === "string" ? interpolateMessage(template, params) : fallback;
+    const result = formatter.format(params);
+    return typeof result === "string" ? result : undefined;
+  } catch {
+    return undefined;
   }
-
-  function getPluralRules(localeId: OpenClawLocale): Intl.PluralRules {
-    const cached = PLURAL_RULES.get(localeId);
-    if (cached) {
-      return cached;
-    }
-    const rules = new Intl.PluralRules(localeId);
-    PLURAL_RULES.set(localeId, rules);
-    return rules;
-  }
-
-  if (typeof selector !== "string" && typeof selector !== "boolean") {
-    return fallback;
-  }
-  const template = entry.cases[String(selector)] ?? entry.cases.other;
-  return typeof template === "string" ? interpolateMessage(template, params) : fallback;
-}
-
-function freezeCatalog(catalog: LocalizationCatalog): LocalizationCatalog {
-  return Object.freeze(
-    Object.fromEntries(
-      Object.entries(catalog).map(([key, entry]) => [
-        key,
-        typeof entry === "string"
-          ? entry
-          : Object.freeze({ ...entry, cases: Object.freeze({ ...entry.cases }) }),
-      ]),
-    ),
-  );
 }
 
 function validateEntry(
@@ -193,18 +180,21 @@ function validateEntry(
   candidate: CatalogMessage,
   issues: CatalogValidationIssue[],
 ): void {
-  if (!hasValidSelectorShape(source) || !hasValidSelectorShape(candidate)) {
+  const sourceParsed = parseBoundedMessage(source);
+  const candidateParsed = parseBoundedMessage(candidate);
+  if (typeof sourceParsed === "string" || typeof candidateParsed === "string") {
     issues.push({
       code: "invalid-selector",
       key,
-      detail: "Plural and select entries require a string param and string other case.",
+      detail:
+        typeof sourceParsed === "string"
+          ? `Source message is outside the bounded ICU profile: ${sourceParsed}`
+          : `Candidate message is outside the bounded ICU profile: ${candidateParsed}`,
     });
     return;
   }
 
-  const sourceCases = entryCases(source);
-  const candidateCases = entryCases(candidate);
-  if (sourceCases.kind !== candidateCases.kind || sourceCases.param !== candidateCases.param) {
+  if (sourceParsed.kind !== candidateParsed.kind || sourceParsed.param !== candidateParsed.param) {
     issues.push({
       code: "invalid-selector",
       key,
@@ -214,9 +204,9 @@ function validateEntry(
   }
 
   if (
-    sourceCases.kind === "select" &&
-    Object.keys(sourceCases.values).toSorted().join(",") !==
-      Object.keys(candidateCases.values).toSorted().join(",")
+    sourceParsed.kind === "select" &&
+    Object.keys(sourceParsed.cases).toSorted().join(",") !==
+      Object.keys(candidateParsed.cases).toSorted().join(",")
   ) {
     issues.push({
       code: "invalid-selector",
@@ -225,8 +215,8 @@ function validateEntry(
     });
   }
 
-  for (const category of Object.keys(candidateCases.values)) {
-    if (candidateCases.kind === "plural" && !PLURAL_CATEGORIES.has(category as PluralCategory)) {
+  for (const category of Object.keys(candidateParsed.cases)) {
+    if (candidateParsed.kind === "plural" && !PLURAL_CATEGORIES.has(category)) {
       issues.push({
         code: "invalid-selector",
         key,
@@ -235,34 +225,46 @@ function validateEntry(
     }
   }
 
-  const expectedPlaceholders = placeholderSignature(Object.values(sourceCases.values)[0] ?? "");
-  for (const [caseName, value] of Object.entries(sourceCases.values)) {
-    if (placeholderSignature(value) !== expectedPlaceholders) {
-      issues.push({
-        code: "placeholder-mismatch",
-        key,
-        detail: `Source case ${caseName} does not use the shared placeholder set.`,
-      });
-    }
+  const expectedParameters = sourceParsed.parameters.join(",");
+  if (candidateParsed.parameters.join(",") !== expectedParameters) {
+    issues.push({
+      code: "placeholder-mismatch",
+      key,
+      detail: `Expected parameters ${expectedParameters || "(none)"}; received ${
+        candidateParsed.parameters.join(",") || "(none)"
+      }.`,
+    });
   }
-  for (const [caseName, value] of Object.entries(candidateCases.values)) {
-    const candidatePlaceholders = placeholderSignature(value);
-    if (candidatePlaceholders !== expectedPlaceholders) {
-      issues.push({
-        code: "placeholder-mismatch",
-        key,
-        detail: `Case ${caseName} expected placeholders ${
-          expectedPlaceholders || "(none)"
-        }; received ${candidatePlaceholders || "(none)"}.`,
-      });
+
+  if (sourceParsed.kind !== "string") {
+    const expectedCaseParameters = Object.values(sourceParsed.cases)[0]?.join(",") ?? "";
+    for (const [caseName, value] of Object.entries(sourceParsed.cases)) {
+      if (value.join(",") !== expectedCaseParameters) {
+        issues.push({
+          code: "placeholder-mismatch",
+          key,
+          detail: `Source case ${caseName} does not use the shared placeholder set.`,
+        });
+      }
+    }
+    for (const [caseName, value] of Object.entries(candidateParsed.cases)) {
+      if (value.join(",") !== expectedCaseParameters) {
+        issues.push({
+          code: "placeholder-mismatch",
+          key,
+          detail: `Case ${caseName} expected placeholders ${
+            expectedCaseParameters || "(none)"
+          }; received ${value.join(",") || "(none)"}.`,
+        });
+      }
     }
   }
 
-  for (const [catalogRole, values] of [
-    ["Source", sourceCases.values],
-    ["Candidate", candidateCases.values],
+  for (const [catalogRole, value] of [
+    ["Source", source],
+    ["Candidate", candidate],
   ] as const) {
-    if (Object.values(values).some((value) => FORBIDDEN_BIDI_CONTROL_PATTERN.test(value))) {
+    if (FORBIDDEN_BIDI_CONTROL_PATTERN.test(value)) {
       issues.push({
         code: "forbidden-bidi-control",
         key,
@@ -272,43 +274,73 @@ function validateEntry(
   }
 }
 
+function parseBoundedMessage(message: string): ParsedMessage | string {
+  let ast: readonly IcuAstElement[];
+  try {
+    ast = new IntlMessageFormat(message, "en", undefined, {
+      ignoreTag: true,
+    }).getAst() as unknown as readonly IcuAstElement[];
+  } catch (error) {
+    return error instanceof Error ? error.message : "invalid ICU message";
+  }
+
+  const selectors = ast.filter(
+    (element) => element.type === ICU_SELECT || element.type === ICU_PLURAL,
+  );
+  if (selectors.length > 1) {
+    return "only one top-level plural or select is allowed";
+  }
+  if (ast.some((element) => !isSimpleElement(element) && !selectors.includes(element))) {
+    return "number, date, time, pound, tag, and nested formatting are not supported";
+  }
+
+  const topLevelArguments = argumentNames(ast);
+  const selector = selectors[0];
+  if (!selector) {
+    return {
+      kind: "string",
+      cases: { other: topLevelArguments },
+      parameters: topLevelArguments,
+    };
+  }
+  if (!selector.value || !selector.options?.other) {
+    return "plural and select messages require a parameter and an other case";
+  }
+  if (selector.type === ICU_PLURAL && selector.pluralType !== "cardinal") {
+    return "ordinal plurals are not supported";
+  }
+
+  const cases: Record<string, readonly string[]> = {};
+  for (const [caseName, option] of Object.entries(selector.options)) {
+    if (option.value.some((element) => !isSimpleElement(element))) {
+      return "nested or rich formatting is not supported inside selector cases";
+    }
+    cases[caseName] = argumentNames(option.value);
+  }
+  const parameters = [...new Set([...topLevelArguments, selector.value])].toSorted();
+  return {
+    kind: selector.type === ICU_PLURAL ? "plural" : "select",
+    param: selector.value,
+    cases,
+    parameters,
+  };
+}
+
+function isSimpleElement(element: IcuAstElement): boolean {
+  return element.type === ICU_LITERAL || element.type === ICU_ARGUMENT;
+}
+
+function argumentNames(elements: readonly IcuAstElement[]): readonly string[] {
+  return elements
+    .filter((element) => element.type === ICU_ARGUMENT && typeof element.value === "string")
+    .map((element) => element.value as string)
+    .toSorted();
+}
+
 function isMessageParam(value: unknown): value is MessageParam {
   return (
     typeof value === "string" ||
     typeof value === "boolean" ||
     (typeof value === "number" && Number.isFinite(value))
   );
-}
-
-function entryCases(entry: CatalogMessage): {
-  kind: "string" | "plural" | "select";
-  param?: string;
-  values: Readonly<Record<string, string>>;
-} {
-  if (typeof entry === "string") {
-    return { kind: "string", values: { other: entry } };
-  }
-  return { kind: entry.kind, param: entry.param, values: entry.cases };
-}
-
-function hasValidSelectorShape(entry: CatalogMessage): boolean {
-  if (typeof entry === "string") {
-    return true;
-  }
-  return (
-    typeof entry.param === "string" &&
-    entry.param.length > 0 &&
-    typeof entry.cases === "object" &&
-    entry.cases !== null &&
-    typeof entry.cases.other === "string" &&
-    Object.values(entry.cases).every((value) => typeof value === "string")
-  );
-}
-
-function placeholderSignature(value: string): string {
-  return extractPlaceholders(value).join(",");
-}
-
-function extractPlaceholders(value: string): string[] {
-  return [...value.matchAll(PLACEHOLDER_PATTERN)].map((match) => match[1] ?? "").toSorted();
 }

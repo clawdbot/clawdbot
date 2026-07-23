@@ -4,23 +4,14 @@ import {
   interpolateMessage,
   renderLocalizedMessage,
   validateCatalog,
-  type CatalogMessage,
   type LocalizationCatalog,
 } from "./catalog.js";
 import { createLocalizationContext } from "./context.js";
 
 describe("localization catalogs", () => {
   const english: LocalizationCatalog = {
-    "core.files.count": {
-      kind: "plural",
-      param: "count",
-      cases: { one: "{count} file", other: "{count} files" },
-    },
-    "core.state.label": {
-      kind: "select",
-      param: "state",
-      cases: { ready: "Ready for {name}", other: "Waiting for {name}" },
-    },
+    "core.files.count": "{count, plural, one {{count} file} other {{count} files}}",
+    "core.state.label": "{state, select, ready {Ready for {name}} other {Waiting for {name}}}",
   };
 
   it.each([
@@ -34,35 +25,16 @@ describe("localization catalogs", () => {
       catalogs: {
         en: english,
         ru: {
-          "core.files.count": {
-            kind: "plural",
-            param: "count",
-            cases: {
-              one: "{count} файл",
-              few: "{count} файла",
-              many: "{count} файлов",
-              other: "{count} файла",
-            },
-          },
+          "core.files.count":
+            "{count, plural, one {{count} файл} few {{count} файла} many {{count} файлов} other {{count} файла}}",
         },
         pl: {
-          "core.files.count": {
-            kind: "plural",
-            param: "count",
-            cases: {
-              one: "{count} plik",
-              few: "{count} pliki",
-              many: "{count} plików",
-              other: "{count} pliku",
-            },
-          },
+          "core.files.count":
+            "{count, plural, one {{count} plik} few {{count} pliki} many {{count} plików} other {{count} pliku}}",
         },
         ar: {
-          "core.files.count": {
-            kind: "plural",
-            param: "count",
-            cases: { one: "{count} ملف", two: "{count} ملفان", other: "{count} ملفات" },
-          },
+          "core.files.count":
+            "{count, plural, one {{count} ملف} two {{count} ملفان} other {{count} ملفات}}",
         },
       },
     });
@@ -78,6 +50,22 @@ describe("localization catalogs", () => {
         fallback: "Files: {count}",
       }),
     ).toBe(expected);
+  });
+
+  it("renders select messages through ICU MessageFormat", () => {
+    const snapshot = createCatalogSnapshot({ catalogRevision: "test", catalogs: { en: english } });
+    const context = createLocalizationContext({
+      locale: "en",
+      source: "english-default",
+      audience: "user",
+    });
+    expect(
+      renderLocalizedMessage(snapshot, context, {
+        key: "core.state.label",
+        params: { state: "ready", name: "Patrick" },
+        fallback: "State for {name}",
+      }),
+    ).toBe("Ready for Patrick");
   });
 
   it("uses a whole-message fallback for unknown keys", () => {
@@ -177,17 +165,12 @@ describe("localization catalogs", () => {
   });
 
   it("rejects missing selector fallback cases", () => {
-    const missingOtherCase = {
-      kind: "plural",
-      param: "count",
-      cases: {},
-    } as unknown as CatalogMessage;
     expect(
       validateCatalog({
         namespace: "core",
         source: english,
         candidate: {
-          "core.files.count": missingOtherCase,
+          "core.files.count": "{count, plural, one {{count} Datei}}",
           "core.state.label": english["core.state.label"]!,
         },
       }).map((issue) => issue.code),
@@ -199,24 +182,12 @@ describe("localization catalogs", () => {
       validateCatalog({
         namespace: "core",
         source: {
-          "core.files.count": {
-            kind: "plural",
-            param: "count",
-            cases: {
-              one: "{count} file for {name}",
-              other: "{count} files for {name}",
-            },
-          },
+          "core.files.count":
+            "{count, plural, one {{count} file for {name}} other {{count} files for {name}}}",
         },
         candidate: {
-          "core.files.count": {
-            kind: "plural",
-            param: "count",
-            cases: {
-              one: "{count} Datei für {name}",
-              other: "{count} Dateien",
-            },
-          },
+          "core.files.count":
+            "{count, plural, one {{count} Datei für {name}} other {{count} Dateien}}",
         },
       }).map((issue) => issue.code),
     ).toContain("placeholder-mismatch");
@@ -227,19 +198,22 @@ describe("localization catalogs", () => {
       validateCatalog({
         namespace: "core",
         source: {
-          "core.state.label": {
-            kind: "select",
-            param: "state",
-            cases: { ready: "Ready for {name}", other: "Waiting for {name}" },
-          },
+          "core.state.label":
+            "{state, select, ready {Ready for {name}} other {Waiting for {name}}}",
         },
         candidate: {
-          "core.state.label": {
-            kind: "select",
-            param: "state",
-            cases: { other: "Warten auf {name}" },
-          },
+          "core.state.label": "{state, select, other {Warten auf {name}}}",
         },
+      }).map((issue) => issue.code),
+    ).toContain("invalid-selector");
+  });
+
+  it("rejects ICU features outside the bounded v1 profile", () => {
+    expect(
+      validateCatalog({
+        namespace: "core",
+        source: { "core.amount": "Amount: {amount, number}" },
+        candidate: { "core.amount": "Betrag: {amount, number}" },
       }).map((issue) => issue.code),
     ).toContain("invalid-selector");
   });

@@ -32,5 +32,8 @@
   },
   "scripts": {
     "build": "tsdown --config tsdown.config.ts"
+  },
+  "dependencies": {
+    "intl-messageformat": "11.2.12"
   }
 }
