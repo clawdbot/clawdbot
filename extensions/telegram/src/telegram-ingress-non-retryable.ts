@@ -11,9 +11,26 @@ const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
 
 type TelegramIngressNonRetryableFailure = {
-  reason: "invalid-event" | "missing-agent-harness" | "dispatch-dedupe-rollback-failed";
+  reason:
+    | "invalid-event"
+    | "missing-agent-harness"
+    | "dispatch-dedupe-rollback-failed"
+    | "recipient-unreachable";
   message: string;
 };
+
+/**
+ * Patterns shared with outbound delivery-queue-recovery PERMANENT_ERROR_PATTERNS.
+ * Keep the two lists aligned so ingress and outbound treat the same permanent
+ * errors consistently.
+ */
+const PERMANENT_INGRESS_ERROR_PATTERNS: readonly RegExp[] = [
+  /bot was blocked by the user/i,
+  /forbidden: bot was kicked/i,
+  /chat not found/i,
+  /user not found/i,
+  /bot.*not.*member/i,
+];
 
 /** Channel-owned non-retryable predicate for the core ingress drain. */
 export function resolveTelegramIngressNonRetryableFailure(
@@ -37,6 +54,9 @@ export function resolveTelegramIngressNonRetryableFailure(
       MISSING_AGENT_HARNESS_MESSAGE_RE.test(message)
     ) {
       return { reason: "missing-agent-harness", message };
+    }
+    if (PERMANENT_INGRESS_ERROR_PATTERNS.some((re) => re.test(message))) {
+      return { reason: "recipient-unreachable", message };
     }
   }
   return null;
