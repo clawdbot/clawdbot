@@ -632,21 +632,29 @@ async function onAdmittedTimer(state: CronServiceState) {
     const addStoreTarget = (agentId: string, storePath: string) => {
       storeTargets.set(`${agentId}\0${storePath}`, { agentId, storePath });
     };
+    const resolveJobAgentId = (job: CronJob, defaultAgentId: string) =>
+      typeof job.agentId === "string" && job.agentId.trim()
+        ? normalizeAgentId(job.agentId)
+        : resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
     if (state.deps.resolveSessionStorePath) {
       const defaultAgentId = sessionReaperDefaultAgentId!;
       if (state.store?.jobs?.length) {
         for (const job of state.store.jobs) {
-          const agentId =
-            typeof job.agentId === "string" && job.agentId.trim()
-              ? normalizeAgentId(job.agentId)
-              : resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
+          const agentId = resolveJobAgentId(job, defaultAgentId);
           addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
         }
       } else {
         addStoreTarget(defaultAgentId, state.deps.resolveSessionStorePath(defaultAgentId));
       }
     } else if (state.deps.sessionStorePath) {
-      addStoreTarget(sessionReaperDefaultAgentId!, state.deps.sessionStorePath);
+      const defaultAgentId = sessionReaperDefaultAgentId!;
+      if (state.store?.jobs?.length) {
+        for (const job of state.store.jobs) {
+          addStoreTarget(resolveJobAgentId(job, defaultAgentId), state.deps.sessionStorePath);
+        }
+      } else {
+        addStoreTarget(defaultAgentId, state.deps.sessionStorePath);
+      }
     }
 
     if (storeTargets.size > 0) {

@@ -196,6 +196,55 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
   });
 
+  it("sweeps every job owner in one static session store", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        createDueIsolatedJob({ id: "default-job", nowMs: now }),
+        {
+          ...createDueIsolatedJob({ id: "worker-job", nowMs: now }),
+          agentId: "worker",
+          enabled: false,
+        },
+      ],
+    });
+    for (const agentId of ["main", "worker"]) {
+      await replaceSessionEntry(
+        {
+          agentId,
+          storePath: sessionStorePath,
+          sessionKey: `agent:${agentId}:cron:expired:run:stale`,
+        },
+        { sessionId: `${agentId}-expired`, updatedAt: now - 25 * 3_600_000 },
+      );
+    }
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "done" }),
+      defaultAgentId: "main",
+      sessionStorePath,
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await onTimer(state);
+
+      expect(listSessionEntries({ agentId: "main", storePath: sessionStorePath })).toStrictEqual(
+        [],
+      );
+      expect(listSessionEntries({ agentId: "worker", storePath: sessionStorePath })).toStrictEqual(
+        [],
+      );
+    });
+  });
+
   it("prunes expired cron-run sessions while ignoring malformed legacy cron files", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");

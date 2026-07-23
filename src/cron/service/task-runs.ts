@@ -82,9 +82,12 @@ function resolveCronTaskChildSessionKey(params: {
     );
   }
   if (params.job.sessionTarget === "current") {
+    const scopedAgentId = parseAgentSessionKey(params.job.sessionKey)?.agentId;
     return resolveCronAgentSessionKey({
       sessionKey: `cron:${params.job.id}`,
-      agentId: requireCronAgentId(params.job.agentId ?? resolveCurrentDefaultAgentId(params.state)),
+      agentId: requireCronAgentId(
+        params.job.agentId ?? scopedAgentId ?? resolveCurrentDefaultAgentId(params.state),
+      ),
     });
   }
   const explicitSessionKey = params.job.sessionKey?.trim();
