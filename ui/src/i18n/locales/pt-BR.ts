@@ -3839,6 +3839,20 @@ export const pt_BR: TranslationMap = {
     },
     outputTokens: "{count} tokens de saída",
     archivedSessionDisabled: "Restaure esta sessão para enviar mensagens.",
+    sessionSharing: {
+      menu: "Compartilhamento da conversa",
+      current: "Visibilidade da conversa: {visibility}",
+      visibility: "Visibilidade",
+      shared: "Compartilhada",
+      readOnly: "Somente leitura",
+      suggest: "Sugerir",
+      draft: "Rascunho",
+      members: "Membros",
+      selected: "Membro",
+      noPeople: "Nenhuma pessoa pareada encontrada.",
+      readOnlyNotice:
+        "Somente o proprietário e os membros da conversa podem realizar ações nesta conversa.",
+    },
     loadOlder: "Carregar anteriores",
     sessionHeader: {
       renameTooltip: "Renomear sessão",
