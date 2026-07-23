@@ -194,10 +194,7 @@ async function writeRecord(filePath: string, value: RestoredAdmissionReadyRecord
   await syncDirectoryBestEffort(path.dirname(filePath));
 }
 
-async function readRecordIfPresent(
-  rootPath: string,
-  relativePath: string,
-): Promise<unknown> {
+async function readRecordIfPresent(rootPath: string, relativePath: string): Promise<unknown> {
   try {
     const read = await (
       await root(rootPath)
