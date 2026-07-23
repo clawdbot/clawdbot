@@ -20,6 +20,7 @@ import {
   CLAW_SCHEMA_VERSION,
   type ClawDiagnostic,
   type ClawManifest,
+  type ClawOpenClawProfile,
 } from "./types.js";
 
 const nonEmptyString = z
@@ -68,112 +69,122 @@ const agentSchema = z
     name: optionalString,
     description: optionalString,
     identity: identitySchema.optional(),
-    groupChat: z
-      .object({ mentionPatterns: z.array(nonEmptyString).min(1).optional() })
-      .strict()
-      .optional(),
-    sandbox: z
+  })
+  .strict();
+
+const openClawProfileSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    agent: z
       .object({
-        mode: z.enum(["off", "non-main", "all"]).optional(),
-        scope: z.enum(["session", "agent", "shared"]).optional(),
-        workspaceAccess: z.enum(["none", "ro", "rw"]).optional(),
-      })
-      .strict()
-      .optional(),
-    tools: z
-      .object({
-        profile: nonEmptyString
-          .refine(
-            (value) => resolveToolProfilePolicy(value) !== undefined,
-            "Tool profile must name a registered OpenClaw built-in profile.",
-          )
-          .optional(),
-        allow: z.array(nonEmptyString).min(1).optional(),
-        alsoAllow: z.array(nonEmptyString).min(1).optional(),
-        deny: z.array(nonEmptyString).min(1).optional(),
-        fs: z
-          .object({ workspaceOnly: z.literal(true).optional() })
+        groupChat: z
+          .object({ mentionPatterns: z.array(nonEmptyString).min(1).optional() })
           .strict()
           .optional(),
-      })
-      .strict()
-      .superRefine((tools, ctx) => {
-        if (tools.allow && tools.alsoAllow) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["alsoAllow"],
-            message:
-              "Agent tools cannot set both allow and alsoAllow; use allow alone or profile with alsoAllow.",
-          });
-        }
-      })
-      .optional(),
-    memory: z
-      .object({
-        search: z
+        sandbox: z
           .object({
-            enabled: z.boolean().optional(),
-            rememberAcrossConversations: z.boolean().optional(),
-            sources: z
-              .array(z.enum(["memory", "sessions"]))
-              .min(1)
+            mode: z.enum(["off", "non-main", "all"]).optional(),
+            scope: z.enum(["session", "agent", "shared"]).optional(),
+            workspaceAccess: z.enum(["none", "ro", "rw"]).optional(),
+          })
+          .strict()
+          .optional(),
+        tools: z
+          .object({
+            profile: nonEmptyString
+              .refine(
+                (value) => resolveToolProfilePolicy(value) !== undefined,
+                "Tool profile must name a registered OpenClaw built-in profile.",
+              )
+              .optional(),
+            allow: z.array(nonEmptyString).min(1).optional(),
+            alsoAllow: z.array(nonEmptyString).min(1).optional(),
+            deny: z.array(nonEmptyString).min(1).optional(),
+            fs: z
+              .object({ workspaceOnly: z.literal(true).optional() })
+              .strict()
               .optional(),
           })
           .strict()
-          .superRefine((search, ctx) => {
-            if (
-              search.sources?.includes("sessions") &&
-              search.rememberAcrossConversations !== true
-            ) {
+          .superRefine((tools, ctx) => {
+            if (tools.allow && tools.alsoAllow) {
               ctx.addIssue({
                 code: "custom",
-                path: ["rememberAcrossConversations"],
+                path: ["alsoAllow"],
                 message:
-                  "The sessions source requires rememberAcrossConversations: true in a portable Claw.",
+                  "Agent tools cannot set both allow and alsoAllow; use allow alone or profile with alsoAllow.",
               });
             }
           })
           .optional(),
-      })
-      .strict()
-      .optional(),
-    heartbeat: z
-      .object({
-        every: nonEmptyString
-          .refine((value) => {
-            try {
-              parseDurationMs(value, { defaultUnit: "m" });
-              return true;
-            } catch {
-              return false;
-            }
-          }, "Invalid heartbeat duration.")
-          .optional(),
-        activeHours: z
+        memory: z
           .object({
-            start: nonEmptyString.regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).optional(),
-            end: nonEmptyString.regex(/^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/).optional(),
-            timezone: nonEmptyString
-              .refine(isValidClawTimezone, "Invalid IANA timezone.")
+            search: z
+              .object({
+                enabled: z.boolean().optional(),
+                rememberAcrossConversations: z.boolean().optional(),
+                sources: z
+                  .array(z.enum(["memory", "sessions"]))
+                  .min(1)
+                  .optional(),
+              })
+              .strict()
+              .superRefine((search, ctx) => {
+                if (
+                  search.sources?.includes("sessions") &&
+                  search.rememberAcrossConversations !== true
+                ) {
+                  ctx.addIssue({
+                    code: "custom",
+                    path: ["rememberAcrossConversations"],
+                    message:
+                      "The sessions source requires rememberAcrossConversations: true in the OpenClaw profile.",
+                  });
+                }
+              })
               .optional(),
           })
           .strict()
           .optional(),
-        lightContext: z.boolean().optional(),
-        isolatedSession: z.boolean().optional(),
-        skipWhenBusy: z.boolean().optional(),
-        timeoutSeconds: z.number().int().positive().optional(),
+        heartbeat: z
+          .object({
+            every: nonEmptyString
+              .refine((value) => {
+                try {
+                  parseDurationMs(value, { defaultUnit: "m" });
+                  return true;
+                } catch {
+                  return false;
+                }
+              }, "Invalid heartbeat duration.")
+              .optional(),
+            activeHours: z
+              .object({
+                start: nonEmptyString.regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).optional(),
+                end: nonEmptyString.regex(/^(?:(?:[01]\d|2[0-3]):[0-5]\d|24:00)$/).optional(),
+                timezone: nonEmptyString
+                  .refine(isValidClawTimezone, "Invalid IANA timezone.")
+                  .optional(),
+              })
+              .strict()
+              .optional(),
+            lightContext: z.boolean().optional(),
+            isolatedSession: z.boolean().optional(),
+            skipWhenBusy: z.boolean().optional(),
+            timeoutSeconds: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        humanDelay: z
+          .object({
+            mode: z.enum(["off", "natural", "custom"]).optional(),
+            minMs: z.number().int().nonnegative().optional(),
+            maxMs: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
       })
-      .strict()
-      .optional(),
-    humanDelay: z
-      .object({
-        mode: z.enum(["off", "natural", "custom"]).optional(),
-        minMs: z.number().int().nonnegative().optional(),
-        maxMs: z.number().int().nonnegative().optional(),
-      })
-      .strict()
-      .optional(),
+      .strict(),
   })
   .strict();
 
@@ -365,6 +376,7 @@ const manifestSchema = z
   .object({
     schemaVersion: z.literal(CLAW_SCHEMA_VERSION),
     agent: agentSchema,
+    metadata: z.record(nonEmptyString, z.string()).optional().default({}),
     workspace: workspaceSchema.optional().default({ bootstrapFiles: {}, files: [] }),
     packages: z.array(packageSchema).optional().default([]),
     mcpServers: z
@@ -467,4 +479,22 @@ export function parseClawManifest(
     return { ok: false, diagnostics: diagnosticsFromZodError(parsed.error) };
   }
   return { ok: true, manifest: parsed.data as ClawManifest, diagnostics: [] };
+}
+
+export function parseClawOpenClawProfile(value: unknown):
+  | {
+      ok: true;
+      profile: ClawOpenClawProfile;
+      diagnostics: ClawDiagnostic[];
+    }
+  | { ok: false; diagnostics: ClawDiagnostic[] } {
+  const parsed = openClawProfileSchema.safeParse(value);
+  if (!parsed.success) {
+    return { ok: false, diagnostics: diagnosticsFromZodError(parsed.error) };
+  }
+  return {
+    ok: true,
+    profile: parsed.data as ClawOpenClawProfile,
+    diagnostics: [],
+  };
 }

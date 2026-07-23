@@ -11,7 +11,7 @@ import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers } from "./mcp.js";
 import { persistClawPackageRef, updateClawInstallRecordStatus } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
-import type { ClawSourceIdentity } from "./types.js";
+import type { ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -42,20 +42,8 @@ async function installedFixture(
       id: "worker",
       name: "Worker",
       ...(options.avatar ? { identity: { avatar: options.avatar } } : {}),
-      tools: {
-        profile: "coding",
-        alsoAllow: ["cron"],
-        deny: ["exec"],
-        fs: { workspaceOnly: true },
-      },
-      memory: {
-        search: {
-          enabled: true,
-          rememberAcrossConversations: true,
-          sources: ["memory", "sessions"],
-        },
-      },
     },
+    metadata: { "openclaw.config": "profiles/openclaw.yml" },
     workspace: {
       bootstrapFiles: { "SOUL.md": { source: "source/SOUL.md" } },
       files: [
@@ -87,6 +75,24 @@ async function installedFixture(
   if (!parsed.ok) {
     throw new Error(JSON.stringify(parsed.diagnostics));
   }
+  const openClawProfile: ClawOpenClawProfile = {
+    schemaVersion: 1,
+    agent: {
+      tools: {
+        profile: "coding",
+        alsoAllow: ["cron"],
+        deny: ["exec"],
+        fs: { workspaceOnly: true },
+      },
+      memory: {
+        search: {
+          enabled: true,
+          rememberAcrossConversations: true,
+          sources: ["memory", "sessions"],
+        },
+      },
+    },
+  };
   const source: ClawSourceIdentity = {
     kind: "package",
     name: "@acme/worker",
@@ -100,6 +106,7 @@ async function installedFixture(
   const plan = await buildClawAddPlan({
     manifest: parsed.manifest,
     source,
+    openClawProfile,
     context: { workspace: join(root, "workspace-worker") },
   });
   let config: OpenClawConfig = {};
@@ -189,23 +196,8 @@ describe("exportClawAgent", () => {
       agentId: "worker",
       manifest: {
         schemaVersion: 1,
-        agent: {
-          id: "worker",
-          name: "Worker",
-          tools: {
-            profile: "coding",
-            alsoAllow: ["cron"],
-            deny: ["exec"],
-            fs: { workspaceOnly: true },
-          },
-          memory: {
-            search: {
-              enabled: true,
-              rememberAcrossConversations: true,
-              sources: ["memory", "sessions"],
-            },
-          },
-        },
+        agent: { id: "worker", name: "Worker" },
+        metadata: { "openclaw.config": "profiles/openclaw.yml" },
         workspace: {
           bootstrapFiles: { "SOUL.md": { source: "workspace/SOUL.md" } },
           files: [{ source: "workspace/reference/policy.md", path: "reference/policy.md" }],
@@ -239,6 +231,24 @@ describe("exportClawAgent", () => {
           },
         ],
       },
+      openClawProfile: {
+        schemaVersion: 1,
+        agent: {
+          tools: {
+            profile: "coding",
+            alsoAllow: ["cron"],
+            deny: ["exec"],
+            fs: { workspaceOnly: true },
+          },
+          memory: {
+            search: {
+              enabled: true,
+              rememberAcrossConversations: true,
+              sources: ["memory", "sessions"],
+            },
+          },
+        },
+      },
     });
     const packageJson = JSON.parse(await readFile(join(out, "package.json"), "utf8"));
     expect(packageJson).toMatchObject({
@@ -248,6 +258,9 @@ describe("exportClawAgent", () => {
     expect(packageJson.version).toMatch(/^0\.0\.0-export\.[0-9a-f]{64}$/);
     await expect(readFile(join(out, "CLAW.md"), "utf8")).resolves.not.toContain(
       "resolved-secret-must-not-be-exported",
+    );
+    await expect(readFile(join(out, "profiles", "openclaw.yml"), "utf8")).resolves.toContain(
+      "profile: coding",
     );
     await expect(readFile(join(out, "workspace", "SOUL.md"), "utf8")).resolves.toBe(
       "managed soul\n",

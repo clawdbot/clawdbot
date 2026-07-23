@@ -27,46 +27,52 @@ type ClawAgent = {
     emoji?: string;
     avatar?: string;
   };
-  groupChat?: {
-    mentionPatterns?: string[];
-  };
-  sandbox?: {
-    mode?: "off" | "non-main" | "all";
-    scope?: "session" | "agent" | "shared";
-    workspaceAccess?: "none" | "ro" | "rw";
-  };
-  tools?: {
-    profile?: ToolProfileId;
-    allow?: string[];
-    alsoAllow?: string[];
-    deny?: string[];
-    fs?: {
-      workspaceOnly?: true;
+};
+
+export type ClawOpenClawProfile = {
+  schemaVersion: 1;
+  agent: {
+    groupChat?: {
+      mentionPatterns?: string[];
     };
-  };
-  memory?: {
-    search?: {
-      enabled?: boolean;
-      rememberAcrossConversations?: boolean;
-      sources?: Array<"memory" | "sessions">;
+    sandbox?: {
+      mode?: "off" | "non-main" | "all";
+      scope?: "session" | "agent" | "shared";
+      workspaceAccess?: "none" | "ro" | "rw";
     };
-  };
-  heartbeat?: {
-    every?: string;
-    activeHours?: {
-      start?: string;
-      end?: string;
-      timezone?: string;
+    tools?: {
+      profile?: ToolProfileId;
+      allow?: string[];
+      alsoAllow?: string[];
+      deny?: string[];
+      fs?: {
+        workspaceOnly?: true;
+      };
     };
-    lightContext?: boolean;
-    isolatedSession?: boolean;
-    skipWhenBusy?: boolean;
-    timeoutSeconds?: number;
-  };
-  humanDelay?: {
-    mode?: "off" | "natural" | "custom";
-    minMs?: number;
-    maxMs?: number;
+    memory?: {
+      search?: {
+        enabled?: boolean;
+        rememberAcrossConversations?: boolean;
+        sources?: Array<"memory" | "sessions">;
+      };
+    };
+    heartbeat?: {
+      every?: string;
+      activeHours?: {
+        start?: string;
+        end?: string;
+        timezone?: string;
+      };
+      lightContext?: boolean;
+      isolatedSession?: boolean;
+      skipWhenBusy?: boolean;
+      timeoutSeconds?: number;
+    };
+    humanDelay?: {
+      mode?: "off" | "natural" | "custom";
+      minMs?: number;
+      maxMs?: number;
+    };
   };
 };
 
@@ -141,6 +147,7 @@ export type ClawCronJob = {
 export type ClawManifest = {
   schemaVersion: typeof CLAW_SCHEMA_VERSION;
   agent: ClawAgent;
+  metadata?: Record<string, string>;
   workspace: ClawWorkspace;
   packages: ClawPackage[];
   mcpServers: Record<string, ClawMcpServer>;
@@ -173,6 +180,7 @@ export type ClawReadResult =
   | {
       ok: true;
       manifest: ClawManifest;
+      openClawProfile?: ClawOpenClawProfile;
       source: ClawSourceIdentity;
       snapshot: ClawSourceSnapshot;
       diagnostics: ClawDiagnostic[];

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
-import { parseClawManifest } from "./schema.js";
+import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import type { ClawManifest, ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -17,12 +17,8 @@ const baseManifest = {
     name: "GitHub Triage",
     description: "Reviews incoming issues.",
     identity: { name: "Triage", emoji: "search" },
-    groupChat: { mentionPatterns: ["@triage"] },
-    sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
-    tools: { allow: ["read", "write"], deny: ["exec"] },
-    heartbeat: { every: "30m", lightContext: true, skipWhenBusy: true },
-    humanDelay: { mode: "natural" },
   },
+  metadata: { "openclaw.config": "profiles/openclaw.yml" },
   workspace: {
     bootstrapFiles: {
       "AGENTS.md": { source: "workspace/AGENTS.md" },
@@ -62,6 +58,17 @@ const baseManifest = {
       delivery: { mode: "announce", channel: "last" },
     },
   ],
+} as const;
+
+const baseOpenClawProfile = {
+  schemaVersion: 1,
+  agent: {
+    groupChat: { mentionPatterns: ["@triage"] },
+    sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
+    tools: { allow: ["read", "write"], deny: ["exec"] },
+    heartbeat: { every: "30m", lightContext: true, skipWhenBusy: true },
+    humanDelay: { mode: "natural" },
+  },
 } as const;
 
 function requireManifest(value: unknown = baseManifest): ClawManifest {
@@ -109,6 +116,7 @@ describe("parseClawManifest", () => {
     expect(manifest).toEqual({
       schemaVersion: 1,
       agent: { id: "minimal-agent" },
+      metadata: {},
       workspace: { bootstrapFiles: {}, files: [] },
       packages: [],
       mcpServers: {},
@@ -141,47 +149,14 @@ describe("parseClawManifest", () => {
     },
   );
 
-  it("accepts portable agent tool and memory-search settings", () => {
-    const result = parseClawManifest({
-      ...baseManifest,
-      agent: {
-        ...baseManifest.agent,
-        tools: {
-          profile: "coding",
-          alsoAllow: ["cron"],
-          deny: ["exec"],
-          fs: { workspaceOnly: true },
-        },
-        memory: {
-          search: {
-            enabled: true,
-            rememberAcrossConversations: true,
-            sources: ["memory", "sessions"],
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("rejects portable policy that disables host filesystem confinement", () => {
-    const result = parseClawManifest({
-      schemaVersion: 1,
-      agent: { id: "worker", tools: { fs: { workspaceOnly: false } } },
-    });
-
-    expect(result.ok).toBe(false);
-  });
-
-  it("rejects unknown profiles, conflicting allowlists, and non-portable memory settings", () => {
-    for (const agent of [
-      { id: "worker", tools: { profile: "future-profile" } },
-      { id: "worker", tools: { allow: ["read"], alsoAllow: ["write"] } },
-      { id: "worker", memory: { search: { provider: "openai" } } },
-      { id: "worker", memory: { search: { sources: ["sessions"] } } },
-    ]) {
-      expect(parseClawManifest({ schemaVersion: 1, agent }).ok).toBe(false);
+  it("keeps harness-specific settings out of the portable agent object", () => {
+    for (const field of ["groupChat", "sandbox", "tools", "memory", "heartbeat", "humanDelay"]) {
+      expect(
+        parseClawManifest({
+          schemaVersion: 1,
+          agent: { id: "worker", [field]: {} },
+        }).ok,
+      ).toBe(false);
     }
   });
 
@@ -317,9 +292,9 @@ describe("parseClawManifest", () => {
   });
 
   it("rejects invalid heartbeat durations and cron expressions", () => {
-    const heartbeat = parseClawManifest({
-      ...baseManifest,
-      agent: { ...baseManifest.agent, heartbeat: { every: "eventually" } },
+    const heartbeat = parseClawOpenClawProfile({
+      schemaVersion: 1,
+      agent: { heartbeat: { every: "eventually" } },
     });
     expect(heartbeat.ok).toBe(false);
     expect(heartbeat.diagnostics).toContainEqual(
@@ -768,6 +743,7 @@ describe("buildClawAddPlan", () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
+      openClawProfile: baseOpenClawProfile,
       source,
       context: { workspace },
     });
@@ -985,24 +961,31 @@ describe("buildClawAddPlan", () => {
     const { source, workspace } = await createPlanSource();
     const first = await buildClawAddPlan({
       manifest: requireManifest(),
+      openClawProfile: baseOpenClawProfile,
       source,
       context: { workspace },
     });
     const repeated = await buildClawAddPlan({
       manifest: requireManifest(),
+      openClawProfile: baseOpenClawProfile,
       source,
       context: { workspace },
     });
     const changed = await buildClawAddPlan({
       manifest: requireManifest(),
+      openClawProfile: baseOpenClawProfile,
       source: { ...source, integrity: "sha256:changed" },
       context: { workspace },
     });
     const changedCapability = await buildClawAddPlan({
-      manifest: requireManifest({
-        ...baseManifest,
-        agent: { ...baseManifest.agent, tools: { allow: ["read", "exec"] } },
-      }),
+      manifest: requireManifest(),
+      openClawProfile: {
+        ...baseOpenClawProfile,
+        agent: {
+          ...baseOpenClawProfile.agent,
+          tools: { allow: ["read", "exec"] },
+        },
+      },
       source,
       context: { workspace },
     });
