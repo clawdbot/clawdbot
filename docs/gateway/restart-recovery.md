@@ -172,6 +172,40 @@ restart handling continues.
 - **Crash-loop breaker:** 3 unclean boots within 5 minutes trip a breaker that
   suppresses auto-start side services on the next boot, so a crashing gateway
   does not amplify itself. It recovers once the unclean-boot window drains.
+
+  When the breaker is tripped, the **control plane still starts**, but channel
+  plugins (and other auto-started side services) stay down until an operator
+  overrides or the unclean-boot window drains. Gateway logs look like:
+  `channel autostart suppressed by crash-loop breaker; refusing automatic
+start for <channel>… Use channels.start to override.`
+
+  Operator recovery SOP:
+
+  1. Confirm the gateway process is up (`openclaw gateway status` / LaunchAgent
+     or systemd unit still running). A “channel disconnected” symptom often
+     means suppressed autostart, not a dead gateway.
+  2. Inspect channel state: `openclaw channels status` (add `--probe` when
+     useful). Look for stopped / not connected accounts while the gateway
+     itself is healthy.
+  3. Fix the root cause of the unclean boots (bad config, plugin crash on
+     start, missing secrets) before forcing channels back up.
+  4. Manually start a channel while suppression is active:
+
+     ```bash
+     openclaw gateway call channels.start --params '{"channel":"<id>"}'
+     # optional: {"channel":"<id>","accountId":"<account>"}
+     ```
+
+     `channels.start` is a **manual** override; it does not disable the
+     breaker for other channels.
+
+  5. Or wait for the unclean-boot window to drain — the gateway logs when
+     channel auto-start is restored, and subsequent boots start channels
+     normally again.
+
+  See also [Gateway](/gateway) (safe mode paragraph) for the same control-plane
+  vs channel-autostart split.
+
 - **Main-session attempt budget:** three charged automatic dispatch attempts
   per interrupted cycle; exhaustion tombstones that session until it is
   inspected and replaced.
