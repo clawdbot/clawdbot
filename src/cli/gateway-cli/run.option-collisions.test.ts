@@ -1493,11 +1493,26 @@ describe("gateway run option collisions", () => {
     expect(process.env.OPENCLAW_INCARNATION_ID).toBe("pod-7f9c");
     expect(startGatewayServer).toHaveBeenCalledOnce();
   });
-  it("rejects invalid activation identity before destructive startup work", async () => {
+  it("ignores profile-only activation identity validation without a selected profile", async () => {
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--runtime-id",
+      "contains spaces",
+      "--allow-unconfigured",
+    ]);
+
+    expect(startGatewayServer).toHaveBeenCalledOnce();
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  it("rejects invalid activation identity before destructive profiled startup work", async () => {
     await expect(
       runGatewayCli([
         "gateway",
         "run",
+        "--hosting-profile",
+        "container",
         "--runtime-id",
         "contains spaces",
         "--force",

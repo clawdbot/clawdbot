@@ -13,8 +13,10 @@ import type { ChannelManager } from "../server-channels.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 /** Snapshot returned by the gateway readiness probe. */
-type ReadinessResult = {
-  activation?: CanonicalReadinessResult["activation"];
+type ReadinessResult = Pick<
+  CanonicalReadinessResult,
+  "profileContractVersion" | "profile" | "profileSource" | "activation"
+> & {
   ready: boolean;
   failing: string[];
   suppressed?: string[];
@@ -369,6 +371,11 @@ function mergeReadinessResults(
   );
   return {
     ...gateway,
+    ...(runtime.profileContractVersion !== undefined
+      ? { profileContractVersion: runtime.profileContractVersion }
+      : {}),
+    ...(runtime.profile !== undefined ? { profile: runtime.profile } : {}),
+    ...(runtime.profileSource !== undefined ? { profileSource: runtime.profileSource } : {}),
     ...(runtime.activation ? { activation: runtime.activation } : {}),
     ready: failures.length === 0,
     failing: Array.from(new Set([...gateway.failing, ...runtime.failures])),

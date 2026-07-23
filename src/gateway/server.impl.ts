@@ -45,12 +45,13 @@ import { createNodeModeReadinessEvidenceResolver } from "../hosting/node-mode.js
 import {
   buildHostingProfileConditions,
   requiredCriteriaForHostingProfile,
-  resolveHostingProfile,
+  resolveHostingProfileSelection,
 } from "../hosting/profiles.js";
 import {
   resolveRuntimeActivationIdentity,
   type RuntimeActivationIdentity,
 } from "../hosting/runtime-activation.js";
+import type { HostingProfileId } from "../hosting/types.js";
 import { normalizeDevicePublicKeyBase64Url } from "../infra/device-identity.js";
 import {
   listDevicePairing,
@@ -579,6 +580,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Explicit CLI/startup profile selection, which wins over environment and config. */
+  hostingProfileOverride?: HostingProfileId;
   /** Runtime identity reported through readiness and status. */
   runtimeActivationIdentity?: RuntimeActivationIdentity;
   /**
@@ -684,9 +687,6 @@ export async function startGatewayServer(
       docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
     });
   }
-  resolveHostingProfile({ env: process.env });
-  const runtimeActivationIdentity =
-    opts.runtimeActivationIdentity ?? resolveRuntimeActivationIdentity({ env: process.env });
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
@@ -792,6 +792,19 @@ export async function startGatewayServer(
     { omitErrorMessage: true },
   );
   const cfgAtStart = authBootstrap.cfg;
+  const startupProfileSelection = resolveHostingProfileSelection({
+    config: cfgAtStart,
+    env: process.env,
+    override: opts.hostingProfileOverride,
+  });
+  let runtimeActivationIdentity = startupProfileSelection
+    ? (opts.runtimeActivationIdentity ?? resolveRuntimeActivationIdentity({ env: process.env }))
+    : undefined;
+  const getRuntimeActivationIdentity = (): RuntimeActivationIdentity => {
+    runtimeActivationIdentity ??=
+      opts.runtimeActivationIdentity ?? resolveRuntimeActivationIdentity({ env: process.env });
+    return runtimeActivationIdentity;
+  };
   startupTrace.setConfig(cfgAtStart);
   const {
     claimControlUiDeviceAuthMigration,
@@ -1313,7 +1326,12 @@ export async function startGatewayServer(
   const evaluateRuntimeReadiness = async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snapshot = readinessRuntimeSnapshot;
-      const profile = resolveHostingProfile({ config: snapshot.config, env: process.env });
+      const profileSelection = resolveHostingProfileSelection({
+        config: snapshot.config,
+        env: process.env,
+        override: opts.hostingProfileOverride,
+      });
+      const profile = profileSelection?.profile;
       const auth = getResolvedAuth();
       const [nodeMode, additionalConditions] = await Promise.all([
         profile === "node-mode"
@@ -1338,7 +1356,9 @@ export async function startGatewayServer(
               port,
               authMode: auth.mode,
               trustedProxyUserHeader: auth.trustedProxy?.userHeader,
-              trustedProxyCount: snapshot.config.gateway?.trustedProxies?.length ?? 0,
+              trustedProxySources: snapshot.config.gateway?.trustedProxies ?? [],
+              trustedProxyAllowLoopback:
+                snapshot.config.gateway?.auth?.trustedProxy?.allowLoopback === true,
             },
             nodeMode,
           )
@@ -1350,8 +1370,15 @@ export async function startGatewayServer(
         configLoaded: true,
         gateway: "responding",
         plugins: buildGatewayPluginReadinessInput(snapshot.registry),
-        activation: runtimeActivationIdentity,
-        additionalConditions: [...profileConditions, ...additionalConditions],
+        profileConditions,
+        profile: profileSelection
+          ? {
+              id: profileSelection.profile,
+              source: profileSelection.source,
+              activation: getRuntimeActivationIdentity(),
+            }
+          : undefined,
+        additionalConditions,
       });
     }
     throw new Error("Readiness runtime changed while it was being evaluated.");

@@ -3,6 +3,7 @@ import {
   buildHostingProfileConditions,
   requiredCriteriaForHostingProfile,
   resolveHostingProfile,
+  resolveHostingProfileSelection,
 } from "./profiles.js";
 
 const facts = {
@@ -10,7 +11,8 @@ const facts = {
   bindHost: "0.0.0.0",
   port: 18789,
   authMode: "token",
-  trustedProxyCount: 0,
+  trustedProxySources: [],
+  trustedProxyAllowLoopback: false,
 };
 
 describe("resolveHostingProfile", () => {
@@ -23,6 +25,23 @@ describe("resolveHostingProfile", () => {
         override: "reverse-proxy",
       }),
     ).toBe("reverse-proxy");
+    expect(
+      resolveHostingProfileSelection({
+        config: { hosting: { profile: "local" } },
+        env: { OPENCLAW_HOSTING_PROFILE: "container" },
+        override: "reverse-proxy",
+      }),
+    ).toEqual({ profile: "reverse-proxy", source: "argument" });
+    expect(
+      resolveHostingProfileSelection({
+        config: { hosting: { profile: "local" } },
+        env: { OPENCLAW_HOSTING_PROFILE: "container" },
+      }),
+    ).toEqual({ profile: "container", source: "environment" });
+    expect(resolveHostingProfileSelection({ config: { hosting: { profile: "local" } } })).toEqual({
+      profile: "local",
+      source: "config",
+    });
   });
 });
 
@@ -58,6 +77,29 @@ describe("buildHostingProfileConditions", () => {
         reason: "TrustedProxyAuthMissing",
       }),
     );
+  });
+
+  it("rejects a loopback trusted proxy unless the auth contract permits it", () => {
+    const proxyFacts = {
+      ...facts,
+      authMode: "trusted-proxy",
+      trustedProxyUserHeader: "x-forwarded-user",
+      trustedProxySources: ["127.0.0.1"],
+    };
+
+    expect(buildHostingProfileConditions("reverse-proxy", proxyFacts)).toContainEqual(
+      expect.objectContaining({
+        type: "TrustedProxyReady",
+        status: "False",
+        reason: "TrustedProxyIngressUnsafe",
+      }),
+    );
+    expect(
+      buildHostingProfileConditions("reverse-proxy", {
+        ...proxyFacts,
+        trustedProxyAllowLoopback: true,
+      }),
+    ).toContainEqual(expect.objectContaining({ type: "TrustedProxyReady", status: "True" }));
   });
 
   it("requires pairing, a connected target, command approval, and a control channel", () => {

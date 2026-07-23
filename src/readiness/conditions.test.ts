@@ -160,16 +160,111 @@ describe("buildRuntimeReadiness", () => {
       configLoaded: true,
       gateway: "responding",
       plugins: { errors: [] },
-      activation,
+      profileConditions: [
+        {
+          type: "ProfileSelected",
+          status: "True",
+          requirement: "required",
+          reason: "ProfileSelected",
+          message: "Container profile selected.",
+        },
+      ],
+      profile: { id: "container", source: "argument", activation },
     });
 
-    expect(readiness.activation).toEqual(activation);
+    expect(readiness).toMatchObject({
+      profileContractVersion: 1,
+      profile: "container",
+      profileSource: "argument",
+      activation: { ...activation, profile: "container" },
+    });
     expect(readiness.conditions).toContainEqual(
       expect.objectContaining({
         type: "RuntimeActivationIdentified",
         status: "True",
         requirement: "required",
       }),
+    );
+  });
+
+  it("places profile conditions between shared runtime facts and core probes", () => {
+    const profileConditions = [
+      {
+        type: "ProfileSelected",
+        status: "True",
+        requirement: "required",
+        reason: "ProfileSelected",
+        message: "Node-mode profile selected.",
+      },
+      {
+        type: "NodePairingReady",
+        status: "True",
+        requirement: "required",
+        reason: "NodePairingReady",
+        message: "A paired target is available.",
+      },
+      {
+        type: "ControlledTargetsReady",
+        status: "True",
+        requirement: "required",
+        reason: "ControlledTargetsReady",
+        message: "A controlled target is connected.",
+      },
+    ] as const;
+    const readiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: { errors: [] },
+      additionalConditions: [
+        {
+          type: "WorkspaceWritable",
+          status: "True",
+          requirement: "required",
+          reason: "WorkspaceWritable",
+          message: "Workspace is writable.",
+        },
+        {
+          type: "plugin.storage.backend",
+          status: "True",
+          requirement: "advisory",
+          reason: "StorageReady",
+          message: "Storage is ready.",
+        },
+      ],
+      profileConditions: [...profileConditions],
+      profile: {
+        id: "node-mode",
+        source: "config",
+        activation: { runtimeId: "node-controller", incarnationId: "process-1" },
+      },
+    });
+
+    expect(readiness.conditions.map((condition) => condition.type)).toEqual([
+      "ConfigLoaded",
+      "WorkspaceWritable",
+      "ProfileSelected",
+      "RuntimeActivationIdentified",
+      "NodePairingReady",
+      "ControlledTargetsReady",
+      "GatewayResponding",
+      "PluginsLoaded",
+      "plugin.storage.backend",
+    ]);
+  });
+
+  it("keeps profile and activation fields absent when no profile is selected", () => {
+    const readiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: { errors: [] },
+    });
+
+    expect(readiness).not.toHaveProperty("profile");
+    expect(readiness).not.toHaveProperty("profileSource");
+    expect(readiness).not.toHaveProperty("profileContractVersion");
+    expect(readiness).not.toHaveProperty("activation");
+    expect(readiness.conditions).not.toContainEqual(
+      expect.objectContaining({ type: "RuntimeActivationIdentified" }),
     );
   });
 });

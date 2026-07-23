@@ -80,6 +80,31 @@ describe("resolveNodeModeReadinessEvidence", () => {
     });
   });
 
+  it("does not treat a dangerous advertised command as approved by pairing alone", async () => {
+    listNodePairing.mockResolvedValue({
+      paired: [{ nodeId: "node-1", commands: ["computer.act"] }],
+      pending: [],
+    });
+    const connectedNode = {
+      nodeId: "node-1",
+      connId: "connection-1",
+      platform: "macos",
+      commands: ["computer.act"],
+    } as never;
+
+    const unarmed = await resolveNodeModeReadinessEvidence({
+      config: {},
+      connectedNodes: [connectedNode],
+    });
+    const armed = await resolveNodeModeReadinessEvidence({
+      config: { gateway: { nodes: { commands: { allow: ["computer.act"] } } } },
+      connectedNodes: [connectedNode],
+    });
+
+    expect(unarmed.commandApproval).toEqual({ configured: false, approvedCommandCount: 0 });
+    expect(armed.commandApproval).toEqual({ configured: true, approvedCommandCount: 1 });
+  });
+
   it("correlates approved commands with the connected paired node", async () => {
     listNodePairing.mockResolvedValue({
       paired: [

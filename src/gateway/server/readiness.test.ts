@@ -548,14 +548,19 @@ describe("canonical configured Gateway readiness", () => {
       configLoaded: true,
       gateway: "responding",
       plugins: { errors: [] },
-      activation,
+      profile: { id: "node-mode", source: "environment", activation },
     });
     const result = await evaluateCanonicalGatewayReadiness({
       evaluateGateway: () => failingSnapshot([]),
       evaluateRuntime: async () => runtime,
     });
 
-    expect(result.activation).toEqual(activation);
+    expect(result).toMatchObject({
+      profileContractVersion: 1,
+      profile: "node-mode",
+      profileSource: "environment",
+      activation: { ...activation, profile: "node-mode" },
+    });
   });
   it("returns a structured required failure when extended evaluation times out", async () => {
     const gateway = readySnapshot() as ReadinessResult;

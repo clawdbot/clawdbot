@@ -62,6 +62,18 @@ const ReadinessConditionSchema = closedObject({
 });
 
 const CanonicalReadinessResultSchema = closedObject({
+  profileContractVersion: Type.Optional(Type.Literal(1)),
+  profile: Type.Optional(NonEmptyString),
+  profileSource: Type.Optional(
+    Type.Union([Type.Literal("argument"), Type.Literal("environment"), Type.Literal("config")]),
+  ),
+  activation: Type.Optional(
+    closedObject({
+      runtimeId: NonEmptyString,
+      incarnationId: NonEmptyString,
+      profile: NonEmptyString,
+    }),
+  ),
   ready: Type.Boolean(),
   conditions: Type.Array(ReadinessConditionSchema),
   failures: Type.Array(Type.String()),

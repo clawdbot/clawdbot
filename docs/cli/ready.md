@@ -22,7 +22,7 @@ openclaw ready --json
 openclaw ready --timeout 2500
 ```
 
-Human output summarizes required/advisory counts, then lists every condition with its status, requirement, stable reason, and diagnostic message. `--json` returns the canonical `ready`, `conditions`, `failures`, and `advisories` fields unchanged.
+Human output summarizes required/advisory counts, then lists every condition with its status, requirement, stable reason, and diagnostic message. `--json` returns the canonical `ready`, `conditions`, `failures`, and `advisories` fields unchanged. When a [hosting profile](/gateway/hosting-profiles) is selected, the same result also includes `profileContractVersion`, `profile`, `profileSource`, and an `activation` object containing `runtimeId`, `incarnationId`, and `profile`. Those fields remain absent for an unprofiled Gateway.
 
 When the Gateway cannot be reached or does not expose the readiness contract, `--json` returns `ready: false` with a structured `error.reason` and `error.message` instead of emitting a partial condition set.
 

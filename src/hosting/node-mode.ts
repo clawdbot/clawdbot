@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveNodeCommandAllowlist } from "../gateway/node-command-policy.js";
 import type { NodeSession } from "../gateway/node-registry.js";
 import { listNodePairing } from "../infra/node-pairing.js";
 import type { NodeModeReadinessEvidence } from "./profiles.js";
@@ -27,17 +28,16 @@ async function resolveNodeModeReadinessEvidenceWith(
     const connectedPairedNodes = params.connectedNodes.filter((entry) =>
       pairedByNodeId.has(entry.nodeId),
     );
-    const configuredAllowCommands = commandSet(params.config.gateway?.nodes?.commands?.allow);
-    const deniedCommands = commandSet(params.config.gateway?.nodes?.commands?.deny);
     let executableApprovedCommandCount = 0;
     for (const node of connectedPairedNodes) {
-      const approvedCommands = commandSet(pairedByNodeId.get(node.nodeId)?.commands);
-      for (const command of configuredAllowCommands) {
-        approvedCommands.add(command);
-      }
+      const approvedCommands = pairedByNodeId.get(node.nodeId)?.commands ?? [];
+      const effectiveAllowlist = resolveNodeCommandAllowlist(params.config, {
+        ...node,
+        approvedCommands,
+      });
       const liveCommands = commandSet(node.commands);
-      executableApprovedCommandCount += [...approvedCommands].filter(
-        (command) => liveCommands.has(command) && !deniedCommands.has(command),
+      executableApprovedCommandCount += [...liveCommands].filter((command) =>
+        effectiveAllowlist.has(command),
       ).length;
     }
     const connectedCount = connectedPairedNodes.length;

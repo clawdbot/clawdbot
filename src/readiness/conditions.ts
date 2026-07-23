@@ -29,9 +29,13 @@ export type ReadinessCondition = {
 };
 
 export type CanonicalReadinessResult = {
+  profileContractVersion?: 1;
+  profile?: string;
+  profileSource?: "argument" | "environment" | "config";
   activation?: {
     runtimeId: string;
     incarnationId: string;
+    profile: string;
   };
   ready: boolean;
   conditions: ReadinessCondition[];
@@ -54,7 +58,12 @@ type RuntimeReadinessInput = {
   plugins?: PluginReadinessInput;
   coreConditions?: ReadinessCondition[];
   additionalConditions?: ReadinessCondition[];
-  activation?: CanonicalReadinessResult["activation"];
+  profileConditions?: ReadinessCondition[];
+  profile?: {
+    id: string;
+    source: NonNullable<CanonicalReadinessResult["profileSource"]>;
+    activation: Omit<NonNullable<CanonicalReadinessResult["activation"]>, "profile">;
+  };
 };
 
 export function buildUnobservedGatewayConditions(): ReadinessCondition[] {
@@ -159,6 +168,13 @@ export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalRe
   const remainingConditions = additionalConditions
     .filter((condition) => condition.type !== "WorkspaceWritable")
     .toSorted((left, right) => left.type.localeCompare(right.type));
+  const profileConditions = input.profileConditions ?? [];
+  const profileSelected = profileConditions.filter(
+    (condition) => condition.type === "ProfileSelected",
+  );
+  const profileSpecific = profileConditions.filter(
+    (condition) => condition.type !== "ProfileSelected",
+  );
   const conditions: ReadinessCondition[] = [
     ...(input.coreConditions ?? []),
     {
@@ -171,7 +187,8 @@ export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalRe
         : "Runtime configuration was not loaded.",
     },
     ...workspaceConditions,
-    ...(input.activation
+    ...profileSelected,
+    ...(input.profile
       ? [
           {
             type: "RuntimeActivationIdentified",
@@ -182,6 +199,7 @@ export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalRe
           },
         ]
       : []),
+    ...profileSpecific,
     buildGatewayCondition(input.gateway),
     buildPluginCondition(input.plugins),
     ...remainingConditions,
@@ -193,7 +211,14 @@ export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalRe
     .filter((entry) => entry.requirement === "advisory" && entry.status !== "True")
     .map((entry) => entry.reason);
   return {
-    ...(input.activation ? { activation: input.activation } : {}),
+    ...(input.profile
+      ? {
+          profileContractVersion: 1 as const,
+          profile: input.profile.id,
+          profileSource: input.profile.source,
+          activation: { ...input.profile.activation, profile: input.profile.id },
+        }
+      : {}),
     ready: failures.length === 0,
     conditions,
     failures,

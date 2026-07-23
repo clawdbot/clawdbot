@@ -38,12 +38,14 @@ import {
   formatHostingProfileIds,
   HOSTING_PROFILE_ENV,
   parseHostingProfileId,
+  resolveHostingProfileSelection,
 } from "../../hosting/profiles.js";
 import {
   INCARNATION_ID_ENV,
   resolveRuntimeActivationIdentity,
   RUNTIME_ID_ENV,
 } from "../../hosting/runtime-activation.js";
+import type { HostingProfileId } from "../../hosting/types.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -711,6 +713,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
   setVerbose(Boolean(opts.verbose));
   const hostingProfileRaw = toOptionString(opts.hostingProfile);
+  let hostingProfileOverride: HostingProfileId | undefined;
   if (hostingProfileRaw !== undefined) {
     const hostingProfile = parseHostingProfileId(hostingProfileRaw);
     if (!hostingProfile) {
@@ -718,6 +721,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       defaultRuntime.exit(1);
       return;
     }
+    hostingProfileOverride = hostingProfile;
     process.env[HOSTING_PROFILE_ENV] = hostingProfile;
   }
   const runtimeId = toOptionString(opts.runtimeId);
@@ -728,11 +732,26 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   if (incarnationId !== undefined) {
     process.env[INCARNATION_ID_ENV] = incarnationId;
   }
-  try {
-    resolveRuntimeActivationIdentity({ env: process.env });
-  } catch (err) {
-    defaultRuntime.error(formatErrorMessage(err));
-    defaultRuntime.exit(1);
+  const validateProfileActivationIdentity = (config?: OpenClawConfig): boolean => {
+    try {
+      if (
+        resolveHostingProfileSelection({
+          config,
+          env: process.env,
+          override: hostingProfileOverride,
+        })
+      ) {
+        resolveRuntimeActivationIdentity({ env: process.env });
+      }
+      return true;
+    } catch (err) {
+      defaultRuntime.error(formatErrorMessage(err));
+      defaultRuntime.exit(1);
+      return false;
+    }
+  };
+  // Explicit profile inputs are available before dev reset and must fail before mutation.
+  if (!validateProfileActivationIdentity()) {
     return;
   }
   if (opts.cliBackendLogs || opts.claudeCliLogs) {
@@ -865,6 +884,10 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
+  }
+  // The config-selected profile is only authoritative after the final snapshot and env overlay.
+  if (!validateProfileActivationIdentity(cfg)) {
+    return;
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
   const portOverride = parsePort(opts.port);
@@ -1198,6 +1221,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         return await startGatewayServer(port, {
           bind,
           auth: authOverride,
+          hostingProfileOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,
           ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),

@@ -22,6 +22,12 @@ function assertSelectedProfile(profile) {
   const selected = condition("ProfileSelected");
   assert.equal(selected.status, "True");
   assert.match(selected.message, new RegExp(`\\b${profile}\\b`));
+  assert.equal(body.profileContractVersion, 1);
+  assert.equal(body.profile, profile);
+  assert.ok(["argument", "environment", "config"].includes(body.profileSource));
+  assert.equal(body.activation?.profile, profile);
+  assert.equal(typeof body.activation?.runtimeId, "string");
+  assert.equal(typeof body.activation?.incarnationId, "string");
 }
 
 if (scenario === "unprofiled") {
@@ -29,6 +35,11 @@ if (scenario === "unprofiled") {
   assert.equal(body.ready, true);
   assert.equal(findCondition("ProfileSelected"), undefined);
   assert.equal(findCondition("WorkspaceWritable"), undefined);
+  assert.equal(findCondition("RuntimeActivationIdentified"), undefined);
+  assert.equal(body.profileContractVersion, undefined);
+  assert.equal(body.profile, undefined);
+  assert.equal(body.profileSource, undefined);
+  assert.equal(body.activation, undefined);
   assert.equal(condition("ConfigLoaded").requirement, "required");
   assert.equal(condition("GatewayResponding").requirement, "required");
   assert.deepEqual(body.failures, []);
