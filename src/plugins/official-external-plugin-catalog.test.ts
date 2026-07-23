@@ -1369,6 +1369,26 @@ describe("official external plugin catalog", () => {
     expect(result.error).toContain("expiresAt must be later than generatedAt");
   });
 
+  it("rejects impossible ISO calendar dates in signed feed expiry", async () => {
+    const signed = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({
+        sequence: 8,
+        pluginName: "@openclaw/invalid-expiry-date",
+        expiresAt: "2026-02-30T00:00:00.000Z",
+      }),
+    });
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      catalogConfig: signedCatalogConfig(signed.publicKeyPem),
+      fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
+      now: () => new Date("2026-02-22T00:00:30.000Z"),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.error).toContain("requires a valid expiresAt value");
+  });
+
   it("uses legacy signed snapshots for rollback state without preserving install authority", async () => {
     const legacyFeed = hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/legacy" });
     delete legacyFeed.expiresAt;

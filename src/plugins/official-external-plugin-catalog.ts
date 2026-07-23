@@ -808,9 +808,11 @@ async function parseHostedCatalogFeedBody(params: {
         `hosted catalog feed id "${verification.feed.id}" did not match expected "${params.expectedFeedId}"`,
       );
     }
-    const generatedAtMs = Date.parse(verification.feed.generatedAt);
+    const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(
+      verification.feed.generatedAt,
+    );
     const expiresAt = normalizeOptionalString(verification.feed.expiresAt);
-    if (!Number.isFinite(generatedAtMs)) {
+    if (generatedAtMs === undefined) {
       throw new Error("hosted catalog signed feed requires a valid generatedAt value");
     }
     let expired: boolean;
@@ -820,8 +822,8 @@ async function parseHostedCatalogFeedBody(params: {
       }
       expired = true;
     } else {
-      const expiresAtMs = Date.parse(expiresAt);
-      if (!Number.isFinite(expiresAtMs)) {
+      const expiresAtMs = parseOfficialExternalPluginCatalogTimestamp(expiresAt);
+      if (expiresAtMs === undefined) {
         throw new Error("hosted catalog signed feed requires a valid expiresAt value");
       }
       if (expiresAtMs <= generatedAtMs) {

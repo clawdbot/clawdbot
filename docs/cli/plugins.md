@@ -569,29 +569,11 @@ deployments can inject both `OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID` and
 fetch. Public keys must come from a trusted release or operator channel, not
 from a key endpoint on the feed host.
 
-Custom signed profiles require an expected `feedId` as well as local trust
-anchors:
-
-```json5
-{
-  marketplaces: {
-    feeds: {
-      acme: {
-        url: "https://packages.acme.example/openclaw/feed",
-        feedId: "acme-plugins",
-        verification: {
-          mode: "signed",
-          keys: [{ keyId: "acme-2026", publicKey: "<Ed25519 public key>" }],
-        },
-      },
-    },
-  },
-}
-```
-
-OpenClaw verifies the DSSE envelope and then requires the decoded payload ID to
-match `feedId`, preventing a valid document for one feed from being replayed
-through another profile.
+OpenClaw verifies the DSSE envelope and then requires its decoded payload ID to
+match the selected profile's `feedId`, preventing a valid document for one feed
+from being replayed through another profile. The feed-profile configuration
+surface is landing separately with the presentation metadata needed by Control
+UI; this trust binding does not restore the retired root `marketplaces` key.
 
 ## Related
 
