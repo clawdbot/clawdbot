@@ -403,8 +403,7 @@ internal fun formatLocalizedChatDurationCompact(durationMs: Long): String =
 
 @Composable
 internal fun formatLocalizedChatDurationFull(durationMs: Long): String {
-  val configuration = LocalConfiguration.current
-  val locale = configuration.locales.get(0) ?: Locale.getDefault()
+  val locale = LocalConfiguration.current.locales.get(0) ?: Locale.ROOT
   return remember(durationMs, locale) { formatChatDurationFull(durationMs, locale) }
 }
 

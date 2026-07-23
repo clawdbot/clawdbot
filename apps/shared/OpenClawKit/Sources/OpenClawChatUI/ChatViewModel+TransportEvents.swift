@@ -228,30 +228,67 @@ extension OpenClawChatViewModel {
         runID: String?) -> LifecycleSessionMergeResult
     {
         guard let snapshot = change.session else { return .unavailable }
-        if let eventKey = change.sessionKey,
-           snapshot.key != eventKey,
-           !self.matchesCurrentSessionKey(
-               incoming: snapshot.key,
-               agentId: change.agentId,
-               current: eventKey)
+        guard self.lifecycleSnapshotMatchesEvent(snapshot, change: change) else { return .rejected }
+        guard let index = self.lifecycleSessionIndex(snapshot, change: change) else { return .unavailable }
+
+        let existing = self.sessions[index]
+        if let rejection = Self.lifecycleSnapshotRejection(
+            snapshot: snapshot,
+            existing: existing,
+            phase: phase,
+            runID: runID)
         {
-            return .rejected
+            return rejection
         }
 
-        let exactIndex = self.sessions.firstIndex(where: { $0.key == snapshot.key })
-        let eventKeyIndex = change.sessionKey.flatMap { key in
-            self.sessions.firstIndex(where: { $0.key == key })
+        var updated = self.sessions
+        updated[index] = Self.mergedLifecycleSession(
+            existing: existing,
+            snapshot: snapshot,
+            phase: phase,
+            runID: runID)
+        self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
+        self.persistSessionsToCache(self.sessions)
+        return .merged
+    }
+
+    private func lifecycleSnapshotMatchesEvent(
+        _ snapshot: OpenClawChatSessionEntry,
+        change: OpenClawChatSessionsChangedEvent) -> Bool
+    {
+        guard let eventKey = change.sessionKey, snapshot.key != eventKey else { return true }
+        return self.matchesCurrentSessionKey(
+            incoming: snapshot.key,
+            agentId: change.agentId,
+            current: eventKey)
+    }
+
+    private func lifecycleSessionIndex(
+        _ snapshot: OpenClawChatSessionEntry,
+        change: OpenClawChatSessionsChangedEvent) -> Int?
+    {
+        if let exactIndex = self.sessions.firstIndex(where: { $0.key == snapshot.key }) {
+            return exactIndex
         }
-        let aliasIndex = self.sessions.firstIndex(where: { session in
+        if let eventKey = change.sessionKey,
+           let eventKeyIndex = self.sessions.firstIndex(where: { $0.key == eventKey })
+        {
+            return eventKeyIndex
+        }
+        return self.sessions.firstIndex(where: { session in
             self.matchesCurrentSessionKey(
                 incoming: snapshot.key,
                 agentId: change.agentId,
                 current: session.key)
         })
-        guard let index = exactIndex ?? eventKeyIndex ?? aliasIndex else { return .unavailable }
+    }
 
-        let existing = self.sessions[index]
-        let isTerminal = phase == "end" || phase == "error"
+    private static func lifecycleSnapshotRejection(
+        snapshot: OpenClawChatSessionEntry,
+        existing: OpenClawChatSessionEntry,
+        phase: String,
+        runID: String?) -> LifecycleSessionMergeResult?
+    {
         if phase == "start" {
             guard let snapshotUpdatedAt = snapshot.updatedAt else { return .unavailable }
             if let existingUpdatedAt = existing.updatedAt, snapshotUpdatedAt <= existingUpdatedAt {
@@ -264,40 +301,38 @@ extension OpenClawChatViewModel {
             return .rejected
         }
 
-        let existingActiveRunIDs = existing.activeRunIds?.compactMap { Self.normalizedRunID($0) } ?? []
-        if isTerminal, let runID {
-            if !existingActiveRunIDs.isEmpty {
-                guard existingActiveRunIDs == [runID] else { return .rejected }
-            } else if existing.hasActiveRun == true {
-                return .rejected
-            }
+        guard phase == "end" || phase == "error", let runID else { return nil }
+        let activeRunIDs = existing.activeRunIds?.compactMap { Self.normalizedRunID($0) } ?? []
+        if !activeRunIDs.isEmpty {
+            return activeRunIDs == [runID] ? nil : .rejected
         }
+        return existing.hasActiveRun == true ? .rejected : nil
+    }
 
-        // Lifecycle snapshots intentionally omit catalog metadata. Merge only
-        // run-owned fields so a sparse terminal row cannot erase sidebar state.
+    private static func mergedLifecycleSession(
+        existing: OpenClawChatSessionEntry,
+        snapshot: OpenClawChatSessionEntry,
+        phase: String,
+        runID: String?) -> OpenClawChatSessionEntry
+    {
+        let isTerminal = phase == "end" || phase == "error"
+        let existingActiveRunIDs = existing.activeRunIds?.compactMap { Self.normalizedRunID($0) } ?? []
         var merged = existing
-        if let updatedAt = snapshot.updatedAt {
-            merged.updatedAt = updatedAt
-        }
-        if let status = snapshot.status {
-            merged.status = status
-        }
+        merged.updatedAt = snapshot.updatedAt ?? existing.updatedAt
+        merged.status = snapshot.status ?? existing.status
+        merged.hasActiveRun = snapshot.hasActiveRun ?? existing.hasActiveRun
         if phase == "start" || phase == "end" {
             merged.lastRunError = snapshot.lastRunError
-        } else if let lastRunError = snapshot.lastRunError {
-            merged.lastRunError = lastRunError
+        } else {
+            merged.lastRunError = snapshot.lastRunError ?? existing.lastRunError
         }
-        if let hasActiveRun = snapshot.hasActiveRun {
-            merged.hasActiveRun = hasActiveRun
-        }
+
         if let activeRunIDs = snapshot.activeRunIds {
             merged.activeRunIds = activeRunIDs
         } else if phase == "start", let runID {
-            var activeRunIDs = existingActiveRunIDs
-            if !activeRunIDs.contains(runID) {
-                activeRunIDs.append(runID)
-            }
-            merged.activeRunIds = activeRunIDs
+            merged.activeRunIds = existingActiveRunIDs.contains(runID)
+                ? existingActiveRunIDs
+                : existingActiveRunIDs + [runID]
             merged.hasActiveRun = true
         } else if isTerminal, let runID {
             merged.activeRunIds = existingActiveRunIDs.filter { $0 != runID }
@@ -316,25 +351,12 @@ extension OpenClawChatViewModel {
             merged.runtimeMs = snapshot.runtimeMs ?? existing.runtimeMs
             merged.outputTokens = snapshot.outputTokens ?? existing.outputTokens
         default:
-            if let startedAt = snapshot.startedAt {
-                merged.startedAt = startedAt
-            }
-            if let endedAt = snapshot.endedAt {
-                merged.endedAt = endedAt
-            }
-            if let runtimeMs = snapshot.runtimeMs {
-                merged.runtimeMs = runtimeMs
-            }
-            if let outputTokens = snapshot.outputTokens {
-                merged.outputTokens = outputTokens
-            }
+            merged.startedAt = snapshot.startedAt ?? existing.startedAt
+            merged.endedAt = snapshot.endedAt ?? existing.endedAt
+            merged.runtimeMs = snapshot.runtimeMs ?? existing.runtimeMs
+            merged.outputTokens = snapshot.outputTokens ?? existing.outputTokens
         }
-
-        var updated = self.sessions
-        updated[index] = merged
-        self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
-        self.persistSessionsToCache(self.sessions)
-        return .merged
+        return merged
     }
 
     private func terminalRunID(
