@@ -1,3 +1,4 @@
+import { isNativeHookRelayAdmissionOverloadedError } from "../agents/harness/native-hook-relay-admission.js";
 // CLI adapter for invoking native provider hooks through direct relay or gateway fallback.
 import {
   invokeNativeHookRelayBridge,
@@ -120,6 +121,17 @@ export async function runNativeHookRelayCli(
       if (isNativeHookRelayBridgeStaleRegistrationError(error)) {
         writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
         return writeNativeHookRelayUnavailableResponse({ stdout, stderr, opts, provider, event });
+      }
+      if (isNativeHookRelayAdmissionOverloadedError(error)) {
+        writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
+        return writeNativeHookRelayUnavailableResponse({
+          stdout,
+          stderr,
+          opts,
+          provider,
+          event,
+          message: "Native hook relay overloaded",
+        });
       }
       // Fall through to the gateway path for embedded/local gateway cases and
       // older registrations that predate the direct relay bridge.

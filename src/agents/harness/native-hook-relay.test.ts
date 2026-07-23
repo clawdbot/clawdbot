@@ -3166,21 +3166,36 @@ describe("native hook relay registry", () => {
     expect(approvalRequester).toHaveBeenCalledTimes(1);
     resolveDecision?.("allow");
     const responses = await Promise.all([first, second]);
+    const settledDuplicate = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: payload,
+    });
 
-    expect(responses.map((response) => JSON.parse(response.stdout))).toEqual([
-      {
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision: { behavior: "allow" },
+    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    expect([...responses, settledDuplicate].map((response) => JSON.parse(response.stdout))).toEqual(
+      [
+        {
+          hookSpecificOutput: {
+            hookEventName: "PermissionRequest",
+            decision: { behavior: "allow" },
+          },
         },
-      },
-      {
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision: { behavior: "allow" },
+        {
+          hookSpecificOutput: {
+            hookEventName: "PermissionRequest",
+            decision: { behavior: "allow" },
+          },
         },
-      },
-    ]);
+        {
+          hookSpecificOutput: {
+            hookEventName: "PermissionRequest",
+            decision: { behavior: "allow" },
+          },
+        },
+      ],
+    );
   });
 
   it("keeps replacement pending PermissionRequest approvals when stale approvals settle", async () => {

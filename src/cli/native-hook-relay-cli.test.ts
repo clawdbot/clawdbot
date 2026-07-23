@@ -1,6 +1,7 @@
 // Native hook relay CLI tests cover relay command registration and runtime delegation.
 import { PassThrough, Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { NativeHookRelayAdmissionOverloadedError } from "../agents/harness/native-hook-relay-admission.js";
 import { runNativeHookRelayCli } from "./native-hook-relay-cli.js";
 
 function createReadableTextStream(text: string): NodeJS.ReadableStream {
@@ -615,6 +616,40 @@ describe("native hook relay CLI", () => {
     expect(exitCode).toBe(0);
     expect(stdout.text()).toBe("");
     expect(stderr.text()).toContain("native hook relay unavailable");
+  });
+
+  it("does not bypass deterministic overload through the gateway fallback", async () => {
+    const callGateway = vi.fn();
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "permission_request",
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        invokeBridge: vi.fn(async () => {
+          throw new NativeHookRelayAdmissionOverloadedError();
+        }) as never,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: "Native hook relay overloaded" },
+      },
+    });
+    expect(stderr.text()).toContain("native hook relay unavailable");
+    expect(callGateway).not.toHaveBeenCalled();
   });
 });
 

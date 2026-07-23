@@ -76,6 +76,7 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-readonly.ts",
     "src/state/openclaw-state-db-readonly.ts",
   ],
+  "latency-critical read-only native hook relay bootstrap": ["src/native-hook-relay-entry.ts"],
   "read-only schema preflight and integrity verification access": [
     "src/state/openclaw-database-preflight.ts",
     "src/state/openclaw-database-verify.worker.ts",
