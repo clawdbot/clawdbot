@@ -56,6 +56,7 @@ import {
   type McpServerConnectionResolved,
 } from "./mcp-connection-resolver.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
+import { listToolsTolerant } from "./mcp-list-tools-tolerant.js";
 import { sanitizeMcpMetadataText } from "./mcp-metadata.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
@@ -171,7 +172,7 @@ async function listAllTools(client: Client, timeoutMs: number) {
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page = await client.listTools(params, { timeout: timeoutMs });
+    const page = await listToolsTolerant(client, params, { timeout: timeoutMs });
     tools.push(...page.tools);
     cursor = page.nextCursor;
   } while (cursor);
@@ -1051,7 +1052,7 @@ export function createSessionMcpRuntime(params: {
       const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, session, async () =>
         runMcpRequest(session, async (signal) =>
-          session.client.listTools(requestParams, { timeout: session.requestTimeoutMs, signal }),
+          listToolsTolerant(session.client, requestParams, { timeout: session.requestTimeoutMs, signal }),
         ),
       );
     },

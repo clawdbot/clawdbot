@@ -9,6 +9,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { matchesMcpToolFilterPattern } from "../agents/agent-bundle-mcp-filter.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
+import { listToolsTolerant } from "../agents/mcp-list-tools-tolerant.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import { resolveMcpTransport } from "../agents/mcp-transport.js";
@@ -265,7 +266,7 @@ async function listAllTools(
   let cursor: string | undefined;
   do {
     const page = await withAbort(
-      client.listTools(cursor ? { cursor } : undefined, { timeout: timeoutMs }),
+      listToolsTolerant(client, cursor ? { cursor } : undefined, { timeout: timeoutMs }),
       signal,
     );
     tools.push(...page.tools);
