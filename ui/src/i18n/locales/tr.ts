@@ -675,8 +675,8 @@ export const tr: TranslationMap = {
     openWorkboardCard: "Workboard kartını aç",
     dashboardAvailable: "Pano kullanılabilir",
     approvalNeeded: "Onay gerekli",
-    queuedMessage: "{count} mesaj gönderilmek üzere sıraya alındı",
-    queuedMessages: "{count} mesaj gönderilmek üzere sıraya alındı",
+    queuedMessage: "Gönderilmek üzere {count} mesaj sıraya alındı",
+    queuedMessages: "Gönderilmek üzere {count} mesaj sıraya alındı",
     noSessions: "Oturum bulunamadı.",
     noActiveSessions: "Etkin konu yok.",
     noArchivedSessions: "Arşivlenmiş oturum yok.",
@@ -3719,6 +3719,16 @@ export const tr: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Kontrol Paneli",
+    deviceAuthMigration: {
+      banner: "Bu tarayıcı, güncellemeden sonra bir kez cihaz onayı gerektiriyor.",
+      action: "Bu tarayıcıyı güvenceye al",
+      secureContextRequired:
+        "Bu eski tarayıcı geçici olarak kullanılabilir durumda. Cihaz kimliğiyle güvenceye almak için HTTPS veya localhost üzerinden yeniden açın.",
+      pendingUnavailable:
+        "Tarayıcı eşleştirme isteği henüz kullanılamıyor. Birazdan tekrar deneyin.",
+      loadFailed: "Bu tarayıcının eşleştirme isteği yüklenemedi: {error}",
+      approvalFailed: "Bu tarayıcı güvenceye alınamadı: {error}",
+    },
     passwordPlaceholder: "isteğe bağlı",
     showToken: "Tokenı göster",
     hideToken: "Token'ı gizle",
@@ -4231,7 +4241,7 @@ export const tr: TranslationMap = {
       offlineHint:
         "Çevrimdışı — mesajlar sıraya alınacak ve bağlantı geri geldiğinde gönderilecek.",
       offlineQueuedHint:
-        "Çevrimdışı — {count} mesaj sırada; bağlantı yeniden kurulduğunda mesajlar gönderilir.",
+        "Çevrimdışı — {count} sırada; mesajlar bağlantı geri geldiğinde gönderilir.",
       preparingModel: "Model hazırlanıyor...",
       responding: "{name} yanıtlıyor...",
       sendingMessage: "Mesaj gönderiliyor...",
