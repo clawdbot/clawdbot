@@ -478,6 +478,23 @@ describe("official external plugin catalog", () => {
     expect(result.error).toContain("requires both key id and public key env vars");
   });
 
+  it("preserves default ClawHub trust for an explicit default feed URL", async () => {
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+    const result = await loadHostedCatalog({
+      feedUrl: "https://clawhub.ai/v1/feeds/plugins",
+      env: {
+        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
+      },
+      fetchImpl,
+      snapshotStore: null,
+    });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result.source).toBe("bundled-fallback");
+    expect(result.entries).toEqual([]);
+    expect(result.error).toContain("requires both key id and public key env vars");
+  });
+
   it("loads schema-v2 marketplace entries and gates installs by state and trust", async () => {
     const body = JSON.stringify({
       schemaVersion: 2,
@@ -527,6 +544,9 @@ describe("official external plugin catalog", () => {
           version: "1.0.0",
           state: "available",
           publisher: { id: "acme", trust: "community" },
+          openclaw: {
+            install: { npmSpec: "@acme/community" },
+          },
           install: {
             candidates: [
               {

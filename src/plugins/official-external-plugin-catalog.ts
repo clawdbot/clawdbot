@@ -486,23 +486,33 @@ function resolveHostedCatalogFeedSource(params: {
     if (!OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST.includes(url.hostname)) {
       throw new Error("hosted catalog feed URL hostname is not allowed");
     }
-    const profileConfig =
+    const defaultProfile =
       explicitProfileName === undefined
+        ? resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig).feeds[
+            DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
+          ]
+        : undefined;
+    const profileName =
+      explicitProfileName ??
+      (defaultProfile && resolveHostedCatalogFeedUrl(defaultProfile.url).href === url.href
+        ? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
+        : undefined);
+    const profileConfig =
+      profileName === undefined
         ? undefined
         : resolveOfficialExternalPluginCatalogProfileConfig(
             params.catalogConfig,
-            explicitProfileName === DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
+            profileName === DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE
               ? params.env
               : undefined,
           );
-    const profile =
-      explicitProfileName === undefined ? undefined : profileConfig?.feeds[explicitProfileName];
-    if (explicitProfileName !== undefined && !profile) {
-      throw new Error(`hosted catalog feed profile "${explicitProfileName}" is not configured`);
+    const profile = profileName === undefined ? undefined : profileConfig?.feeds[profileName];
+    if (profileName !== undefined && !profile) {
+      throw new Error(`hosted catalog feed profile "${profileName}" is not configured`);
     }
     if (profile?.verification?.mode === "signed" && !profile.feedId) {
       throw new HostedCatalogTrustConfigurationError(
-        `signed hosted catalog feed profile "${explicitProfileName}" requires feedId`,
+        `signed hosted catalog feed profile "${profileName}" requires feedId`,
       );
     }
     return {
@@ -1525,7 +1535,10 @@ export function resolveOfficialExternalPluginInstall(
   params?: { catalogConfig?: OfficialExternalPluginCatalogProfileConfig },
 ): PluginPackageInstall | null {
   const state = normalizeOptionalString(entry.state);
-  if (state && state !== "available") {
+  if (
+    state &&
+    (state !== "available" || normalizeOptionalString(entry.publisher?.trust) !== "official")
+  ) {
     return null;
   }
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
