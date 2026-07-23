@@ -399,6 +399,106 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it.each([
+    [
+      "output new_sensitive",
+      'MiniMax request failed: {"base_resp":{"status_code":1027,"status_msg":"output new_sensitive"}}',
+    ],
+    ["1027 sensitive", "MiniMax API error 1027: sensitive output blocked"],
+  ])(
+    "falls back assistant MiniMax %s errors after rotation is exhausted",
+    (_label, errorMessage) => {
+      const assistantError = {
+        role: "assistant" as const,
+        api: "openai-completions" as const,
+        provider: "minimax",
+        model: "abab6.5s-chat",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "error" as const,
+        errorMessage,
+        content: [],
+        timestamp: 0,
+      };
+      const failoverReason = classifyAssistantFailoverReason(assistantError);
+
+      expect(failoverReason).toBe("rate_limit");
+      expect(
+        resolveRunFailoverDecision({
+          stage: "assistant",
+          aborted: false,
+          externalAbort: false,
+          fallbackConfigured: true,
+          failoverFailure: failoverReason !== null,
+          failoverReason,
+          timedOut: false,
+          idleTimedOut: false,
+          timedOutDuringCompaction: false,
+          timedOutDuringToolExecution: false,
+          profileRotated: true,
+        }),
+      ).toEqual({
+        action: "fallback_model",
+        reason: "rate_limit",
+      });
+    },
+  );
+
+  it("does not classify generic content policy text as MiniMax sensitive failover", () => {
+    const failoverReason = classifyAssistantFailoverReason({
+      role: "assistant" as const,
+      api: "openai-completions" as const,
+      provider: "minimax",
+      model: "abab6.5s-chat",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error" as const,
+      errorMessage: "content policy violation",
+      content: [],
+      timestamp: 0,
+    });
+
+    expect(failoverReason).toBeNull();
+  });
+
+  it.each([
+    'MiniMax request failed: {"base_resp":{"status_code":1027,"status_msg":"output new_sensitive"}}',
+    "MiniMax API error 1027: sensitive output blocked",
+  ])("does not apply MiniMax sensitive failover to other providers", (errorMessage) => {
+    const failoverReason = classifyAssistantFailoverReason({
+      role: "assistant" as const,
+      api: "openai-completions" as const,
+      provider: "openrouter",
+      model: "some-model",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error" as const,
+      errorMessage,
+      content: [],
+      timestamp: 0,
+    });
+
+    expect(failoverReason).toBeNull();
+  });
+
   it("does not fallback assistant tool-execution timeouts even after profile rotation exhausted (#52147)", () => {
     expect(
       resolveRunFailoverDecision({
