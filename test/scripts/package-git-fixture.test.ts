@@ -23,6 +23,7 @@ describe("package git fixture", () => {
       )}\n`,
     );
     writeFileSync(path.join(root, "npm-shrinkwrap.json"), "{}\n");
+    writeFileSync(path.join(root, ".gitignore"), "dist/temp\n");
     writeFileSync(
       path.join(root, "node_modules", "@openclaw", "ai", "package.json"),
       `${JSON.stringify({ name: "@openclaw/ai", version: "2026.6.11" })}\n`,
@@ -39,6 +40,9 @@ describe("package git fixture", () => {
     expect(packageJson.dependencies["@openclaw/ai"]).toBe("file:.openclaw-fixture/packages/ai");
     expect(packageJson.bundleDependencies).toEqual(["chalk"]);
     expect(() => readFileSync(path.join(root, "npm-shrinkwrap.json"), "utf8")).toThrow();
+    expect(readFileSync(path.join(root, ".gitignore"), "utf8")).toBe(
+      "dist/temp\nnode_modules/\n/pnpm-lock.yaml\n",
+    );
     expect(
       JSON.parse(
         readFileSync(
@@ -47,5 +51,20 @@ describe("package git fixture", () => {
         ),
       ).name,
     ).toBe("@openclaw/ai");
+
+    mkdirSync(path.join(root, "node_modules", "fixture-dependency"), { recursive: true });
+    writeFileSync(path.join(root, "node_modules", "fixture-dependency", "package.json"), "{}\n");
+    writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    expect(spawnSync("git", ["init", "-q", root]).status).toBe(0);
+    expect(
+      spawnSync("git", [
+        "-C",
+        root,
+        "check-ignore",
+        "-q",
+        "node_modules/fixture-dependency/package.json",
+      ]).status,
+    ).toBe(0);
+    expect(spawnSync("git", ["-C", root, "check-ignore", "-q", "pnpm-lock.yaml"]).status).toBe(0);
   });
 });
