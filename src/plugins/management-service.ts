@@ -1284,6 +1284,7 @@ export async function uninstallManagedPlugin(params: {
       const disabledConfig = prepareConfigForPendingPluginDirectoryRemoval(
         snapshot.config,
         pluginId,
+        { channelIds },
       );
       await replaceConfigFile({
         nextConfig: disabledConfig,

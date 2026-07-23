@@ -24,7 +24,10 @@ describe("resolvePluginUninstallId", () => {
       plugins: [{ id: "linkmind-context", name: "linkmind-context" }],
     });
 
-    expect(result.pluginId).toBe("linkmind-context");
+    expect(result).toEqual({
+      pluginId: "linkmind-context",
+      plugin: { id: "linkmind-context", name: "linkmind-context" },
+    });
   });
 
   it("accepts a versionless ClawHub spec when the install was pinned", () => {
@@ -46,6 +49,9 @@ describe("resolvePluginUninstallId", () => {
       plugins: [{ id: "linkmind-context", name: "linkmind-context" }],
     });
 
-    expect(result.pluginId).toBe("linkmind-context");
+    expect(result).toEqual({
+      pluginId: "linkmind-context",
+      plugin: { id: "linkmind-context", name: "linkmind-context" },
+    });
   });
 });
