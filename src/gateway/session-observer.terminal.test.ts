@@ -73,6 +73,29 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     harness.observer.dispose();
   });
 
+  it("finalizes an active run from a contextless terminal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const harness = createHarness();
+    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+    vi.setSystemTime(30_000);
+    const contextlessTerminal = event({
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 0, endedAt: 30_000 },
+    });
+    delete contextlessTerminal.sessionKey;
+
+    harness.observer.handleEvent(contextlessTerminal);
+    await flushObserver();
+
+    const digest = harness.broadcastToConnIds.mock.calls.at(-1)?.[1] as
+      | SessionObserverDigest
+      | undefined;
+    expect(digest?.health).toBe("done");
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    harness.observer.dispose();
+  });
+
   it("suppresses live events after a contextless terminal", () => {
     const harness = createHarness();
     const contextlessTerminal = event({ stream: "lifecycle", data: { phase: "end" } });

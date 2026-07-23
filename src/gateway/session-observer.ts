@@ -438,10 +438,10 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const admitState = (
     event: SessionObserverEvent,
     allowPreambleOnly: boolean,
+    sessionKey: string,
+    agentId: string | undefined,
   ): SessionObserverState | undefined => {
-    const sessionKey = event.sessionKey?.trim();
-    const agentId = event.agentId?.trim();
-    if (!sessionKey || !agentId || !audience.has(sessionKey)) {
+    if (!agentId || !audience.has(sessionKey)) {
       return undefined;
     }
     const cfg = deps.getConfig();
@@ -513,18 +513,31 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
       return;
     }
-    // A contextless terminal still closes the live run, but one routed terminal
-    // duplicate must pass through later so durable state can be finalized.
+    // A terminal with no recoverable run context still closes the live run, but
+    // one routed terminal duplicate must pass later to finalize durable state.
     if (contextlessTerminalRuns.has(event.runId) && !terminal) {
       return;
     }
-    const sessionKey = event.sessionKey?.trim();
+    const eventSessionKey = event.sessionKey?.trim();
+    const eventAgentId = event.agentId?.trim();
+    let knownRun: SessionObserverState | DormantSessionObserverRun | undefined;
+    if (terminal && (!eventSessionKey || !eventAgentId)) {
+      for (const candidate of states.values()) {
+        if (candidate.runId === event.runId) {
+          knownRun = candidate;
+          break;
+        }
+      }
+      knownRun ??= dormantRuns.get(event.runId);
+    }
+    const sessionKey = eventSessionKey || knownRun?.sessionKey;
     if (!sessionKey) {
       if (terminal) {
         markSessionObserverRunSuperseded(contextlessTerminalRuns, event.runId, event.ts);
       }
       return;
     }
+    const agentId = eventAgentId || knownRun?.agentId;
     if (terminal) {
       contextlessTerminalRuns.delete(event.runId);
       markSessionObserverRunSuperseded(terminalRuns, event.runId, event.ts);
@@ -582,7 +595,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state = undefined;
     }
     if (!state) {
-      state = admitState(event, isPreamble);
+      state = admitState(event, isPreamble, sessionKey, agentId);
     }
     if (!state) {
       if (terminal) {
