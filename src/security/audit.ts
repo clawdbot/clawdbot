@@ -649,7 +649,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   }
 
   const agents = listAgentEntries(cfg);
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = agents.length > 0 ? resolveDefaultAgentId(cfg) : undefined;
   const riskyAgents = agents
     .filter(
       (entry) =>
@@ -1267,7 +1267,7 @@ async function createAuditExecutionContext(
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = listAgentEntries(cfg).length > 0 ? resolveDefaultAgentId(cfg) : undefined;
   const configuredDefaultWorkspace = cfg.agents?.defaults?.workspace?.trim();
   const workspaceDir =
     opts.workspaceDir ??

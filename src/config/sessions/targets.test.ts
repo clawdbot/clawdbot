@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config.js";
 import { resolveStorePath } from "./paths.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import {
+  listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
@@ -81,6 +82,30 @@ function expectTargetsToContainStores(
 }
 
 describe("resolveSessionStoreTargets", () => {
+  it("includes a retired owner registered under the active shared store", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storePath = path.join(stateDir, "shared", "sessions.json");
+      const cfg: OpenClawConfig = {
+        session: { store: storePath },
+        agents: { entries: { ops: { default: true } } },
+      };
+
+      await replaceSessionEntry(
+        {
+          agentId: "retired",
+          env,
+          storePath,
+          sessionKey: "agent:retired:cron:old:run:expired",
+        },
+        { sessionId: "retired-session", updatedAt: 1 },
+      );
+
+      expect(listKnownSessionStoreAgentIds(cfg, { env }).toSorted()).toEqual(["ops", "retired"]);
+    });
+  });
+
   it("resolves all configured agent stores", async () => {
     await withTempHome(async () => {
       const cfg: OpenClawConfig = {

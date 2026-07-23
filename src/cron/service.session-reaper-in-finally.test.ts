@@ -239,6 +239,40 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
   });
 
+  it("sweeps a persisted owner after it leaves the roster and cron store", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await saveCronStore(store.storePath, { version: 1, jobs: [] });
+    await replaceSessionEntry(
+      {
+        agentId: "retired",
+        storePath: sessionStorePath,
+        sessionKey: "agent:retired:cron:old-job:run:expired",
+      },
+      { sessionId: "retired-expired", updatedAt: now - 25 * 3_600_000 },
+    );
+
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      defaultAgentId: "ops",
+      resolveSessionStoreAgentIds: () => ["retired"],
+      sessionStorePath,
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await onTimer(state);
+
+      expect(listSessionEntries({ agentId: "retired", storePath: sessionStorePath })).toEqual([]);
+    });
+  });
+
   it("prunes expired cron-run sessions while ignoring malformed legacy cron files", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");

@@ -10,6 +10,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
@@ -121,6 +122,24 @@ export function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[
     }
   }
 
+  return [...ids];
+}
+
+/** Lists configured owners plus persisted owners whose registered DB still matches this store. */
+export function listKnownSessionStoreAgentIds(
+  cfg: OpenClawConfig,
+  params: { env?: NodeJS.ProcessEnv } = {},
+): string[] {
+  const env = params.env ?? process.env;
+  const ids = new Set(listConfiguredSessionStoreAgentIds(cfg));
+  for (const registered of listOpenClawRegisteredAgentDatabases({ env })) {
+    const agentId = normalizeAgentId(registered.agentId);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId, env });
+    const expectedPath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
+    if (path.resolve(registered.path) === path.resolve(expectedPath)) {
+      ids.add(agentId);
+    }
+  }
   return [...ids];
 }
 
