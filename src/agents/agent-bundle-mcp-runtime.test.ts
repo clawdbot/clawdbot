@@ -5858,6 +5858,80 @@ process.stdin.on("end", () => {
   );
 
   it(
+    "preserves runtime-owned sessions when invalidation supersedes queued fanout",
+    { timeout: 8_000 },
+    async () => {
+      const tempDir = makeTempDir(tempDirs, "bundle-mcp-superseded-fanout-");
+      const servers = Array.from({ length: 8 }, (_, index) => ({
+        serverName: `supersededServer${index}`,
+        serverPath: path.join(tempDir, `server-${index}.mjs`),
+        logPath: path.join(tempDir, `server-${index}.log`),
+      }));
+
+      await Promise.all(
+        servers.map((server, index) =>
+          writeListToolsMcpServer({
+            filePath: server.serverPath,
+            logPath: server.logPath,
+            ...(index === 0
+              ? {
+                  capabilities: { tools: { listChanged: true } },
+                  notifyListChangedOnInitialized: true,
+                }
+              : { initializeDelayMs: 200 }),
+          }),
+        ),
+      );
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-superseded-fanout",
+        sessionKey: "agent:test:session-superseded-fanout",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: Object.fromEntries(
+              servers.map((server) => [
+                server.serverName,
+                {
+                  command: process.execPath,
+                  args: [server.serverPath],
+                  connectionTimeoutMs: 2_000,
+                },
+              ]),
+            ),
+          },
+        },
+      });
+
+      try {
+        const firstCatalog = runtime.getCatalog();
+        await waitForFileText(
+          servers[0]!.logPath,
+          "notify tools/list_changed",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+
+        const replacementCatalog = await runtime.getCatalog();
+        await firstCatalog;
+
+        expect(Object.keys(replacementCatalog.servers).toSorted()).toEqual(
+          servers.map((server) => server.serverName).toSorted(),
+        );
+        expect(replacementCatalog.diagnostics ?? []).toEqual([]);
+        await Promise.all(
+          servers.map((server) =>
+            expect(runtime.callTool(server.serverName, "slow_tool", {})).resolves.toMatchObject({
+              content: [{ type: "text", text: "tool ok" }],
+            }),
+          ),
+        );
+      } finally {
+        await runtime.dispose();
+      }
+    },
+  );
+
+  it(
     "retires timed-out shared MCP sessions before later catalog retries",
     { timeout: 8_000 },
     async () => {

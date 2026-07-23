@@ -736,9 +736,19 @@ export function createSessionMcpRuntime(params: {
                               `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactMcpDiagnosticError(error)}`,
                             );
                           }
-                          invalidateCatalog(
-                            "MCP catalog refresh superseded by tools/list_changed",
-                          );
+                          const supersededRefresh = catalogInFlight;
+                          catalogInvalidationGeneration += 1;
+                          catalog = null;
+                          catalogRetryAfterMs = undefined;
+                          catalogInFlight = undefined;
+                          // Let a protocol response delivered immediately before
+                          // this notification settle before cancelling queued work
+                          // whose result can no longer populate the current cache.
+                          setTimeout(() => {
+                            supersededRefresh?.controller.abort(
+                              new Error("MCP catalog refresh superseded by tools/list_changed"),
+                            );
+                          }, 0);
                         },
                       },
                     },
@@ -962,6 +972,11 @@ export function createSessionMcpRuntime(params: {
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {
+        if (catalogInvalidationGeneration !== catalogGeneration) {
+          // Sessions belong to the runtime, not one catalog generation. A newer
+          // generation may already be reusing their connection work.
+          throw error;
+        }
         await Promise.allSettled(
           Array.from(sessions.values(), (session) => disposeBundleMcpSession(session)),
         );

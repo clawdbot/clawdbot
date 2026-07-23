@@ -1,4 +1,5 @@
-import type { IncomingMessage } from "node:http";
+import { EventEmitter } from "node:events";
+import { createServer, type IncomingMessage, request as requestHttp } from "node:http";
 import { Readable } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
@@ -104,6 +105,8 @@ async function request(params: {
   body?: unknown;
 }) {
   const { res, end, setHeader } = makeMockHttpResponse();
+  const socket = new EventEmitter();
+  Object.assign(res, { socket });
   const serialized = params.body === undefined ? undefined : JSON.stringify(params.body);
   const req = Object.assign(Readable.from(serialized === undefined ? [] : [serialized]), {
     url: params.url,
@@ -112,7 +115,7 @@ async function request(params: {
       ...(params.authorization ? { authorization: params.authorization } : {}),
       ...(serialized ? { "content-type": "application/json" } : {}),
     },
-    socket: {},
+    socket,
   }) as IncomingMessage;
   const handled = await handleMcpAppStandaloneHttpRequest(req, res, {
     gatewayPort: 18_789,
@@ -560,6 +563,101 @@ describe("MCP App standalone host", () => {
     expect(host.getRequestSignal()).toBeDefined();
     host.emit("pagehide");
     expect(host.getRequestSignal()?.aborted).toBe(true);
+  });
+
+  it("cancels a running standalone operation when the HTTP client disconnects", async () => {
+    view.operationTimeoutMs = 300;
+    let operationSignal: AbortSignal | undefined;
+    let resolveOperationStarted: (() => void) | undefined;
+    const operationStarted = new Promise<void>((resolve) => {
+      resolveOperationStarted = resolve;
+    });
+    runtime.callTool.mockImplementationOnce(async (_serverName, _toolName, _args, options) => {
+      operationSignal = options?.signal;
+      resolveOperationStarted?.();
+      return await new Promise((resolve, reject) => {
+        operationSignal?.addEventListener(
+          "abort",
+          () => {
+            reject(
+              operationSignal?.reason instanceof Error
+                ? operationSignal.reason
+                : new Error("standalone MCP App operation aborted"),
+            );
+          },
+          { once: true },
+        );
+      });
+    });
+
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret });
+    let resolveHandled: ((handled: boolean) => void) | undefined;
+    let rejectHandled: ((error: unknown) => void) | undefined;
+    const handled = new Promise<boolean>((resolve, reject) => {
+      resolveHandled = resolve;
+      rejectHandled = reject;
+    });
+    const server = createServer((req, res) => {
+      void handleMcpAppStandaloneHttpRequest(req, res, {
+        gatewayPort: 18_789,
+        sandboxPort: 18_790,
+        nowMs,
+        ticketSecret: secret,
+      }).then(resolveHandled, rejectHandled);
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("standalone disconnect test server did not bind a TCP port");
+      }
+      const client = requestHttp({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/__openclaw__/mcp-app/view",
+        method: "POST",
+        headers: {
+          Authorization: `MCP-App ${issued.ticket}`,
+          "Content-Type": "application/json",
+        },
+      });
+      client.on("error", () => {});
+      client.end(
+        JSON.stringify({
+          method: "tools/call",
+          params: { name: "shared", arguments: {} },
+        }),
+      );
+
+      await operationStarted;
+      expect(view.activeRequests).toBe(1);
+      client.destroy();
+
+      const abortedPromptly = await Promise.race([
+        new Promise<boolean>((resolve) => {
+          operationSignal?.addEventListener("abort", () => resolve(true), { once: true });
+        }),
+        new Promise<boolean>((resolve) => {
+          setTimeout(() => resolve(false), 100);
+        }),
+      ]);
+      expect(abortedPromptly).toBe(true);
+      await expect(handled).resolves.toBe(true);
+      expect(operationSignal?.aborted).toBe(true);
+      expect(view.activeRequests).toBe(0);
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    } finally {
+      await handled.catch(() => {});
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      view.operationTimeoutMs = viewOperationTimeoutMs;
+    }
   });
 
   it("keeps slow standalone operations within the MCP deadline alive past the gateway default", async () => {

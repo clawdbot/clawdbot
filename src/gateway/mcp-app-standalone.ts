@@ -10,7 +10,7 @@ import {
   MCP_APP_STANDALONE_PATH,
   MCP_APP_STANDALONE_VIEW_PATH,
 } from "./gateway-http-route-contracts.js";
-import { readJsonBodyOrError, sendJson } from "./http-common.js";
+import { readJsonBodyOrError, sendJson, watchClientDisconnect } from "./http-common.js";
 import {
   executeMcpAppOperation,
   type McpAppActiveView,
@@ -581,10 +581,21 @@ export async function handleMcpAppStandaloneHttpRequest(
       sendJson(res, 403, { ok: false, error: "MCP App tool bridge is unavailable" });
       return true;
     }
+    const disconnectController = new AbortController();
+    const stopWatchingDisconnect = watchClientDisconnect(req, res, disconnectController);
     try {
-      sendJson(res, 200, { ok: true, result: await executeMcpAppOperation(current, operation) });
+      const result = await executeMcpAppOperation(current, operation, {
+        signal: disconnectController.signal,
+      });
+      if (!disconnectController.signal.aborted) {
+        sendJson(res, 200, { ok: true, result });
+      }
     } catch (error) {
-      sendJson(res, 403, { ok: false, error: formatErrorMessage(error) });
+      if (!disconnectController.signal.aborted) {
+        sendJson(res, 403, { ok: false, error: formatErrorMessage(error) });
+      }
+    } finally {
+      stopWatchingDisconnect();
     }
     return true;
   }

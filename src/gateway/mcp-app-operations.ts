@@ -216,9 +216,11 @@ export async function withMcpAppActiveView<T>(
 export async function executeMcpAppOperation(
   active: McpAppActiveView,
   operation: McpAppOperation,
+  options?: { signal?: AbortSignal },
 ): Promise<unknown> {
   const { runtime, view } = active;
-  const signal = AbortSignal.timeout(view.operationTimeoutMs);
+  const timeoutSignal = AbortSignal.timeout(view.operationTimeoutMs);
+  const signal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
   switch (operation.method) {
     case "tools/call":
       return await withMcpAppActiveView(active, "tool", async () => {
