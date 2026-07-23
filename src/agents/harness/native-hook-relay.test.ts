@@ -126,6 +126,17 @@ function nativeHookRelayStateDbArgForTests(): string {
   return `--state-db ${resolveOpenClawStateSqlitePath()}`;
 }
 
+function deferredForNativeHookRelayTests(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 function openDeferredNativeHookRelayBridgeRequest(
   record: Pick<NativeHookRelayBridgeRecord, "hostname" | "port" | "token">,
   payload: Record<string, unknown>,
@@ -201,6 +212,20 @@ type NativeHookRelaySharedStateForTests = {
   pendingPermissionApprovals: Map<string, unknown>;
   permissionApprovalWindows: Map<string, unknown[]>;
   permissionAllowAlwaysApprovals: Map<string, unknown>;
+  admissions: Map<
+    string,
+    {
+      snapshot: () => {
+        active: number;
+        queued: number;
+        accepted: number;
+        completed: number;
+        rejected: number;
+        peakActive: number;
+        peakQueued: number;
+      };
+    }
+  >;
 };
 
 function getNativeHookRelaySharedStateForTests(): NativeHookRelaySharedStateForTests {
@@ -768,6 +793,80 @@ describe("native hook relay registry", () => {
       relayId: relay.relayId,
       event: "pre_tool_use",
       runId: "run-1",
+    });
+  });
+
+  it("enforces four active and 32 queued bridge requests with deterministic overload", async () => {
+    const release = deferredForNativeHookRelayTests();
+    const beforeAgentFinalize = vi.fn(async () => {
+      await release.promise;
+      return { action: "continue" as const };
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_agent_finalize", handler: beforeAgentFinalize },
+      ]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-bounded-bridge-admission",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["before_agent_finalize"],
+    });
+    const record = await waitForNativeHookRelayBridgeRecord(relay.relayId);
+    const requests = Array.from({ length: 37 }, (_, index) =>
+      openDeferredNativeHookRelayBridgeRequest(record, {
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: relay.generation,
+        event: "before_agent_finalize",
+        rawPayload: {
+          hook_event_name: "Stop",
+          turn_id: `bounded-admission-${index}`,
+          stop_hook_active: false,
+        },
+      }),
+    );
+    try {
+      await Promise.all(requests.map((request) => request.connected));
+      for (const request of requests) {
+        request.sendBody();
+      }
+      await vi.waitFor(() => expect(beforeAgentFinalize).toHaveBeenCalledTimes(4));
+
+      const admission = getNativeHookRelaySharedStateForTests().admissions.get(relay.relayId);
+      expect(admission?.snapshot()).toMatchObject({
+        active: 4,
+        queued: 32,
+        accepted: 36,
+        rejected: 1,
+        peakActive: 4,
+        peakQueued: 32,
+      });
+      await expect(requests[36]?.response).resolves.toMatchObject({
+        ok: false,
+        code: "overloaded",
+        error: "native hook relay overloaded",
+      });
+    } finally {
+      release.resolve();
+    }
+
+    const accepted = await Promise.all(requests.slice(0, 36).map((request) => request.response));
+    expect(accepted).toHaveLength(36);
+    expect(accepted.every((response) => response.ok === true)).toBe(true);
+    expect(beforeAgentFinalize).toHaveBeenCalledTimes(36);
+    expect(
+      getNativeHookRelaySharedStateForTests().admissions.get(relay.relayId)?.snapshot(),
+    ).toMatchObject({
+      active: 0,
+      queued: 0,
+      accepted: 36,
+      completed: 36,
+      rejected: 1,
+      peakActive: 4,
+      peakQueued: 32,
     });
   });
 

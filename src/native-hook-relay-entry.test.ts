@@ -295,6 +295,37 @@ describe("native hook relay minimal entry", () => {
     expect(fallback).toHaveBeenCalledOnce();
   });
 
+  it("bounds an oversized bridge response before using the full fallback", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("x".repeat(5 * 1024 * 1024 + 1));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("oversized-response test bridge did not expose a TCP port");
+    }
+    const fallback = vi.fn(async () => 6);
+    try {
+      await expect(
+        runNativeHookRelayEntry(options(), {
+          stdin: readable("{}"),
+          readRecord: () => ({ ...record, port: address.port }),
+          fallback,
+        }),
+      ).resolves.toBe(6);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+
+    expect(fallback).toHaveBeenCalledOnce();
+  });
+
   it("rejects oversized input before locator access or fallback", async () => {
     const stderr = writable();
     const readRecord = vi.fn();
