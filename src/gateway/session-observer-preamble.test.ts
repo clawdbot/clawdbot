@@ -95,6 +95,45 @@ describe("session observer preamble publisher", () => {
     publisher.dispose();
   });
 
+  it("remembers a preamble that matches a restored digest", () => {
+    const session = state("Checking files");
+    const publish = vi.fn();
+    const publisher = createSessionObserverPreamblePublisher({
+      now: () => 1_000,
+      setTimeoutFn: setTimeout,
+      clearTimeoutFn: clearTimeout,
+      isCurrent: () => true,
+      publish,
+    });
+    const event = {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: 1_000,
+      sessionKey: session.sessionKey,
+      agentId: session.agentId,
+      data: { kind: "preamble", progressText: "Checking files" },
+    };
+
+    publisher.handle(session, event);
+    const previousDigest = session.previousDigest;
+    if (!previousDigest) {
+      throw new Error("expected previous digest");
+    }
+    session.previousDigest = {
+      ...previousDigest,
+      revision: 2,
+      headline: "Reviewing the implementation",
+      updatedAt: 2_000,
+    };
+    publisher.handle(session, { ...event, seq: 2, ts: 2_001 });
+
+    expect(session.lastPreambleHeadline).toBe("Checking files");
+    expect(publish).not.toHaveBeenCalled();
+    expect(publisher.generation(session)).toBe(0);
+    publisher.dispose();
+  });
+
   it("does not restore an unchanged preamble after a richer digest replaces it", () => {
     const session = state("Earlier headline");
     const publish = vi.fn();

@@ -81,6 +81,7 @@ export function createSessionObserverPreamblePublisher(params: {
         state.lastPreambleHeadline ??
         (state.previousDigest?.runId === state.runId ? state.previousDigest.headline : "");
       if (!existing && previousHeadline === headline) {
+        state.lastPreambleHeadline = headline;
         return true;
       }
       const entry = existing ?? {

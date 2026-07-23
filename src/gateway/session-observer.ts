@@ -64,6 +64,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const dormantRuns = new Map<string, DormantSessionObserverRun>();
   const revisionFloors = new Map<string, SessionObserverRevisionFloor>();
   const supersededRuns = new Map<string, number>();
+  const contextlessTerminalRuns = new Map<string, number>();
   const terminalRuns = new Map<string, number>();
   const disabledRuns = new Set<string>();
   const visibleConnections = new Set<string>();
@@ -502,20 +503,31 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (terminalRuns.has(event.runId)) {
       return;
     }
-    if (terminal) {
-      markSessionObserverRunSuperseded(terminalRuns, event.runId, event.ts);
-    }
     if (supersededRuns.has(event.runId)) {
       if (terminal) {
+        markSessionObserverRunSuperseded(terminalRuns, event.runId, event.ts);
+        contextlessTerminalRuns.delete(event.runId);
         supersededRuns.delete(event.runId);
         dormantRuns.delete(event.runId);
         disabledRuns.delete(event.runId);
       }
       return;
     }
+    // A contextless terminal still closes the live run, but one routed terminal
+    // duplicate must pass through later so durable state can be finalized.
+    if (contextlessTerminalRuns.has(event.runId) && !terminal) {
+      return;
+    }
     const sessionKey = event.sessionKey?.trim();
     if (!sessionKey) {
+      if (terminal) {
+        markSessionObserverRunSuperseded(contextlessTerminalRuns, event.runId, event.ts);
+      }
       return;
+    }
+    if (terminal) {
+      contextlessTerminalRuns.delete(event.runId);
+      markSessionObserverRunSuperseded(terminalRuns, event.runId, event.ts);
     }
     const isPreamble = event.stream === "item" && event.data.kind === "preamble";
     if (terminal && audience.recipients(sessionKey).size === 0) {
