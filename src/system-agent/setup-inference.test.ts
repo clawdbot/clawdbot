@@ -2034,7 +2034,9 @@ describe("activateSetupInference", () => {
       expect.objectContaining({
         runId: expect.stringMatching(/^probe-setup-inference-/),
         sessionId: expect.stringMatching(/^probe-setup-inference-/),
-        sessionKey: expect.stringMatching(/^temp:setup-inference:probe-setup-inference-/),
+        sessionKey: expect.stringMatching(
+          /^agent:openclaw:setup-inference:incognito-probe-setup-inference-/,
+        ),
         lane: "session:probe-setup-inference:anthropic",
       }),
     );
