@@ -390,6 +390,182 @@ describe("config io write prepare", () => {
     expect(persisted.agents?.entries).toEqual({ primary: { default: true } });
   });
 
+  it("applies an indexed unset after an explicit legacy-list reorder with a resolved id", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        agents: {
+          entries: {
+            main: { default: true, workspace: "/srv/main" },
+            worker: { workspace: "/srv/worker" },
+          },
+        },
+      },
+      sourceConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/srv/main" },
+            { id: "worker", workspace: "/srv/worker" },
+          ],
+        },
+      },
+      sourceConfigBeforeMigrations: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/srv/main" },
+            { id: "worker", workspace: "/srv/worker" },
+          ],
+        },
+      },
+      rootAuthoredConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/srv/main" },
+            { id: "${WORKER_ID}", workspace: "/srv/worker" },
+          ],
+        },
+      },
+      nextConfig: {
+        agents: {
+          entries: {
+            worker: {},
+            main: { default: true, workspace: "/srv/main" },
+          },
+        },
+      },
+      explicitSetPaths: [["agents", "list"]],
+      explicitSetValueSource: {
+        agents: {
+          list: [{ id: "${WORKER_ID}" }, { id: "main", default: true, workspace: "/srv/main" }],
+        },
+      },
+      unsetPaths: [["agents", "list", "0", "workspace"]],
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries).toEqual({
+      worker: {},
+      main: { default: true, workspace: "/srv/main" },
+    });
+  });
+
+  it("removes the explicitly reordered list slot instead of the surviving agent", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        agents: {
+          entries: {
+            main: { default: true },
+            "0": { workspace: "/srv/worker" },
+          },
+        },
+      },
+      sourceConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: "0", workspace: "/srv/worker" },
+          ],
+        },
+      },
+      rootAuthoredConfig: {
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: "0", workspace: "/srv/worker" },
+          ],
+        },
+      },
+      nextConfig: { agents: { entries: { main: { default: true } } } },
+      explicitSetPaths: [["agents", "list"]],
+      explicitSetValueSource: {
+        agents: {
+          list: [
+            { id: "0", workspace: "/srv/worker" },
+            { id: "main", default: true },
+          ],
+        },
+      },
+      unsetPaths: [["agents", "list", "0"]],
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries).toEqual({ main: { default: true } });
+  });
+
+  it("rejects an unprovable newly introduced environment-backed id", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          agents: {
+            entries: {
+              main: { default: true },
+              worker_id: { workspace: "/srv/existing" },
+            },
+          },
+        },
+        sourceConfig: {
+          agents: {
+            list: [
+              { id: "main", default: true },
+              { id: "worker_id", workspace: "/srv/existing" },
+            ],
+          },
+        },
+        rootAuthoredConfig: {
+          agents: {
+            list: [
+              { id: "main", default: true },
+              { id: "worker_id", workspace: "/srv/existing" },
+            ],
+          },
+        },
+        nextConfig: {
+          agents: {
+            entries: {
+              "new-worker": {},
+              worker_id: { workspace: "/srv/existing" },
+              main: { default: true },
+            },
+          },
+        },
+        explicitSetPaths: [["agents", "list"]],
+        explicitSetValueSource: {
+          agents: {
+            list: [
+              { id: "${WORKER_ID}" },
+              { id: "worker_id", workspace: "/srv/existing" },
+              { id: "main", default: true },
+            ],
+          },
+        },
+        unsetPaths: [["agents", "list", "0", "workspace"]],
+      }),
+    ).toThrow("cannot safely resolve an explicitly replaced agent list slot");
+  });
+
+  it("rejects an indexed unset across duplicate explicit list ids", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: { agents: { entries: { worker: { workspace: "/old" } } } },
+        sourceConfig: { agents: { list: [{ id: "worker", workspace: "/old" }] } },
+        sourceConfigBeforeMigrations: {
+          agents: { list: [{ id: "worker", workspace: "/old" }] },
+        },
+        rootAuthoredConfig: {
+          agents: { list: [{ id: "${WORKER_ID}", workspace: "/old" }] },
+        },
+        nextConfig: { agents: { entries: { worker: { workspace: "/second" } } } },
+        explicitSetPaths: [["agents", "list"]],
+        explicitSetValueSource: {
+          agents: {
+            list: [
+              { id: "${WORKER_ID}", workspace: "/first" },
+              { id: "worker", workspace: "/second" },
+            ],
+          },
+        },
+        unsetPaths: [["agents", "list", "0"]],
+      }),
+    ).toThrow("cannot safely resolve duplicate agent ids");
+  });
+
   it("keys legacy authored references by the pre-migration resolved agent id", () => {
     const identityRef = { source: "env", provider: "default", id: "SSH_IDENTITY" };
     const runtimeEntry = {

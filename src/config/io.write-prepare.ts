@@ -9,6 +9,7 @@ import {
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
@@ -1347,6 +1348,56 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     const nextIdByPriorId = new Map(
       [...entryIdentityByNextId].map(([nextId, priorId]) => [priorId, nextId]),
     );
+    const resolveExplicitLegacyIdCandidate = (index: number): string | undefined => {
+      if (explicitRoster?.kind !== "list" || !Array.isArray(explicitRoster.value)) {
+        return undefined;
+      }
+      const explicitEntry = explicitRoster.value[index];
+      const explicitId = isRecord(explicitEntry) ? explicitEntry.id : undefined;
+      if (typeof explicitId !== "string") {
+        return undefined;
+      }
+      if (Object.hasOwn(nextEntries, explicitId)) {
+        return normalizeAgentId(explicitId);
+      }
+      const authoredIndex = authoredRoster.value.findIndex(
+        (entry) => isRecord(entry) && entry.id === explicitId,
+      );
+      const resolvedEntry = authoredIndex < 0 ? undefined : resolvedLegacyList?.[authoredIndex];
+      const resolvedId = isRecord(resolvedEntry) ? resolvedEntry.id : undefined;
+      if (typeof resolvedId === "string") {
+        return normalizeAgentId(resolvedId);
+      }
+      if (explicitId.includes("${")) {
+        return undefined;
+      }
+      return normalizeAgentId(explicitId);
+    };
+    const resolveExplicitLegacyId = (index: number): string => {
+      const resolvedId = resolveExplicitLegacyIdCandidate(index);
+      if (!resolvedId || explicitRoster?.kind !== "list" || !Array.isArray(explicitRoster.value)) {
+        throw new Error(
+          "Config write cannot safely resolve an explicitly replaced agent list slot for unset.",
+        );
+      }
+      for (const [candidateIndex] of explicitRoster.value.entries()) {
+        if (candidateIndex === index) {
+          continue;
+        }
+        const candidateId = resolveExplicitLegacyIdCandidate(candidateIndex);
+        if (!candidateId) {
+          throw new Error(
+            "Config write cannot safely resolve every explicit agent id across an indexed list unset.",
+          );
+        }
+        if (candidateId === resolvedId) {
+          throw new Error(
+            "Config write cannot safely resolve duplicate agent ids across an indexed list unset.",
+          );
+        }
+      }
+      return resolvedId;
+    };
     for (const unsetPath of params.unsetPaths ?? []) {
       if (unsetPath[0] !== "agents" || unsetPath[1] !== "list") {
         continue;
@@ -1363,15 +1414,22 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       const index = parseArrayIndexPathSegment(unsetPath[2] ?? "");
       const authoredEntry = index === undefined ? undefined : authoredRoster.value[index];
       const resolvedEntry = index === undefined ? undefined : resolvedLegacyList?.[index];
-      const id = isRecord(resolvedEntry)
-        ? resolvedEntry.id
-        : isRecord(authoredEntry)
-          ? authoredEntry.id
-          : undefined;
+      const usesExplicitIdentity =
+        index !== undefined && structurallyExplicitLegacyIndexes.has(index);
+      const explicitResolvedId =
+        usesExplicitIdentity && index !== undefined ? resolveExplicitLegacyId(index) : undefined;
+      const id =
+        explicitResolvedId !== undefined
+          ? explicitResolvedId
+          : isRecord(resolvedEntry)
+            ? resolvedEntry.id
+            : isRecord(authoredEntry)
+              ? authoredEntry.id
+              : undefined;
       if (typeof id !== "string") {
         continue;
       }
-      const targetId = nextIdByPriorId.get(id) ?? id;
+      const targetId = explicitResolvedId !== undefined ? id : (nextIdByPriorId.get(id) ?? id);
       entries = deletePathValue(entries, [targetId, ...unsetPath.slice(3)]);
     }
   }
