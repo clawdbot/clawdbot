@@ -7,7 +7,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import {
+  resolvePluginMetadataEnvFingerprint,
+  resolvePluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-workspace-state.js";
 
 type ManifestModelIdNormalizationLookupParams = {
@@ -18,18 +22,21 @@ type ManifestModelIdNormalizationLookupParams = {
 };
 
 type ManifestModelIdNormalizationPolicyCache = {
-  configFingerprint: string;
+  contextFingerprint: string;
   policies: Map<string, PluginManifestModelIdNormalizationProvider>;
 };
 
 let cachedPolicies: ManifestModelIdNormalizationPolicyCache | undefined;
 
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  cachedPolicies = undefined;
+});
+
 function resolveMetadataSnapshotForPolicies(
   params: ManifestModelIdNormalizationLookupParams = {},
 ): {
   plugins: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-  configFingerprint?: string;
-  cacheable: boolean;
+  contextFingerprint?: string;
 } {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -43,8 +50,7 @@ function resolveMetadataSnapshotForPolicies(
     if (currentSnapshot) {
       return {
         plugins: currentSnapshot.plugins,
-        configFingerprint: currentSnapshot.configFingerprint,
-        cacheable: true,
+        contextFingerprint: `${currentSnapshot.configFingerprint}:${resolvePluginMetadataEnvFingerprint(env)}`,
       };
     }
   }
@@ -56,8 +62,7 @@ function resolveMetadataSnapshotForPolicies(
   });
   return {
     plugins: snapshot.plugins,
-    configFingerprint: snapshot.configFingerprint,
-    cacheable: false,
+    contextFingerprint: `${snapshot.configFingerprint}:${resolvePluginMetadataEnvFingerprint(env)}`,
   };
 }
 
@@ -67,13 +72,15 @@ function loadManifestModelIdNormalizationPolicies(
   if (params.plugins) {
     return collectManifestModelIdNormalizationPolicies(params.plugins);
   }
-  const { plugins, configFingerprint, cacheable } = resolveMetadataSnapshotForPolicies(params);
-  if (cacheable && configFingerprint && cachedPolicies?.configFingerprint === configFingerprint) {
+  const { plugins, contextFingerprint } = resolveMetadataSnapshotForPolicies(params);
+  // The control-plane half already binds workspace/source roots, policy, and
+  // installed inventory; the environment half covers compatibility context.
+  if (contextFingerprint && cachedPolicies?.contextFingerprint === contextFingerprint) {
     return cachedPolicies.policies;
   }
   const policies = collectManifestModelIdNormalizationPolicies(plugins);
-  if (cacheable && configFingerprint) {
-    cachedPolicies = { configFingerprint, policies };
+  if (contextFingerprint) {
+    cachedPolicies = { contextFingerprint, policies };
   }
   return policies;
 }
