@@ -1344,6 +1344,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     }),
   );
   if (authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value)) {
+    const nextIdByPriorId = new Map(
+      [...entryIdentityByNextId].map(([nextId, priorId]) => [priorId, nextId]),
+    );
     for (const unsetPath of params.unsetPaths ?? []) {
       if (unsetPath[0] !== "agents" || unsetPath[1] !== "list") {
         continue;
@@ -1368,7 +1371,8 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       if (typeof id !== "string") {
         continue;
       }
-      entries = deletePathValue(entries, [id, ...unsetPath.slice(3)]);
+      const targetId = nextIdByPriorId.get(id) ?? id;
+      entries = deletePathValue(entries, [targetId, ...unsetPath.slice(3)]);
     }
   }
   const withoutLegacyList = deletePathValue(params.valueSource, ["agents", "list"]);

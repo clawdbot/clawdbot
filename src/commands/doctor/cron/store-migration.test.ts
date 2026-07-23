@@ -389,7 +389,7 @@ describe("normalizeStoredCronJobs", () => {
     expect((job.payload as Record<string, unknown>).model).toBe("openai/gpt-5.6-sol");
   });
 
-  it("writes the configured default agent policy to defaults when no list entry exists", () => {
+  it("writes the configured default agent policy to its canonical keyed entry", () => {
     const jobs = [
       makeLegacyJob({
         id: "implicit-default-codex-model",
@@ -406,9 +406,10 @@ describe("normalizeStoredCronJobs", () => {
       targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
     });
 
-    expect(policyRepair.config.agents?.defaults?.models).toMatchObject({
+    expect(policyRepair.config.agents?.entries?.main?.models).toMatchObject({
       "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
     });
+    expect(policyRepair.config.agents?.defaults?.models).toBeUndefined();
   });
 
   it("retains a post-snapshot Codex ref until its runtime policy is persisted", () => {

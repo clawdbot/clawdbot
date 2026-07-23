@@ -36,6 +36,14 @@ function resolvePolicyOwner(params: {
   if (!effectiveAgentId) {
     return undefined;
   }
+  const entries = asOptionalRecord(agents.entries);
+  const keyedEntry = entries
+    ? Object.entries(entries).find(([agentId]) => normalizeAgentId(agentId) === effectiveAgentId)
+    : undefined;
+  const keyedRecord = asOptionalRecord(keyedEntry?.[1]);
+  if (keyedEntry && keyedRecord) {
+    return { owner: keyedRecord, path: `agents.entries.${keyedEntry[0]}` };
+  }
   const list = Array.isArray(agents.list) ? agents.list : [];
   const owner = list.find((entry) => {
     const record = asOptionalRecord(entry);

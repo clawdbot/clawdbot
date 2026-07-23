@@ -365,6 +365,31 @@ describe("config io write prepare", () => {
     expect(persisted.agents?.entries?.main).toBeUndefined();
   });
 
+  it("applies a legacy-list unset to the renamed canonical entry", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        agents: { entries: { main: { default: true, workspace: "/srv/main" } } },
+      },
+      sourceConfig: {
+        agents: { entries: { main: { default: true, workspace: "/srv/main" } } },
+      },
+      sourceConfigBeforeMigrations: {
+        agents: { list: [{ id: "main", default: true, workspace: "/srv/main" }] },
+      },
+      rootAuthoredConfig: {
+        agents: { list: [{ id: "main", default: true, workspace: "/srv/main" }] },
+      },
+      nextConfig: { agents: { entries: { primary: { default: true } } } },
+      explicitSetPaths: [["agents", "list", "0", "id"]],
+      explicitSetValueSource: {
+        agents: { list: [{ id: "primary", default: true }] },
+      },
+      unsetPaths: [["agents", "list", "0", "workspace"]],
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries).toEqual({ primary: { default: true } });
+  });
+
   it("keys legacy authored references by the pre-migration resolved agent id", () => {
     const identityRef = { source: "env", provider: "default", id: "SSH_IDENTITY" };
     const runtimeEntry = {

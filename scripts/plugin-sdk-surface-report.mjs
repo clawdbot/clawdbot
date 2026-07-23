@@ -106,7 +106,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-reply-pipeline": 12,
   "interactive-runtime": 11,
   // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-  "infra-runtime": 596,
+  // +3: deprecated DEFAULT_AGENT_ID alias re-exported through infra runtime surfaces.
+  "infra-runtime": 599,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   // +1: deprecated agent media projection re-export during the media migration window.
@@ -204,7 +205,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: canonical incognito classifier projected through deprecated compatibility barrels.
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
-      1698,
+      // +3: deprecated DEFAULT_AGENT_ID alias across public infra runtime entrypoints.
+      1701,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
