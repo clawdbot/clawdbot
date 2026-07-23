@@ -284,17 +284,17 @@ export function createBoardHandlers(
             active,
             "read",
             async (signal) => {
-              let interactive = false;
+              let isInteractive = false;
               try {
                 await requireMcpAppInteraction(view, signal);
-                interactive = true;
+                isInteractive = true;
               } catch {
                 signal.throwIfAborted();
                 // Reconstructed or revoked source leases may be pinned only as read-only content.
               }
               return {
-                interactive,
-                allowedTools: interactive
+                interactive: isInteractive,
+                allowedTools: isInteractive
                   ? await mcpApp.resolveAllowedToolNames(active, signal)
                   : [],
               };
