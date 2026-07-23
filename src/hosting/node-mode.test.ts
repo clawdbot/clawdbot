@@ -46,20 +46,37 @@ describe("resolveNodeModeReadinessEvidence", () => {
     });
   });
 
-  it("does not treat denyCommands as command approval posture", async () => {
+  it("applies the canonical command deny policy to paired commands", async () => {
     listNodePairing.mockResolvedValue({
       paired: [{ nodeId: "node-1", commands: ["system.run"] }],
       pending: [],
     });
 
     const evidence = await resolveNodeModeReadinessEvidence({
-      config: { gateway: { nodes: { denyCommands: ["system.run"] } } },
+      config: { gateway: { nodes: { commands: { deny: ["system.run"] } } } },
       connectedNodes: [{ nodeId: "node-1", commands: ["system.run"] } as never],
     });
 
     expect(evidence.commandApproval).toEqual({
       configured: false,
       approvedCommandCount: 0,
+    });
+  });
+
+  it("applies the canonical command allow policy to live commands", async () => {
+    listNodePairing.mockResolvedValue({
+      paired: [{ nodeId: "node-1", commands: [] }],
+      pending: [],
+    });
+
+    const evidence = await resolveNodeModeReadinessEvidence({
+      config: { gateway: { nodes: { commands: { allow: ["system.run"] } } } },
+      connectedNodes: [{ nodeId: "node-1", commands: ["system.run"] } as never],
+    });
+
+    expect(evidence.commandApproval).toEqual({
+      configured: true,
+      approvedCommandCount: 1,
     });
   });
 
@@ -98,7 +115,7 @@ describe("resolveNodeModeReadinessEvidence", () => {
 
     const disconnected = await resolveEvidence({ config: {}, connectedNodes: [] });
     const connected = await resolveEvidence({
-      config: { gateway: { nodes: { denyCommands: ["system.run"] } } },
+      config: { gateway: { nodes: { commands: { deny: ["system.run"] } } } },
       connectedNodes: [{ nodeId: "node-1", commands: ["system.run"] } as never],
     });
 

@@ -27,8 +27,8 @@ async function resolveNodeModeReadinessEvidenceWith(
     const connectedPairedNodes = params.connectedNodes.filter((entry) =>
       pairedByNodeId.has(entry.nodeId),
     );
-    const configuredAllowCommands = commandSet(params.config.gateway?.nodes?.allowCommands);
-    const deniedCommands = commandSet(params.config.gateway?.nodes?.denyCommands);
+    const configuredAllowCommands = commandSet(params.config.gateway?.nodes?.commands?.allow);
+    const deniedCommands = commandSet(params.config.gateway?.nodes?.commands?.deny);
     let executableApprovedCommandCount = 0;
     for (const node of connectedPairedNodes) {
       const approvedCommands = commandSet(pairedByNodeId.get(node.nodeId)?.commands);
