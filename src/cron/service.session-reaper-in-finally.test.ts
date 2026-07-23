@@ -148,6 +148,47 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
   });
 
+  it("resolves the current default agent for the session reaper", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await saveCronStore(store.storePath, { version: 1, jobs: [] });
+    await replaceSessionEntry(
+      {
+        agentId: "ops",
+        storePath: sessionStorePath,
+        sessionKey: "agent:ops:cron:default:run:expired",
+      },
+      { sessionId: "ops-expired", updatedAt: now - 25 * 3_600_000 },
+    );
+
+    const resolvedAgentIds: string[] = [];
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      resolveDefaultAgentId: () => "ops",
+      resolveSessionStorePath: (agentId) => {
+        if (!agentId) {
+          throw new Error("expected prepared agent id");
+        }
+        resolvedAgentIds.push(agentId);
+        return sessionStorePath;
+      },
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await expect(onTimer(state)).resolves.toBeUndefined();
+
+      expect([...new Set(resolvedAgentIds)]).toEqual(["ops"]);
+      expect(listSessionEntries({ agentId: "ops", storePath: sessionStorePath })).toStrictEqual([]);
+    });
+  });
+
   it("prunes expired cron-run sessions while ignoring malformed legacy cron files", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");

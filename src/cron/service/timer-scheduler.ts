@@ -183,7 +183,7 @@ async function onAdmittedTimer(state: CronServiceState) {
     state.deps.resolveSessionStorePath || state.deps.sessionStorePath,
   );
   const sessionReaperDefaultAgentId = hasSessionReaperStore
-    ? state.deps.defaultAgentId?.trim()
+    ? (state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId)?.trim()
     : undefined;
   if (hasSessionReaperStore && !sessionReaperDefaultAgentId) {
     throw new Error("Cron session reaper requires the prepared configured default agent id.");
