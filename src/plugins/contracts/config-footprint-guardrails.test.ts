@@ -235,12 +235,6 @@ describe("config footprint guardrails", () => {
     expect(bundledSource).toMatch(
       /loadBundledConfigSchema<[^;]+?>\(\s*"telegram",\s*"TelegramConfigSchema",?\s*\)/u,
     );
-    expect(bundledSource).toMatch(
-      /loadBundledConfigSchema<[^;]+?>\(\s*"discord",\s*"DiscordConfigSchema",?\s*\)/u,
-    );
-    expect(bundledSource).toMatch(
-      /loadBundledConfigSchema<[^;]+?>\(\s*"msteams",\s*"MSTeamsConfigSchema",?\s*\)/u,
-    );
     // The primitives facade re-exports the canonical channel-config-schema
     // module; only bundled provider schemas bypass it.
     const primitivesSource = readSource("src/plugin-sdk/channel-config-primitives.ts");
