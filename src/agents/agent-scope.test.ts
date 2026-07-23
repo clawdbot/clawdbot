@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withEnv } from "../test-utils/env.js";
@@ -29,6 +29,8 @@ import {
   resolveAgentIdsByWorkspacePath,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
+
+vi.unmock("./agent-scope-config.js");
 
 describe("resolveAgentConfig", () => {
   it("should return undefined when no agents config exists", () => {

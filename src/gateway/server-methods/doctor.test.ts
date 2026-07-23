@@ -33,6 +33,12 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: (cfg: OpenClawConfig) =>
+    cfg.agents?.entries
+      ? Object.entries(cfg.agents.entries).map(([id, entry]) => Object.assign({ id }, entry))
+      : cfg.agents?.list
+        ? cfg.agents.list
+        : [{ id: "main", default: true }],
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 }));

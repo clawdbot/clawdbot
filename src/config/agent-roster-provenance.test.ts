@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   configIncludeOwnsAgentRoster,
   hasResolvedRosterBeforeMigrations,
 } from "./agent-roster-provenance.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
+
+vi.unmock("../agents/agent-scope-config.js");
 
 function snapshot(params: {
   parsed: unknown;

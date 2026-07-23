@@ -44,7 +44,8 @@ function readRosterValue(raw: unknown): unknown {
  *   an entry object, an id/default field, a nested entries/list $include, or an ambiguous
  *   byte-identical roster contribution.
  * - Locally owned: ancestor includes contribute only unrelated config, or an include is nested
- *   inside entry-internal identity/model/etc. fields that cannot change membership or default.
+ *   inside entry-internal identity/model/etc. fields that cannot change membership or default;
+ *   canonical roster writes preserve those entry-internal authored include nodes in place.
  */
 export function includeContributionOwnsAgentRoster(event: {
   path: readonly string[];

@@ -1,5 +1,5 @@
 // Covers config write preparation diffs and metadata preservation.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   collectChangedPaths,
   applyUnsetPathsForWrite,
@@ -8,9 +8,10 @@ import {
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
-  DuplicateAgentRosterIdError,
 } from "./io.write-prepare.js";
 import type { OpenClawConfig } from "./types.js";
+
+vi.unmock("../agents/agent-scope-config.js");
 
 describe("config io write prepare", () => {
   it("ignores prototype-chain keys when building merge patches", () => {
@@ -246,6 +247,38 @@ describe("config io write prepare", () => {
     expect(persisted.agents?.entries?.main?.agentDir).toBe("/srv/main");
   });
 
+  it("preserves authored refs in a full legacy-list write with an env-backed id", () => {
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        agents: { entries: { main: { default: true, agentDir: "/resolved/old" } } },
+      },
+      sourceConfig: {
+        agents: { entries: { main: { default: true, agentDir: "/resolved/old" } } },
+      },
+      sourceConfigBeforeMigrations: {
+        agents: { list: [{ id: "main", default: true, agentDir: "/resolved/old" }] },
+      },
+      rootAuthoredConfig: {
+        agents: {
+          list: [{ id: "${AGENT_ID}", default: true, agentDir: "${OLD_DIR}" }],
+        },
+      },
+      nextConfig: {
+        agents: { entries: { main: { default: true, agentDir: "/resolved/new" } } },
+      },
+      explicitSetPaths: [["agents", "list"]],
+      explicitSetValueSource: {
+        agents: {
+          list: [{ id: "${AGENT_ID}", default: true, agentDir: "${NEW_DIR}" }],
+        },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries).toEqual({
+      main: { default: true, agentDir: "${NEW_DIR}" },
+    });
+  });
+
   it("keeps explicit legacy-list reorders keyed by each new item id", () => {
     const main = { id: "main", default: true, workspace: "/srv/main" };
     const ops = { id: "ops", workspace: "/srv/ops" };
@@ -336,6 +369,67 @@ describe("config io write prepare", () => {
     expect(persisted.agents?.entries?.main?.sandbox?.ssh?.identityData).toEqual(identityRef);
   });
 
+  it("preserves an entry-internal include while atomically adding an agent", () => {
+    const resolvedMain = {
+      default: true,
+      identity: { name: "Main", emoji: "🦞" },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: { agents: { entries: { main: resolvedMain } } },
+      sourceConfig: { agents: { entries: { main: resolvedMain } } },
+      sourceConfigBeforeMigrations: { agents: { entries: { main: resolvedMain } } },
+      rootAuthoredConfig: {
+        agents: {
+          entries: {
+            main: { default: true, identity: { $include: "./identity.json" } },
+          },
+        },
+      },
+      nextConfig: {
+        agents: {
+          entries: {
+            main: resolvedMain,
+            worker: { workspace: "/srv/worker" },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries).toEqual({
+      main: { default: true, identity: { $include: "./identity.json" } },
+      worker: { workspace: "/srv/worker" },
+    });
+  });
+
+  it("rejects a roster write that changes an entry-internal included subtree", () => {
+    const resolvedMain = {
+      default: true,
+      identity: { name: "Main", emoji: "🦞" },
+    };
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: { agents: { entries: { main: resolvedMain } } },
+        sourceConfig: { agents: { entries: { main: resolvedMain } } },
+        sourceConfigBeforeMigrations: { agents: { entries: { main: resolvedMain } } },
+        rootAuthoredConfig: {
+          agents: {
+            entries: {
+              main: { default: true, identity: { $include: "./identity.json" } },
+            },
+          },
+        },
+        nextConfig: {
+          agents: {
+            entries: {
+              main: { default: true, identity: { name: "Changed", emoji: "🦞" } },
+              worker: { workspace: "/srv/worker" },
+            },
+          },
+        },
+      }),
+    ).toThrow("flatten $include-owned config at agents.entries.main.identity");
+  });
+
   it("preserves authored references when an agent id is renamed", () => {
     const identityRef = { source: "env", provider: "default", id: "SSH_IDENTITY" };
     const runtimeEntry = {
@@ -364,6 +458,26 @@ describe("config io write prepare", () => {
 
     expect(persisted.agents?.entries?.primary?.sandbox?.ssh?.identityData).toEqual(identityRef);
     expect(persisted.agents?.entries?.main).toBeUndefined();
+  });
+
+  it("rejects an env-backed agent rename whose resolved identity is unavailable", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: { agents: { entries: { main: { default: true } } } },
+        sourceConfig: { agents: { entries: { main: { default: true } } } },
+        sourceConfigBeforeMigrations: {
+          agents: { list: [{ id: "main", default: true }] },
+        },
+        rootAuthoredConfig: {
+          agents: { list: [{ id: "${OLD_AGENT_ID}", default: true }] },
+        },
+        nextConfig: { agents: { entries: { ops: { default: true } } } },
+        explicitSetPaths: [["agents", "list", "0", "id"]],
+        explicitSetValueSource: {
+          agents: { list: [{ id: "${NEW_AGENT_ID}", default: true }] },
+        },
+      }),
+    ).toThrow("cannot safely resolve an env-backed renamed agent id");
   });
 
   it("applies a legacy-list unset to the renamed canonical entry", () => {
@@ -586,7 +700,12 @@ describe("config io write prepare", () => {
         explicitSetPaths: [["agents", "list"]],
         explicitSetValueSource: nextConfig,
       }),
-    ).toThrow(DuplicateAgentRosterIdError);
+    ).toThrowError(
+      expect.objectContaining({
+        name: "DuplicateAgentRosterIdError",
+        message: 'Config write cannot canonicalize duplicate normalized agent id "ops".',
+      }),
+    );
     expect(nextConfig).toEqual(before);
   });
 

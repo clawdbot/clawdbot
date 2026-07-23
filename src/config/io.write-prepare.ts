@@ -26,7 +26,7 @@ const AGENT_ROSTER_PATHS = [
   ["agents", "list"],
 ] as const;
 
-export class DuplicateAgentRosterIdError extends Error {
+class DuplicateAgentRosterIdError extends Error {
   constructor(agentId: string) {
     super(`Config write cannot canonicalize duplicate normalized agent id "${agentId}".`);
     this.name = "DuplicateAgentRosterIdError";
@@ -880,6 +880,7 @@ function injectExplicitlySetPaths(params: {
   persistedCandidate: unknown;
   explicitSetPaths?: readonly (readonly string[])[];
   rootAuthoredConfig?: unknown;
+  preserveDescendantIncludes?: boolean;
 }): unknown {
   if (!params.explicitSetPaths || params.explicitSetPaths.length === 0) {
     return params.persistedCandidate;
@@ -893,7 +894,12 @@ function injectExplicitlySetPaths(params: {
     const includeOwnedPath = params.rootAuthoredConfig
       ? findOverlappingIncludeOwnedPath(params.rootAuthoredConfig, [...path])
       : undefined;
-    if (includeOwnedPath) {
+    const preserveDescendantInclude =
+      includeOwnedPath &&
+      params.preserveDescendantIncludes === true &&
+      includeOwnedPath.length > path.length &&
+      pathStartsWith(includeOwnedPath, path);
+    if (includeOwnedPath && !preserveDescendantInclude) {
       throw new Error(
         `Config write would flatten $include-owned config at ${formatConfigPath(
           includeOwnedPath,
@@ -1208,6 +1214,36 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       }
     }
   }
+  for (const index of renamedLegacyIndexes) {
+    const entry =
+      explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)
+        ? explicitRoster.value[index]
+        : undefined;
+    if (isRecord(entry) && typeof entry.id === "string" && entry.id.includes("${")) {
+      throw new Error(
+        "Config write cannot safely resolve an env-backed renamed agent id; set the resolved literal id or rename the authored entry directly.",
+      );
+    }
+  }
+  const resolveExplicitLegacyEntryId = (entry: Record<string, unknown>, index: number) => {
+    const explicitId = entry.id;
+    if (typeof explicitId !== "string") {
+      return undefined;
+    }
+    if (renamedLegacyIndexes.has(index) || Object.hasOwn(nextEntries, explicitId)) {
+      return explicitId;
+    }
+    if (authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value)) {
+      const authoredIndex = authoredRoster.value.findIndex(
+        (authoredEntry) => isRecord(authoredEntry) && authoredEntry.id === explicitId,
+      );
+      const resolvedEntry = authoredIndex < 0 ? undefined : resolvedLegacyList?.[authoredIndex];
+      if (isRecord(resolvedEntry) && typeof resolvedEntry.id === "string") {
+        return resolvedEntry.id;
+      }
+    }
+    return explicitId.includes("${") ? undefined : explicitId;
+  };
   const explicitEntries =
     explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)
       ? Object.fromEntries(
@@ -1218,7 +1254,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
             const resolvedEntry = resolvedLegacyList?.[index];
             const resolvedId = isRecord(resolvedEntry) ? resolvedEntry.id : undefined;
             const id = structurallyExplicitLegacyIndexes.has(index)
-              ? entry.id
+              ? resolveExplicitLegacyEntryId(entry, index)
               : typeof resolvedId === "string"
                 ? resolvedId
                 : entry.id;
@@ -1372,25 +1408,11 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
         return undefined;
       }
       const explicitEntry = explicitRoster.value[index];
-      const explicitId = isRecord(explicitEntry) ? explicitEntry.id : undefined;
-      if (typeof explicitId !== "string") {
+      if (!isRecord(explicitEntry)) {
         return undefined;
       }
-      if (Object.hasOwn(nextEntries, explicitId)) {
-        return normalizeAgentId(explicitId);
-      }
-      const authoredIndex = authoredList.findIndex(
-        (entry) => isRecord(entry) && entry.id === explicitId,
-      );
-      const resolvedEntry = authoredIndex < 0 ? undefined : resolvedLegacyList?.[authoredIndex];
-      const resolvedId = isRecord(resolvedEntry) ? resolvedEntry.id : undefined;
-      if (typeof resolvedId === "string") {
-        return normalizeAgentId(resolvedId);
-      }
-      if (explicitId.includes("${")) {
-        return undefined;
-      }
-      return normalizeAgentId(explicitId);
+      const id = resolveExplicitLegacyEntryId(explicitEntry, index);
+      return id === undefined ? undefined : normalizeAgentId(id);
     };
     const resolveExplicitLegacyId = (index: number): string => {
       const resolvedId = resolveExplicitLegacyIdCandidate(index);
@@ -1545,11 +1567,23 @@ export function resolvePersistCandidateForWrite(params: {
     persistedCandidate: persistedBase,
     explicitSetPaths,
     rootAuthoredConfig: includeProjectionRootAuthoredConfig,
+    // This only postpones descendant include validation: the preservation pass below
+    // compares next against source/runtime and still rejects every changed include subtree.
+    preserveDescendantIncludes: persistCanonicalRoster,
   });
+  const withPreservedIncludes = persistCanonicalRoster
+    ? preserveUntouchedIncludes({
+        runtimeConfig: params.runtimeConfig,
+        sourceConfig: params.sourceConfig,
+        nextConfig: params.nextConfig,
+        rootAuthoredConfig: includeProjectionRootAuthoredConfig,
+        persistedCandidate: persisted,
+      })
+    : persisted;
   const withSchema = preserveRootSchemaUri({
     rootAuthoredConfig,
     nextConfig: params.nextConfig,
-    persistedCandidate: persisted,
+    persistedCandidate: withPreservedIncludes,
   });
   const withAuthoredParams = preserveAuthoredAgentParams({
     sourceConfig: params.sourceConfig,

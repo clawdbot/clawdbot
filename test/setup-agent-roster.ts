@@ -1,6 +1,7 @@
 // Ordinary runtime tests receive config after load-time roster migration.
 // Keep raw-roster contract tests explicitly unmocked instead of reintroducing a production fallback.
 import { vi } from "vitest";
+import { resolveSqliteTargetFromSessionStorePath } from "../src/config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 
 function materializeRoster(cfg: OpenClawConfig): OpenClawConfig {
@@ -62,13 +63,22 @@ vi.mock("../src/agents/agent-scope-config.js", async (importOriginal) => {
 
   return {
     ...actual,
+    listAgentEntriesWithSource: (cfg: OpenClawConfig) =>
+      actual.listAgentEntriesWithSource(materializeRoster(cfg)),
+    listAgentEntries: (cfg: OpenClawConfig) => actual.listAgentEntries(materializeRoster(cfg)),
     listAgentIds: (cfg: OpenClawConfig) => actual.listAgentIds(materializeRoster(cfg)),
     resolveDefaultAgentId: (cfg: OpenClawConfig) =>
       actual.resolveDefaultAgentId(materializeRoster(cfg)),
-    tryResolveDefaultAgentId: (cfg: OpenClawConfig) =>
-      actual.tryResolveDefaultAgentId(materializeRoster(cfg)),
+    resolveAgentEntry: (cfg: OpenClawConfig, agentId: string) =>
+      actual.resolveAgentEntry(materializeRoster(cfg), agentId),
+    resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
+      actual.resolveAgentConfig(materializeRoster(cfg), agentId),
+    resolveAgentContextLimits: (cfg: OpenClawConfig | undefined, agentId?: string | null) =>
+      actual.resolveAgentContextLimits(cfg ? materializeRoster(cfg) : cfg, agentId),
     resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId: string, env?: NodeJS.ProcessEnv) =>
       actual.resolveAgentWorkspaceDir(materializeRoster(cfg), agentId, env),
+    resolveAgentDir: (cfg: OpenClawConfig, agentId: string, env?: NodeJS.ProcessEnv) =>
+      actual.resolveAgentDir(materializeRoster(cfg), agentId, env),
     resolveDefaultAgentDir: (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) =>
       actual.resolveDefaultAgentDir(materializeRoster(cfg), env),
   };
@@ -81,8 +91,6 @@ vi.mock("../src/config/sessions/session-accessor.sqlite-scope.js", async (import
     await importOriginal<
       typeof import("../src/config/sessions/session-accessor.sqlite-scope.js")
     >();
-  const { resolveSqliteTargetFromSessionStorePath } =
-    await import("../src/config/sessions/session-sqlite-target.js");
   const withAgentId = <T extends { agentId?: string; sessionKey?: string }>(scope: T): T =>
     scope.agentId ||
     scope.sessionKey?.startsWith("agent:") ||
