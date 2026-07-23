@@ -163,7 +163,7 @@ describe("normalizeStoredCronJobs", () => {
       targets: result.codexRuntimePolicyTargets,
     });
     expect(runtimeRepair.warnings).toStrictEqual([]);
-    expect(runtimeRepair.config.agents?.defaults?.models).toMatchObject({
+    expect(runtimeRepair.config.agents?.entries?.main?.models).toMatchObject({
       "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
       "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
     });
@@ -228,11 +228,16 @@ describe("normalizeStoredCronJobs", () => {
       cfg: {
         agents: {
           defaults: {
-            models: {
-              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            model: { primary: "openai/gpt-5.6-sol" },
+          },
+          entries: {
+            main: {
+              default: true,
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+              },
             },
           },
-          entries: { main: { default: true } },
         },
       },
       targets: collectStoredCronCodexRuntimePolicyTargets(jobs),

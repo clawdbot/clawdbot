@@ -5,6 +5,7 @@ type DoctorConfigTestInput = {
   config: Record<string, unknown>;
   parsed?: Record<string, unknown>;
   sourceConfigBeforeMigrations?: Record<string, unknown>;
+  agentRosterIncludeOwned?: boolean;
   exists: boolean;
   path: string;
   preflightMode: "fast" | "issues" | "compat";
@@ -132,6 +133,7 @@ export async function runDoctorConfigWithInput<T>(params: {
   config: Record<string, unknown>;
   parsedConfig?: Record<string, unknown>;
   sourceConfigBeforeMigrations?: Record<string, unknown>;
+  agentRosterIncludeOwned?: boolean;
   exists?: boolean;
   repair?: boolean;
   preflightMode?: "fast" | "issues" | "compat";
@@ -150,6 +152,9 @@ export async function runDoctorConfigWithInput<T>(params: {
     ...(params.parsedConfig ? { parsed: structuredClone(params.parsedConfig) } : {}),
     ...(params.sourceConfigBeforeMigrations
       ? { sourceConfigBeforeMigrations: structuredClone(params.sourceConfigBeforeMigrations) }
+      : {}),
+    ...(params.agentRosterIncludeOwned !== undefined
+      ? { agentRosterIncludeOwned: params.agentRosterIncludeOwned }
       : {}),
     exists: params.exists ?? true,
     path: "/virtual/.openclaw/openclaw.json",

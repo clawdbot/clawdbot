@@ -65,6 +65,8 @@ vi.mock("../src/agents/agent-scope-config.js", async (importOriginal) => {
     listAgentIds: (cfg: OpenClawConfig) => actual.listAgentIds(materializeRoster(cfg)),
     resolveDefaultAgentId: (cfg: OpenClawConfig) =>
       actual.resolveDefaultAgentId(materializeRoster(cfg)),
+    tryResolveDefaultAgentId: (cfg: OpenClawConfig) =>
+      actual.tryResolveDefaultAgentId(materializeRoster(cfg)),
     resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId: string, env?: NodeJS.ProcessEnv) =>
       actual.resolveAgentWorkspaceDir(materializeRoster(cfg), agentId, env),
     resolveDefaultAgentDir: (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) =>

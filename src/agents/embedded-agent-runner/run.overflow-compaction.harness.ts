@@ -416,6 +416,7 @@ export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {
+  agentId: "main",
   sessionId: "test-session",
   sessionKey: "test-key",
   sessionFile: "/tmp/session.json",

@@ -2,8 +2,8 @@
 // unit-fast runs isolate:false with auto-curated membership, so without this any
 // test that reads config/state sees the developer's real ~/.openclaw. The roster
 // adapter below also models the load-time normalization ordinary runtime tests receive.
-import { installTestEnv } from "./test-env.js";
 import "./setup-agent-roster.js";
+import { installTestEnv } from "./test-env.js";
 
 process.env.VITEST = "true";
 

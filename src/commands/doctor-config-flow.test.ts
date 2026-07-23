@@ -1383,6 +1383,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
             exists,
             path: configPath,
             parsed,
+            includeProvenance: { agentRoster: injected?.agentRosterIncludeOwned === true },
             sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
@@ -1406,6 +1407,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
             exists,
             path: configPath,
             parsed,
+            includeProvenance: { agentRoster: injected?.agentRosterIncludeOwned === true },
             sourceConfigBeforeMigrations,
             config: injectedEffectiveConfig,
             sourceConfig: injectedEffectiveConfig,
@@ -1430,6 +1432,7 @@ vi.mock("./doctor-config-preflight.js", async () => {
           exists,
           path: configPath,
           parsed,
+          includeProvenance: { agentRoster: injected?.agentRosterIncludeOwned === true },
           sourceConfigBeforeMigrations,
           config: effectiveConfig,
           sourceConfig: effectiveConfig,
@@ -1680,6 +1683,7 @@ describe("doctor config flow", () => {
     const result = await runDoctorConfigWithInput({
       config: { agents: { entries: { ops: { default: true } } } },
       parsedConfig: { $include: "./agents.json" },
+      agentRosterIncludeOwned: true,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1693,6 +1697,7 @@ describe("doctor config flow", () => {
       config: { agents: { entries: { main: { default: true } } } },
       parsedConfig: { $include: "./agents.json" },
       sourceConfigBeforeMigrations: { agents: { entries: {} } },
+      agentRosterIncludeOwned: true,
       repair: true,
       run: loadAndMaybeMigrateDoctorConfig,
     });
