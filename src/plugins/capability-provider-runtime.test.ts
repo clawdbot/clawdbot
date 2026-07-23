@@ -370,10 +370,12 @@ describe("resolvePluginCapabilityProviders", () => {
       },
     } as never);
 
-    expectResolvedCapabilityProviderIds(
-      resolvePluginCapabilityProviders({ key: "imageGenerationProviders" }),
-      ["fal"],
-    );
+    for (let iteration = 0; iteration < 2; iteration += 1) {
+      expectResolvedCapabilityProviderIds(
+        resolvePluginCapabilityProviders({ key: "imageGenerationProviders" }),
+        ["fal"],
+      );
+    }
     expectActiveRegistryLookup(["fal"]);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
