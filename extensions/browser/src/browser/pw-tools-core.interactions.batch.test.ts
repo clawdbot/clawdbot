@@ -111,7 +111,7 @@ describe("batchViaPlaywright", () => {
   });
 
   it("aborts remaining actions after a navigation", async () => {
-    locator!.click!.mockImplementationOnce(async () => {
+    locator!.click!.mockImplementationOnce(() => {
       setPageUrl("https://example.com/next");
     });
 
@@ -154,7 +154,7 @@ describe("batchViaPlaywright", () => {
 
   it("keeps stopOnError=false until a later navigation aborts the batch", async () => {
     locator!.click!.mockRejectedValueOnce(new Error("click failed"));
-    locator!.hover!.mockImplementationOnce(async () => {
+    locator!.hover!.mockImplementationOnce(() => {
       setPageUrl("https://example.com/next");
     });
 
@@ -185,7 +185,7 @@ describe("batchViaPlaywright", () => {
   });
 
   it("aborts when the page closes during an action", async () => {
-    locator!.click!.mockImplementationOnce(async () => setPageClosed(true));
+    locator!.click!.mockImplementationOnce(() => setPageClosed(true));
 
     const result = await batchViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
