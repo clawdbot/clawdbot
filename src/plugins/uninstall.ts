@@ -86,9 +86,19 @@ export function formatUninstallActionLabels(actions: UninstallActions): string[]
 export function prepareConfigForPendingPluginDirectoryRemoval(
   config: OpenClawConfig,
   pluginId: string,
+  options?: { channelIds?: string[] },
 ): OpenClawConfig {
+  let channels = config.channels as Record<string, unknown> | undefined;
+  for (const key of resolveUninstallChannelConfigKeys(pluginId, options)) {
+    if (!channels || !Object.hasOwn(channels, key)) {
+      continue;
+    }
+    const { [key]: _removed, ...remainingChannels } = channels;
+    channels = Object.keys(remainingChannels).length > 0 ? remainingChannels : undefined;
+  }
   return {
     ...config,
+    channels: channels as OpenClawConfig["channels"],
     plugins: {
       ...config.plugins,
       entries: {
