@@ -8,8 +8,6 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 
 function hasAssistantEvent(calls: Array<unknown[]>): boolean {
-  // The gate buffers assistant stream events; tests use this helper to assert
-  // nothing leaks before the terminal decision resolves.
   return calls.some((call) => {
     const event = call[0] as { stream?: string } | undefined;
     return event?.stream === "assistant";
@@ -38,12 +36,12 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       blockReplyBreak: "message_end",
     });
 
-    emitMessageStartAndEndForAssistantText({
+    emitAssistantTextDeltaAndEnd({
       emit,
       text: "First answer.",
     });
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
 
     emit({
       type: "agent_end",
@@ -67,7 +65,12 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       }),
     );
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+    await vi.waitFor(() =>
+      expect(onAgentEvent).toHaveBeenLastCalledWith({
+        stream: "assistant",
+        data: { text: "", delta: "", replace: true },
+      }),
+    );
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(false);
   });
 
@@ -118,7 +121,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
-  it("defers assistant stream and partial replies until the terminal gate continues", async () => {
+  it("streams provisional assistant events while deferring partial replies", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const onBeforeTerminalDelivery = vi.fn(async () => undefined);
@@ -134,7 +137,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       emit,
       text: "Visible stream.",
     });
-    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
     expect(onPartialReply).not.toHaveBeenCalled();
 
     emit({
@@ -150,7 +153,9 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     });
 
     await subscription.waitForPendingEvents();
-    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
+    expect(
+      onAgentEvent.mock.calls.filter((call) => (call[0] as { stream?: string }).stream === "assistant"),
+    ).toHaveLength(1);
     expect(onPartialReply).toHaveBeenCalled();
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
   });

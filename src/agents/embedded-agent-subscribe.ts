@@ -202,7 +202,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     lastDeliveredBlockReplyText: undefined,
     deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
     deferredBlockReplies: [],
-    deferredAssistantEvents: [],
+    deferredAssistantPartialReplies: [],
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
@@ -275,10 +275,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
-  const emitAssistantStreamDataSafely = (
-    delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
+  const emitAssistantAgentEventSafely = (
+    data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantPartialReplies"][number]["data"],
   ) => {
-    const { data } = delivery;
     emitAgentEvent({
       runId: params.runId,
       stream: "assistant",
@@ -295,7 +294,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           }),
       });
     }
-    if (delivery.emitPartialReply && params.onPartialReply && state.shouldEmitPartialReplies) {
+  };
+  const emitAssistantPartialReplySafely = (
+    data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantPartialReplies"][number]["data"],
+  ) => {
+    if (params.onPartialReply && state.shouldEmitPartialReplies) {
       runBestEffortCallback({
         label: "assistant partial reply",
         log,
@@ -304,27 +307,33 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
   };
   const emitAssistantStreamData = (
-    data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
+    data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantPartialReplies"][number]["data"],
     options?: { emitPartialReply?: boolean },
   ) => {
     const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
+    // Agent events are provisional and replaceable, so live consumers can render them while
+    // finalizers run. Only irreversible channel partial replies stay behind the terminal gate.
+    emitAssistantAgentEventSafely(data);
+    if (!delivery.emitPartialReply) {
+      return;
+    }
     if (state.deferBlockReplyDelivery) {
-      state.deferredAssistantEvents.push(delivery);
+      state.deferredAssistantPartialReplies.push(delivery);
       return;
     }
-    emitAssistantStreamDataSafely(delivery);
+    emitAssistantPartialReplySafely(data);
   };
-  const flushDeferredAssistantEvents = () => {
-    if (state.deferredAssistantEvents.length === 0) {
+  const flushDeferredAssistantPartialReplies = () => {
+    if (state.deferredAssistantPartialReplies.length === 0) {
       return;
     }
-    const deferred = state.deferredAssistantEvents.splice(0);
+    const deferred = state.deferredAssistantPartialReplies.splice(0);
     for (const delivery of deferred) {
-      emitAssistantStreamDataSafely(delivery);
+      emitAssistantPartialReplySafely(delivery.data);
     }
   };
-  const clearDeferredAssistantEvents = () => {
-    state.deferredAssistantEvents.length = 0;
+  const clearDeferredAssistantPartialReplies = () => {
+    state.deferredAssistantPartialReplies.length = 0;
   };
   const deferredToolMediaReplies = new WeakSet<BlockReplyPayload>();
   const emitBlockReplySafely = (
@@ -1308,7 +1317,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolTrustedLocalMedia = false;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
-    clearDeferredAssistantEvents();
+    clearDeferredAssistantPartialReplies();
     clearDeferredBlockReplies();
     state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
@@ -1357,9 +1366,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     flushBlockReplyBuffer,
     emitAssistantStreamData,
     emitBlockReply,
-    flushDeferredAssistantEvents,
+    flushDeferredAssistantPartialReplies,
     flushDeferredBlockReplies,
-    clearDeferredAssistantEvents,
+    clearDeferredAssistantPartialReplies,
     clearDeferredBlockReplies,
     emitReasoningStream,
     consumeReplyDirectives,

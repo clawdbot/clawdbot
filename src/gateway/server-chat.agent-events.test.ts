@@ -1338,6 +1338,34 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("broadcasts an explicit empty replacement immediately", () => {
+    let now = 11_600;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "empty-replacement");
+
+    emitAgentEvent(handler, "run-empty-replacement", "assistant", { text: "Rejected draft" });
+
+    now = 11_601;
+    emitAgentEvent(
+      handler,
+      "run-empty-replacement",
+      "assistant",
+      { text: "", delta: "", replace: true },
+      { seq: 2 },
+    );
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    expect(chatCalls[1]?.[1]).toMatchObject({
+      deltaText: "",
+      replace: true,
+      message: { content: [{ text: "" }] },
+    });
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
+    nowSpy.mockRestore();
+  });
+
   it("flushes throttled shorter replacement deltas before final", () => {
     let now = 11_700;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);

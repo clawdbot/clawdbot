@@ -302,7 +302,7 @@ export function handleAgentEnd(
 
   const deliverTerminal = () => {
     ctx.state.deferBlockReplyDelivery = false;
-    ctx.flushDeferredAssistantEvents();
+    ctx.flushDeferredAssistantPartialReplies();
     ctx.flushDeferredBlockReplies();
     const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
     finalizeAgentEnd();
@@ -342,8 +342,13 @@ export function handleAgentEnd(
   };
 
   const suppressTerminalDelivery = () => {
-    ctx.clearDeferredAssistantEvents();
+    ctx.clearDeferredAssistantPartialReplies();
     ctx.clearDeferredBlockReplies();
+    if (ctx.state.emittedAssistantUpdate) {
+      // A finalizer revision starts a new model attempt. Retract the provisional live snapshot
+      // without sending the rejected draft through irreversible partial-reply channels.
+      ctx.emitAssistantStreamData({ text: "", delta: "", replace: true });
+    }
     finalizeAgentEnd();
   };
 
