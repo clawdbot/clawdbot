@@ -1,15 +1,17 @@
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import type { ReadinessCondition } from "../readiness/conditions.js";
-import { WORKSPACE_WRITABLE_CRITERION_ID } from "../readiness/selection.js";
+import {
+  WORKSPACE_WRITABLE_CRITERION_ID,
+  type ReadinessCondition,
+} from "../readiness/conditions.js";
 
 export const HOSTING_PROFILE_IDS = ["local", "container", "reverse-proxy", "node-mode"] as const;
 export type HostingProfileId = (typeof HOSTING_PROFILE_IDS)[number];
 
 export const HOSTING_PROFILE_ENV = "OPENCLAW_HOSTING_PROFILE";
 
-export type HostingProfileDescriptor = {
+type HostingProfileDescriptor = {
   id: HostingProfileId;
   description: string;
   requiredCriteria: readonly string[];
@@ -37,10 +39,6 @@ const STANDARD_HOSTING_PROFILES: Record<HostingProfileId, HostingProfileDescript
     requiredCriteria: [WORKSPACE_WRITABLE_CRITERION_ID],
   },
 };
-
-export function listStandardHostingProfiles(): HostingProfileDescriptor[] {
-  return HOSTING_PROFILE_IDS.map((id) => STANDARD_HOSTING_PROFILES[id]);
-}
 
 export function parseHostingProfileId(value: unknown): HostingProfileId | null {
   if (typeof value !== "string") {
@@ -86,7 +84,7 @@ export function resolveHostingProfile(
   );
 }
 
-export type HostingRuntimeFacts = {
+type HostingRuntimeFacts = {
   bind: GatewayBindMode;
   bindHost: string;
   port: number;
