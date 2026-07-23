@@ -120,27 +120,53 @@ export function createWorkspaceReadinessEvidenceResolver(options?: {
   const probeTimeoutMs = Math.max(1, options?.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS);
   const probe = options?.probe ?? probeWorkspaceWritable;
   const now = options?.now ?? Date.now;
+  let activeConfig: OpenClawConfig | undefined;
+  let generation = 0;
   let cached:
-    | { workspaceDir: string; expiresAt: number; evidence: WorkspaceReadinessEvidence }
+    | {
+        config: OpenClawConfig;
+        workspaceDir: string;
+        expiresAt: number;
+        evidence: WorkspaceReadinessEvidence;
+      }
     | undefined;
-  let pending: { workspaceDir: string; promise: Promise<WorkspaceReadinessEvidence> } | undefined;
+  let pending:
+    | {
+        config: OpenClawConfig;
+        generation: number;
+        workspaceDir: string;
+        promise: Promise<WorkspaceReadinessEvidence>;
+      }
+    | undefined;
 
   return async (params: {
     config: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
   }): Promise<WorkspaceReadinessEvidence> => {
+    if (params.config !== activeConfig) {
+      activeConfig = params.config;
+      generation += 1;
+      cached = undefined;
+    }
+    const requestedGeneration = generation;
     const workspaceDir = resolveAgentWorkspaceDir(
       params.config,
       resolveDefaultAgentId(params.config),
       params.env,
     );
     const checkedAt = now();
-    if (cached?.workspaceDir === workspaceDir && checkedAt < cached.expiresAt) {
+    if (
+      cached?.config === params.config &&
+      cached.workspaceDir === workspaceDir &&
+      checkedAt < cached.expiresAt
+    ) {
       return cached.evidence;
     }
 
-    if (!pending || pending.workspaceDir !== workspaceDir) {
+    if (!pending) {
       const entry = {
+        config: params.config,
+        generation: requestedGeneration,
         workspaceDir,
         promise: Promise.resolve()
           .then(() => probe(workspaceDir))
@@ -150,12 +176,32 @@ export function createWorkspaceReadinessEvidenceResolver(options?: {
       void entry.promise.then((evidence) => {
         if (pending === entry) {
           pending = undefined;
-          cached = { workspaceDir, expiresAt: now() + cacheTtlMs, evidence };
+          if (entry.generation === generation && entry.config === activeConfig) {
+            cached = {
+              config: entry.config,
+              workspaceDir,
+              expiresAt: now() + cacheTtlMs,
+              evidence,
+            };
+          }
         }
       });
     }
 
-    const activeProbe = pending.promise;
+    const activeProbeEntry = pending;
+    const activeProbe = activeProbeEntry.promise.then((evidence) =>
+      activeProbeEntry.generation === requestedGeneration &&
+      activeProbeEntry.config === params.config &&
+      requestedGeneration === generation &&
+      params.config === activeConfig &&
+      activeProbeEntry.workspaceDir === workspaceDir
+        ? evidence
+        : ({
+            writable: null,
+            reason: "WorkspaceNotChecked",
+            message: "Workspace configuration changed while its readiness probe was running.",
+          } satisfies WorkspaceReadinessEvidence),
+    );
     let timeout: NodeJS.Timeout | undefined;
     const timedOut = new Promise<WorkspaceReadinessEvidence>((resolve) => {
       timeout = setTimeout(
@@ -172,8 +218,17 @@ export function createWorkspaceReadinessEvidenceResolver(options?: {
     if (timeout) {
       clearTimeout(timeout);
     }
-    if (evidence.writable === null) {
-      cached = { workspaceDir, expiresAt: now() + cacheTtlMs, evidence };
+    if (
+      evidence.writable === null &&
+      params.config === activeConfig &&
+      requestedGeneration === generation
+    ) {
+      cached = {
+        config: params.config,
+        workspaceDir,
+        expiresAt: now() + cacheTtlMs,
+        evidence,
+      };
     }
     return evidence;
   };

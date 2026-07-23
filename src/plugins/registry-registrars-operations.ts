@@ -311,9 +311,6 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     const id = `plugin.${record.id}.${localId}`;
     const existing = registry.readinessCriteria.find((entry) => entry.id === id);
     if (existing) {
-      if (existing.pluginId === record.id) {
-        return;
-      }
       pushDiagnostic({
         level: "error",
         pluginId: record.id,

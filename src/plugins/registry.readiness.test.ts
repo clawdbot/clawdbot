@@ -5,7 +5,7 @@ import { createPluginRegistry } from "./registry.js";
 import { createPluginRuntime } from "./runtime/index.js";
 
 describe("plugin readiness registration", () => {
-  it("namespaces criteria and keeps duplicate registration idempotent", () => {
+  it("namespaces criteria and rejects duplicate registration", () => {
     const pluginRegistry = createPluginRegistry({
       logger: { info() {}, warn() {}, error() {}, debug() {} },
       runtime: createPluginRuntime(),
@@ -42,5 +42,12 @@ describe("plugin readiness registration", () => {
         pluginConfig: { endpoint: "https://storage.example" },
       }),
     ]);
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "storage",
+        message: "readiness criterion already registered: plugin.storage.backend",
+      }),
+    );
   });
 });
