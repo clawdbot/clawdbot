@@ -69,6 +69,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const dormantRuns = new Map<string, DormantSessionObserverRun>();
   const revisionFloors = new Map<string, SessionObserverRevisionFloor>();
   const supersededRuns = new Map<string, number>();
+  const terminalRuns = new Map<string, number>();
   const disabledRuns = new Set<string>();
   const visibleConnections = new Set<string>();
   let disposed = false;
@@ -169,7 +170,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (state.timer) {
       clearTimeoutFn(state.timer);
     }
-    state.activeController?.abort();
+    modelSlots.invalidateRequest(state);
     if (states.get(state.sessionKey) === state) {
       states.delete(state.sessionKey);
     }
@@ -195,7 +196,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       clearTimeoutFn(state.timer);
       state.timer = undefined;
     }
-    state.activeController?.abort();
+    modelSlots.invalidateRequest(state);
     state.preparedPromise = undefined;
     state.utilityModelRef = undefined;
     state.consecutiveFailures = 0;
@@ -207,14 +208,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     demote: demoteUtilityModel,
   });
 
-  const disableRun = (state: SessionObserverState) => {
+  const disableModelForRun = (state: SessionObserverState) => {
     rememberSessionObserverDisabledRun(disabledRuns, state.runId);
-    rememberSessionObserverDormantRun(
-      dormantRuns,
-      revisionFloors,
-      createDormantSessionObserverRun(state),
-    );
-    dropState(state);
+    demoteUtilityModel(state);
   };
 
   const suspendStatesWithoutAudience = () => {
@@ -418,15 +414,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     state.inFlight = true;
     state.lastRunAt = now();
     const lastSelectedSequence = selectedNotes.at(-1)?.sequence ?? state.lastDigestNoteSequence;
+    const requestedPreambleGeneration = preamblePublisher.generation(state);
+    const requestGeneration = modelSlots.beginRequest(state);
     void (async () => {
       try {
-        const requestedPreambleGeneration = preamblePublisher.generation(state);
         const modelDigest = await requestModelDigest(
           state,
           selectedNotes.map((note) => note.text),
         );
         if (
           !modelStateIsCurrent(state) ||
+          !modelSlots.requestIsCurrent(state, requestGeneration) ||
           (!final && state.terminalHealth !== undefined) ||
           preamblePublisher.generation(state) !== requestedPreambleGeneration
         ) {
@@ -466,7 +464,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           dormantRuns.delete(state.runId);
         }
       } catch (error) {
-        if (!modelStateIsCurrent(state) || (!final && state.terminalHealth !== undefined)) {
+        if (
+          !modelStateIsCurrent(state) ||
+          !modelSlots.requestIsCurrent(state, requestGeneration) ||
+          (!final && state.terminalHealth !== undefined)
+        ) {
           return;
         }
         state.consecutiveFailures += 1;
@@ -481,7 +483,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
             dormantRuns.delete(state.runId);
             dropState(state);
           } else {
-            disableRun(state);
+            disableModelForRun(state);
           }
         } else if (final) {
           state.finalPending = true;
@@ -516,7 +518,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (cfg.gateway?.controlUi?.sessionObserver === false) {
       return undefined;
     }
-    const utilityModelRef = modelSlots.claim(agentId);
+    const utilityModelRef = disabledRuns.has(event.runId) ? undefined : modelSlots.claim(agentId);
     if (!utilityModelRef && !allowPreambleOnly) {
       return undefined;
     }
@@ -568,18 +570,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       return;
     }
     const terminal = isTerminalLifecycleEvent(event);
+    if (terminalRuns.has(event.runId)) {
+      return;
+    }
+    if (terminal) {
+      markSessionObserverRunSuperseded(terminalRuns, event.runId, event.ts);
+    }
     if (supersededRuns.has(event.runId)) {
       if (terminal) {
         supersededRuns.delete(event.runId);
         dormantRuns.delete(event.runId);
-      }
-      return;
-    }
-    if (disabledRuns.has(event.runId)) {
-      if (terminal) {
-        void synthesizeTerminalDigest({ event });
         disabledRuns.delete(event.runId);
-        dormantRuns.delete(event.runId);
       }
       return;
     }
@@ -591,6 +592,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (terminal && audience.recipients(sessionKey).size === 0) {
       void synthesizeTerminalDigest({ event, state: states.get(sessionKey) });
       dormantRuns.delete(event.runId);
+      disabledRuns.delete(event.runId);
       return;
     }
     const isRunStart = event.stream === "lifecycle" && event.data.phase === "start";
@@ -645,7 +647,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       if (terminal) {
         void synthesizeTerminalDigest({ event });
         dormantRuns.delete(event.runId);
+        disabledRuns.delete(event.runId);
       }
+      return;
+    }
+    if (state.terminalHealth) {
       return;
     }
     if (revisionFloor && revisionFloor.revision > state.revision) {
@@ -653,10 +659,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       state.previousDigest = revisionFloor.previousDigest;
     }
     revisionFloors.delete(sessionKey);
-    const utilityModelRef = modelSlots.claim(state.agentId, state);
+    const utilityModelRef = disabledRuns.has(state.runId)
+      ? undefined
+      : modelSlots.claim(state.agentId, state);
     if (state.utilityModelRef !== utilityModelRef) {
-      state.activeController?.abort();
-      state.activeController = undefined;
+      modelSlots.invalidateRequest(state);
       state.preparedPromise = undefined;
       state.utilityModelRef = utilityModelRef;
       state.consecutiveFailures = 0;
@@ -669,10 +676,13 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     noteSessionActivityEvent(state, event);
     preamblePublisher.handle(state, event);
     if (terminal) {
-      state.activeController?.abort();
+      if (!state.terminalHealth) {
+        modelSlots.invalidateRequest(state);
+      }
       preamblePublisher.flush(state);
       preamblePublisher.clear(state);
       state.terminalHealth = terminalHealthFor(event);
+      disabledRuns.delete(event.runId);
       const endedAt = readFiniteNumber(event.data.endedAt) ?? now();
       const hasRunDigest = state.digestCount > 0 || state.previousDigest?.runId === state.runId;
       if (!hasRunDigest && endedAt - state.startedAt < FINAL_DIGEST_MIN_RUN_MS) {
@@ -714,6 +724,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       dormantRuns.clear();
       revisionFloors.clear();
       supersededRuns.clear();
+      terminalRuns.clear();
       disabledRuns.clear();
       visibleConnections.clear();
     },

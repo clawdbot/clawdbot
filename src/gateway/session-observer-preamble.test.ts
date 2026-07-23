@@ -91,7 +91,7 @@ describe("session observer preamble publisher", () => {
       });
     }
 
-    expect(publisher.generation(session)).toBe(2);
+    expect(publisher.generation(session)).toBe(0);
     publisher.dispose();
   });
 });

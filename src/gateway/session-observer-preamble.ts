@@ -23,6 +23,7 @@ export function createSessionObserverPreamblePublisher(params: {
 }) {
   const entries = new Map<SessionObserverState, PreambleEntry>();
   const generations = new WeakMap<SessionObserverState, number>();
+  const lastHeadlines = new WeakMap<SessionObserverState, string>();
 
   const clear = (state: SessionObserverState): void => {
     const entry = entries.get(state);
@@ -82,9 +83,13 @@ export function createSessionObserverPreamblePublisher(params: {
         published: false,
         updatedAt: event.ts,
       };
-      if (entry.headline !== headline) {
+      const previousHeadline =
+        lastHeadlines.get(state) ??
+        (state.previousDigest?.runId === state.runId ? state.previousDigest.headline : "");
+      if (previousHeadline !== headline) {
         generations.set(state, (generations.get(state) ?? 0) + 1);
       }
+      lastHeadlines.set(state, headline);
       entry.headline = headline;
       entry.updatedAt = event.ts;
       entries.set(state, entry);

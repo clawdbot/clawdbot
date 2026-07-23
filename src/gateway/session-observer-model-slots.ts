@@ -7,8 +7,24 @@ export function createSessionObserverModelSlots(params: {
   demote: (state: SessionObserverState) => void;
 }) {
   const demoted = new WeakSet<SessionObserverState>();
+  const requestGenerations = new WeakMap<SessionObserverState, number>();
 
   return {
+    beginRequest(state: SessionObserverState): number {
+      const generation = (requestGenerations.get(state) ?? 0) + 1;
+      requestGenerations.set(state, generation);
+      return generation;
+    },
+
+    invalidateRequest(state: SessionObserverState): void {
+      requestGenerations.set(state, (requestGenerations.get(state) ?? 0) + 1);
+      state.activeController?.abort();
+    },
+
+    requestIsCurrent(state: SessionObserverState, generation: number): boolean {
+      return requestGenerations.get(state) === generation;
+    },
+
     claim(agentId: string, current?: SessionObserverState): string | undefined {
       const resolved = params.resolve(agentId);
       if (!resolved || current?.utilityModelRef === resolved) {

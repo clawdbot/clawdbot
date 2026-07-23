@@ -139,6 +139,15 @@ describe("session observer", () => {
       revision: 3,
     });
     const terminalCount = harness.broadcastToConnIds.mock.calls.length;
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Late preamble" },
+      }),
+    );
+    harness.observer.handleEvent(
+      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_001 } }),
+    );
     await vi.advanceTimersByTimeAsync(2_000);
     expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(terminalCount);
     harness.observer.dispose();
@@ -498,7 +507,7 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
-  it("disables a run after two consecutive model failures", async () => {
+  it("disables only model work after two consecutive failures", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const completeModel = vi.fn(async () => {
@@ -518,6 +527,15 @@ describe("session observer", () => {
     }
     await vi.advanceTimersByTimeAsync(24_000);
     expect(completeModel).toHaveBeenCalledTimes(2);
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Continuing without model" },
+      }),
+    );
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Continuing without model",
+    });
     harness.observer.dispose();
   });
 
@@ -623,6 +641,40 @@ describe("session observer", () => {
 
     expect(harness.prepareModel).not.toHaveBeenCalled();
     expect(harness.completeModel).not.toHaveBeenCalled();
+    harness.observer.dispose();
+  });
+
+  it("rejects an in-flight result after utility-model replacement", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let utilityModelRef: string | undefined = "openai/gpt-a";
+    let resolveModel: ((value: ReturnType<typeof modelMessage>) => void) | undefined;
+    const completeModel = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof modelMessage>>((resolve) => {
+          resolveModel = resolve;
+        }),
+    );
+    const harness = createHarness({
+      completeModel,
+      resolveUtilityModelRef: vi.fn(() => utilityModelRef),
+    });
+    startAndAddToolNotes(harness.observer);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(completeModel).toHaveBeenCalledOnce();
+
+    utilityModelRef = "openai/gpt-b";
+    harness.observer.handleEvent(
+      event({ stream: "tool", data: { phase: "start", name: "read", args: { path: "next" } } }),
+    );
+    resolveModel?.(modelMessage({ headline: "Stale model A", health: "on-track" }));
+    await flushObserver();
+
+    expect(
+      harness.broadcastToConnIds.mock.calls.some(
+        (call) => (call[1] as SessionObserverDigest).headline === "Stale model A",
+      ),
+    ).toBe(false);
     harness.observer.dispose();
   });
 
