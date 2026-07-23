@@ -9,6 +9,7 @@ type BoardMcpAppDependencies = {
   resolveActiveView: NonNullable<BoardHandlerDependencies["resolveActiveView"]>;
   resolveAllowedToolNames: NonNullable<BoardHandlerDependencies["resolveAllowedToolNames"]>;
   mintFromTranscript: NonNullable<BoardHandlerDependencies["mintFromTranscript"]>;
+  withActiveView: NonNullable<BoardHandlerDependencies["withActiveView"]>;
 };
 
 export function createMcpAppDependencies(): BoardMcpAppDependencies {
@@ -27,6 +28,9 @@ export function createMcpAppDependencies(): BoardMcpAppDependencies {
       },
     })),
     resolveAllowedToolNames: vi.fn(async () => ["server.refresh", "server.search"]),
+    withActiveView: vi.fn(async (_active, _kind, operation) => {
+      return await operation(new AbortController().signal);
+    }),
     mintFromTranscript: vi.fn(async ({ readOnly }: { readOnly: boolean }) => {
       lease += 1;
       return {
@@ -53,6 +57,7 @@ export function createBoardHarness(
     resolveActiveView: dependencies.resolveActiveView ?? defaults.resolveActiveView,
     resolveAllowedToolNames:
       dependencies.resolveAllowedToolNames ?? defaults.resolveAllowedToolNames,
+    withActiveView: dependencies.withActiveView ?? defaults.withActiveView,
     mintFromTranscript: dependencies.mintFromTranscript ?? defaults.mintFromTranscript,
   };
   const broadcast = vi.fn();

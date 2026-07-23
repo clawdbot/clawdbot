@@ -112,11 +112,15 @@ export async function requireMcpAppInteraction(
   }
 }
 
-export async function resolveMcpAppAllowedToolNames(active: McpAppActiveView): Promise<string[]> {
+export async function resolveMcpAppAllowedToolNames(
+  active: McpAppActiveView,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  signal?.throwIfAborted();
   if (active.view.readOnly === true || active.view.allowedAppToolNames === undefined) {
     return [];
   }
-  const catalog = await active.runtime.getCatalog();
+  const catalog = await active.runtime.getCatalog(signal ? { signal } : undefined);
   return catalog.tools
     .filter(
       (tool) =>
@@ -195,13 +199,20 @@ export async function resolveMcpAppActiveView(params: {
 export async function withMcpAppActiveView<T>(
   active: McpAppActiveView,
   kind: "read" | "tool",
-  operation: () => Promise<T> | T,
+  operation: (signal: AbortSignal) => Promise<T> | T,
+  options?: { signal?: AbortSignal },
 ): Promise<T> {
+  const timeoutSignal = AbortSignal.timeout(active.view.operationTimeoutMs);
+  const signal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+  signal.throwIfAborted();
   active.runtime.markUsed();
   const release = acquireMcpAppViewRequest(active.view, kind);
   const releaseRuntimeLease = active.runtime.acquireLease?.();
   try {
-    return await operation();
+    return await waitForMcpAppOperation(
+      Promise.resolve().then(() => operation(signal)),
+      signal,
+    );
   } finally {
     release();
     releaseRuntimeLease?.();
@@ -219,11 +230,13 @@ export async function executeMcpAppOperation(
   options?: { signal?: AbortSignal },
 ): Promise<unknown> {
   const { runtime, view } = active;
-  const timeoutSignal = AbortSignal.timeout(view.operationTimeoutMs);
-  const signal = options?.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+  const runActiveViewOperation = <T>(
+    kind: "read" | "tool",
+    callback: (signal: AbortSignal) => Promise<T> | T,
+  ) => withMcpAppActiveView(active, kind, callback, options);
   switch (operation.method) {
     case "tools/call":
-      return await withMcpAppActiveView(active, "tool", async () => {
+      return await runActiveViewOperation("tool", async (signal) => {
         await requireCallableTool(runtime, view, operation.params.name, signal);
         return await runtime.callTool(
           view.serverName,
@@ -233,7 +246,7 @@ export async function executeMcpAppOperation(
         );
       });
     case "tools/list":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await runActiveViewOperation("read", async (signal) => {
         await requireMcpAppInteraction(view, signal);
         if (!runtime.listTools) {
           throw new Error("MCP tools/list is unavailable");
@@ -264,7 +277,7 @@ export async function executeMcpAppOperation(
         };
       });
     case "resources/list":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await runActiveViewOperation("read", async (signal) => {
         if (!runtime.listResources) {
           throw new Error("MCP resources/list is unavailable");
         }
@@ -274,7 +287,7 @@ export async function executeMcpAppOperation(
         return Array.isArray(resources) ? { resources } : resources;
       });
     case "resources/templates/list":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await runActiveViewOperation("read", async (signal) => {
         if (!runtime.listResourceTemplates) {
           throw new Error("MCP resources/templates/list is unavailable");
         }
@@ -285,7 +298,7 @@ export async function executeMcpAppOperation(
         );
       });
     case "resources/read":
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await runActiveViewOperation("read", async (signal) => {
         if (!runtime.readResource) {
           throw new Error("MCP resources/read is unavailable");
         }

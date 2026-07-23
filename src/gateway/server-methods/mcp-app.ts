@@ -95,13 +95,14 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         viewId: requireString(params, "viewId"),
         cfg: context.getRuntimeConfig(),
       });
-      return await withMcpAppActiveView(active, "read", async () => {
+      return await withMcpAppActiveView(active, "read", async (signal) => {
         const { view } = active;
         let interactive = false;
         try {
-          await requireMcpAppInteraction(view);
+          await requireMcpAppInteraction(view, signal);
           interactive = true;
         } catch {
+          signal.throwIfAborted();
           // Stale board leases remain renderable but lose every interactive capability.
         }
         const updateModelContextSupported =
@@ -151,8 +152,8 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
         agentId: resolveMcpAppSessionOwner(params, context.getRuntimeConfig()),
         viewId: requireString(params, "viewId"),
       });
-      return await withMcpAppActiveView(active, "read", async () => {
-        await requireMcpAppInteraction(active.view);
+      return await withMcpAppActiveView(active, "read", async (signal) => {
+        await requireMcpAppInteraction(active.view, signal);
         updateMcpAppModelContext(active.runtime, active.view, params);
         return {};
       });

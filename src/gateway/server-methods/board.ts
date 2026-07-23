@@ -49,6 +49,7 @@ import {
   requireMcpAppInteraction,
   resolveMcpAppActiveView,
   resolveMcpAppAllowedToolNames,
+  withMcpAppActiveView,
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
@@ -62,6 +63,7 @@ type McpAppDependencies = {
   resolveActiveView: typeof resolveMcpAppActiveView;
   resolveAllowedToolNames: typeof resolveMcpAppAllowedToolNames;
   mintFromTranscript: typeof mintMcpAppViewFromTranscript;
+  withActiveView: typeof withMcpAppActiveView;
 };
 type BoardDataReader = typeof readBoardDataBinding;
 type BoardActionVerbRunner = typeof runBoardActionVerb;
@@ -76,6 +78,7 @@ const defaultMcpAppDependencies: McpAppDependencies = {
   resolveActiveView: resolveMcpAppActiveView,
   resolveAllowedToolNames: resolveMcpAppAllowedToolNames,
   mintFromTranscript: mintMcpAppViewFromTranscript,
+  withActiveView: withMcpAppActiveView,
 };
 
 function invalidParams(
@@ -148,6 +151,7 @@ export function createBoardHandlers(
       dependencies.resolveAllowedToolNames ?? defaultMcpAppDependencies.resolveAllowedToolNames,
     mintFromTranscript:
       dependencies.mintFromTranscript ?? defaultMcpAppDependencies.mintFromTranscript,
+    withActiveView: dependencies.withActiveView ?? defaultMcpAppDependencies.withActiveView,
   };
   const readDataBinding = dependencies.readDataBinding ?? readBoardDataBinding;
   const runActionVerb = dependencies.runActionVerb ?? runBoardActionVerb;
@@ -276,14 +280,26 @@ export function createBoardHandlers(
               "MCP App view is missing its originating tool call",
             );
           }
-          let interactive = false;
-          try {
-            await requireMcpAppInteraction(view);
-            interactive = true;
-          } catch {
-            // Reconstructed or revoked source leases may be pinned only as read-only content.
-          }
-          const allowedTools = interactive ? await mcpApp.resolveAllowedToolNames(active) : [];
+          const { interactive, allowedTools } = await mcpApp.withActiveView(
+            active,
+            "read",
+            async (signal) => {
+              let interactive = false;
+              try {
+                await requireMcpAppInteraction(view, signal);
+                interactive = true;
+              } catch {
+                signal.throwIfAborted();
+                // Reconstructed or revoked source leases may be pinned only as read-only content.
+              }
+              return {
+                interactive,
+                allowedTools: interactive
+                  ? await mcpApp.resolveAllowedToolNames(active, signal)
+                  : [],
+              };
+            },
+          );
           content = {
             kind: "mcp-app",
             descriptor: {
