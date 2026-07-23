@@ -138,4 +138,18 @@ describe("createPluginReadinessResolver", () => {
       expect.objectContaining({ status: "Unknown", reason: "CriterionInvalidResult" }),
     ]);
   });
+
+  it("redacts secrets from otherwise valid provider messages", async () => {
+    const criterion = registration(() => ({
+      status: "False",
+      reason: "StorageUnavailable",
+      message: "Storage failed with password=super-secret-value-that-must-not-escape",
+    }));
+    const resolve = createPluginReadinessResolver({ cacheTtlMs: 0 });
+
+    const [condition] = await resolve({ registry: { readinessCriteria: [criterion] }, config: {} });
+
+    expect(condition).toMatchObject({ status: "False", reason: "StorageUnavailable" });
+    expect(condition?.message).not.toContain("super-secret-value-that-must-not-escape");
+  });
 });
