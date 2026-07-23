@@ -59,6 +59,7 @@ export function createSessionObserverPreamblePublisher(params: {
       ...(state.planProgress ? { planProgress: state.planProgress } : {}),
     };
     state.previousDigest = digest;
+    state.lastPublishedPreambleHeadline = entry.headline;
     entry.lastPublishedAt = params.now();
     entry.published = true;
     params.publish(state, digest);
@@ -82,6 +83,7 @@ export function createSessionObserverPreamblePublisher(params: {
         (state.previousDigest?.runId === state.runId ? state.previousDigest.headline : "");
       if (!existing && previousHeadline === headline) {
         state.lastPreambleHeadline = headline;
+        state.lastPublishedPreambleHeadline = headline;
         return true;
       }
       const entry = existing ?? {

@@ -55,6 +55,7 @@ export type SessionObserverState = SessionActivityNoteState & {
   consecutiveFailures: number;
   lastDigestNoteSequence: number;
   lastPreambleHeadline?: string;
+  lastPublishedPreambleHeadline?: string;
   previousDigest?: SessionObserverDigest;
   preparedPromise?: Promise<PreparedModel>;
   activeController?: AbortController;
@@ -172,7 +173,9 @@ export function createDormantSessionObserverRun(
     revision: state.revision,
     digestCount: state.digestCount,
     consecutiveFailures: state.consecutiveFailures,
-    ...(state.lastPreambleHeadline ? { lastPreambleHeadline: state.lastPreambleHeadline } : {}),
+    ...(state.lastPublishedPreambleHeadline
+      ? { lastPreambleHeadline: state.lastPublishedPreambleHeadline }
+      : {}),
     planProgress: state.planProgress,
     previousDigest: state.previousDigest,
   };

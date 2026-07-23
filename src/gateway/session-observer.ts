@@ -459,6 +459,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       const state: SessionObserverState = {
         ...createSessionActivityNoteState(),
         ...dormantState,
+        ...(dormantState.lastPreambleHeadline
+          ? { lastPublishedPreambleHeadline: dormantState.lastPreambleHeadline }
+          : {}),
         ...(utilityModelRef ? { utilityModelRef } : {}),
         lastActivityAt: event.ts,
         lastRunAt: now(),

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSessionActivityNoteState } from "../agents/session-activity-notes.js";
-import type { SessionObserverState } from "./session-observer-model.js";
+import {
+  createDormantSessionObserverRun,
+  type SessionObserverState,
+} from "./session-observer-model.js";
 import { createSessionObserverPreamblePublisher } from "./session-observer-preamble.js";
 
 function state(headline: string): SessionObserverState {
@@ -46,7 +49,7 @@ describe("session observer preamble publisher", () => {
     publisher.handle(session, {
       runId: "run-1",
       seq: 1,
-      stream: "item",
+      stream: "item" as const,
       ts: 1_000,
       sessionKey: session.sessionKey,
       agentId: session.agentId,
@@ -55,7 +58,7 @@ describe("session observer preamble publisher", () => {
     publisher.handle(session, {
       runId: "run-1",
       seq: 2,
-      stream: "item",
+      stream: "item" as const,
       ts: 1_000,
       sessionKey: session.sessionKey,
       agentId: session.agentId,
@@ -83,7 +86,7 @@ describe("session observer preamble publisher", () => {
       publisher.handle(session, {
         runId: "run-1",
         seq: sequence,
-        stream: "item",
+        stream: "item" as const,
         ts: 1_000,
         sessionKey: session.sessionKey,
         agentId: session.agentId,
@@ -108,7 +111,7 @@ describe("session observer preamble publisher", () => {
     const event = {
       runId: "run-1",
       seq: 1,
-      stream: "item",
+      stream: "item" as const,
       ts: 1_000,
       sessionKey: session.sessionKey,
       agentId: session.agentId,
@@ -147,7 +150,7 @@ describe("session observer preamble publisher", () => {
     const event = {
       runId: "run-1",
       seq: 1,
-      stream: "item",
+      stream: "item" as const,
       ts: 1_000,
       sessionKey: session.sessionKey,
       agentId: session.agentId,
@@ -173,6 +176,49 @@ describe("session observer preamble publisher", () => {
     publisher.dispose();
   });
 
+  it("replays a queued preamble after dormant-state revival", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const original = state("Earlier headline");
+    const publish = vi.fn();
+    const publisher = createSessionObserverPreamblePublisher({
+      now: Date.now,
+      setTimeoutFn: setTimeout,
+      clearTimeoutFn: clearTimeout,
+      isCurrent: () => true,
+      publish,
+    });
+    const preamble = (sequence: number, progressText: string) => ({
+      runId: "run-1",
+      seq: sequence,
+      stream: "item" as const,
+      ts: Date.now(),
+      sessionKey: original.sessionKey,
+      agentId: original.agentId,
+      data: { kind: "preamble" as const, progressText },
+    });
+
+    publisher.handle(original, preamble(1, "Published headline"));
+    vi.setSystemTime(1_100);
+    publisher.handle(original, preamble(2, "Queued headline"));
+    const dormant = createDormantSessionObserverRun(original);
+    publisher.clear(original);
+
+    expect(dormant.lastPreambleHeadline).toBe("Published headline");
+    const revived = state("Published headline");
+    revived.lastPreambleHeadline = dormant.lastPreambleHeadline;
+    publisher.handle(revived, {
+      ...preamble(3, "Queued headline"),
+      sessionKey: revived.sessionKey,
+      agentId: revived.agentId,
+    });
+
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(revived.previousDigest?.headline).toBe("Queued headline");
+    publisher.dispose();
+    vi.useRealTimers();
+  });
+
   it("preserves duplicate suppression across dormant-state revival", () => {
     const original = state("Earlier headline");
     const publish = vi.fn();
@@ -186,7 +232,7 @@ describe("session observer preamble publisher", () => {
     publisher.handle(original, {
       runId: "run-1",
       seq: 1,
-      stream: "item",
+      stream: "item" as const,
       ts: 1_000,
       sessionKey: original.sessionKey,
       agentId: original.agentId,
@@ -198,7 +244,7 @@ describe("session observer preamble publisher", () => {
     publisher.handle(revived, {
       runId: "run-1",
       seq: 2,
-      stream: "item",
+      stream: "item" as const,
       ts: 2_000,
       sessionKey: revived.sessionKey,
       agentId: revived.agentId,
