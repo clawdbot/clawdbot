@@ -1326,7 +1326,7 @@ export async function startGatewayServer(
           config: snapshot.config,
           registry: snapshot.registry,
           env: process.env,
-          additionalRequiredCriteria: requiredCriteriaForHostingProfile(profile),
+          additionalRequiredCriteria: profile ? requiredCriteriaForHostingProfile(profile) : [],
         }),
       ]);
       const profileConditions = profile
