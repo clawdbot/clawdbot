@@ -13,6 +13,7 @@ type WorkspaceReadinessEvidence = {
 
 const DEFAULT_CACHE_TTL_MS = 5_000;
 const DEFAULT_PROBE_TIMEOUT_MS = 1_000;
+const MAX_WORKSPACE_PROBES = 2;
 const PROBE_CONTENT = "openclaw workspace readiness\n";
 
 function errorCode(error: unknown): string | undefined {
@@ -138,6 +139,7 @@ export function createWorkspaceReadinessEvidenceResolver(options?: {
         promise: Promise<WorkspaceReadinessEvidence>;
       }
     | undefined;
+  const activeProbes = new Set<Promise<WorkspaceReadinessEvidence>>();
 
   return async (params: {
     config: OpenClawConfig;
@@ -174,7 +176,7 @@ export function createWorkspaceReadinessEvidenceResolver(options?: {
       pending = undefined;
     }
 
-    if (!pending) {
+    if (!pending && activeProbes.size < MAX_WORKSPACE_PROBES) {
       const entry = {
         config: params.config,
         generation: requestedGeneration,
@@ -184,7 +186,9 @@ export function createWorkspaceReadinessEvidenceResolver(options?: {
           .catch(workspaceProbeFailure),
       };
       pending = entry;
+      activeProbes.add(entry.promise);
       void entry.promise.then((evidence) => {
+        activeProbes.delete(entry.promise);
         if (pending === entry) {
           pending = undefined;
           if (entry.generation === generation && entry.config === activeConfig) {
@@ -197,6 +201,14 @@ export function createWorkspaceReadinessEvidenceResolver(options?: {
           }
         }
       });
+    }
+
+    if (!pending) {
+      return {
+        writable: null,
+        reason: "WorkspaceProbeTimedOut",
+        message: "Prior workspace probes still occupy the bounded probe capacity.",
+      };
     }
 
     const activeProbeEntry = pending;
