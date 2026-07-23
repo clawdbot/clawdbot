@@ -26,7 +26,7 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
-import { finalizeRoleSnapshot } from "./pw-role-snapshot.js";
+import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
 export { appendCdpPath } from "./cdp.helpers.js";
@@ -891,11 +891,13 @@ export async function snapshotRoleViaCdp(opts: {
   urls?: boolean;
   timeoutMs?: number;
   maxChars?: number;
+  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
   snapshot: string;
   truncated?: boolean;
   refs: Record<string, CdpRoleRef>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
+  newElements?: number;
 }> {
   return await withCdpSocket(
     opts.wsUrl,
@@ -915,6 +917,7 @@ export async function snapshotRoleViaCdp(opts: {
         snapshot,
         refs: built.refs,
         maxChars: opts.maxChars,
+        delta: opts.delta,
       });
     },
     { commandTimeoutMs: opts.timeoutMs ?? 5000 },

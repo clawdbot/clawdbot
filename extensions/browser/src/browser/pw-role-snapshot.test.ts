@@ -1,9 +1,11 @@
 // Browser tests cover pw role snapshot plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  annotateRoleSnapshotDelta,
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
   finalizeRoleSnapshot,
+  getRoleSnapshotIdentityKeys,
   parseRoleRef,
 } from "./pw-role-snapshot.js";
 
@@ -129,6 +131,78 @@ describe("pw-role-snapshot", () => {
     expect(result.snapshot).toBe(snapshot);
     expect(result.truncated).toBeUndefined();
     expect(result.refs).toEqual({ e1: { role: "button" } });
+  });
+
+  it("does not mark the first snapshot", () => {
+    const snapshot = '- button "Save" [ref=e1]';
+    const refs = { e1: { role: "button", name: "Save" } };
+
+    const result = annotateRoleSnapshotDelta({ snapshot, refs, mode: "role" });
+
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.newElements).toBeUndefined();
+  });
+
+  it("marks only new role identities and preserves ref extraction", () => {
+    const previousKeys = getRoleSnapshotIdentityKeys(
+      { e1: { role: "button", name: "Save" } },
+      "role",
+    );
+    const refs = {
+      e7: { role: "button", name: "Save" },
+      e8: { role: "dialog", name: "Confirmation" },
+    };
+    const annotated = annotateRoleSnapshotDelta({
+      snapshot: ['- button "Save" [ref=e7]', '- dialog "Confirmation" [ref=e8]'].join("\n"),
+      refs,
+      mode: "role",
+      previousKeys,
+    });
+    const finalized = finalizeRoleSnapshot({ snapshot: annotated.snapshot, refs });
+
+    expect(annotated.snapshot).toBe(
+      [
+        '- button "Save" [ref=e7]',
+        '- dialog "Confirmation" [ref=e8] [new]',
+        "1 new element(s) since last snapshot",
+      ].join("\n"),
+    );
+    expect(annotated.newElements).toBe(1);
+    expect(finalized.refs).toEqual(refs);
+  });
+
+  it("uses preserved aria refs as AI snapshot identities", () => {
+    const annotated = annotateRoleSnapshotDelta({
+      snapshot: ['- button "Save" [ref=7]', '- dialog "Confirmation" [ref=8]'].join("\n"),
+      refs: {
+        "7": { role: "button", name: "Save" },
+        "8": { role: "dialog", name: "Confirmation" },
+      },
+      mode: "aria",
+      previousKeys: new Set(["7"]),
+    });
+
+    expect(annotated.snapshot).toContain('- button "Save" [ref=7]\n');
+    expect(annotated.snapshot).toContain('- dialog "Confirmation" [ref=8] [new]');
+    expect(annotated.newElements).toBe(1);
+  });
+
+  it("annotates before truncation and keeps only complete annotated refs", () => {
+    const first = '- button "Visible" [ref=e1] [new]';
+    const marker = "[...TRUNCATED - page too large]";
+    const result = finalizeRoleSnapshot({
+      snapshot: ['- button "Visible" [ref=e1]', '- dialog "Hidden" [ref=e2]'].join("\n"),
+      refs: {
+        e1: { role: "button", name: "Visible" },
+        e2: { role: "dialog", name: "Hidden" },
+      },
+      maxChars: first.length + 2 + marker.length,
+      delta: { mode: "role", previousKeys: new Set() },
+    });
+
+    expect(result.snapshot).toBe(`${first}\n\n${marker}`);
+    expect(result.refs).toEqual({ e1: { role: "button", name: "Visible" } });
+    expect(result.newElements).toBe(1);
   });
 
   it("treats sub-unit internal budgets as uncapped", () => {

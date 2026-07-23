@@ -27,7 +27,7 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
-import { finalizeRoleSnapshot } from "../pw-role-snapshot.js";
+import { finalizeRoleSnapshot, type RoleRefMap } from "../pw-role-snapshot.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
 import { scaleAnnotations } from "../screenshot-annotate.js";
 import {
@@ -36,6 +36,11 @@ import {
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import {
+  getPreviousSnapshotKeys,
+  recordSnapshotKeys,
+  type SnapshotDeltaFamily,
+} from "../snapshot-delta-cache.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "../snapshot-urls.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
@@ -597,6 +602,49 @@ export function registerBrowserAgentSnapshotRoutes(
               ...ssrfPolicyOpts,
             });
           }
+          const deltaFamily: SnapshotDeltaFamily | undefined =
+            plan.format === "ai"
+              ? {
+                  identity: usesChromeMcp
+                    ? "aria"
+                    : plan.wantsRoleSnapshot
+                      ? plan.refsMode === "aria"
+                        ? "aria"
+                        : "role"
+                      : pwModule
+                        ? "aria"
+                        : "role",
+                  interactive: plan.interactive,
+                  compact: plan.compact,
+                  depth: plan.depth,
+                  selector: plan.selectorValue,
+                  frame: plan.frameSelectorValue,
+                  urls: plan.urls,
+                  maxChars: plan.resolvedMaxChars,
+                }
+              : undefined;
+          const previousKeys = deltaFamily
+            ? getPreviousSnapshotKeys(ctx, {
+                profile: profileCtx.profile.name,
+                targetId: tab.targetId,
+                family: deltaFamily,
+              })
+            : undefined;
+          const delta =
+            deltaFamily && previousKeys !== undefined
+              ? { mode: deltaFamily.identity, previousKeys }
+              : undefined;
+          const recordDelta = (refs: RoleRefMap) => {
+            if (!deltaFamily) {
+              return;
+            }
+            recordSnapshotKeys(ctx, {
+              profile: profileCtx.profile.name,
+              targetId: tab.targetId,
+              family: deltaFamily,
+              refs,
+            });
+          };
           let observedBrowserState: unknown;
           if (!usesChromeMcp && pwModule) {
             observedBrowserState = await pwModule
@@ -645,6 +693,7 @@ export function registerBrowserAgentSnapshotRoutes(
             const finalized = finalizeRoleSnapshot({
               ...builtWithUrls,
               maxChars: plan.resolvedMaxChars,
+              delta,
             });
             if (plan.labels) {
               const refs = Object.keys(finalized.refs);
@@ -668,6 +717,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   "browser",
                   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
                 );
+                recordDelta(finalized.refs);
                 return res.json({
                   ok: true,
                   format: "ai",
@@ -684,6 +734,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 await clearChromeMcpOverlay(operation);
               }
             }
+            recordDelta(finalized.refs);
             return res.json({
               ok: true,
               format: "ai",
@@ -719,6 +770,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 compact: plan.compact ?? undefined,
                 maxDepth: plan.depth ?? undefined,
               },
+              delta,
             };
 
             const cdpRoleSnapshot = async () => {
@@ -738,6 +790,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   compact: plan.compact ?? undefined,
                   maxDepth: plan.depth ?? undefined,
                 },
+                delta,
               });
             };
 
@@ -764,6 +817,7 @@ export function registerBrowserAgentSnapshotRoutes(
                     ...(typeof plan.resolvedMaxChars === "number"
                       ? { maxChars: plan.resolvedMaxChars }
                       : {}),
+                    delta,
                   })
                 : await cdpRoleSnapshot();
             if (!snap) {
@@ -801,6 +855,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
               );
               const imageType = normalized.contentType?.includes("jpeg") ? "jpeg" : "png";
+              recordDelta(snap.refs ?? {});
               return res.json({
                 ok: true,
                 format: plan.format,
@@ -819,6 +874,7 @@ export function registerBrowserAgentSnapshotRoutes(
               });
             }
 
+            recordDelta(snap.refs ?? {});
             return res.json({
               ok: true,
               format: plan.format,

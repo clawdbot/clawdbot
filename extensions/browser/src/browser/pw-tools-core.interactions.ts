@@ -16,6 +16,7 @@ import {
   resolveActInteractionTimeoutMs,
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
+import type { BrowserBatchAbort, BrowserBatchActionResult } from "./client-actions-types.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
@@ -1953,7 +1954,8 @@ export async function executeActViaPlaywright(
   } & BrowserNavigationPolicyOptions,
 ): Promise<{
   result?: unknown;
-  results?: Array<{ ok: boolean; error?: string }>;
+  results?: BrowserBatchActionResult[];
+  aborted?: BrowserBatchAbort;
   blockedByDialog?: boolean;
   browserState?: unknown;
   downloads?: BrowserDownloadResult[];
@@ -1995,6 +1997,7 @@ export async function executeActViaPlaywright(
       const batch = await batchViaPlaywright({
         cdpUrl: opts.cdpUrl,
         targetId: opts.targetId,
+        page,
         ...navigationPolicy,
         actions: opts.action.actions,
         stopOnError: opts.action.stopOnError,
@@ -2004,6 +2007,7 @@ export async function executeActViaPlaywright(
       const newDownloads = await drainDownloads();
       return {
         results: batch.results,
+        ...(batch.aborted ? { aborted: batch.aborted } : {}),
         ...(newDownloads ? { downloads: newDownloads } : {}),
       };
     }
@@ -2059,13 +2063,14 @@ export async function batchViaPlaywright(
   opts: {
     cdpUrl: string;
     targetId?: string;
+    page?: Page;
     actions: BrowserActRequest[];
     stopOnError?: boolean;
     evaluateEnabled?: boolean;
     depth?: number;
     signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
-): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
+): Promise<{ results: BrowserBatchActionResult[]; aborted?: BrowserBatchAbort }> {
   const navigationPolicy = interactionNavigationPolicy(opts);
   const depth = opts.depth ?? 0;
   if (depth > ACT_MAX_BATCH_DEPTH) {
@@ -2074,11 +2079,26 @@ export async function batchViaPlaywright(
   if (opts.actions.length > ACT_MAX_BATCH_ACTIONS) {
     throw new Error(`Batch exceeds maximum of ${ACT_MAX_BATCH_ACTIONS} actions`);
   }
-  const results: Array<{ ok: boolean; error?: string }> = [];
-  for (const action of opts.actions) {
+  const page = opts.page ?? (await getPageForTargetId(opts));
+  const results: BrowserBatchActionResult[] = [];
+  const finishAborted = (
+    reason: BrowserBatchAbort["reason"],
+    afterAction: number,
+    url: string,
+    skipped: number,
+  ) =>
+    skipped === 0
+      ? { results }
+      : { results, aborted: { reason, afterAction, url, skipped } satisfies BrowserBatchAbort };
+  let lastUrl = page.mainFrame?.().url() ?? page.url();
+  for (const [index, action] of opts.actions.entries()) {
     if (opts.signal?.aborted) {
       throw opts.signal.reason ?? new Error("aborted");
     }
+    if (page.isClosed?.()) {
+      return finishAborted("closed", index, lastUrl, opts.actions.length - index);
+    }
+    const beforeUrl = page.mainFrame?.().url() ?? page.url();
     try {
       await executeSingleAction(
         action,
@@ -2089,6 +2109,18 @@ export async function batchViaPlaywright(
         depth,
         opts.signal,
       );
+      if (page.isClosed?.()) {
+        results.push({ ok: true });
+        return finishAborted("closed", index + 1, beforeUrl, opts.actions.length - index - 1);
+      }
+      const afterUrl = page.mainFrame?.().url() ?? page.url();
+      lastUrl = afterUrl;
+      // Snapshot refs are document-scoped. A URL-changing navigation means later refs
+      // target another document; same-URL SPA state changes remain intentionally out of scope.
+      if (afterUrl !== beforeUrl) {
+        results.push({ ok: true, navigated: true, url: afterUrl });
+        return finishAborted("navigation", index + 1, afterUrl, opts.actions.length - index - 1);
+      }
       results.push({ ok: true });
     } catch (err) {
       if (isBrowserObservedDialogBlockedError(err)) {
@@ -2098,6 +2130,16 @@ export async function batchViaPlaywright(
         throw err;
       }
       const message = formatErrorMessage(err);
+      if (page.isClosed?.()) {
+        results.push({ ok: false, error: message });
+        return finishAborted("closed", index + 1, beforeUrl, opts.actions.length - index - 1);
+      }
+      const afterUrl = page.mainFrame?.().url() ?? page.url();
+      lastUrl = afterUrl;
+      if (afterUrl !== beforeUrl) {
+        results.push({ ok: false, error: message, navigated: true, url: afterUrl });
+        return finishAborted("navigation", index + 1, afterUrl, opts.actions.length - index - 1);
+      }
       results.push({ ok: false, error: message });
       if (opts.stopOnError !== false) {
         break;

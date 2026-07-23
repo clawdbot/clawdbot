@@ -33,7 +33,7 @@ export {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-export { BrowserToolSchema } from "./browser-tool.schema.js";
+export { BrowserToolOutputSchema, BrowserToolSchema } from "./browser-tool.schema.js";
 export {
   browserAct,
   browserArmDialog,

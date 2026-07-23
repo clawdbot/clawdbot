@@ -31,6 +31,7 @@ import {
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import {
@@ -691,6 +692,7 @@ export function registerBrowserAgentActRoutes(
                 ...existingSessionCallOptions,
                 exactTargetId: true,
               });
+              clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
               return await jsonOk();
             case "batch":
               return jsonActError(
@@ -721,10 +723,17 @@ export function registerBrowserAgentActRoutes(
           });
         }
         const downloads = result.downloads;
+        if (action.kind === "close" || result.aborted?.reason === "closed") {
+          clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
+        }
         switch (action.kind) {
           case "batch":
             return await jsonOk(
-              { results: result.results ?? [], ...(downloads ? { downloads } : {}) },
+              {
+                results: result.results ?? [],
+                ...(result.aborted ? { aborted: result.aborted } : {}),
+                ...(downloads ? { downloads } : {}),
+              },
               { resolveCurrentTarget: true },
             );
           case "evaluate":
