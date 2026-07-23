@@ -5,8 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildWorkspaceReadinessCondition,
   createWorkspaceReadinessEvidenceResolver,
-  probeWorkspaceWritable,
-  workspaceProbeFailure,
 } from "./workspace.js";
 
 const tempDirs: string[] = [];
@@ -46,7 +44,10 @@ describe("probeWorkspaceWritable", () => {
     const workspaceDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-ready-"));
     tempDirs.push(workspaceDir);
 
-    await expect(probeWorkspaceWritable(workspaceDir)).resolves.toMatchObject({
+    const resolveEvidence = createWorkspaceReadinessEvidenceResolver({ cacheTtlMs: 0 });
+    await expect(
+      resolveEvidence({ config: { agents: { defaults: { workspace: workspaceDir } } } }),
+    ).resolves.toMatchObject({
       writable: true,
       reason: "WorkspaceWritable",
     });
@@ -58,23 +59,30 @@ describe("probeWorkspaceWritable", () => {
     tempDirs.push(parentDir);
     const workspaceDir = path.join(parentDir, "workspace");
 
-    await expect(probeWorkspaceWritable(workspaceDir)).resolves.toMatchObject({
+    const resolveEvidence = createWorkspaceReadinessEvidenceResolver({ cacheTtlMs: 0 });
+    await expect(
+      resolveEvidence({ config: { agents: { defaults: { workspace: workspaceDir } } } }),
+    ).resolves.toMatchObject({
       writable: false,
       reason: "WorkspaceMissing",
     });
     await expect(access(workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("uses stable reasons for full and read-only storage", () => {
-    expect(
-      workspaceProbeFailure(Object.assign(new Error("full"), { code: "ENOSPC" })),
-    ).toMatchObject({ writable: false, reason: "WorkspaceStorageFull" });
-    expect(
-      workspaceProbeFailure(Object.assign(new Error("read only"), { code: "EROFS" })),
-    ).toMatchObject({ writable: false, reason: "WorkspaceNotWritable" });
-    expect(
-      workspaceProbeFailure(Object.assign(new Error("missing"), { code: "ENOENT" })),
-    ).toMatchObject({ writable: false, reason: "WorkspaceMissing" });
+  it.each([
+    ["ENOSPC", "WorkspaceStorageFull"],
+    ["EROFS", "WorkspaceNotWritable"],
+    ["ENOENT", "WorkspaceMissing"],
+  ])("uses the stable reason for %s", async (code, reason) => {
+    const resolveEvidence = createWorkspaceReadinessEvidenceResolver({
+      cacheTtlMs: 0,
+      probe: async () => {
+        throw Object.assign(new Error("probe failure"), { code });
+      },
+    });
+    await expect(
+      resolveEvidence({ config: { agents: { defaults: { workspace: "/workspace" } } } }),
+    ).resolves.toMatchObject({ writable: false, reason });
   });
 });
 

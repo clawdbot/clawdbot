@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CanonicalReadinessResult } from "../readiness/conditions.js";
-import { formatReadyResult, readyCommand } from "./ready.js";
+import { readyCommand } from "./ready.js";
 
 const ready: CanonicalReadinessResult = {
   ready: true,
@@ -33,10 +33,9 @@ describe("readyCommand", () => {
     const runtime = createRuntime();
     const callReady = vi.fn().mockResolvedValue(ready);
     await readyCommand({ json: true, timeoutMs: 2500 }, runtime, {
-      loadConfig: async () => ({}),
       callReady,
     });
-    expect(callReady).toHaveBeenCalledWith({ config: {}, timeoutMs: 2500 });
+    expect(callReady).toHaveBeenCalledWith({ timeoutMs: 2500 });
     expect(runtime.log).toHaveBeenCalledWith(JSON.stringify(ready, null, 2));
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -59,7 +58,6 @@ describe("readyCommand", () => {
       failures: ["WorkspaceStorageFull"],
     };
     await readyCommand({}, runtime, {
-      loadConfig: async () => ({}),
       callReady: async () => notReady,
     });
     expect(runtime.log.mock.calls[0]?.[0]).toContain("Ready: no");
@@ -70,7 +68,6 @@ describe("readyCommand", () => {
   it("fails closed with JSON when the Gateway is unavailable", async () => {
     const runtime = createRuntime();
     await readyCommand({ json: true }, runtime, {
-      loadConfig: async () => ({}),
       callReady: async () => {
         throw new Error("connection refused");
       },
@@ -83,7 +80,6 @@ describe("readyCommand", () => {
   it("fails closed when an older Gateway does not expose the readiness method", async () => {
     const runtime = createRuntime();
     await readyCommand({}, runtime, {
-      loadConfig: async () => ({}),
       callReady: async () => {
         throw new Error("unknown method: ready");
       },
@@ -95,9 +91,12 @@ describe("readyCommand", () => {
   });
 });
 
-describe("formatReadyResult", () => {
-  it("summarizes required and advisory conditions", () => {
-    const output = formatReadyResult(ready);
+describe("readyCommand", () => {
+  it("summarizes required and advisory conditions", async () => {
+    const runtime = createRuntime();
+    await readyCommand({}, runtime, { callReady: async () => ready });
+
+    const output = String(runtime.log.mock.calls[0]?.[0]);
     expect(output).toContain("Ready: yes");
     expect(output).toContain("Required: 1/1");
     expect(output).toContain("Advisories: 1");

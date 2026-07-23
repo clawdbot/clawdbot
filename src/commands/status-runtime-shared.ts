@@ -154,7 +154,7 @@ export async function resolveStatusGatewayHealth(params: {
 }
 
 /** Reads the canonical live readiness result when the Gateway is reachable. */
-export async function resolveStatusGatewayReadiness(params: {
+async function resolveStatusGatewayReadiness(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayReachable: boolean;

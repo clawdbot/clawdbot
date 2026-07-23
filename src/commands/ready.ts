@@ -1,11 +1,10 @@
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { CanonicalReadinessResult, ReadinessCondition } from "../readiness/conditions.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-export type ReadyCommandOptions = { json?: boolean; timeoutMs?: number };
+type ReadyCommandOptions = { json?: boolean; timeoutMs?: number };
 
 type ReadyCommandError = {
   ready: false;
@@ -22,7 +21,7 @@ function conditionMark(condition: ReadinessCondition): string {
   return condition.requirement === "required" ? "FAIL" : "WARN";
 }
 
-export function formatReadyResult(result: CanonicalReadinessResult): string {
+function formatReadyResult(result: CanonicalReadinessResult): string {
   const required = result.conditions.filter((condition) => condition.requirement === "required");
   const requiredPassing = required.filter((condition) => condition.status === "True").length;
   const lines = [
@@ -71,30 +70,21 @@ export async function readyCommand(
   opts: ReadyCommandOptions,
   runtime: RuntimeEnv,
   dependencies: {
-    loadConfig?: () => Promise<OpenClawConfig>;
-    callReady?: (params: {
-      config: OpenClawConfig;
-      timeoutMs?: number;
-    }) => Promise<CanonicalReadinessResult>;
+    callReady?: (params: { timeoutMs?: number }) => Promise<CanonicalReadinessResult>;
   } = {},
 ): Promise<void> {
-  const loadConfig =
-    dependencies.loadConfig ??
-    (async () => (await import("../config/config.js")).readBestEffortConfig());
   const callReady =
     dependencies.callReady ??
-    (async ({ config, timeoutMs }) =>
+    (async ({ timeoutMs }) =>
       await callGateway<CanonicalReadinessResult>({
         method: "ready",
         params: {},
         timeoutMs,
-        config,
       }));
 
   let readiness: CanonicalReadinessResult;
   try {
-    const config = await loadConfig();
-    readiness = await callReady({ config, timeoutMs: opts.timeoutMs });
+    readiness = await callReady({ timeoutMs: opts.timeoutMs });
   } catch (error) {
     emitError(runtime, Boolean(opts.json), {
       ready: false,
