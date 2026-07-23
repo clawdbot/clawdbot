@@ -67,7 +67,7 @@ export function createCatalogSnapshot(params: {
   const catalogs = Object.fromEntries(
     Object.entries(params.catalogs).map(([locale, catalog]) => [
       locale,
-      Object.freeze({ ...(catalog ?? {}) }),
+      Object.freeze({ ...catalog }),
     ]),
   ) as Partial<Record<OpenClawLocale, LocalizationCatalog>>;
 
@@ -183,13 +183,18 @@ function validateEntry(
   const sourceParsed = parseBoundedMessage(source);
   const candidateParsed = parseBoundedMessage(candidate);
   if (typeof sourceParsed === "string" || typeof candidateParsed === "string") {
+    let detail: string;
+    if (typeof sourceParsed === "string") {
+      detail = `Source message is outside the bounded ICU profile: ${sourceParsed}`;
+    } else if (typeof candidateParsed === "string") {
+      detail = `Candidate message is outside the bounded ICU profile: ${candidateParsed}`;
+    } else {
+      return;
+    }
     issues.push({
       code: "invalid-selector",
       key,
-      detail:
-        typeof sourceParsed === "string"
-          ? `Source message is outside the bounded ICU profile: ${sourceParsed}`
-          : `Candidate message is outside the bounded ICU profile: ${candidateParsed}`,
+      detail,
     });
     return;
   }
