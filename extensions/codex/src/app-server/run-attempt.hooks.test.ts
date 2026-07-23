@@ -115,7 +115,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
     const harness = createStartedThreadHarness();
 
@@ -311,7 +311,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         return {};
       });
       const params = createParams(sessionFile, workspaceDir);
-      const sessionManager = SessionManager.open(sessionFile);
+      const sessionManager = SessionManager.openFile(sessionFile);
       sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.config = {
@@ -943,7 +943,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()),
     );
     createStartedThreadHarness(async (method) => {

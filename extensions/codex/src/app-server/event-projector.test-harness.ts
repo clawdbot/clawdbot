@@ -90,7 +90,7 @@ export async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-projector-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  SessionManager.open(sessionFile).appendMessage(assistantMessage("history", Date.now()));
+  SessionManager.openFile(sessionFile).appendMessage(assistantMessage("history", Date.now()));
   return {
     prompt: "hello",
     sessionId: "session-1",

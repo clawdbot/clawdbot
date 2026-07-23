@@ -457,7 +457,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("bootstraps and assembles non-legacy context before the Codex turn starts", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()) as never,
     );
     const openSpy = vi.spyOn(SessionManager, "open");
@@ -535,7 +535,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("canonical main context", Date.now()) as never,
     );
     const contextEngine = createContextEngine();
@@ -726,7 +726,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("bootstrap-only context", Date.now()) as never,
     );
     const contextEngine = createContextEngine({
@@ -979,7 +979,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(
       userMessage("previous stale-bootstrap request", Date.now()) as never,
     );
@@ -1069,7 +1069,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("keeps mirrored history when an inactive per-turn context-engine binding starts fresh", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(userMessage("previous per-turn request", 10) as never);
     sessionManager.appendMessage(assistantMessage("previous per-turn answer", 11) as never);
     await writeCodexAppServerBinding(sessionFile, {
@@ -1447,7 +1447,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("retries a resumed context-engine thread on a fresh Codex thread without plugin compaction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1549,7 +1549,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("returns a replay-safe recovery result when the executable owner changes during overflow retry", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1616,7 +1616,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1688,7 +1688,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("clears a resumed context-engine binding when a turn terminally overflows", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1766,7 +1766,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("does not pre-compact over-budget rendered context-engine prompts before Codex turn/start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     const hugePayload = {
@@ -1848,7 +1848,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("does not call hung owning context-engine compaction during Codex overflow recovery", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("pre-compaction context", Date.now()) as never,
     );
     await writeCodexAppServerBinding(sessionFile, {
@@ -1929,7 +1929,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("keeps current inbound context at the front of the Codex context-engine prompt", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("older context", Date.now()) as never,
     );
     const contextEngine = createContextEngine();
@@ -2028,7 +2028,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
+    SessionManager.openFile(sessionFile).appendMessage(
       assistantMessage("existing context", Date.now()) as never,
     );
     const afterTurn = vi.fn(
@@ -2036,7 +2036,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     );
     const bootstrap = vi.fn(
       async ({ sessionFile: file }: Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]) => {
-        SessionManager.open(file).appendMessage(
+        SessionManager.openFile(file).appendMessage(
           assistantMessage("bootstrap context", Date.now() + 1) as never,
         );
         return { bootstrapped: true };

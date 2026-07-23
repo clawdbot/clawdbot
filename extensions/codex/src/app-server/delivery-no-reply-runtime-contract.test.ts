@@ -20,7 +20,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-delivery-contract-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  SessionManager.open(sessionFile);
+  SessionManager.openFile(sessionFile);
   return {
     prompt: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.prompt,
     sessionId: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.sessionId,
