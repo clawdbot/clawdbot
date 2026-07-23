@@ -26,7 +26,29 @@ function withoutAiRuntimeDependency(value) {
   return next.length > 0 ? next : undefined;
 }
 
+function ensureFixtureGitIgnore(root) {
+  const gitIgnorePath = path.join(root, ".gitignore");
+  const requiredEntries = ["node_modules/"];
+  if (!fs.existsSync(path.join(root, "pnpm-lock.yaml"))) {
+    requiredEntries.push("/pnpm-lock.yaml");
+  }
+
+  const existing = fs.existsSync(gitIgnorePath) ? fs.readFileSync(gitIgnorePath, "utf8") : "";
+  const existingEntries = new Set(existing.split("\n"));
+  const additions = requiredEntries.filter((entry) => !existingEntries.has(entry));
+  if (additions.length === 0) {
+    return;
+  }
+
+  const prefix = existing.length === 0 || existing.endsWith("\n") ? existing : `${existing}\n`;
+  fs.writeFileSync(gitIgnorePath, `${prefix}${additions.join("\n")}\n`);
+}
+
 function prepare(root) {
+  // Package tarballs omit repository ignore rules. Keep dependency installs out
+  // of the synthetic git tree so updater dirty checks exercise source changes.
+  ensureFixtureGitIgnore(root);
+
   const packageJsonPath = path.join(root, "package.json");
   const packageJson = readJson(packageJsonPath);
   const aiRuntimeSource = path.join(root, "node_modules", "@openclaw", "ai");
