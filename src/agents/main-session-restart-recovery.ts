@@ -801,6 +801,7 @@ async function writeUnresumableSessionNotice(params: {
       abortedLastRun: params.entry.abortedLastRun,
       restartRecoveryDeliveryRequestFingerprint:
         params.entry.restartRecoveryDeliveryRequestFingerprint,
+      restartRecoveryDeliveryRequestMessageId: params.entry.restartRecoveryDeliveryRequestMessageId,
       restartRecoveryDeliveryRunId: params.entry.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: params.entry.restartRecoveryDeliverySourceRunId,
       status: params.entry.status,
@@ -891,6 +892,16 @@ function resolveRecoveryDispatchSessionKey(params: {
   }
 }
 
+type RecoveryAttemptResult = {
+  recovered: number;
+  failed: number;
+  skipped: number;
+  /** Failures that leave an interrupted row runnable and therefore need a retry. */
+  retryableFailures: number;
+};
+
+type RecoveryResult = Omit<RecoveryAttemptResult, "retryableFailures">;
+
 async function recoverStore(params: {
   cfg?: OpenClawConfig;
   storePath: string;
@@ -899,8 +910,13 @@ async function recoverStore(params: {
   sessionWorkAdmissionHandoffId?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+}): Promise<RecoveryAttemptResult> {
+  const result: RecoveryAttemptResult = {
+    recovered: 0,
+    failed: 0,
+    skipped: 0,
+    retryableFailures: 0,
+  };
   const providedActiveSessionIds =
     params.activeSessionIds === undefined ? undefined : normalizeStringSet(params.activeSessionIds);
   const providedActiveSessionKeys =
@@ -925,6 +941,7 @@ async function recoverStore(params: {
   } catch (err) {
     log.warn(`failed to load session store ${params.storePath}: ${String(err)}`);
     result.failed++;
+    result.retryableFailures++;
     return result;
   }
 
@@ -990,6 +1007,7 @@ async function recoverStore(params: {
         result.recovered++;
       } else {
         result.failed++;
+        result.retryableFailures++;
       }
       continue;
     }
@@ -1029,11 +1047,13 @@ async function recoverStore(params: {
           result.recovered++;
         } else {
           result.failed++;
+          result.retryableFailures++;
         }
         continue;
       }
       log.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
       result.failed++;
+      result.retryableFailures++;
       continue;
     }
 
@@ -1053,6 +1073,7 @@ async function recoverStore(params: {
         result.recovered++;
       } else {
         result.failed++;
+        result.retryableFailures++;
       }
       continue;
     }
@@ -1086,6 +1107,7 @@ async function recoverStore(params: {
       ) {
         // Keep the claim recoverable until its user-visible terminal notice is durable.
         result.failed++;
+        result.retryableFailures++;
         continue;
       }
       const failed = await markSessionFailed({
@@ -1129,6 +1151,7 @@ async function recoverStore(params: {
       result.recovered++;
     } else {
       result.failed++;
+      result.retryableFailures++;
     }
   }
 
@@ -1153,7 +1176,7 @@ async function resolveRestartRecoveryStorePaths(params: {
   return [...storePaths].toSorted((a, b) => a.localeCompare(b));
 }
 
-export async function recoverRestartAbortedMainSessions(
+async function recoverRestartAbortedMainSessionsWithStatus(
   params: {
     cfg?: OpenClawConfig;
     stateDir?: string;
@@ -1161,8 +1184,13 @@ export async function recoverRestartAbortedMainSessions(
     activeSessionIds?: Iterable<string>;
     activeSessionKeys?: Iterable<string>;
   } = {},
-): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+): Promise<RecoveryAttemptResult> {
+  const result: RecoveryAttemptResult = {
+    recovered: 0,
+    failed: 0,
+    skipped: 0,
+    retryableFailures: 0,
+  };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
@@ -1176,6 +1204,7 @@ export async function recoverRestartAbortedMainSessions(
     result.recovered += storeResult.recovered;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
+    result.retryableFailures += storeResult.retryableFailures;
   }
 
   if (result.recovered > 0 || result.failed > 0) {
@@ -1183,6 +1212,20 @@ export async function recoverRestartAbortedMainSessions(
       `main-session restart recovery complete: recovered=${result.recovered} failed=${result.failed} skipped=${result.skipped}`,
     );
   }
+  return result;
+}
+
+export async function recoverRestartAbortedMainSessions(
+  params: {
+    cfg?: OpenClawConfig;
+    stateDir?: string;
+    resumedSessionKeys?: Set<string>;
+    activeSessionIds?: Iterable<string>;
+    activeSessionKeys?: Iterable<string>;
+  } = {},
+): Promise<RecoveryResult> {
+  const { retryableFailures: _retryableFailures, ...result } =
+    await recoverRestartAbortedMainSessionsWithStatus(params);
   return result;
 }
 
@@ -1224,7 +1267,7 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
   });
   const handoffId = admission.createHandoff();
   try {
-    return await admission.run(
+    const { retryableFailures: _retryableFailures, ...result } = await admission.run(
       async () =>
         await recoverStore({
           cfg: params.cfg,
@@ -1234,9 +1277,44 @@ export async function retryRestartAbortedMainSessionRecovery(params: {
           sessionWorkAdmissionHandoffId: handoffId,
         }),
     );
+    return result;
   } finally {
     cancelSessionWorkAdmissionHandoff(handoffId);
   }
+}
+
+async function recoverStartupOrphanedMainSessionsWithStatus(
+  params: {
+    cfg?: OpenClawConfig;
+    stateDir?: string;
+    activeSessionIds?: Iterable<string>;
+    activeSessionKeys?: Iterable<string>;
+    updatedBeforeMs?: number;
+    resumedSessionKeys?: Set<string>;
+  } = {},
+): Promise<RecoveryAttemptResult & { marked: number }> {
+  const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
+  const marked = await markStartupOrphanedMainSessionsForRecovery({
+    cfg: params.cfg,
+    stateDir: params.stateDir,
+    activeSessionIds: params.activeSessionIds,
+    activeSessionKeys: params.activeSessionKeys,
+    updatedBeforeMs: startupRecoveryCutoffMs,
+  });
+  const recovered = await recoverRestartAbortedMainSessionsWithStatus({
+    cfg: params.cfg,
+    stateDir: params.stateDir,
+    resumedSessionKeys: params.resumedSessionKeys,
+    activeSessionIds: params.activeSessionIds,
+    activeSessionKeys: params.activeSessionKeys,
+  });
+  return {
+    marked: marked.marked,
+    recovered: recovered.recovered,
+    failed: recovered.failed,
+    skipped: marked.skipped + recovered.skipped,
+    retryableFailures: recovered.retryableFailures,
+  };
 }
 
 export async function recoverStartupOrphanedMainSessions(
@@ -1249,27 +1327,9 @@ export async function recoverStartupOrphanedMainSessions(
     resumedSessionKeys?: Set<string>;
   } = {},
 ): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
-  const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
-  const marked = await markStartupOrphanedMainSessionsForRecovery({
-    cfg: params.cfg,
-    stateDir: params.stateDir,
-    activeSessionIds: params.activeSessionIds,
-    activeSessionKeys: params.activeSessionKeys,
-    updatedBeforeMs: startupRecoveryCutoffMs,
-  });
-  const recovered = await recoverRestartAbortedMainSessions({
-    cfg: params.cfg,
-    stateDir: params.stateDir,
-    resumedSessionKeys: params.resumedSessionKeys,
-    activeSessionIds: params.activeSessionIds,
-    activeSessionKeys: params.activeSessionKeys,
-  });
-  return {
-    marked: marked.marked,
-    recovered: recovered.recovered,
-    failed: recovered.failed,
-    skipped: marked.skipped + recovered.skipped,
-  };
+  const { retryableFailures: _retryableFailures, ...result } =
+    await recoverStartupOrphanedMainSessionsWithStatus(params);
+  return result;
 }
 
 export function scheduleRestartAbortedMainSessionRecovery(
@@ -1279,20 +1339,24 @@ export function scheduleRestartAbortedMainSessionRecovery(
     maxRetries?: number;
     stateDir?: string;
   } = {},
-): void {
+): Promise<boolean> {
   const initialDelay = params.delayMs ?? DEFAULT_RECOVERY_DELAY_MS;
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
   const resumedSessionKeys = new Set<string>();
   // Only reconcile rows that existed before this startup recovery was scheduled.
   // Fresh runs started by this gateway are protected again by the active-run check.
   const startupRecoveryCutoffMs = Date.now();
+  let resolveStableRecovery = (_stable: boolean) => {};
+  const stableRecovery = new Promise<boolean>((resolve) => {
+    resolveStableRecovery = resolve;
+  });
 
   const runRecoveryAttempt = (attempt: number, delay: number) => {
     // Delayed retries outlive startup; each attempt must independently block
     // host suspension while it reads and rewrites recovery session state.
     void runWithGatewayIndependentRootWorkAdmission(
       async () =>
-        await recoverStartupOrphanedMainSessions({
+        await recoverStartupOrphanedMainSessionsWithStatus({
           cfg: params.cfg,
           stateDir: params.stateDir,
           resumedSessionKeys,
@@ -1300,8 +1364,13 @@ export function scheduleRestartAbortedMainSessionRecovery(
         }),
     )
       .then((result) => {
-        if (result.failed > 0 && attempt < maxRetries) {
+        if (result.retryableFailures > 0 && attempt < maxRetries) {
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+        } else if (result.retryableFailures > 0) {
+          log.warn("main-session restart recovery gave up with interrupted sessions still pending");
+          resolveStableRecovery(false);
+        } else {
+          resolveStableRecovery(true);
         }
       })
       .catch((err: unknown) => {
@@ -1310,6 +1379,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
         } else {
           log.warn(`main-session restart recovery gave up: ${String(err)}`);
+          resolveStableRecovery(false);
         }
       });
   };
@@ -1325,5 +1395,6 @@ export function scheduleRestartAbortedMainSessionRecovery(
   };
 
   scheduleAttempt(1, initialDelay);
+  return stableRecovery;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

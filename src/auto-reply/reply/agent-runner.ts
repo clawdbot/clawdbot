@@ -1539,6 +1539,7 @@ export async function runReplyAgent(params: {
     isRestartAbort: () =>
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",
+    requestMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     resolveDeliveryContext: (entry) =>
       sessionKey
         ? resolveReplyRunDeliveryContext({

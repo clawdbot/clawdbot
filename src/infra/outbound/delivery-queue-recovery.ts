@@ -488,7 +488,9 @@ async function persistRecoveredPostSendState(opts: {
     await markDeliveryPlatformOutcomeUnknown(opts.entry.id, opts.stateDir);
     return "marked";
   } catch (markErr) {
-    if (opts.entry.replyPayloadSendingHook?.messageSentReceiptPluginId) throw markErr;
+    if (opts.entry.replyPayloadSendingHook?.messageSentReceiptPluginId) {
+      throw markErr;
+    }
     // A result proves at least one send completed. If the intermediate marker
     // is unavailable, direct ack still removes the replayable intent.
     opts.log.warn(

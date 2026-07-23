@@ -74,6 +74,27 @@ const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
 
 export type GatewayPostReadySidecarHandle = { stop: () => Awaitable<void> };
 
+/**
+ * Keep plugin startup replay behind a stable main-session recovery result.
+ * Exported so cross-repo integration tests can exercise the real startup barrier.
+ */
+export async function runGatewayStartAfterMainSessionRecovery(params: {
+  recovery: Promise<boolean>;
+  runGatewayStart: () => Awaitable<void>;
+  warn: (message: string) => void;
+}): Promise<boolean> {
+  const mainSessionRecoveryStable = await params.recovery;
+  if (!mainSessionRecoveryStable) {
+    params.warn("gateway_start hooks skipped: main-session restart recovery is unsettled");
+    return false;
+  }
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  await params.runGatewayStart();
+  return true;
+}
+
 /** Stop sidecars immediately when shutdown has already started before they are reported. */
 export function stopPostReadySidecarsAfterCloseStarted(params: {
   postReadySidecars: readonly GatewayPostReadySidecarHandle[];
@@ -1251,6 +1272,7 @@ export async function startGatewayPostAttachRuntime(
 
   let pluginServicesReported = false;
   let reportedPluginServices: PluginServicesHandle | null = null;
+  let startupMainSessionRecovery: Promise<boolean> = Promise.resolve(true);
   const reportPluginServices = (pluginServices: PluginServicesHandle | null) => {
     pluginServicesReported = true;
     reportedPluginServices = pluginServices;
@@ -1319,9 +1341,12 @@ export async function startGatewayPostAttachRuntime(
         try {
           const { scheduleRestartAbortedMainSessionRecovery } =
             await loadMainSessionRestartRecoveryModule();
-          scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfgAtStart });
+          startupMainSessionRecovery = scheduleRestartAbortedMainSessionRecovery({
+            cfg: params.cfgAtStart,
+          });
         } catch (err) {
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
+          startupMainSessionRecovery = Promise.resolve(false);
         }
         // Capture the orphan-recovery cutoff before new startup-gated agent
         // work can create sessions that the recovery scan must leave alone.
@@ -1404,30 +1429,34 @@ export async function startGatewayPostAttachRuntime(
       if (!hasGatewayStartHooks(sidecarsResult.pluginRegistry)) {
         return;
       }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
+      await runGatewayStartAfterMainSessionRecovery({
+        recovery: startupMainSessionRecovery,
+        warn: (message) => params.log.warn(message),
+        runGatewayStart: async () => {
+          const hookRunner = await runtimeDeps.getGlobalHookRunner();
+          if (!hookRunner?.hasHooks("gateway_start")) {
+            return;
+          }
+          const { withPluginHttpRouteRegistry } = await import("../plugins/http-registry.js");
+          await runWithGatewayIndependentRootWorkAdmission(async () => {
+            await withPluginHttpRouteRegistry(sidecarsResult.pluginRegistry, () =>
+              hookRunner.runGatewayStart(
+                { port: params.port },
+                {
+                  port: params.port,
+                  config: params.gatewayPluginConfigAtStart,
+                  workspaceDir: params.defaultWorkspaceDir,
+                  getCron: () =>
+                    params.getCronService?.() ??
+                    (params.deps.cron as PluginHookGatewayCronService | undefined),
+                },
+              ),
+            );
+          }).catch((err: unknown) => {
+            params.log.warn(`gateway_start hook failed: ${String(err)}`);
+          });
+        },
       });
-      const hookRunner = await runtimeDeps.getGlobalHookRunner();
-      if (hookRunner?.hasHooks("gateway_start")) {
-        const { withPluginHttpRouteRegistry } = await import("../plugins/http-registry.js");
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
-          await withPluginHttpRouteRegistry(sidecarsResult.pluginRegistry, () =>
-            hookRunner.runGatewayStart(
-              { port: params.port },
-              {
-                port: params.port,
-                config: params.gatewayPluginConfigAtStart,
-                workspaceDir: params.defaultWorkspaceDir,
-                getCron: () =>
-                  params.getCronService?.() ??
-                  (params.deps.cron as PluginHookGatewayCronService | undefined),
-              },
-            ),
-          );
-        }).catch((err: unknown) => {
-          params.log.warn(`gateway_start hook failed: ${String(err)}`);
-        });
-      }
     })
     .catch((err: unknown) => {
       params.log.warn(`gateway sidecars failed to start: ${String(err)}`);

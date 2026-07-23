@@ -53,6 +53,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     isOneShotModelRun,
     isRawModelRun,
     agentDedupeKeys,
+    trustedRequestMessageId,
   } = preflight;
   const idem = runId;
   let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
@@ -446,6 +447,14 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     }
     resolvedSessionId = admittedSessionId;
     gatewayAdmissionTransferred = true;
+    // Only a trusted in-process caller or the matching durable recovery claim
+    // may attach an inbound transport identity to an outbound delivery hook.
+    const requestMessageId =
+      trustedRequestMessageId ??
+      (expectedExistingSessionId === sessionEntry?.sessionId &&
+      sessionEntry?.restartRecoveryDeliveryRunId === idem
+        ? sessionEntry?.restartRecoveryDeliveryRequestMessageId
+        : undefined);
     startAgentRunExecution({
       prepared: preparedDispatch,
       request,
@@ -470,6 +479,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       inputProvenance,
       runId,
       idempotencyKey: idem,
+      requestMessageId,
       agentDedupeKeys,
       spawnedBy: spawnedByValue,
       groupId: resolvedGroupId,

@@ -138,6 +138,7 @@ function latestOutboundDeliveryArgs(): {
     messageSentReceiptPluginId?: string;
     context?: Record<string, unknown>;
   };
+  session?: { key?: string; agentId?: string };
 } {
   const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
   if (!args || typeof args !== "object") {
@@ -161,6 +162,7 @@ function latestOutboundDeliveryArgs(): {
       messageSentReceiptPluginId?: string;
       context?: Record<string, unknown>;
     };
+    session?: { key?: string; agentId?: string };
   };
 }
 
@@ -429,6 +431,44 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
     expect(delivered.payloads).toHaveLength(1);
     expectTextPayload(delivered.payloads[0], "[openai/gpt-5.4] Ready.");
+  });
+
+  it("carries immutable run and request identity into command-mode delivery hooks", async () => {
+    const outboundSession = {
+      key: "agent:main:slack:channel:c0alpha:thread:100.001",
+      agentId: "main",
+    };
+    await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "resume",
+        deliver: true,
+        channel: "slack",
+        to: "C0ALPHA",
+        threadId: "100.001",
+        runId: "recovery-run",
+        requestMessageId: "100.002",
+      } as AgentCommandOpts,
+      outboundSession: outboundSession as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "recovered" }],
+      result: createResult(),
+    });
+
+    expect(latestOutboundDeliveryArgs()).toMatchObject({
+      session: outboundSession,
+      replyPayloadSendingHook: {
+        runId: "recovery-run",
+        sessionKey: outboundSession.key,
+        context: {
+          messageId: "100.002",
+          runId: "recovery-run",
+          sessionKey: outboundSession.key,
+        },
+      },
+    });
   });
 
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
@@ -742,7 +782,22 @@ describe("deliverAgentCommandResult payload normalization", () => {
       { runId: "ordinary-run" },
     );
     expect(latestOutboundDeliveryArgs().requireUnknownSendReconciliation).toBe(false);
-    expect(latestOutboundDeliveryArgs().replyPayloadSendingHook).toBeUndefined();
+    expect(latestOutboundDeliveryArgs().replyPayloadSendingHook).toMatchObject({
+      kind: "final",
+      channel: "slack",
+      sessionKey: "agent:tester:slack:channel:C123",
+      runId: "ordinary-run",
+      context: {
+        channelId: "slack",
+        accountId: "default",
+        conversationId: "#general",
+        sessionKey: "agent:tester:slack:channel:C123",
+        runId: "ordinary-run",
+      },
+    });
+    expect(
+      latestOutboundDeliveryArgs().replyPayloadSendingHook?.messageSentReceiptPluginId,
+    ).toBeUndefined();
   });
 
   it("keeps LINE directive-only replies intact for local preview when delivery is disabled", async () => {

@@ -131,6 +131,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   lane?: string;
   runId?: string;
+  /** Immutable transport request id used only for delivery hook correlation. */
+  requestMessageId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
   lifecycleGeneration?: string;
   extraSystemPrompt?: string;

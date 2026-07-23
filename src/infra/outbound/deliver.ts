@@ -702,7 +702,9 @@ async function persistQueuedPostSendState(params: {
     await markDeliveryPlatformOutcomeUnknown(params.queueId);
     return "marked";
   } catch (markErr: unknown) {
-    if (params.failClosed) throw markErr;
+    if (params.failClosed) {
+      throw markErr;
+    }
     log.warn(
       `failed to mark queued delivery ${params.queueId} as platform-outcome-unknown; falling back to direct ack (${params.queuePolicy}): ${formatErrorMessage(markErr)}`,
     );

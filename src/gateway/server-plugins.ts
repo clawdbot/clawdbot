@@ -242,6 +242,7 @@ type DispatchGatewayMethodInProcessOptions = {
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
+  trustedRequestMessageId?: string;
 };
 
 export type GatewayMethodDispatchResponse = {
@@ -352,6 +353,7 @@ export async function dispatchGatewayMethodInProcessRaw(
     cronRunContinuation: options?.allowSyntheticCronRunContinuation === true,
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
     internalDeliverySuppressText: options?.internalDeliverySuppressText,
+    trustedRequestMessageId: options?.trustedRequestMessageId,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     ...(options?.runtimePluginToolGrant
       ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
@@ -474,7 +476,16 @@ export async function dispatchGatewayMethodInProcess<T>(
   params: Record<string, unknown>,
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<T> {
-  return await dispatchGatewayMethod<T>(method, params, options);
+  const trustedRequestMessageId = options?.trustedRequestMessageId?.trim();
+  if (!trustedRequestMessageId || method !== "agent") {
+    return await dispatchGatewayMethod<T>(method, params, options);
+  }
+  if (params.requestMessageId !== trustedRequestMessageId) {
+    throw new Error("trustedRequestMessageId must match the agent request identity.");
+  }
+  const { requestMessageId: _requestMessageId, ...gatewayParams } = params;
+  // Recovery identity is trusted process metadata, never a network RPC field.
+  return await dispatchGatewayMethod<T>(method, gatewayParams, options);
 }
 
 export async function dispatchTrustedPluginGatewayMethod<T>(
@@ -487,10 +498,17 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
     throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
   }
+  const trustedRequestMessageId =
+    method === "agent" &&
+    typeof params.requestMessageId === "string" &&
+    params.requestMessageId.trim()
+      ? params.requestMessageId.trim()
+      : undefined;
   const syntheticScopes = normalizeOperatorScopeList(options?.scopes);
-  return await dispatchGatewayMethod<T>(method, params, {
+  return await dispatchGatewayMethodInProcess<T>(method, params, {
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
+    ...(trustedRequestMessageId ? { trustedRequestMessageId } : {}),
     ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });

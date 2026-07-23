@@ -59,6 +59,7 @@ export function startAgentRunExecution(params: {
   inputProvenance?: InputProvenance;
   runId: string;
   idempotencyKey: string;
+  requestMessageId?: string;
   agentDedupeKeys: readonly string[];
   spawnedBy?: string;
   groupId?: string;
@@ -290,6 +291,7 @@ export function startAgentRunExecution(params: {
           bestEffortDeliver: params.bestEffortDeliver,
           messageChannel: params.delivery.originMessageChannel,
           runId: params.runId,
+          requestMessageId: params.requestMessageId,
           lane: params.request.lane,
           modelRun: params.request.modelRun === true,
           promptMode: params.request.promptMode,

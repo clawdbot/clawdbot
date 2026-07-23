@@ -938,14 +938,21 @@ export async function deliverAgentCommandResult(
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
           requireUnknownSendReconciliation: Boolean(receiptPluginId),
-          replyPayloadSendingHook: receiptPluginId
-            ? {
-                kind: "final" as const,
-                runId: opts.runId,
-                messageSentReceiptPluginId: receiptPluginId,
-                context: { channelId: deliveryChannel, runId: opts.runId },
-              }
-            : undefined,
+          replyPayloadSendingHook: {
+            kind: "final",
+            channel: deliveryChannel,
+            ...(effectiveSessionKey ? { sessionKey: effectiveSessionKey } : {}),
+            ...(opts.runId ? { runId: opts.runId } : {}),
+            ...(receiptPluginId ? { messageSentReceiptPluginId: receiptPluginId } : {}),
+            context: {
+              channelId: deliveryChannel,
+              ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
+              conversationId: deliveryTarget,
+              ...(effectiveSessionKey ? { sessionKey: effectiveSessionKey } : {}),
+              ...(opts.runId ? { runId: opts.runId } : {}),
+              ...(opts.requestMessageId ? { messageId: opts.requestMessageId } : {}),
+            },
+          },
           session: outboundSession,
           replyToId: resolvedReplyToId ?? null,
           threadId: resolvedThreadTarget ?? null,

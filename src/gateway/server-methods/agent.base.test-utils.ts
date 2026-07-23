@@ -1620,5 +1620,61 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.status).toBeUndefined();
     expectSqliteSessionFileMarkerForEntry(capturedEntry);
   });
+
+  it("derives recovery delivery identity from the matching durable claim", async () => {
+    const sessionKey = "agent:main:slack:channel:C123";
+    const entry = {
+      sessionId: "interrupted-session",
+      updatedAt: Date.now(),
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliveryRequestMessageId: "1784768109.234419",
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry,
+      canonicalKey: sessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      return await updater({ [sessionKey]: structuredClone(entry) });
+    });
+    mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 100 } });
+
+    await invokeAgent(
+      {
+        message: "resume",
+        sessionKey,
+        expectedExistingSessionId: "interrupted-session",
+        idempotencyKey: "recovery-run",
+      } as AgentParams,
+      { client: backendGatewayClient() },
+    );
+
+    const call = await waitForAgentCommandCall<{ requestMessageId?: string }>();
+    expect(call.requestMessageId).toBe("1784768109.234419");
+  });
+
+  it("forwards only trusted in-process recovery identity to the agent command", async () => {
+    primeMainAgentRun();
+    const client = backendGatewayClient();
+    if (!client) {
+      throw new Error("expected backend client");
+    }
+    client.internal = { trustedRequestMessageId: "1784768109.234419" };
+
+    await invokeAgent(
+      {
+        message: "resume",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "trusted-recovery-run",
+      } as AgentParams,
+      { client },
+    );
+
+    const call = await waitForAgentCommandCall<{ requestMessageId?: string }>();
+    expect(call.requestMessageId).toBe("1784768109.234419");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
