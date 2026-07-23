@@ -3928,6 +3928,7 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
     expect(maintainerSkill).toContain("full_release_validation_run_id=<saved-run-id>");
     expect(maintainerSkill).toContain("full_release_validation_run_attempt=<saved-attempt>");
+    expect(maintainerSkill).toContain("its exact `full_release_validation_run_attempt`");
     expect(npmWorkflow).toContain(
       "Workflow-dispatched real publish requires release_publish_run_id",
     );
