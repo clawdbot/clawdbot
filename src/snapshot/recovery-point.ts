@@ -11,8 +11,8 @@ import {
   type SqliteSnapshotProvider,
 } from "./snapshot-provider.js";
 
-export const RECOVERY_POINT_VERSION = "openclaw-recovery-point/v1";
-export const RECOVERY_POINT_ACCEPTANCE_VERSION = "openclaw-recovery-point-acceptance/v1";
+const RECOVERY_POINT_VERSION = "openclaw-recovery-point/v1";
+const RECOVERY_POINT_ACCEPTANCE_VERSION = "openclaw-recovery-point-acceptance/v1";
 
 const RECOVERY_POINT_INVENTORY_VERSION = "openclaw-runtime-sqlite-inventory/v1";
 
@@ -104,8 +104,8 @@ const recoveryPointAcceptanceSchema = z
   })
   .strict();
 
-export type RecoveryPointObligation = z.infer<typeof obligationSchema>;
-export type RecoveryPointComponent = z.infer<typeof recoveryPointComponentSchema>;
+type RecoveryPointObligation = z.infer<typeof obligationSchema>;
+type RecoveryPointComponent = z.infer<typeof recoveryPointComponentSchema>;
 export type RecoveryPointManifest = z.infer<typeof recoveryPointManifestSchema>;
 export type RecoveryPointAcceptance = z.infer<typeof recoveryPointAcceptanceSchema>;
 
@@ -114,7 +114,7 @@ export type RecoveryPointSqliteSnapshot = {
   readonly ref: SnapshotRef;
 };
 
-export type RecoveryPointObligations = {
+type RecoveryPointObligations = {
   readonly external?: readonly RecoveryPointObligation[];
   readonly reconstructed?: readonly RecoveryPointObligation[];
   readonly ephemeral?: readonly RecoveryPointObligation[];
