@@ -7,7 +7,6 @@ import {
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
-  navigationCopyEntries,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
@@ -24,7 +23,6 @@ import {
   routeIdFromPath,
   type RouteId,
 } from "./app-routes.ts";
-import { t } from "./i18n/index.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
 /**
@@ -184,10 +182,13 @@ describe("formatDocumentTitle", () => {
 });
 
 describe("titleForRoute", () => {
-  it("keeps every navigation copy key backed by an English translation", () => {
-    for (const entry of navigationCopyEntries()) {
-      expect(t(entry.titleKey)).not.toBe(entry.titleKey);
-      expect(t(entry.subtitleKey)).not.toBe(entry.subtitleKey);
+  it("keeps every navigation title and subtitle backed by an English translation", () => {
+    // t() returns the raw dotted key (e.g. "tabs.advanced") when a catalog
+    // entry is missing; resolved copy is Title/Sentence case and never matches.
+    const rawI18nKey = /^[a-z][a-zA-Z0-9]*\.[a-zA-Z]/;
+    for (const routeId of ALL_ROUTES) {
+      expect(titleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
+      expect(subtitleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
     }
   });
 
