@@ -9,7 +9,9 @@ import {
   resolveStorePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -150,6 +152,7 @@ describe("structured state integrity findings", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     fs.rmSync(tempHome, { recursive: true, force: true });
@@ -581,6 +584,33 @@ describe("doctor state integrity oauth dir checks", () => {
       name.startsWith("orphan-session.jsonl.deleted."),
     );
     expect(archivedOrphanTranscripts.length).toBeGreaterThan(0);
+  });
+
+  it("uses SQLite session rows for transcript integrity without orphan false positives", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const transcriptPath = path.join(sessionsDir, "sqlite-live-session.jsonl");
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n');
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      {
+        sessionFile: transcriptPath,
+        sessionId: "sqlite-live-session",
+        updatedAt: Date.now(),
+      },
+    );
+    const confirmRuntimeRepair = vi.fn(async () => false);
+
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    expect(stateIntegrityText()).not.toContain("orphan transcript file");
+    expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
+    expect(fs.existsSync(transcriptPath)).toBe(true);
+    expect(confirmRuntimeRepair).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Archive 1 orphan") }),
+    );
   });
 
   it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {

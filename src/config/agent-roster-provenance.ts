@@ -31,25 +31,6 @@ function hasAncestorRosterInclude(raw: unknown): boolean {
   );
 }
 
-function hasAdditionalResolvedShape(authored: unknown, resolved: unknown): boolean {
-  if (Array.isArray(resolved)) {
-    if (!Array.isArray(authored) || resolved.length > authored.length) {
-      return true;
-    }
-    return resolved.some((value, index) => hasAdditionalResolvedShape(authored[index], value));
-  }
-  if (!isRecord(resolved)) {
-    return false;
-  }
-  if (!isRecord(authored)) {
-    return true;
-  }
-  return Object.entries(resolved).some(
-    ([key, value]) =>
-      !Object.hasOwn(authored, key) || hasAdditionalResolvedShape(authored[key], value),
-  );
-}
-
 /** Whether include/env resolution produced a non-empty roster before raw migrations. */
 export function hasResolvedRosterBeforeMigrations(snapshot: ConfigFileSnapshot): boolean {
   return listAgentEntries(snapshot.sourceConfigBeforeMigrations ?? {}).length > 0;
@@ -71,8 +52,10 @@ export function configIncludeOwnsAgentRosterValues(params: {
   if (!hasAncestorRosterInclude(params.parsed)) {
     return false;
   }
-  const resolvedRoster = readRosterValue(resolved);
-  return authoredRoster === undefined || hasAdditionalResolvedShape(authoredRoster, resolvedRoster);
+  // Shape comparison cannot prove that an ancestor include contributed nothing:
+  // an included entry may be byte-identical to the local one. Treat that
+  // ambiguity as include ownership so later writes cannot flatten or delete it.
+  return true;
 }
 
 /** Whether an include, rather than the authored root, owns agents.entries. */

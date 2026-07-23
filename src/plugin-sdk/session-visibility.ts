@@ -379,7 +379,7 @@ export function createSessionVisibilityRowChecker(params: {
     const isRequesterSession =
       targetSessionKey === params.requesterSessionKey || targetSessionKey === "current";
     let targetAgentId = normalizeLowercaseStringOrEmpty(row.agentId);
-    if (!targetAgentId && isRequesterSession) {
+    if (!targetAgentId && isRequesterSession && !params.defaultAgentId?.trim()) {
       targetAgentId = requesterAgentId;
     }
     if (!targetAgentId) {

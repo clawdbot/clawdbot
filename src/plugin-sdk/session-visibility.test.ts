@@ -74,6 +74,24 @@ describe("scoped session access providers", () => {
     });
   });
 
+  it("resolves a bare requester alias through the configured default before row metadata exists", () => {
+    const checker = createSessionVisibilityRowChecker({
+      action: "send",
+      defaultAgentId: "main",
+      requesterAgentId: "work",
+      requesterSessionKey: "main",
+      visibility: "agent",
+      a2aPolicy: createAgentToAgentPolicy({}),
+    });
+
+    expect(checker.check({ key: "main" })).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session send visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+    });
+  });
+
   it("grants only the exact requester, target, and action supplied by a provider", () => {
     const makeChecker = (action: "history" | "send") =>
       createSessionVisibilityChecker({

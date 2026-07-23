@@ -30,6 +30,12 @@ import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
 } from "../config/sessions/paths.js";
+import {
+  applySessionEntryReplacements,
+  listSessionEntriesReadOnly,
+} from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -1309,9 +1315,17 @@ export async function noteStateIntegrity(
     return;
   }
 
-  // The doctor importer is uncached and returns one mutable parse, avoiding the
-  // duplicate materialization that made large legacy stores OOM (#56827).
-  const store = loadLegacySessionStore(storePath);
+  const sqliteEntries = listSessionEntriesReadOnly({ agentId, storePath: absoluteStorePath });
+  const sqliteSessionKeys = new Set(sqliteEntries.map(({ sessionKey }) => sessionKey));
+  // A successful SQLite import archives sessions.json. Its continued presence
+  // is therefore the explicit signal that pre-import rows still need inspection.
+  const legacyStore = existsFile(absoluteStorePath)
+    ? loadLegacySessionStore(absoluteStorePath)
+    : {};
+  const store: Record<string, SessionEntry> = { ...legacyStore };
+  for (const { entry, sessionKey } of sqliteEntries) {
+    store[sessionKey] = entry;
+  }
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   const canonicalEntryCount = await noteMainSessionRecoveryIntegrity({
@@ -1335,6 +1349,9 @@ export async function noteStateIntegrity(
     const missing = recentTranscriptCandidates.filter(([, entry]) => {
       const sessionId = entry.sessionId;
       if (!sessionId) {
+        return false;
+      }
+      if (parseSqliteSessionFileMarker(entry.sessionFile)) {
         return false;
       }
       const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
@@ -1374,15 +1391,35 @@ export async function noteStateIntegrity(
       if (repairWedged) {
         let repaired = 0;
         const repairedAt = Date.now();
-        await updateLegacySessionStore(absoluteStorePath, (currentStore) => {
-          for (const [key] of wedgedSubagentSessions) {
-            const current = currentStore[key];
-            if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
-              repaired += 1;
-              currentStore[key] = current;
+        const sqliteKeys = wedgedSubagentSessions
+          .map(([key]) => key)
+          .filter((key) => sqliteSessionKeys.has(key));
+        if (sqliteKeys.length > 0) {
+          repaired += await applySessionEntryReplacements<number>({
+            sessionKeys: sqliteKeys,
+            storePath: absoluteStorePath,
+            update: (currentEntries) => {
+              const replacements = currentEntries.flatMap(({ entry, sessionKey }) =>
+                clearWedgedSubagentRecoveryAbort(entry, repairedAt) ? [{ entry, sessionKey }] : [],
+              );
+              return { replacements, result: replacements.length };
+            },
+          });
+        }
+        const legacyKeys = wedgedSubagentSessions
+          .map(([key]) => key)
+          .filter((key) => !sqliteSessionKeys.has(key));
+        if (legacyKeys.length > 0 && existsFile(absoluteStorePath)) {
+          await updateLegacySessionStore(absoluteStorePath, (currentStore) => {
+            for (const key of legacyKeys) {
+              const current = currentStore[key];
+              if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
+                repaired += 1;
+                currentStore[key] = current;
+              }
             }
-          }
-        });
+          });
+        }
         if (repaired > 0) {
           changes.push(
             `- Cleared aborted restart-recovery flags for ${countLabel(
@@ -1450,7 +1487,9 @@ export async function noteStateIntegrity(
     }
   }
 
-  if (existsDir(sessionsDir)) {
+  // SQLite transcript ownership is repaired by the import/migration workflow.
+  // Never offer generic file archival against a live canonical session store.
+  if (sqliteEntries.length === 0 && existsDir(sessionsDir)) {
     const referencedTranscriptPaths = new Set<string>();
     for (const [, entry] of entries) {
       if (!entry?.sessionId) {

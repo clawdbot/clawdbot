@@ -40,6 +40,7 @@ import type {
   SessionEntryPatchResult,
   SessionEntryTargetPatchScope,
 } from "./session-accessor.types.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
 import type { SessionEntry } from "./types.js";

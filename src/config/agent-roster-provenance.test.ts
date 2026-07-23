@@ -75,7 +75,7 @@ describe("agent roster include provenance", () => {
     expect(configIncludeOwnsAgentRoster(value)).toBe(true);
   });
 
-  it("does not assign an agents-scoped include ownership when roster shape is unchanged", () => {
+  it("conservatively assigns an agents-scoped include ownership when roster shape is unchanged", () => {
     const entries = { main: { default: true } };
     const value = snapshot({
       parsed: {
@@ -84,10 +84,10 @@ describe("agent roster include provenance", () => {
       sourceConfigBeforeMigrations: { agents: { entries } },
     });
 
-    expect(configIncludeOwnsAgentRoster(value)).toBe(false);
+    expect(configIncludeOwnsAgentRoster(value)).toBe(true);
   });
 
-  it("does not assign unrelated includes ownership of a local roster", () => {
+  it("treats an ancestor include with an identical roster contribution as include-owned", () => {
     const entries = { main: { default: true } };
     const value = snapshot({
       parsed: {
@@ -97,10 +97,10 @@ describe("agent roster include provenance", () => {
       sourceConfigBeforeMigrations: { agents: { entries } },
     });
 
-    expect(configIncludeOwnsAgentRoster(value)).toBe(false);
+    expect(configIncludeOwnsAgentRoster(value)).toBe(true);
   });
 
-  it("does not mistake local env resolution for root-include roster ownership", () => {
+  it("keeps ancestor-include ownership conservative across local env resolution", () => {
     const value = snapshot({
       parsed: {
         $include: "./channels.json",
@@ -111,6 +111,6 @@ describe("agent roster include provenance", () => {
       },
     });
 
-    expect(configIncludeOwnsAgentRoster(value)).toBe(false);
+    expect(configIncludeOwnsAgentRoster(value)).toBe(true);
   });
 });
