@@ -14,11 +14,17 @@ export type NativeHookRelayAdmissionSnapshot = {
 };
 
 type QueuedAdmission<T> = {
-  operation: () => Promise<T>;
+  operation: (signal?: AbortSignal) => Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;
   reject: (error: Error) => void;
   signal?: AbortSignal;
   abort?: () => void;
+};
+
+type SharedAdmission<T> = {
+  abortController: AbortController;
+  promise: Promise<T>;
+  waiters: number;
 };
 
 export class NativeHookRelayAdmissionOverloadedError extends Error {
@@ -62,7 +68,7 @@ export class NativeHookRelayAdmissionController {
   private active = 0;
   private closed = false;
   private queue: QueuedAdmission<unknown>[] = [];
-  private inFlight = new Map<string, Promise<unknown>>();
+  private inFlight = new Map<string, SharedAdmission<unknown>>();
   private accepted = 0;
   private completed = 0;
   private rejected = 0;
@@ -77,7 +83,7 @@ export class NativeHookRelayAdmissionController {
   }
 
   run<T>(
-    operation: () => Promise<T>,
+    operation: (signal?: AbortSignal) => Promise<T>,
     options: { signal?: AbortSignal; key?: string } = {},
   ): Promise<T> {
     if (this.closed) {
@@ -89,28 +95,33 @@ export class NativeHookRelayAdmissionController {
     }
     const key = options.key?.trim();
     if (key) {
-      const existing = this.inFlight.get(key) as Promise<T> | undefined;
+      const existing = this.inFlight.get(key) as SharedAdmission<T> | undefined;
       if (existing) {
         this.coalesced += 1;
-        return this.waitForShared(existing, options.signal);
+        return this.waitForShared(key, existing, options.signal);
       }
-      const promise = this.runUnique(operation, options);
-      this.inFlight.set(key, promise);
+      const abortController = new AbortController();
+      const promise = this.runUnique(operation, { signal: abortController.signal });
+      const shared: SharedAdmission<T> = { abortController, promise, waiters: 0 };
+      this.inFlight.set(key, shared);
       const clear = () => {
-        if (this.inFlight.get(key) === promise) {
+        if (this.inFlight.get(key) === shared) {
           this.inFlight.delete(key);
         }
       };
       void promise.then(clear, clear);
-      return promise;
+      return this.waitForShared(key, shared, options.signal);
     }
     return this.runUnique(operation, options);
   }
 
-  private runUnique<T>(operation: () => Promise<T>, options: { signal?: AbortSignal }): Promise<T> {
+  private runUnique<T>(
+    operation: (signal?: AbortSignal) => Promise<T>,
+    options: { signal?: AbortSignal },
+  ): Promise<T> {
     if (this.active < this.maxActive) {
       this.accepted += 1;
-      return this.start(operation);
+      return this.start(operation, options.signal);
     }
     if (this.queue.length >= this.maxQueued) {
       this.rejected += 1;
@@ -133,7 +144,9 @@ export class NativeHookRelayAdmissionController {
             return;
           }
           this.queue.splice(index, 1);
-          this.cancelled += 1;
+          if (!(options.signal?.reason instanceof NativeHookRelayAdmissionCancelledError)) {
+            this.cancelled += 1;
+          }
           reject(new NativeHookRelayAdmissionCancelledError());
         };
         options.signal.addEventListener("abort", queued.abort, { once: true });
@@ -170,12 +183,32 @@ export class NativeHookRelayAdmissionController {
     };
   }
 
-  private start<T>(operation: () => Promise<T>): Promise<T> {
+  private start<T>(
+    operation: (signal?: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     this.active += 1;
     this.peakActive = Math.max(this.peakActive, this.active);
+    let observedAbort = false;
+    const onAbort = () => {
+      if (!observedAbort) {
+        observedAbort = true;
+        if (!(signal?.reason instanceof NativeHookRelayAdmissionCancelledError)) {
+          this.cancelled += 1;
+        }
+      }
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     return Promise.resolve()
-      .then(operation)
+      .then(() => operation(signal))
+      .catch((error: unknown) => {
+        if (signal?.aborted) {
+          throw new NativeHookRelayAdmissionCancelledError();
+        }
+        throw error;
+      })
       .finally(() => {
+        signal?.removeEventListener("abort", onAbort);
         this.active -= 1;
         this.completed += 1;
         this.drain();
@@ -194,7 +227,7 @@ export class NativeHookRelayAdmissionController {
         entry.reject(new NativeHookRelayAdmissionCancelledError());
         continue;
       }
-      void this.start(entry.operation).then(entry.resolve, entry.reject);
+      void this.start(entry.operation, entry.signal).then(entry.resolve, entry.reject);
     }
   }
 
@@ -204,33 +237,37 @@ export class NativeHookRelayAdmissionController {
     }
   }
 
-  private waitForShared<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
-    if (!signal) {
-      return promise;
-    }
-    return new Promise<T>((resolve, reject) => {
-      const abort = () => {
-        cleanup();
-        this.cancelled += 1;
-        reject(new NativeHookRelayAdmissionCancelledError());
-      };
-      const cleanup = () => signal.removeEventListener("abort", abort);
-      signal.addEventListener("abort", abort, { once: true });
-      if (signal.aborted) {
-        abort();
-        return;
+  private async waitForShared<T>(
+    key: string,
+    shared: SharedAdmission<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    shared.waiters += 1;
+    let abort: (() => void) | undefined;
+    try {
+      if (!signal) {
+        return await shared.promise;
       }
-      promise.then(
-        (value) => {
-          cleanup();
-          resolve(value);
-        },
-        (error: unknown) => {
-          cleanup();
-          reject(error);
-        },
-      );
-    });
+      const abortPromise = new Promise<never>((_, reject) => {
+        abort = () => {
+          this.cancelled += 1;
+          reject(new NativeHookRelayAdmissionCancelledError());
+        };
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) {
+          abort();
+        }
+      });
+      return await Promise.race([shared.promise, abortPromise]);
+    } finally {
+      if (abort) {
+        signal?.removeEventListener("abort", abort);
+      }
+      shared.waiters -= 1;
+      if (shared.waiters === 0 && this.inFlight.get(key) === shared) {
+        shared.abortController.abort(new NativeHookRelayAdmissionCancelledError());
+      }
+    }
   }
 }
 

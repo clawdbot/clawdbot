@@ -329,7 +329,7 @@ function postFastRelay(params: {
               reject(new Error(parsed.error ?? "native hook relay bridge failed"));
             }
           } catch (error) {
-            reject(error);
+            reject(error instanceof Error ? error : new Error(String(error)));
           }
         });
       },

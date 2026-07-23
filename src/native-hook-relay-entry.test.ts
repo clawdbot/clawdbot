@@ -112,7 +112,7 @@ describe("native hook relay minimal entry", () => {
     let receivedAuthorization = "";
     let receivedBody = "";
     const server = createServer((request, response) => {
-      receivedAuthorization = String(request.headers.authorization ?? "");
+      receivedAuthorization = request.headers.authorization ?? "";
       request.setEncoding("utf8");
       request.on("data", (chunk) => {
         receivedBody += chunk;

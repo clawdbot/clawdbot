@@ -85,6 +85,42 @@ describe("NativeHookRelayAdmissionController", () => {
     await first;
   });
 
+  it("propagates abort to active work and drains the next queued operation", async () => {
+    const controller = new NativeHookRelayAdmissionController({
+      maxActive: 1,
+      maxQueued: 1,
+    });
+    const abortController = new AbortController();
+    const started = deferred();
+    const active = controller.run(
+      async (signal) => {
+        started.resolve();
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(new NativeHookRelayAdmissionCancelledError()),
+            { once: true },
+          );
+        });
+      },
+      { signal: abortController.signal },
+    );
+    const queued = controller.run(async () => "drained");
+
+    await started.promise;
+    expect(controller.snapshot()).toMatchObject({ active: 1, queued: 1 });
+    abortController.abort();
+    await expect(active).rejects.toBeInstanceOf(NativeHookRelayAdmissionCancelledError);
+    await expect(queued).resolves.toBe("drained");
+    expect(controller.snapshot()).toMatchObject({
+      active: 0,
+      queued: 0,
+      accepted: 2,
+      completed: 2,
+      cancelled: 1,
+    });
+  });
+
   it("rejects queued and future operations after close", async () => {
     const controller = new NativeHookRelayAdmissionController({
       maxActive: 1,
@@ -129,5 +165,73 @@ describe("NativeHookRelayAdmissionController", () => {
     expect(operation).toHaveBeenCalledOnce();
     release.resolve();
     await expect(Promise.all([first, duplicate])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it("keeps coalesced work alive until its final connected waiter leaves", async () => {
+    const controller = new NativeHookRelayAdmissionController({
+      maxActive: 1,
+      maxQueued: 0,
+    });
+    const release = deferred();
+    const started = deferred();
+    const sharedAborted = vi.fn();
+    const operation = vi.fn(async (signal?: AbortSignal) => {
+      signal?.addEventListener("abort", sharedAborted, { once: true });
+      started.resolve();
+      await release.promise;
+      return "allowed";
+    });
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const first = controller.run(operation, {
+      key: "permission:call-1",
+      signal: firstAbort.signal,
+    });
+    const second = controller.run(operation, {
+      key: "permission:call-1",
+      signal: secondAbort.signal,
+    });
+
+    await started.promise;
+    firstAbort.abort();
+    await expect(first).rejects.toBeInstanceOf(NativeHookRelayAdmissionCancelledError);
+    expect(sharedAborted).not.toHaveBeenCalled();
+    release.resolve();
+    await expect(second).resolves.toBe("allowed");
+    expect(sharedAborted).not.toHaveBeenCalled();
+  });
+
+  it("aborts coalesced work after its final connected waiter leaves", async () => {
+    const controller = new NativeHookRelayAdmissionController({
+      maxActive: 1,
+      maxQueued: 0,
+    });
+    const started = deferred();
+    const abortController = new AbortController();
+    const active = controller.run(
+      async (signal?: AbortSignal) => {
+        started.resolve();
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(new NativeHookRelayAdmissionCancelledError()),
+            { once: true },
+          );
+        });
+      },
+      {
+        key: "permission:call-1",
+        signal: abortController.signal,
+      },
+    );
+
+    await started.promise;
+    abortController.abort();
+    await expect(active).rejects.toBeInstanceOf(NativeHookRelayAdmissionCancelledError);
+    expect(controller.snapshot()).toMatchObject({
+      active: 0,
+      completed: 1,
+      cancelled: 1,
+    });
   });
 });
