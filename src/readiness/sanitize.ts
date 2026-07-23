@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { redactSensitiveText } from "../logging/redact.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
-export const MAX_READINESS_MESSAGE_BYTES = 512;
+const MAX_READINESS_MESSAGE_BYTES = 512;
 export const READINESS_REASON_PATTERN = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
 
 export function sanitizeProviderReadinessMessage(value: string): string | undefined {
