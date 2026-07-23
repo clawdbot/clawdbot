@@ -310,20 +310,32 @@ export function resolveSessionFilePath(
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
 }
 
+export class SessionStoreAgentIdRequiredError extends Error {
+  constructor() {
+    super("Session store path requires an explicit agent id.");
+    this.name = "SessionStoreAgentIdRequiredError";
+  }
+}
+
+/** Resolves fixed literal paths without an owner; derived or templated paths require agentId. */
 export function resolveStorePath(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
-  if (!opts?.agentId?.trim()) {
-    throw new Error("Session store path requires an explicit agent id.");
-  }
-  const agentId = normalizeAgentId(opts.agentId);
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {
+    if (!opts?.agentId?.trim()) {
+      throw new SessionStoreAgentIdRequiredError();
+    }
+    const agentId = normalizeAgentId(opts.agentId);
     return path.join(resolveAgentSessionsDir(agentId, env, homedir), "sessions.json");
   }
   if (store.includes("{agentId}")) {
+    if (!opts?.agentId?.trim()) {
+      throw new SessionStoreAgentIdRequiredError();
+    }
+    const agentId = normalizeAgentId(opts.agentId);
     // Template expansion is the only supported way to share one config path across agent stores.
     const expanded = store.replaceAll("{agentId}", agentId);
     if (expanded.startsWith("~")) {

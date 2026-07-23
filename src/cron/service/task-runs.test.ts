@@ -48,7 +48,7 @@ describe("cron task run terminal records", () => {
       "agent:ops:cron:default-owner:run:1500",
     );
     expect(() => resolveMainSessionCronRunSessionKey(job, 1_500, undefined)).toThrow(
-      "Cron task run requires an agent id or prepared configured default.",
+      "Cron job has no agent id and no configured default was provided.",
     );
   });
 

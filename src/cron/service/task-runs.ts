@@ -6,6 +6,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 
 function requireCronAgentId(agentId: string | undefined): string {
   if (!agentId?.trim()) {
@@ -59,11 +60,7 @@ export function resolveMainSessionCronRunSessionKey(
   startedAt: number,
   configuredDefaultAgentId: string | undefined,
 ): string {
-  const explicitAgentId = job.agentId?.trim() || undefined;
-  const sessionKeyAgentId = parseAgentSessionKey(job.sessionKey)?.agentId;
-  const agentId = normalizeAgentId(
-    explicitAgentId ?? sessionKeyAgentId ?? requireCronAgentId(configuredDefaultAgentId),
-  );
+  const agentId = resolveCronJobEffectiveAgentId(job, configuredDefaultAgentId);
   const jobSegment = normalizeCronLaneSegment(job.id, "job");
   const runSegment = normalizeCronLaneSegment(String(Math.max(0, Math.floor(startedAt))), "run");
   return `agent:${agentId}:cron:${jobSegment}:run:${runSegment}`;
