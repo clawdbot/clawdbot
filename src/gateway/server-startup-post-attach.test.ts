@@ -343,7 +343,8 @@ describe("startGatewayPostAttachRuntime", () => {
       failed: 0,
       skipped: 0,
     });
-    hoisted.scheduleRestartAbortedMainSessionRecovery.mockClear();
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockReset();
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockResolvedValue(true);
     hoisted.scheduleRestartSentinelWake.mockClear();
     hoisted.refreshLatestUpdateRestartSentinel.mockReset();
     hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(null);
@@ -2454,6 +2455,114 @@ describe("startGatewayPostAttachRuntime", () => {
     const reloadedCron = { list: vi.fn(), add: vi.fn(), update: vi.fn(), remove: vi.fn() };
     params.deps.cron = reloadedCron as never;
     expect(getCron()).toBe(reloadedCron);
+  });
+
+  it("waits for stable main-session recovery before gateway_start hooks", async () => {
+    let resolveRecovery: ((stable: boolean) => void) | undefined;
+    const firstRecoveryAttempt = new Promise<boolean>((resolve) => {
+      resolveRecovery = resolve;
+    });
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockReturnValueOnce(firstRecoveryAttempt);
+    const runGatewayStart = vi.fn(async () => {});
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
+      runGatewayStart,
+    };
+
+    await startGatewayPostAttachRuntime(
+      createPostAttachParams({
+        pluginRegistry: {
+          ...createPostAttachParams().pluginRegistry,
+          typedHooks: [{ hookName: "gateway_start" }],
+        } as never,
+      }),
+      createPostAttachRuntimeDeps({
+        getGlobalHookRunner: vi.fn(async () => hookRunner as never),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledTimes(1);
+    });
+    expect(runGatewayStart).not.toHaveBeenCalled();
+
+    resolveRecovery?.(true);
+    await vi.waitFor(() => {
+      expect(runGatewayStart).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("fails closed for gateway_start hooks when restart recovery is still unsettled", async () => {
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockResolvedValueOnce(false);
+    const runGatewayStart = vi.fn(async () => {});
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
+      runGatewayStart,
+    };
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await startGatewayPostAttachRuntime(
+      createPostAttachParams({
+        pluginRegistry: {
+          ...createPostAttachParams().pluginRegistry,
+          typedHooks: [{ hookName: "gateway_start" }],
+        } as never,
+        log,
+      }),
+      createPostAttachRuntimeDeps({
+        getGlobalHookRunner: vi.fn(async () => hookRunner as never),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledTimes(1);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await vi.waitFor(() => {
+      expect(log.warn).toHaveBeenCalledWith(
+        "gateway_start hooks skipped: main-session restart recovery is unsettled",
+      );
+    });
+    expect(runGatewayStart).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for gateway_start hooks when restart recovery cannot be scheduled", async () => {
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(() => {
+      throw new Error("recovery scheduler unavailable");
+    });
+    const runGatewayStart = vi.fn(async () => {});
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
+      runGatewayStart,
+    };
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await startGatewayPostAttachRuntime(
+      createPostAttachParams({
+        pluginRegistry: {
+          ...createPostAttachParams().pluginRegistry,
+          typedHooks: [{ hookName: "gateway_start" }],
+        } as never,
+        log,
+      }),
+      createPostAttachRuntimeDeps({
+        getGlobalHookRunner: vi.fn(async () => hookRunner as never),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(log.warn).toHaveBeenCalledWith(
+        "main-session restart recovery failed to schedule: Error: recovery scheduler unavailable",
+      );
+    });
+    await vi.waitFor(() => {
+      expect(log.warn).toHaveBeenCalledWith(
+        "gateway_start hooks skipped: main-session restart recovery is unsettled",
+      );
+    });
+    expect(runGatewayStart).not.toHaveBeenCalled();
   });
 
   it("does not resolve the global hook runner when no gateway_start hooks are registered", async () => {

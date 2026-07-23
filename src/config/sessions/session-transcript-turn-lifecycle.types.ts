@@ -6,6 +6,7 @@ type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 export type SessionTranscriptTurnExpectedState = {
   abortedLastRun: boolean | undefined;
   restartRecoveryDeliveryRequestFingerprint: SessionRestartRecoveryState["restartRecoveryDeliveryRequestFingerprint"];
+  restartRecoveryDeliveryRequestMessageId: SessionRestartRecoveryState["restartRecoveryDeliveryRequestMessageId"];
   restartRecoveryDeliveryRunId: SessionRestartRecoveryState["restartRecoveryDeliveryRunId"];
   restartRecoveryDeliverySourceRunId: SessionRestartRecoveryState["restartRecoveryDeliverySourceRunId"];
   status: SessionRunStatus | undefined;
@@ -18,6 +19,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   endedAt?: number;
   restartRecoveryDeliveryContext?: SessionRestartRecoveryState["restartRecoveryDeliveryContext"];
   restartRecoveryDeliveryRequestFingerprint?: SessionRestartRecoveryState["restartRecoveryDeliveryRequestFingerprint"];
+  restartRecoveryDeliveryRequestMessageId?: SessionRestartRecoveryState["restartRecoveryDeliveryRequestMessageId"];
   restartRecoveryDeliveryRunId?: SessionRestartRecoveryState["restartRecoveryDeliveryRunId"];
   restartRecoveryDeliverySourceRunId?: SessionRestartRecoveryState["restartRecoveryDeliverySourceRunId"];
   /** Durable tombstones merged with the fresh row inside the SQLite write transaction. */

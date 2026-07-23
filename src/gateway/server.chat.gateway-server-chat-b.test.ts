@@ -2415,6 +2415,7 @@ describe("gateway server chat", () => {
             sessionId: "sess-main",
             status: "done",
             abortedLastRun: false,
+            restartRecoveryDeliveryRequestMessageId: "channel-request-that-must-not-survive",
             restartRecoveryDeliveryRunId: priorRunId,
             restartRecoveryDeliverySourceRunId: priorRunId,
             restartRecoveryTerminalRunIds: ["idem-older-terminal-claim"],
@@ -2446,6 +2447,7 @@ describe("gateway server chat", () => {
         restartRecoveryTerminalRunIds: ["idem-older-terminal-claim", priorRunId],
         status: "running",
       });
+      expect(snapshotAtAck?.restartRecoveryDeliveryRequestMessageId).toBeUndefined();
 
       const retryResponses: Array<{ ok: boolean; payload?: unknown; meta?: unknown }> = [];
       await sendControlUiChat({

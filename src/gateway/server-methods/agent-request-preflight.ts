@@ -52,6 +52,7 @@ type AgentRequestPreflight = {
   isOneShotModelRun: boolean;
   isRawModelRun: boolean;
   agentDedupeKeys: string[];
+  trustedRequestMessageId?: string;
 };
 
 export function prepareAgentRequestPreflight(
@@ -224,5 +225,8 @@ export function prepareAgentRequestPreflight(
     isOneShotModelRun,
     isRawModelRun,
     agentDedupeKeys,
+    trustedRequestMessageId: normalizeOptionalString(
+      params.client?.internal?.trustedRequestMessageId,
+    ),
   };
 }

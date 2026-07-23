@@ -1113,6 +1113,27 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test("moves in-process recovery identity out of agent wire params", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("recovery-request-identity"));
+
+    await serverPluginsModule.dispatchGatewayMethodInProcess(
+      "agent",
+      {
+        message: "resume",
+        sessionKey: "agent:main:slack:channel:C123",
+        idempotencyKey: "recovery-run",
+        requestMessageId: "1784768109.234419",
+      },
+      {
+        forceSyntheticClient: true,
+        trustedRequestMessageId: "1784768109.234419",
+      },
+    );
+
+    expect(getRequiredLastDispatchedParams()).not.toHaveProperty("requestMessageId");
+    expect(getLastDispatchedClientInternal().trustedRequestMessageId).toBe("1784768109.234419");
+  });
+
   test("lets trusted official plugins request explicit Gateway scopes", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();

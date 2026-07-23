@@ -2593,6 +2593,7 @@ describe("session accessor seam", () => {
         abortedLastRun: retryable.abortedLastRun,
         restartRecoveryDeliveryRequestFingerprint:
           retryable.restartRecoveryDeliveryRequestFingerprint,
+        restartRecoveryDeliveryRequestMessageId: retryable.restartRecoveryDeliveryRequestMessageId,
         restartRecoveryDeliveryRunId: retryable.restartRecoveryDeliveryRunId,
         restartRecoveryDeliverySourceRunId: retryable.restartRecoveryDeliverySourceRunId,
         status: retryable.status,
@@ -2777,6 +2778,7 @@ describe("session accessor seam", () => {
     const expectedSessionState = {
       abortedLastRun: stored.abortedLastRun,
       restartRecoveryDeliveryRequestFingerprint: stored.restartRecoveryDeliveryRequestFingerprint,
+      restartRecoveryDeliveryRequestMessageId: stored.restartRecoveryDeliveryRequestMessageId,
       restartRecoveryDeliveryRunId: stored.restartRecoveryDeliveryRunId,
       restartRecoveryDeliverySourceRunId: stored.restartRecoveryDeliverySourceRunId,
       status: stored.status,
@@ -2815,6 +2817,89 @@ describe("session accessor seam", () => {
       sessionId: scope.sessionId,
       status: "running",
       updatedAt: 20,
+    });
+    releasePredicate();
+    const result = await pendingTurn;
+
+    expect(result).toMatchObject({ appendedCount: 0, rejectedReason: "session-rebound" });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
+  });
+
+  it("rejects a retryable chat turn when its transport request identity changes during admission", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-chat-retry",
+      sessionKey: "agent:main:chat-retry",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "chat-fingerprint",
+      restartRecoveryDeliveryRequestMessageId: "channel-request-old",
+      restartRecoveryDeliveryRunId: "chat-run",
+      restartRecoveryDeliverySourceRunId: "chat-run",
+      sessionId: scope.sessionId,
+      status: "failed",
+      updatedAt: 10,
+    });
+    const stored = loadSessionEntry(scope);
+    if (!stored) {
+      throw new Error("expected retryable chat claim");
+    }
+    const expectedSessionState = {
+      abortedLastRun: stored.abortedLastRun,
+      restartRecoveryDeliveryRequestFingerprint: stored.restartRecoveryDeliveryRequestFingerprint,
+      restartRecoveryDeliveryRequestMessageId: stored.restartRecoveryDeliveryRequestMessageId,
+      restartRecoveryDeliveryRunId: stored.restartRecoveryDeliveryRunId,
+      restartRecoveryDeliverySourceRunId: stored.restartRecoveryDeliverySourceRunId,
+      status: stored.status,
+      updatedAt: stored.updatedAt,
+    };
+    let releasePredicate!: () => void;
+    let markPredicateStarted!: () => void;
+    const predicateStarted = new Promise<void>((resolve) => {
+      markPredicateStarted = resolve;
+    });
+    const predicateGate = new Promise<void>((resolve) => {
+      releasePredicate = resolve;
+    });
+    const pendingTurn = persistSessionTranscriptTurn(scope, {
+      expectedSessionId: scope.sessionId,
+      expectedSessionState,
+      messages: [
+        {
+          message: { role: "user", content: "retry once", timestamp: 100 },
+          shouldAppend: async () => {
+            markPredicateStarted();
+            await predicateGate;
+            return true;
+          },
+        },
+      ],
+      sessionLifecyclePatch: {
+        abortedLastRun: false,
+        restartRecoveryDeliveryRequestFingerprint: "chat-fingerprint",
+        restartRecoveryDeliveryRequestMessageId: undefined,
+        restartRecoveryDeliveryRunId: "chat-run",
+        restartRecoveryDeliverySourceRunId: "chat-run",
+        status: "running",
+        updatedAt: 100,
+      },
+      updateMode: "file-only",
+    });
+
+    await predicateStarted;
+    // Keep every other compared field stable. This verifies the transport id is
+    // itself part of the atomic admission guard, not incidental metadata.
+    replaceSqliteSessionEntrySync(scope, {
+      abortedLastRun: false,
+      restartRecoveryDeliveryRequestFingerprint: "chat-fingerprint",
+      restartRecoveryDeliveryRequestMessageId: "channel-request-new",
+      restartRecoveryDeliveryRunId: "chat-run",
+      restartRecoveryDeliverySourceRunId: "chat-run",
+      sessionId: scope.sessionId,
+      status: "failed",
+      updatedAt: 10,
     });
     releasePredicate();
     const result = await pendingTurn;

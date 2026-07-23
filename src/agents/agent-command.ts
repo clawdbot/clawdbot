@@ -269,6 +269,7 @@ async function agentCommandInternal(
             disableMessageTool: opts.disableMessageTool,
             entry,
             forceRestartSafeTools: opts.forceRestartSafeTools,
+            requestMessageId: opts.requestMessageId,
             runId,
             sourceRunId:
               opts.internalDeliveryMediaUrls !== undefined &&

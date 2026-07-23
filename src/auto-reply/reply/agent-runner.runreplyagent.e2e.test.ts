@@ -821,6 +821,7 @@ describe("runReplyAgent pending final delivery capture", () => {
         threadId: "1503645939964055592",
       });
       expect(typeof storedDuringRun.restartRecoveryDeliveryRunId).toBe("string");
+      expect(storedDuringRun.restartRecoveryDeliveryRequestMessageId).toBe("1503645939964055592");
       return {
         payloads: [{ text: "visible final" }],
         meta: {},
@@ -855,6 +856,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       threadId: "1503645939964055592",
     });
     expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(stored.restartRecoveryDeliveryRequestMessageId).toBeUndefined();
     expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
   });
 

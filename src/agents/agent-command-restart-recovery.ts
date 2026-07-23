@@ -280,6 +280,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   disableMessageTool?: boolean;
   entry: SessionEntry;
   forceRestartSafeTools?: boolean;
+  requestMessageId?: string;
   runId: string;
   sourceRunId?: string;
   sourceReplyDeliveryMode?: SessionEntry["restartRecoverySourceReplyDeliveryMode"];
@@ -290,6 +291,7 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   | "restartRecoveryDeliveryMediaUrls"
   | "restartRecoveryDisableMessageTool"
   | "restartRecoveryDeliveryRunId"
+  | "restartRecoveryDeliveryRequestMessageId"
   | "restartRecoveryDeliverySourceRunId"
   | "restartRecoveryForceSafeTools"
   | "restartRecoverySourceReplyDeliveryMode"
@@ -330,6 +332,11 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     restartRecoveryDeliveryRunId:
       params.deliveryContext || adoptsExistingClaim || createsTranscriptOnlySourceClaim
         ? params.runId
+        : undefined,
+    restartRecoveryDeliveryRequestMessageId: adoptsExistingClaim
+      ? params.entry.restartRecoveryDeliveryRequestMessageId
+      : params.deliveryContext
+        ? params.requestMessageId
         : undefined,
     restartRecoveryDeliverySourceRunId: adoptsExistingClaim
       ? params.entry.restartRecoveryDeliverySourceRunId

@@ -45,6 +45,8 @@ export type SessionRestartRecoveryState = {
   /** Suppresses visible text when a recovery attempt repairs only missing media. */
   restartRecoverySuppressTextDelivery?: true;
   restartRecoveryDeliveryRequestFingerprint?: string;
+  /** Immutable transport request id that owns the externally visible recovery reply. */
+  restartRecoveryDeliveryRequestMessageId?: string;
   restartRecoveryDeliveryRunId?: string;
   restartRecoveryDeliverySourceRunId?: string;
   restartRecoverySourceReplyDeliveryMode?: SourceReplyDeliveryMode;

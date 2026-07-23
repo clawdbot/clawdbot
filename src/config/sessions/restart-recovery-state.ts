@@ -243,6 +243,7 @@ type RestartRecoveryNormalizedField =
   | "restartRecoveryDisableMessageTool"
   | "restartRecoverySuppressTextDelivery"
   | "restartRecoveryDeliveryRequestFingerprint"
+  | "restartRecoveryDeliveryRequestMessageId"
   | "restartRecoveryDeliveryRunId"
   | "restartRecoveryDeliverySourceRunId"
   | "restartRecoverySourceReplyDeliveryMode"
@@ -282,6 +283,10 @@ export function normalizeRestartRecoveryEntryFields(
   assign(
     "restartRecoveryDeliveryRequestFingerprint",
     normalizeRunId(entry.restartRecoveryDeliveryRequestFingerprint),
+  );
+  assign(
+    "restartRecoveryDeliveryRequestMessageId",
+    normalizeRunId(entry.restartRecoveryDeliveryRequestMessageId),
   );
   assign("restartRecoveryDeliveryRunId", normalizeRunId(entry.restartRecoveryDeliveryRunId));
   assign(
@@ -387,6 +392,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDisableMessageTool: undefined,
     restartRecoverySuppressTextDelivery: undefined,
     restartRecoveryDeliveryRequestFingerprint: undefined,
+    restartRecoveryDeliveryRequestMessageId: undefined,
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,

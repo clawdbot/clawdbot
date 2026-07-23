@@ -842,6 +842,7 @@ describe("main-session-restart-recovery", () => {
           accountId: "main",
           threadId: 123,
         },
+        restartRecoveryDeliveryRequestMessageId: "123.456",
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
@@ -1516,7 +1517,7 @@ describe("main-session-restart-recovery", () => {
     expect(customStore["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
-  it("admits each scheduled recovery attempt as independent root work", async () => {
+  it("keeps the startup barrier pending until a failed recovery retry settles", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -1544,7 +1545,7 @@ describe("main-session-restart-recovery", () => {
         return { runId: "run-resumed" };
       });
 
-    scheduleRestartAbortedMainSessionRecovery({
+    const stableRecovery = scheduleRestartAbortedMainSessionRecovery({
       delayMs: 0,
       maxRetries: 2,
       stateDir: tmpDir,
@@ -1554,6 +1555,14 @@ describe("main-session-restart-recovery", () => {
       expect(callGateway).toHaveBeenCalledOnce();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     });
+    let barrierSettled = false;
+    void stableRecovery.then(() => {
+      barrierSettled = true;
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(barrierSettled).toBe(false);
     expect(suspensionRef.current?.release()).toBe(true);
 
     await vi.waitFor(() => {
@@ -1564,6 +1573,7 @@ describe("main-session-restart-recovery", () => {
       });
       expect(entry?.abortedLastRun).toBe(false);
     });
+    await expect(stableRecovery).resolves.toBe(true);
     const runIds = vi
       .mocked(callGateway)
       .mock.calls.map(

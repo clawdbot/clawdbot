@@ -57,7 +57,7 @@ const musicCompletionEvent: AgentInternalEvent = {
 };
 
 describe("AgentParamsSchema", () => {
-  it("accepts the backend expected-session binding", () => {
+  it("accepts the backend expected-session binding but rejects caller-supplied request identity", () => {
     expect(
       Value.Check(AgentParamsSchema, {
         message: "resume",
@@ -66,6 +66,15 @@ describe("AgentParamsSchema", () => {
         idempotencyKey: "recovery-1",
       }),
     ).toBe(true);
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "resume",
+        sessionKey: "agent:main:main",
+        expectedExistingSessionId: "session-1",
+        idempotencyKey: "recovery-1",
+        requestMessageId: "1784768109.234419",
+      }),
+    ).toBe(false);
   });
 
   it("rejects host-owned delivery media constraints from public requests", () => {
