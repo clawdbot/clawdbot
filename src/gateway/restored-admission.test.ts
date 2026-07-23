@@ -92,7 +92,10 @@ async function createFixture() {
   const journalPath = path.join(tempDir, "journal");
   await fs.mkdir(journalPath, { recursive: true, mode: 0o700 });
   const descriptorPath = path.join(journalPath, "startup.json");
-  const resultWithoutReceipt = {
+  const resultWithoutReceipt: Omit<
+    Extract<RestoredRecoveryPointResult, { ok: true }>,
+    "restoreReceiptIdentity"
+  > = {
     version: RESTORED_RECOVERY_POINT_RESULT_VERSION,
     ok: true as const,
     runtimeLineage: "runtime/tenant-7",

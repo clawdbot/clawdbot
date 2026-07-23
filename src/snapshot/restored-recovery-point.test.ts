@@ -260,7 +260,7 @@ function createDatabase(databasePath: string, role: "global" | "agent", agentId?
           meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
         ) VALUES ('primary', ?, ?, ?, NULL, 1, 1)`,
       )
-      .run(role, version, role === "agent" ? agentId : null);
+      .run(role, version, role === "agent" ? agentId! : null);
   } finally {
     database.close();
   }
