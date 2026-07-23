@@ -54,6 +54,16 @@
           "verboseLogging": {
             "type": "boolean"
           },
+          "nephesh": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "description": "Opt in to Nephesh-compatible provenance metadata on generated DREAMS.md entries."
+              }
+            }
+          },
           "storage": {
             "type": "object",
             "additionalProperties": false,

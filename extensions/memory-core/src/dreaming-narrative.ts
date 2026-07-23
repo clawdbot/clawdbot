@@ -45,6 +45,8 @@ type SubagentSurface = {
 
 export type NarrativePhaseData = {
   phase: "light" | "deep" | "rem";
+  /** Opt-in to the Nephesh-compatible provenance envelope at the storage boundary. */
+  nepheshEnabled?: boolean;
   /** Short memory snippets the phase processed. */
   snippets: string[];
   /** Concept tags / themes that surfaced (REM and light). */
@@ -150,6 +152,46 @@ function formatFallbackWriteFailure(err: unknown): string {
 const REQUEST_SCOPED_FALLBACK_NARRATIVE =
   "A memory trace surfaced, but details were unavailable in this run.";
 
+type DreamGenerationStatus = "generated" | "unavailable";
+
+function buildDreamEntryId(params: {
+  workspaceDir: string;
+  phase: NarrativePhaseData["phase"];
+  nowMs: number;
+}): string {
+  return `dream-${createHash("sha1")
+    .update(`${params.workspaceDir}\0${params.phase}\0${params.nowMs}`)
+    .digest("hex")
+    .slice(0, 20)}`;
+}
+
+function buildDreamProvenanceEnvelope(params: {
+  workspaceDir: string;
+  data: NarrativePhaseData;
+  nowMs: number;
+  model?: string;
+  generationStatus: DreamGenerationStatus;
+}): string {
+  const fields: Array<[string, string]> = [
+    [
+      "id",
+      buildDreamEntryId({
+        workspaceDir: params.workspaceDir,
+        phase: params.data.phase,
+        nowMs: params.nowMs,
+      }),
+    ],
+    ["experience_mode", "dream"],
+    ["historical_status", "fictional_scene"],
+    ["recorded_during", "dream"],
+    ["generated_at", new Date(params.nowMs).toISOString()],
+    ["phase", params.data.phase],
+    ...(params.model ? [["model", params.model] as [string, string]] : []),
+    ["generation_status", params.generationStatus],
+  ];
+  return `<!-- openclaw:dream:provenance ${JSON.stringify(Object.fromEntries(fields))} -->`;
+}
+
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
   data: NarrativePhaseData;
@@ -157,6 +199,7 @@ export async function appendFallbackNarrativeEntry(params: {
   timezone?: string;
   logger: Logger;
   reason: string;
+  model?: string;
 }): Promise<void> {
   try {
     await appendNarrativeEntry({
@@ -166,6 +209,9 @@ export async function appendFallbackNarrativeEntry(params: {
       narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
+      data: params.data,
+      model: params.model,
+      generationStatus: "unavailable",
     });
     params.logger.info(
       `memory-core: narrative generation used fallback for ${params.data.phase} phase because ${params.reason}.`,
@@ -260,6 +306,7 @@ async function startNarrativeRunOrFallback(params: {
       nowMs: params.nowMs,
       timezone: params.timezone,
       logger: params.logger,
+      model: params.model,
       reason: "subagent runtime is request-scoped",
     });
     return null;
@@ -733,8 +780,17 @@ export async function dedupeDreamDiaryEntries(params: {
   });
 }
 
-function buildDiaryEntry(narrative: string, dateStr: string): string {
-  return `\n---\n\n*${dateStr}*\n\n${narrative}\n`;
+function buildDiaryEntry(params: {
+  narrative: string;
+  dateStr: string;
+  workspaceDir: string;
+  data: NarrativePhaseData;
+  nowMs: number;
+  model?: string;
+  generationStatus: DreamGenerationStatus;
+}): string {
+  const envelope = params.data.nepheshEnabled ? `\n${buildDreamProvenanceEnvelope(params)}` : "";
+  return `\n---\n\n*${params.dateStr}*${envelope}\n\n${params.narrative}\n`;
 }
 
 async function appendNarrativeEntry(params: {
@@ -742,9 +798,20 @@ async function appendNarrativeEntry(params: {
   narrative: string;
   nowMs: number;
   timezone?: string;
+  data: NarrativePhaseData;
+  model?: string;
+  generationStatus: DreamGenerationStatus;
 }): Promise<string> {
   const dateStr = formatNarrativeDate(params.nowMs, params.timezone);
-  const entry = buildDiaryEntry(params.narrative, dateStr);
+  const entry = buildDiaryEntry({
+    narrative: params.narrative,
+    dateStr,
+    workspaceDir: params.workspaceDir,
+    data: params.data,
+    model: params.model,
+    nowMs: params.nowMs,
+    generationStatus: params.generationStatus,
+  });
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => {
@@ -836,6 +903,7 @@ export async function generateAndAppendDreamNarrative(params: {
   await withNarrativeSessionLock(sessionKey, async () => {
     const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
     let successfulSessionKey: string | null = null;
+    let successfulModel: string | undefined;
     try {
       const attemptModels = params.model ? [params.model, undefined] : [undefined];
 
@@ -879,6 +947,7 @@ export async function generateAndAppendDreamNarrative(params: {
 
           if (result.status === "ok") {
             successfulSessionKey = attemptSessionKey;
+            successfulModel = attemptModel;
             break;
           }
 
@@ -908,6 +977,7 @@ export async function generateAndAppendDreamNarrative(params: {
             nowMs,
             timezone: params.timezone,
             logger: params.logger,
+            model: attemptModel,
             reason: `the narrative run ended with ${formatNarrativeTerminalStatus({
               status: result.status,
               error: result.error,
@@ -943,6 +1013,7 @@ export async function generateAndAppendDreamNarrative(params: {
           nowMs,
           timezone: params.timezone,
           logger: params.logger,
+          model: successfulModel,
           reason: "the narrative run produced no text",
         });
         return;
@@ -953,6 +1024,9 @@ export async function generateAndAppendDreamNarrative(params: {
         narrative,
         nowMs,
         timezone: params.timezone,
+        data: params.data,
+        model: successfulModel,
+        generationStatus: "generated",
       });
 
       params.logger.info(

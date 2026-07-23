@@ -55,6 +55,7 @@ type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type DreamingHostConfig = unknown;
 type DreamingPhaseStorageConfig = {
   timezone?: string;
+  nephesh?: { enabled: boolean };
   storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
   execution?: { model?: string };
 };
@@ -1772,6 +1773,7 @@ async function runLightDreaming(params: {
     const themes = uniqueStrings(capped.flatMap((e) => e.conceptTags).filter(Boolean));
     const data: NarrativePhaseData = {
       phase: "light",
+      nepheshEnabled: params.config.nephesh?.enabled,
       snippets: capped.map((e) => e.snippet).filter(Boolean),
       currentDate: formatMemoryDreamingDay(nowMs, params.config.timezone),
       ...(themes.length > 0 ? { themes } : {}),
@@ -1883,6 +1885,7 @@ async function runRemDreaming(params: {
     );
     const data: NarrativePhaseData = {
       phase: "rem",
+      nepheshEnabled: params.config.nephesh?.enabled,
       snippets:
         snippets.length > 0
           ? snippets

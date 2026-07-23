@@ -18,6 +18,9 @@ describe("memory dreaming host helpers", () => {
           enabled: true,
           frequency: "0 */4 * * *",
           timezone: "Europe/London",
+          nephesh: {
+            enabled: true,
+          },
           model: " anthropic/claude-sonnet-4-6 ",
           storage: {
             mode: "both",
@@ -40,6 +43,7 @@ describe("memory dreaming host helpers", () => {
     expect(resolved.enabled).toBe(true);
     expect(resolved.frequency).toBe("0 */4 * * *");
     expect(resolved.timezone).toBe("Europe/London");
+    expect(resolved.nephesh.enabled).toBe(true);
     expect(resolved.execution.defaults.model).toBe("anthropic/claude-sonnet-4-6");
     expect(resolved.phases.light.execution.model).toBe("anthropic/claude-sonnet-4-6");
     expect(resolved.phases.deep.execution.model).toBe("anthropic/claude-sonnet-4-6");
@@ -174,6 +178,7 @@ describe("memory dreaming host helpers", () => {
       mode: "separate",
       separateReports: false,
     });
+    expect(resolved.nephesh.enabled).toBe(false);
   });
 
   it("preserves explicit inline storage mode for callers that opt in", () => {

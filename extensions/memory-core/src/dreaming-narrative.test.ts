@@ -441,7 +441,43 @@ describe("generateAndAppendDreamNarrative", () => {
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("The repository whispered of forgotten endpoints.");
+    expect(content).not.toContain("openclaw:dream:provenance");
     expect(logger.info).toHaveBeenCalled();
+  });
+
+  it("writes an opt-in Nephesh provenance envelope without changing diary context", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-nephesh-");
+    const subagent = createMockSubagent("The village remembered the shape of rain.");
+    const logger = createMockLogger();
+    const nowMs = Date.parse("2026-04-05T03:00:00Z");
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "rem",
+        nepheshEnabled: true,
+        snippets: ["A village memory surfaced."],
+      },
+      nowMs,
+      timezone: "UTC",
+      model: "anthropic/claude-sonnet-4-6",
+      logger,
+    });
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("<!-- openclaw:dream:provenance");
+    expect(content).toContain('"experience_mode":"dream"');
+    expect(content).toContain('"historical_status":"fictional_scene"');
+    expect(content).toContain('"recorded_during":"dream"');
+    expect(content).toContain('"generated_at":"2026-04-05T03:00:00.000Z"');
+    expect(content).toContain('"phase":"rem"');
+    expect(content).toContain('"model":"anthropic/claude-sonnet-4-6"');
+    expect(content).toContain('"generation_status":"generated"');
+
+    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 1 })).resolves.toEqual([
+      "The village remembered the shape of rain.",
+    ]);
   });
 
   it("waits for persisted assistant text before falling back", async () => {
@@ -688,6 +724,31 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(content).not.toContain("some memory");
     expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("status=timeout"));
+  });
+
+  it("marks an opt-in fallback as unavailable rather than a generated dream", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-nephesh-fallback-");
+    const subagent = createMockSubagent("");
+    subagent.waitForRun.mockResolvedValue({ status: "timeout" });
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "deep",
+        nepheshEnabled: true,
+        snippets: ["private staging fragment"],
+      },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain('"generation_status":"unavailable"');
+    expect(content).not.toContain('"generation_status":"generated"');
+    expect(content).not.toContain("private staging fragment");
   });
 
   it("does not leak sensitive raw staging fragments into the diary on fallback", async () => {

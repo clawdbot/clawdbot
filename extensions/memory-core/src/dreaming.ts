@@ -111,6 +111,7 @@ type ShortTermPromotionDreamingConfig = {
   maxAgeDays?: number;
   maxPromotedSnippetTokens?: number;
   verboseLogging: boolean;
+  nephesh?: { enabled: boolean };
   storage?: {
     mode: "inline" | "separate" | "both";
     separateReports: boolean;
@@ -661,6 +662,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       if (candidates.length > 0 || applied.applied > 0) {
         const data: NarrativePhaseData = {
           phase: "deep",
+          nepheshEnabled: params.config.nephesh?.enabled,
           snippets: candidates.map((c) => c.snippet).filter(Boolean),
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
         };
