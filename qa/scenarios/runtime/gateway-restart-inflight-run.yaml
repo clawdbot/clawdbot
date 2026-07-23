@@ -81,7 +81,7 @@ flow:
                 expr: config.prompt
               to:
                 expr: "`dm:${conversationId}`"
-              taskTracking: false
+              taskTracking: true
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 180000)
         - call: waitForCondition
