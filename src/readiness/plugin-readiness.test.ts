@@ -61,7 +61,7 @@ describe("createPluginReadinessResolver", () => {
     expect(failed).toMatchObject({ status: "Unknown", reason: "CriterionCheckFailed" });
   });
 
-  it("does not restart a timed-out callback that ignores cancellation", async () => {
+  it("retries a timed-out callback after the cache expires", async () => {
     let currentTime = 0;
     const check = vi.fn(() => new Promise<never>(() => {}));
     const criterion = registration(check);
@@ -80,6 +80,6 @@ describe("createPluginReadinessResolver", () => {
 
     expect(first).toMatchObject({ status: "Unknown", reason: "CriterionTimedOut" });
     expect(afterCacheExpiry).toEqual(first);
-    expect(check).toHaveBeenCalledTimes(1);
+    expect(check).toHaveBeenCalledTimes(2);
   });
 });
