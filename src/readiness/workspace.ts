@@ -5,7 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ReadinessCondition } from "./conditions.js";
 
-export type WorkspaceReadinessEvidence = {
+type WorkspaceReadinessEvidence = {
   writable: boolean | null;
   reason: string;
   message: string;
@@ -22,7 +22,7 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
-export function workspaceProbeFailure(error: unknown): WorkspaceReadinessEvidence {
+function workspaceProbeFailure(error: unknown): WorkspaceReadinessEvidence {
   const code = errorCode(error);
   if (code === "ENOSPC" || code === "EDQUOT") {
     return {
@@ -73,9 +73,7 @@ export function buildWorkspaceReadinessCondition(
   };
 }
 
-export async function probeWorkspaceWritable(
-  workspaceDir: string,
-): Promise<WorkspaceReadinessEvidence> {
+async function probeWorkspaceWritable(workspaceDir: string): Promise<WorkspaceReadinessEvidence> {
   const probePath = path.join(
     workspaceDir,
     `.openclaw-readiness-${process.pid}-${randomUUID()}.tmp`,

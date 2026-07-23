@@ -5,13 +5,9 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import { buildRuntimeReadiness, type ReadinessCondition } from "../../readiness/conditions.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
-import {
-  createReadinessChecker,
-  evaluateCanonicalGatewayReadiness,
-  mergeReadinessResults,
-  type ReadinessResult,
-  withReadinessEvaluationTimeout,
-} from "./readiness.js";
+import { createReadinessChecker, evaluateCanonicalGatewayReadiness } from "./readiness.js";
+
+type ReadinessResult = Awaited<ReturnType<ReturnType<typeof createReadinessChecker>>>;
 
 /**
  * Readiness checker tests for startup grace, channel health, and stale sockets.
@@ -515,8 +511,8 @@ describe("createReadinessChecker", () => {
   });
 });
 
-describe("mergeReadinessResults", () => {
-  it("normalizes core failures and advisories while preserving legacy fields", () => {
+describe("evaluateCanonicalGatewayReadiness", () => {
+  it("normalizes core failures and advisories while preserving legacy fields", async () => {
     const gateway = failingSnapshot(["discord"]);
     const runtime = buildRuntimeReadiness({
       configLoaded: true,
@@ -526,7 +522,10 @@ describe("mergeReadinessResults", () => {
       },
     });
 
-    const result = mergeReadinessResults(gateway, runtime);
+    const result = await evaluateCanonicalGatewayReadiness({
+      evaluateGateway: () => gateway,
+      evaluateRuntime: async () => runtime,
+    });
 
     expect(result.ready).toBe(false);
     expect(result.failing).toEqual(["discord"]);
@@ -542,23 +541,6 @@ describe("mergeReadinessResults", () => {
       "PluginsLoaded",
     ]);
   });
-});
-
-describe("withReadinessEvaluationTimeout", () => {
-  it("rejects a readiness evaluation that never settles", async () => {
-    await expect(withReadinessEvaluationTimeout(new Promise<never>(() => {}), 5)).rejects.toThrow(
-      "readiness evaluation exceeded 5ms",
-    );
-  });
-
-  it("returns a readiness evaluation that settles inside the outer budget", async () => {
-    await expect(withReadinessEvaluationTimeout(Promise.resolve("ready"), 5)).resolves.toBe(
-      "ready",
-    );
-  });
-});
-
-describe("evaluateCanonicalGatewayReadiness", () => {
   it("returns a structured required failure when extended evaluation times out", async () => {
     const gateway = readySnapshot() as ReadinessResult;
     const result = await evaluateCanonicalGatewayReadiness({

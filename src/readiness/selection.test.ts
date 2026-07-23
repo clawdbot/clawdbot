@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { PluginReadinessCriterionRegistration } from "../plugins/registry-types.js";
-import { createSelectedReadinessResolver, resolveSelectedReadinessCriteria } from "./selection.js";
+import { createSelectedReadinessResolver } from "./selection.js";
 
 function pluginCriterion(): PluginReadinessCriterionRegistration {
   return {
@@ -21,24 +21,6 @@ function pluginCriterion(): PluginReadinessCriterionRegistration {
     },
   };
 }
-
-describe("resolveSelectedReadinessCriteria", () => {
-  it("lets required selection win over advisory selection defensively", () => {
-    expect(
-      resolveSelectedReadinessCriteria({
-        gateway: {
-          readiness: {
-            requiredCriteria: ["plugin.storage.backend"],
-            advisoryCriteria: ["plugin.storage.backend", "plugin.metrics.exporter"],
-          },
-        },
-      }),
-    ).toEqual([
-      { id: "plugin.storage.backend", requirement: "required" },
-      { id: "plugin.metrics.exporter", requirement: "advisory" },
-    ]);
-  });
-});
 
 describe("createSelectedReadinessResolver", () => {
   it("does no provider work when no criteria are selected", async () => {
@@ -58,7 +40,12 @@ describe("createSelectedReadinessResolver", () => {
     await expect(
       resolve({
         config: {
-          gateway: { readiness: { requiredCriteria: ["plugin.storage.backend"] } },
+          gateway: {
+            readiness: {
+              requiredCriteria: ["plugin.storage.backend"],
+              advisoryCriteria: ["plugin.storage.backend"],
+            },
+          },
         },
         registry: { readinessCriteria: [criterion] },
       }),

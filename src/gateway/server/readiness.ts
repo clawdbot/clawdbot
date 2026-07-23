@@ -12,7 +12,7 @@ import type { ChannelManager } from "../server-channels.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 /** Snapshot returned by the gateway readiness probe. */
-export type ReadinessResult = {
+type ReadinessResult = {
   ready: boolean;
   failing: string[];
   suppressed?: string[];
@@ -29,16 +29,16 @@ export type CanonicalGatewayReadinessResult = ReadinessResult & CanonicalReadine
 export type ReadinessChecker = () => ReadinessResult | Promise<ReadinessResult>;
 
 const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
-export const DEFAULT_READINESS_EVALUATION_TIMEOUT_MS = 2_000;
+const DEFAULT_READINESS_EVALUATION_TIMEOUT_MS = 2_000;
 
-export class ReadinessEvaluationTimeoutError extends Error {
+class ReadinessEvaluationTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`readiness evaluation exceeded ${timeoutMs}ms`);
     this.name = "ReadinessEvaluationTimeoutError";
   }
 }
 
-export async function withReadinessEvaluationTimeout<T>(
+async function withReadinessEvaluationTimeout<T>(
   evaluation: Promise<T>,
   timeoutMs = DEFAULT_READINESS_EVALUATION_TIMEOUT_MS,
 ): Promise<T> {
@@ -343,7 +343,7 @@ function withEventLoopHealth(
   };
 }
 
-export function mergeReadinessResults(
+function mergeReadinessResults(
   gateway: ReadinessResult,
   runtime: CanonicalReadinessResult,
 ): CanonicalGatewayReadinessResult {
