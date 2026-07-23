@@ -328,8 +328,9 @@ OpenClaw supports two "snapshot" styles:
 - If Playwright is unavailable, ARIA snapshots can still be useful for
   inspection, but refs may not be actionable. Re-snapshot with `--format ai`
   or `--interactive` when you need action refs.
-- Consecutive AI and role snapshots for the same profile, tab, and option family
-  append `[new]` to ref-bearing lines that were absent from the previous snapshot.
+- Consecutive AI and role snapshots for the same profile, tab, page URL, and
+  option family append `[new]` to ref-bearing lines that were absent from the
+  previous snapshot. Navigation starts a fresh unmarked baseline.
   The first snapshot establishes the baseline without markers; later responses
   also expose `newElements`, and add a count footer when the value is nonzero.
   Structured `--format aria` snapshots with `axN` refs do not use delta markers.

@@ -627,6 +627,7 @@ export function registerBrowserAgentSnapshotRoutes(
             ? getPreviousSnapshotKeys(ctx, {
                 profile: profileCtx.profile.name,
                 targetId: tab.targetId,
+                url: tab.url,
                 family: deltaFamily,
               })
             : undefined;
@@ -641,6 +642,7 @@ export function registerBrowserAgentSnapshotRoutes(
             recordSnapshotKeys(ctx, {
               profile: profileCtx.profile.name,
               targetId: tab.targetId,
+              url: tab.url,
               family: deltaFamily,
               refs,
             });
