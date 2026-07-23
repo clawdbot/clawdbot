@@ -9,6 +9,8 @@ import {
   createRecoveryPointManifest,
   verifyRecoveryPoint,
   verifyRecoveryPointManifest,
+  type RecoveryPointAcceptance,
+  type RecoveryPointManifest,
   type RecoveryPointSqliteSnapshot,
 } from "./recovery-point.js";
 import type { SnapshotManifest, SnapshotRef, SqliteSnapshotProvider } from "./snapshot-provider.js";
@@ -50,7 +52,7 @@ describe("recovery point composition", () => {
       ],
     } as const;
 
-    const first = await createRecoveryPointManifest({
+    const first: RecoveryPointManifest = await createRecoveryPointManifest({
       snapshots: [agent.snapshot, global.snapshot],
       expectedAgentIds: ["main"],
       obligations,
@@ -76,7 +78,8 @@ describe("recovery point composition", () => {
     ]);
     expect(first.obligations.external).toEqual(obligations.external);
     expect(first.components.every((component) => component.ownerManifestSizeBytes > 0)).toBe(true);
-    expect(createRecoveryPointAcceptance(first)).toEqual(createRecoveryPointAcceptance(second));
+    const firstAcceptance: RecoveryPointAcceptance = createRecoveryPointAcceptance(first);
+    expect(firstAcceptance).toEqual(createRecoveryPointAcceptance(second));
     expect(global.verify).toHaveBeenCalledTimes(4);
     expect(agent.verify).toHaveBeenCalledTimes(4);
   });
