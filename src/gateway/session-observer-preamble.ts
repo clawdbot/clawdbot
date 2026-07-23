@@ -77,15 +77,19 @@ export function createSessionObserverPreamblePublisher(params: {
       if (!headline) {
         return true;
       }
-      const entry = entries.get(state) ?? {
+      const existing = entries.get(state);
+      const previousHeadline =
+        lastHeadlines.get(state) ??
+        (state.previousDigest?.runId === state.runId ? state.previousDigest.headline : "");
+      if (!existing && previousHeadline === headline) {
+        return true;
+      }
+      const entry = existing ?? {
         headline: "",
         lastPublishedAt: 0,
         published: false,
         updatedAt: event.ts,
       };
-      const previousHeadline =
-        lastHeadlines.get(state) ??
-        (state.previousDigest?.runId === state.runId ? state.previousDigest.headline : "");
       if (previousHeadline !== headline) {
         generations.set(state, (generations.get(state) ?? 0) + 1);
       }
