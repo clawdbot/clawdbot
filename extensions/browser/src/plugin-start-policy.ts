@@ -4,7 +4,7 @@ function isTruthyEnvValue(value: string | undefined): boolean {
   return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
 }
 
-export type BrowserControlStartupMode = "server" | "service";
+type BrowserControlStartupMode = "server" | "service";
 
 /** Select the early-start owner without changing the standalone HTTP server contract. */
 export function resolveBrowserControlStartupMode(
