@@ -1,5 +1,6 @@
 // Elevenlabs provider module implements model/runtime integration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -370,17 +371,19 @@ async function listElevenLabsVoices(params: {
   timeoutMs?: number;
 }): Promise<SpeechVoiceOption[]> {
   const normalizedBaseUrl = normalizeElevenLabsBaseUrl(params.baseUrl);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${normalizedBaseUrl}/v1/voices`,
-    init: {
-      headers: {
-        "xi-api-key": params.apiKey,
+  const { response, release } = await fetchWithSsrFGuard(
+    withTrustedEnvProxyGuardedFetchMode({
+      url: `${normalizedBaseUrl}/v1/voices`,
+      init: {
+        headers: {
+          "xi-api-key": params.apiKey,
+        },
       },
-    },
-    timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
-    auditContext: "elevenlabs.voices",
-  });
+      timeoutMs: params.timeoutMs,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
+      auditContext: "elevenlabs.voices",
+    }),
+  );
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs voices API error");
     const json = await readProviderJsonResponse<{

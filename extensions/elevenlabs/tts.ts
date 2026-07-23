@@ -1,4 +1,5 @@
 // Elevenlabs plugin module implements tts behavior.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
@@ -213,21 +214,23 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
     stream: false,
   });
 
-  const { response, release } = await fetchWithSsrFGuard({
-    url: url.toString(),
-    init: {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        ...(acceptHeader ? { Accept: acceptHeader } : {}),
+  const { response, release } = await fetchWithSsrFGuard(
+    withTrustedEnvProxyGuardedFetchMode({
+      url: url.toString(),
+      init: {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          ...(acceptHeader ? { Accept: acceptHeader } : {}),
+        },
+        body,
       },
-      body,
-    },
-    timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
-    auditContext: "elevenlabs.tts",
-  });
+      timeoutMs,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
+      auditContext: "elevenlabs.tts",
+    }),
+  );
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
@@ -247,21 +250,23 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
     stream: true,
   });
 
-  const { response, release } = await fetchWithSsrFGuard({
-    url: url.toString(),
-    init: {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        ...(acceptHeader ? { Accept: acceptHeader } : {}),
+  const { response, release } = await fetchWithSsrFGuard(
+    withTrustedEnvProxyGuardedFetchMode({
+      url: url.toString(),
+      init: {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+          ...(acceptHeader ? { Accept: acceptHeader } : {}),
+        },
+        body,
       },
-      body,
-    },
-    timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
-    auditContext: "elevenlabs.tts.stream",
-  });
+      timeoutMs,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
+      auditContext: "elevenlabs.tts.stream",
+    }),
+  );
   let handedOff = false;
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
