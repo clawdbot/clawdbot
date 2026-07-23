@@ -957,15 +957,27 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       ...snapshot("probe", mocks.state.commitConfig),
       sourceConfig,
     };
-    const finalizeConfig = vi.fn((config: OpenClawConfig, source: OpenClawConfig) => ({
-      ...config,
-      plugins: source.plugins,
-    }));
+    const finalizeConfig = vi.fn((config: OpenClawConfig, source: OpenClawConfig) => {
+      const { list: _legacyList, ...agents } = config.agents ?? {};
+      return {
+        ...config,
+        agents: {
+          ...agents,
+          entries: { ops: { default: true, workspace: "/tmp/finalized-ops" } },
+        },
+        plugins: source.plugins,
+      };
+    });
 
     await applySystemAgentSetup(baseParams({ expectedConfigHash: "probe", finalizeConfig }));
 
     expect(finalizeConfig).toHaveBeenCalledWith(expect.any(Object), sourceConfig);
     expect(mocks.state.persistedConfig?.plugins).toEqual(sourceConfig.plugins);
+    expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
+      "/tmp/finalized-ops",
+      runtime,
+      expect.objectContaining({ agentId: "ops" }),
+    );
   });
 
   it("returns visible post-commit workspace, approval, registry, and service failures", async () => {

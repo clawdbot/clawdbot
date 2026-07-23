@@ -460,7 +460,6 @@ export async function applySystemAgentSetup(
         mode: "local",
       }),
       settings: gateway.settings,
-      workspace: resolveOnboardingAgentTarget(gateway.nextConfig).workspaceDir,
     };
   };
   const committed = await commit(
@@ -505,7 +504,6 @@ export async function applySystemAgentSetup(
             nextConfig: finalizedConfig,
             result: {
               settings: setupCandidate.settings,
-              workspace: setupCandidate.workspace,
             },
           };
         },
@@ -518,7 +516,7 @@ export async function applySystemAgentSetup(
     throw new Error("OpenClaw setup committed without resolved Gateway settings.");
   }
   const onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
-  const effectiveWorkspace = setupResult.workspace;
+  const effectiveWorkspace = onboardingTarget.workspaceDir;
   if (params.expectedInferenceRoute) {
     const afterRead = await readConfigFileSnapshotWithPluginMetadata();
     const afterSnapshot = afterRead.snapshot;
