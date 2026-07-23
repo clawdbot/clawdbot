@@ -63,22 +63,11 @@ vi.mock("../src/agents/agent-scope-config.js", async (importOriginal) => {
 
   return {
     ...actual,
-    listAgentEntriesWithSource: (cfg: OpenClawConfig) =>
-      actual.listAgentEntriesWithSource(materializeRoster(cfg)),
-    listAgentEntries: (cfg: OpenClawConfig) => actual.listAgentEntries(materializeRoster(cfg)),
     listAgentIds: (cfg: OpenClawConfig) => actual.listAgentIds(materializeRoster(cfg)),
     resolveDefaultAgentId: (cfg: OpenClawConfig) =>
       actual.resolveDefaultAgentId(materializeRoster(cfg)),
-    resolveAgentEntry: (cfg: OpenClawConfig, agentId: string) =>
-      actual.resolveAgentEntry(materializeRoster(cfg), agentId),
-    resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
-      actual.resolveAgentConfig(materializeRoster(cfg), agentId),
-    resolveAgentContextLimits: (cfg: OpenClawConfig | undefined, agentId?: string | null) =>
-      actual.resolveAgentContextLimits(cfg ? materializeRoster(cfg) : cfg, agentId),
     resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId: string, env?: NodeJS.ProcessEnv) =>
       actual.resolveAgentWorkspaceDir(materializeRoster(cfg), agentId, env),
-    resolveAgentDir: (cfg: OpenClawConfig, agentId: string, env?: NodeJS.ProcessEnv) =>
-      actual.resolveAgentDir(materializeRoster(cfg), agentId, env),
     resolveDefaultAgentDir: (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) =>
       actual.resolveDefaultAgentDir(materializeRoster(cfg), env),
   };
