@@ -141,4 +141,30 @@ describe("createWorkspaceReadinessEvidenceResolver", () => {
     });
     expect(probe).toHaveBeenCalledTimes(1);
   });
+
+  it("does not publish evidence from a retired config snapshot", async () => {
+    let releaseProbe:
+      | ((value: { writable: true; reason: string; message: string }) => void)
+      | undefined;
+    const probe = vi.fn(
+      () =>
+        new Promise<{ writable: true; reason: string; message: string }>((resolve) => {
+          releaseProbe = resolve;
+        }),
+    );
+    const resolveEvidence = createWorkspaceReadinessEvidenceResolver({
+      probe,
+      probeTimeoutMs: 500,
+    });
+    const firstConfig = { agents: { defaults: { workspace: "/workspace" } } };
+    const nextConfig = { agents: { defaults: { workspace: "/workspace" } } };
+    const first = resolveEvidence({ config: firstConfig });
+    const next = resolveEvidence({ config: nextConfig });
+
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    releaseProbe?.({ writable: true, reason: "WorkspaceWritable", message: "ready" });
+    await expect(first).resolves.toMatchObject({ reason: "WorkspaceNotChecked" });
+    await expect(next).resolves.toMatchObject({ reason: "WorkspaceNotChecked" });
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
 });

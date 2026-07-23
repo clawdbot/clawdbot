@@ -337,11 +337,18 @@ export async function startGatewayCoreRuntime(input: {
     runtimeState.gatewayMethods.length,
     ...listAttachedGatewayMethods(),
   );
-  const replaceAttachedPluginRuntime = (loaded: {
-    pluginRegistry: typeof pluginRuntime.registry;
-    gatewayMethods: string[];
-  }) => {
+  const replaceAttachedPluginRuntime = (
+    loaded: {
+      pluginRegistry: typeof pluginRuntime.registry;
+      gatewayMethods: string[];
+    },
+    readinessConfig = getRuntimeConfig(),
+  ) => {
     pluginRuntime.registry = loaded.pluginRegistry;
+    pluginRuntime.readinessSnapshot = {
+      config: readinessConfig,
+      registry: pluginRuntime.registry,
+    };
     pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
     for (const key of attachedPluginGatewayHandlerKeys) {
       delete attachedGatewayExtraHandlers[key];
@@ -503,7 +510,7 @@ export async function startGatewayCoreRuntime(input: {
       env: params.env,
       workspaceDir: defaultWorkspaceDir,
     });
-    replaceAttachedPluginRuntime(loaded);
+    replaceAttachedPluginRuntime(loaded, params.nextConfig);
     runtimeState.pluginServices = null;
     if (previousPluginServices) {
       await previousPluginServices.stop();
