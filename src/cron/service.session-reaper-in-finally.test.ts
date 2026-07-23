@@ -202,14 +202,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
     await saveCronStore(store.storePath, {
       version: 1,
-      jobs: [
-        createDueIsolatedJob({ id: "default-job", nowMs: now }),
-        {
-          ...createDueIsolatedJob({ id: "worker-job", nowMs: now }),
-          agentId: "worker",
-          enabled: false,
-        },
-      ],
+      jobs: [createDueIsolatedJob({ id: "default-job", nowMs: now })],
     });
     for (const agentId of ["main", "worker"]) {
       await replaceSessionEntry(
@@ -230,6 +223,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "done" }),
       defaultAgentId: "main",
+      resolveSessionStoreAgentIds: () => ["main", "worker"],
       sessionStorePath,
     });
 

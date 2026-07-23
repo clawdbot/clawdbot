@@ -636,25 +636,27 @@ async function onAdmittedTimer(state: CronServiceState) {
       typeof job.agentId === "string" && job.agentId.trim()
         ? normalizeAgentId(job.agentId)
         : resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
+    const configuredAgentIds = state.deps.resolveSessionStoreAgentIds?.() ?? [];
     if (state.deps.resolveSessionStorePath) {
       const defaultAgentId = sessionReaperDefaultAgentId!;
-      if (state.store?.jobs?.length) {
-        for (const job of state.store.jobs) {
-          const agentId = resolveJobAgentId(job, defaultAgentId);
-          addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
-        }
-      } else {
-        addStoreTarget(defaultAgentId, state.deps.resolveSessionStorePath(defaultAgentId));
+      for (const agentId of configuredAgentIds) {
+        const normalizedAgentId = normalizeAgentId(agentId);
+        addStoreTarget(normalizedAgentId, state.deps.resolveSessionStorePath(normalizedAgentId));
       }
+      for (const job of state.store?.jobs ?? []) {
+        const agentId = resolveJobAgentId(job, defaultAgentId);
+        addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
+      }
+      addStoreTarget(defaultAgentId, state.deps.resolveSessionStorePath(defaultAgentId));
     } else if (state.deps.sessionStorePath) {
       const defaultAgentId = sessionReaperDefaultAgentId!;
-      if (state.store?.jobs?.length) {
-        for (const job of state.store.jobs) {
-          addStoreTarget(resolveJobAgentId(job, defaultAgentId), state.deps.sessionStorePath);
-        }
-      } else {
-        addStoreTarget(defaultAgentId, state.deps.sessionStorePath);
+      for (const agentId of configuredAgentIds) {
+        addStoreTarget(normalizeAgentId(agentId), state.deps.sessionStorePath);
       }
+      for (const job of state.store?.jobs ?? []) {
+        addStoreTarget(resolveJobAgentId(job, defaultAgentId), state.deps.sessionStorePath);
+      }
+      addStoreTarget(defaultAgentId, state.deps.sessionStorePath);
     }
 
     if (storeTargets.size > 0) {
