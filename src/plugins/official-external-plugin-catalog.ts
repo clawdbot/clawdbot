@@ -263,10 +263,6 @@ type OfficialExternalProviderContract =
   | "webFetchProviders";
 
 const SUPPORTED_OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS = new Set([1, 2]);
-const officialExternalPluginCatalogEntrySchemaVersions = new WeakMap<
-  OfficialExternalPluginCatalogEntry,
-  number
->();
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL =
   "https://clawhub.ai/v1/feeds/plugins";
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE = "clawhub-public";
@@ -365,13 +361,9 @@ function parseOfficialExternalPluginCatalogEntries(
     return raw.filter((entry): entry is OfficialExternalPluginCatalogEntry => isRecord(entry));
   }
   if (isOfficialExternalPluginCatalogFeed(raw)) {
-    const entries = raw.entries.filter((entry): entry is OfficialExternalPluginCatalogEntry =>
+    return raw.entries.filter((entry): entry is OfficialExternalPluginCatalogEntry =>
       isRecord(entry),
     );
-    for (const entry of entries) {
-      officialExternalPluginCatalogEntrySchemaVersions.set(entry, raw.schemaVersion);
-    }
-    return entries;
   }
   if (!isRecord(raw)) {
     return [];
@@ -847,7 +839,7 @@ async function parseHostedCatalogFeedBody(params: {
       );
     }
     return {
-      feed: verification.feed,
+      feed: enforceHostedCatalogFeedInstallAuthority(verification.feed),
       trust: {
         mode: "signed",
         signedBy: verification.signedBy,
@@ -866,7 +858,25 @@ async function parseHostedCatalogFeedBody(params: {
       `hosted catalog feed id "${raw.id}" did not match expected "${params.expectedFeedId}"`,
     );
   }
-  return { feed: raw };
+  return { feed: enforceHostedCatalogFeedInstallAuthority(raw) };
+}
+
+function enforceHostedCatalogFeedInstallAuthority(
+  feed: OfficialExternalPluginCatalogFeed,
+): OfficialExternalPluginCatalogFeed {
+  if (feed.schemaVersion < 2) {
+    return feed;
+  }
+  return {
+    ...feed,
+    entries: feed.entries.map((entry) => {
+      const state = normalizeOptionalString(entry.state);
+      const publisherTrust = normalizeOptionalString(entry.publisher?.trust);
+      return state === "available" && publisherTrust === "official"
+        ? entry
+        : removeOfficialExternalPluginCatalogInstallAuthority(entry);
+    }),
+  };
 }
 
 class HostedCatalogFeedTimestampError extends Error {
@@ -1534,13 +1544,9 @@ export function resolveOfficialExternalPluginInstall(
 ): PluginPackageInstall | null {
   const state = normalizeOptionalString(entry.state);
   const publisherTrust = normalizeOptionalString(entry.publisher?.trust);
-  const feedSchemaVersion = officialExternalPluginCatalogEntrySchemaVersions.get(entry);
-  // Legacy schema-v1 entries inherit the feed's trust. Schema-v2 entries must carry their own
-  // complete authority pair; also fail closed if an unversioned entry declares only one field.
-  if (
-    ((feedSchemaVersion !== undefined && feedSchemaVersion >= 2) || state || publisherTrust) &&
-    (state !== "available" || publisherTrust !== "official")
-  ) {
+  // Legacy schema-v1 entries inherit the feed's trust. Hosted schema-v2 parsing strips install
+  // authority from incomplete entries; also fail closed if an unversioned entry declares one field.
+  if ((state || publisherTrust) && (state !== "available" || publisherTrust !== "official")) {
     return null;
   }
   const manifest = getOfficialExternalPluginCatalogManifest(entry);

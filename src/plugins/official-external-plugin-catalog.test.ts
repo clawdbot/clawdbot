@@ -592,6 +592,8 @@ describe("official external plugin catalog", () => {
     expect(disabled).not.toHaveProperty("featured");
     expect(resolveOfficialExternalPluginInstall(disabled)).toBeNull();
     expect(resolveOfficialExternalPluginInstall(community)).toBeNull();
+    expect(missingAuthority).toMatchObject({ state: "unavailable" });
+    expect(getOfficialExternalPluginCatalogManifest(missingAuthority)?.install).toBeUndefined();
     expect(resolveOfficialExternalPluginInstall(missingAuthority)).toBeNull();
   });
 
