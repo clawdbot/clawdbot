@@ -680,8 +680,8 @@ export const nl: TranslationMap = {
     openWorkboardCard: "Workboard-kaart openen",
     dashboardAvailable: "Dashboard beschikbaar",
     approvalNeeded: "Goedkeuring vereist",
-    queuedMessage: "{count} bericht in de wachtrij om te verzenden",
-    queuedMessages: "{count} berichten in de wachtrij om te verzenden",
+    queuedMessage: "{count} bericht in wachtrij om te verzenden",
+    queuedMessages: "{count} berichten in wachtrij om te verzenden",
     noSessions: "Geen sessies gevonden.",
     noActiveSessions: "Geen actieve threads.",
     noArchivedSessions: "Geen gearchiveerde sessies.",
@@ -3047,7 +3047,7 @@ export const nl: TranslationMap = {
     eventStale: "Verlopen sessie",
   },
   connection: {
-    queuedCount: "{count} in de wachtrij",
+    queuedCount: "{count} in wachtrij",
     reconnecting: "Opnieuw verbinden…",
     retryNow: "Nu opnieuw proberen",
     access: {
@@ -3719,6 +3719,16 @@ export const nl: TranslationMap = {
   },
   login: {
     subtitle: "Gateway-dashboard",
+    deviceAuthMigration: {
+      banner: "Deze browser heeft na de update nog eenmalige apparaatgoedkeuring nodig.",
+      action: "Deze browser beveiligen",
+      secureContextRequired:
+        "Deze verouderde browser blijft tijdelijk beschikbaar. Open hem opnieuw via HTTPS of localhost om hem te beveiligen met apparaatidentiteit.",
+      pendingUnavailable:
+        "Het koppelingsverzoek voor de browser is nog niet beschikbaar. Probeer het zo meteen opnieuw.",
+      loadFailed: "Kon het koppelingsverzoek van deze browser niet laden: {error}",
+      approvalFailed: "Kon deze browser niet beveiligen: {error}",
+    },
     passwordPlaceholder: "optioneel",
     showToken: "Token weergeven",
     hideToken: "Token verbergen",
@@ -4232,7 +4242,7 @@ export const nl: TranslationMap = {
       offlineHint:
         "Offline — berichten worden in de wachtrij geplaatst en verzonden zodra de verbinding terugkeert.",
       offlineQueuedHint:
-        "Offline — {count} in de wachtrij; berichten worden verzonden zodra de verbinding is hersteld.",
+        "Offline — {count} in wachtrij; berichten worden verzonden zodra de verbinding terug is.",
       preparingModel: "Model voorbereiden...",
       responding: "{name} reageert...",
       sendingMessage: "Bericht verzenden...",
