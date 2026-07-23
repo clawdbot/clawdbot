@@ -461,7 +461,12 @@ function isOpenClawSessionOwnerArgv(args: string[]): boolean {
     return false;
   }
   const exe = (normalized[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
-  if (exe === "openclaw" || exe.endsWith("/openclaw") || exe.endsWith("/openclaw-gateway")) {
+  if (
+    exe === "openclaw" ||
+    exe === "openclaw-gateway" ||
+    exe.endsWith("/openclaw") ||
+    exe.endsWith("/openclaw-gateway")
+  ) {
     return true;
   }
   if (
