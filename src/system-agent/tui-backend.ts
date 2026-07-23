@@ -503,18 +503,18 @@ async function requireTuiVerifiedInference(
   try {
     const route = await resolveSystemAgentVerifiedInferenceRoute(binding, opts.deps);
     if (route) {
-      const [{ loadPreparedModelCatalog }, { resolveThinkingDefault }] = await Promise.all([
+      const [{ getPreparedModelCatalogSnapshot }, { resolveThinkingDefault }] = await Promise.all([
         import("../agents/prepared-model-catalog.js"),
         import("../agents/model-thinking-default.js"),
       ]);
-      // Catalog metadata improves the label but must not become a new startup
-      // dependency after this exact inference route has already been verified.
-      const catalog = await loadPreparedModelCatalog({
+      // Reuse published lifecycle metadata without activating discovery on this
+      // verified startup path; provider hooks must not block the TUI.
+      const catalog = getPreparedModelCatalogSnapshot({
         config: route.runConfig,
         agentId: route.agentId,
         agentDir: route.agentDir,
         readOnly: true,
-      }).catch(() => undefined);
+      })?.entries;
       const model = splitModelRef(route.modelLabel);
       return {
         model: model.model,
