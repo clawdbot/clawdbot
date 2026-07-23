@@ -774,12 +774,42 @@ type RunPluginInstallCommandParams = {
   runtime?: RuntimeEnv;
 };
 
+class DeferredPluginInstallExit extends Error {
+  constructor(readonly code: number) {
+    super(`plugin install requested exit ${code}`);
+    this.name = "DeferredPluginInstallExit";
+  }
+}
+
+function deferPluginInstallRuntimeExit(runtime: RuntimeEnv): RuntimeEnv {
+  return {
+    ...runtime,
+    // Process exit must happen after the lifecycle lease unwinds; otherwise the
+    // persisted lease survives until expiry and blocks the next plugin mutation.
+    exit: (code) => {
+      throw new DeferredPluginInstallExit(code);
+    },
+  };
+}
+
 export async function runPluginInstallCommand(params: RunPluginInstallCommandParams) {
   assertConfigWriteAllowedInCurrentMode();
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginInstallCommandUnlocked(params),
-  );
+  const runtime = params.runtime ?? defaultRuntime;
+  try {
+    return await withPluginLifecycleLease(
+      {},
+      async () =>
+        await runPluginInstallCommandUnlocked({
+          ...params,
+          runtime: deferPluginInstallRuntimeExit(runtime),
+        }),
+    );
+  } catch (error) {
+    if (!(error instanceof DeferredPluginInstallExit)) {
+      throw error;
+    }
+    return runtime.exit(error.code);
+  }
 }
 
 async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandParams) {
