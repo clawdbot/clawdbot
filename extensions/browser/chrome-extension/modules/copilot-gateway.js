@@ -125,6 +125,9 @@ export class CopilotGatewayClient {
     this.statusListeners = new Set();
     this.lifecycle = null;
     this.tokenRecovery = null;
+    // Consecutive "pairing required" failures, so we back off the reconnect while
+    // waiting for the operator to approve this device instead of retrying every 2s.
+    this.pairingRetries = 0;
   }
 
   onEvent(listener) {
@@ -149,6 +152,7 @@ export class CopilotGatewayClient {
     }
     this.stop();
     this.url = gatewayScope;
+    this.pairingRetries = 0;
     const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
       loadIdentity: () => loadOrCreateCopilotIdentity(this.storage, gatewayScope),
       tokenStore: createCopilotTokenStore(this.storage, gatewayScope),
@@ -196,6 +200,7 @@ export class CopilotGatewayClient {
       onHello: (hello) => {
         this.ready = true;
         this.hello = hello;
+        this.pairingRetries = 0;
         this.#emitStatus({ state: "ready", label: "Gateway connected", hello });
       },
       onConnectFailure: (error, { plan }) => {
@@ -205,18 +210,26 @@ export class CopilotGatewayClient {
           void cleared.catch(() => undefined);
           this.tokenRecovery = { gatewayScope, protocol, cleared };
         }
+        const pairingRequired = details.code === "PAIRING_REQUIRED";
+        if (!pairingRequired) {
+          this.pairingRetries = 0;
+        }
         this.#emitStatus({
-          state: details.code === "PAIRING_REQUIRED" ? "approval" : "error",
+          state: pairingRequired ? "approval" : "error",
           label: error.message,
           requestId: typeof details.requestId === "string" ? details.requestId : undefined,
         });
         return {
           closeCode: 4008,
           closeReason: "connect failed",
-          reconnectDelayMs: details.code === "PAIRING_REQUIRED" ? 2_000 : undefined,
+          // Approval is a human step; back off 2s→30s while waiting instead of hammering
+          // the gateway every 2s. A successful connect (onHello) resets the delay.
+          reconnectDelayMs: pairingRequired
+            ? Math.min(2_000 * 2 ** this.pairingRetries++, 30_000)
+            : undefined,
           stop:
             details.code === "AUTH_DEVICE_TOKEN_MISMATCH" ||
-            (details.pauseReconnect === true && details.code !== "PAIRING_REQUIRED"),
+            (details.pauseReconnect === true && !pairingRequired),
         };
       },
       resolveClose: resolveCopilotClose,
