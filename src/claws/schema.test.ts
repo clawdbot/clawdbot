@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
-import type { ClawManifest, ClawSourceIdentity } from "./types.js";
+import type { ClawManifest, ClawOpenClawProfile, ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -60,7 +60,7 @@ const baseManifest = {
   ],
 } as const;
 
-const baseOpenClawProfile = {
+const baseOpenClawProfile: ClawOpenClawProfile = {
   schemaVersion: 1,
   agent: {
     groupChat: { mentionPatterns: ["@triage"] },
@@ -69,7 +69,7 @@ const baseOpenClawProfile = {
     heartbeat: { every: "30m", lightContext: true, skipWhenBusy: true },
     humanDelay: { mode: "natural" },
   },
-} as const;
+};
 
 function requireManifest(value: unknown = baseManifest): ClawManifest {
   const result = parseClawManifest(value);
