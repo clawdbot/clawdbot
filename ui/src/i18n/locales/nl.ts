@@ -599,6 +599,9 @@ export const nl: TranslationMap = {
     worktreeName: "Worktree-naam",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Worktree-namen gebruiken kleine letters, cijfers en koppeltekens.",
+    incognito: "Incognito",
+    incognitoDescription: "Bewaar deze thread alleen totdat de Gateway opnieuw wordt gestart",
+    startAsDraft: "Starten als concept",
     messagePlaceholder: "Waar moet deze sessie aan werken?",
     readingAttachment: "Bijlage lezen",
     start: "Sessie starten",
@@ -620,6 +623,7 @@ export const nl: TranslationMap = {
     limit: "Limiet",
     filters: "Filters",
     createdBy: "Gemaakt door {name}",
+    archivedBy: "Gearchiveerd door {name}",
     filterByCreator: "Filteren op maker",
     allCreators: "Alle personen",
     filterControls: "Sessiefilters",
@@ -750,6 +754,7 @@ export const nl: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "Incognitothread",
     cloudWorkerPlacement: "Cloudworker: {state}",
     cloudWorkerPlacementConflict: "Cloud worker: {state} · 1 workspaceconflict",
     cloudWorkerPlacementConflicts: "Cloud worker: {state} · {count} workspaceconflicten",
@@ -2422,6 +2427,8 @@ export const nl: TranslationMap = {
     toolRuns: "{count} uitvoeringen",
     identity: {
       title: "Identiteit",
+      menuLabel: "Identiteitsmenu",
+      menuButtonLabel: "Identiteits- en appmenu voor {name}",
       description: "Je profiel op deze gateway.",
       loading: "Je identiteit laden…",
       profileUnavailable: "Je identiteitsprofiel kon niet worden geladen.",
@@ -3831,6 +3838,9 @@ export const nl: TranslationMap = {
   },
   chat: {
     disconnected: "Verbinding met Gateway verbroken.",
+    sendErrors: {
+      activeLeafChanged: "De thread is van vertakking gewisseld — controleer en verstuur opnieuw.",
+    },
     waitingForApproval: "Wachten op goedkeuring…",
     startupStatus: {
       preparingWorkspace: "Werkruimte voorbereiden…",
@@ -3848,6 +3858,7 @@ export const nl: TranslationMap = {
       readOnly: "Alleen-lezen",
       suggest: "Voorstellen",
       draft: "Concept",
+      publishDraft: "Concept publiceren",
       members: "Leden",
       selected: "Lid",
       noPeople: "Geen gekoppelde personen gevonden.",
@@ -3867,6 +3878,7 @@ export const nl: TranslationMap = {
       copyPath: "Pad kopiëren",
       copyBranch: "Branchnaam kopiëren",
       copied: "Gekopieerd",
+      incognito: "Incognitothread",
       branches: "Threadvertakkingen",
       branchSwitchUnavailable: "Vertakking wisselen is niet beschikbaar terwijl de agent werkt.",
       branchSwitchRequiresAdmin:
@@ -4157,6 +4169,7 @@ export const nl: TranslationMap = {
       openInCanvas: "Openen in canvas",
       reply: "Beantwoorden",
       replyToMessage: "Op bericht reageren",
+      replyingTo: "Antwoord aan {name}",
       rewind: "Terugspoelen",
       rewindConfirm: "Terugspoelen naar voor dit bericht?",
       rewindToHere: "Naar hier terugspoelen",
