@@ -65,7 +65,6 @@ export type ClawOpenClawProfile = {
       };
       lightContext?: boolean;
       isolatedSession?: boolean;
-      skipWhenBusy?: boolean;
       timeoutSeconds?: number;
     };
     humanDelay?: {

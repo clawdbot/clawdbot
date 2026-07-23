@@ -42,6 +42,7 @@ describe("OpenClaw profile schema", () => {
 
   it("rejects invalid profile policy", () => {
     for (const agent of [
+      { heartbeat: { skipWhenBusy: true } },
       { tools: { profile: "future-profile" } },
       { tools: { allow: ["read"], alsoAllow: ["write"] } },
       { memory: { search: { provider: "openai" } } },
@@ -181,6 +182,27 @@ describe("OpenClaw profile reader", () => {
         schemaVersion: 1,
         agent: { id: "triage" },
         metadata: { "openclaw.config": "../openclaw.yml" },
+      }),
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(path);
+
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: "invalid_openclaw_profile_path" })],
+    });
+  });
+
+  it("rejects a backslash profile path", async () => {
+    const root = tempDirs.make("openclaw-claw-profile-backslash-path-");
+    const path = join(root, "openclaw.claw.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "triage" },
+        metadata: { "openclaw.config": "profiles\\openclaw.yml" },
       }),
       "utf8",
     );

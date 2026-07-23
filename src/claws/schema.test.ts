@@ -66,7 +66,7 @@ const baseOpenClawProfile: ClawOpenClawProfile = {
     groupChat: { mentionPatterns: ["@triage"] },
     sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
     tools: { allow: ["read", "write"], deny: ["exec"] },
-    heartbeat: { every: "30m", lightContext: true, skipWhenBusy: true },
+    heartbeat: { every: "30m", lightContext: true },
     humanDelay: { mode: "natural" },
   },
 };

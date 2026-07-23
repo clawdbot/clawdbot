@@ -180,7 +180,7 @@ function classifyAgentCapability(
   if (path === "heartbeat.every") {
     return classifyHeartbeatEvery(current, desired);
   }
-  if (path === "heartbeat.isolatedSession" || path === "heartbeat.skipWhenBusy") {
+  if (path === "heartbeat.isolatedSession") {
     return desired === true ? "reduction" : "escalation";
   }
   if (path === "heartbeat.timeoutSeconds") {
@@ -273,7 +273,6 @@ function pushAgentCapabilityChanges(params: {
     ["heartbeat", "every"],
     ["heartbeat", "activeHours"],
     ["heartbeat", "isolatedSession"],
-    ["heartbeat", "skipWhenBusy"],
     ["heartbeat", "timeoutSeconds"],
   ] as const;
   for (const field of fields) {

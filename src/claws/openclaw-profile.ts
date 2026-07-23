@@ -93,13 +93,17 @@ export async function readClawOpenClawProfile(params: {
   if (declaredPath === undefined) {
     return { ok: true };
   }
-  if (!isSafeClawRelativePath(declaredPath) || !/\.ya?ml$/i.test(declaredPath)) {
+  if (
+    declaredPath.includes("\\") ||
+    !isSafeClawRelativePath(declaredPath) ||
+    !/\.ya?ml$/i.test(declaredPath)
+  ) {
     return {
       ok: false,
       diagnostics: [
         diagnostic(
           "invalid_openclaw_profile_path",
-          "metadata.openclaw.config must reference a package-relative .yml or .yaml file.",
+          "metadata.openclaw.config must reference a forward-slash package-relative .yml or .yaml file.",
           "$.metadata.openclaw.config",
         ),
       ],

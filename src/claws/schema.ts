@@ -170,7 +170,6 @@ const openClawProfileSchema = z
               .optional(),
             lightContext: z.boolean().optional(),
             isolatedSession: z.boolean().optional(),
-            skipWhenBusy: z.boolean().optional(),
             timeoutSeconds: z.number().int().positive().optional(),
           })
           .strict()
