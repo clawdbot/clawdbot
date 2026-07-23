@@ -128,14 +128,9 @@ export function createPluginReadinessResolver(options?: {
         rawPending: true,
       };
       cache.set(registration, entry);
-      void raw.then(
-        () => {
-          entry.rawPending = false;
-        },
-        () => {
-          entry.rawPending = false;
-        },
-      );
+      void value.then(() => {
+        entry.rawPending = false;
+      });
       return value;
     });
     return Promise.all(evaluated);
