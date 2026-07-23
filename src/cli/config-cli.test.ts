@@ -106,6 +106,7 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
+  resolvePluginMetadataEnvFingerprint: () => "test-plugin-metadata-env",
   resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
     mockLoadPluginMetadataSnapshot(params.config),
 }));
