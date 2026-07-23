@@ -585,6 +585,27 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(community)).toBeNull();
   });
 
+  it("requires complete schema-v2 install authority when either trust field is present", () => {
+    const manifestInstall = { install: { npmSpec: "@acme/untrusted" } };
+
+    expect(
+      resolveOfficialExternalPluginInstall({
+        name: "@acme/missing-state",
+        kind: "plugin",
+        publisher: { id: "acme", trust: "community" },
+        openclaw: manifestInstall,
+      }),
+    ).toBeNull();
+    expect(
+      resolveOfficialExternalPluginInstall({
+        name: "@acme/missing-publisher",
+        kind: "plugin",
+        state: "available",
+        openclaw: manifestInstall,
+      }),
+    ).toBeNull();
+  });
+
   it("reads and updates hosted catalog snapshots in the SQLite store", async () => {
     const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-hosted-store-"));
     try {

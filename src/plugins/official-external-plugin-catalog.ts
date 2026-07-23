@@ -1525,10 +1525,10 @@ export function resolveOfficialExternalPluginInstall(
   params?: { catalogConfig?: OfficialExternalPluginCatalogProfileConfig },
 ): PluginPackageInstall | null {
   const state = normalizeOptionalString(entry.state);
-  if (
-    state &&
-    (state !== "available" || normalizeOptionalString(entry.publisher?.trust) !== "official")
-  ) {
+  const publisherTrust = normalizeOptionalString(entry.publisher?.trust);
+  // Legacy schema-v1 entries have neither field and inherit the signed feed's trust. Once an
+  // entry declares either schema-v2 authority field, require the complete fail-closed pair.
+  if ((state || publisherTrust) && (state !== "available" || publisherTrust !== "official")) {
     return null;
   }
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
