@@ -657,8 +657,8 @@ export const th: TranslationMap = {
     openWorkboardCard: "เปิดการ์ด Workboard",
     dashboardAvailable: "มีแดชบอร์ดพร้อมใช้งาน",
     approvalNeeded: "ต้องการการอนุมัติ",
-    queuedMessage: "{count} ข้อความอยู่ในคิวเพื่อส่ง",
-    queuedMessages: "{count} ข้อความอยู่ในคิวเพื่อส่ง",
+    queuedMessage: "มีข้อความ {count} รายการรอส่ง",
+    queuedMessages: "มีข้อความ {count} รายการรอส่ง",
     noSessions: "ไม่พบเซสชัน",
     noActiveSessions: "ไม่มีเธรดที่ใช้งานอยู่",
     noArchivedSessions: "ไม่มีเซสชันที่จัดเก็บ",
@@ -2980,7 +2980,7 @@ export const th: TranslationMap = {
     eventStale: "เซสชันหมดอายุ",
   },
   connection: {
-    queuedCount: "{count} อยู่ในคิว",
+    queuedCount: "รอดำเนินการ {count} รายการ",
     reconnecting: "กำลังเชื่อมต่อใหม่…",
     retryNow: "ลองอีกครั้งตอนนี้",
     access: {
@@ -4141,7 +4141,7 @@ export const th: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "ออฟไลน์ — ข้อความจะถูกจัดคิวและส่งเมื่อการเชื่อมต่อกลับมา",
-      offlineQueuedHint: "ออฟไลน์ — {count} อยู่ในคิว ข้อความจะถูกส่งเมื่อการเชื่อมต่อกลับมา",
+      offlineQueuedHint: "ออฟไลน์ — มีข้อความรอส่ง {count} รายการ; ระบบจะส่งข้อความเมื่อเชื่อมต่ออีกครั้ง",
       preparingModel: "กำลังเตรียมโมเดล...",
       responding: "{name} กำลังตอบกลับ...",
       sendingMessage: "กำลังส่งข้อความ...",

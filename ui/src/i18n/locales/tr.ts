@@ -675,8 +675,8 @@ export const tr: TranslationMap = {
     openWorkboardCard: "Workboard kartını aç",
     dashboardAvailable: "Pano kullanılabilir",
     approvalNeeded: "Onay gerekli",
-    queuedMessage: "Gönderilmek üzere {count} mesaj sıraya alındı",
-    queuedMessages: "Gönderilmek üzere {count} mesaj sıraya alındı",
+    queuedMessage: "{count} mesaj gönderilmek üzere sıraya alındı",
+    queuedMessages: "{count} mesaj gönderilmek üzere sıraya alındı",
     noSessions: "Oturum bulunamadı.",
     noActiveSessions: "Etkin konu yok.",
     noArchivedSessions: "Arşivlenmiş oturum yok.",
@@ -4241,7 +4241,7 @@ export const tr: TranslationMap = {
       offlineHint:
         "Çevrimdışı — mesajlar sıraya alınacak ve bağlantı geri geldiğinde gönderilecek.",
       offlineQueuedHint:
-        "Çevrimdışı — {count} sırada; mesajlar bağlantı geri geldiğinde gönderilir.",
+        "Çevrimdışı — {count} mesaj sırada; bağlantı yeniden kurulduğunda mesajlar gönderilir.",
       preparingModel: "Model hazırlanıyor...",
       responding: "{name} yanıtlıyor...",
       sendingMessage: "Mesaj gönderiliyor...",

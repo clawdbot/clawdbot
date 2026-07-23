@@ -672,8 +672,8 @@ export const fa: TranslationMap = {
     openWorkboardCard: "باز کردن کارت Workboard",
     dashboardAvailable: "داشبورد در دسترس است",
     approvalNeeded: "نیازمند تأیید",
-    queuedMessage: "{count} پیام در صف ارسال",
-    queuedMessages: "{count} پیام در صف ارسال",
+    queuedMessage: "{count} پیام در صف ارسال است",
+    queuedMessages: "{count} پیام در صف ارسال هستند",
     noSessions: "هیچ نشستی پیدا نشد.",
     noActiveSessions: "هیچ رشته فعالی نیست.",
     noArchivedSessions: "هیچ نشست بایگانی‌شده‌ای نیست.",
@@ -3025,7 +3025,7 @@ export const fa: TranslationMap = {
     eventStale: "نشست منقضی‌شده",
   },
   connection: {
-    queuedCount: "{count} در صف",
+    queuedCount: "{count} مورد در صف",
     reconnecting: "در حال اتصال مجدد…",
     retryNow: "اکنون دوباره تلاش کنید",
     access: {
@@ -4212,7 +4212,8 @@ export const fa: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "آفلاین — پیام‌ها در صف قرار می‌گیرند و هنگام بازگشت اتصال ارسال می‌شوند.",
-      offlineQueuedHint: "آفلاین — {count} در صف؛ پیام‌ها هنگام بازگشت اتصال ارسال می‌شوند.",
+      offlineQueuedHint:
+        "آفلاین — {count} پیام در صف است؛ پیام‌ها پس از برقراری مجدد اتصال ارسال می‌شوند.",
       preparingModel: "در حال آماده‌سازی مدل...",
       responding: "{name} در حال پاسخ‌دهی است...",
       sendingMessage: "در حال ارسال پیام...",

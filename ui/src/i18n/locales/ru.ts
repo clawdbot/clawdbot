@@ -677,8 +677,8 @@ export const ru: TranslationMap = {
     openWorkboardCard: "Открыть карточку Workboard",
     dashboardAvailable: "Панель доступна",
     approvalNeeded: "Требуется подтверждение",
-    queuedMessage: "{count} сообщение в очереди на отправку",
-    queuedMessages: "{count} сообщений в очереди на отправку",
+    queuedMessage: "{count} сообщение ожидает отправки",
+    queuedMessages: "{count} сообщений ожидают отправки",
     noSessions: "Сеансы не найдены.",
     noActiveSessions: "Нет активных тредов.",
     noArchivedSessions: "Нет архивных сессий.",
@@ -3053,7 +3053,7 @@ export const ru: TranslationMap = {
     eventStale: "Устаревший сеанс",
   },
   connection: {
-    queuedCount: "{count} в очереди",
+    queuedCount: "В очереди: {count}",
     reconnecting: "Повторное подключение…",
     retryNow: "Повторить сейчас",
     access: {
@@ -4254,7 +4254,7 @@ export const ru: TranslationMap = {
       offlineHint:
         "Не в сети — сообщения будут поставлены в очередь и отправлены при восстановлении соединения.",
       offlineQueuedHint:
-        "Не в сети — {count} в очереди; сообщения будут отправлены при восстановлении соединения.",
+        "Нет подключения — в очереди: {count}; сообщения будут отправлены после восстановления подключения.",
       preparingModel: "Подготовка модели...",
       responding: "{name} отвечает...",
       sendingMessage: "Отправка сообщения...",
