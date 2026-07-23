@@ -29,7 +29,7 @@ describe("Claude live configured exec policy", () => {
           },
         },
       },
-    } as PreparedCliRunContext;
+    } as unknown as PreparedCliRunContext;
 
     expect(readConfiguredExecPolicy(context)).toEqual({
       agentId: "ops",
