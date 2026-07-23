@@ -687,8 +687,8 @@ export const fr: TranslationMap = {
     openWorkboardCard: "Ouvrir la carte Workboard",
     dashboardAvailable: "Tableau de bord disponible",
     approvalNeeded: "Approbation requise",
-    queuedMessage: "{count} message en file d'attente à envoyer",
-    queuedMessages: "{count} messages en file d'attente à envoyer",
+    queuedMessage: "{count} message en attente d’envoi",
+    queuedMessages: "{count} messages en attente d’envoi",
     noSessions: "Aucune session trouvée.",
     noActiveSessions: "Aucun fil actif.",
     noArchivedSessions: "Aucune session archivée.",
@@ -3094,7 +3094,7 @@ export const fr: TranslationMap = {
     eventStale: "Session inactive",
   },
   connection: {
-    queuedCount: "{count} en file d'attente",
+    queuedCount: "{count} en attente",
     reconnecting: "Reconnexion…",
     retryNow: "Réessayer maintenant",
     access: {
@@ -4305,7 +4305,7 @@ export const fr: TranslationMap = {
       offlineHint:
         "Hors ligne — les messages seront mis en file d'attente et envoyés au retour de la connexion.",
       offlineQueuedHint:
-        "Hors ligne — {count} en file d'attente ; les messages sont envoyés au retour de la connexion.",
+        "Hors ligne — {count} en attente ; les messages seront envoyés une fois la connexion rétablie.",
       preparingModel: "Préparation du modèle...",
       responding: "{name} répond...",
       sendingMessage: "Envoi du message...",
