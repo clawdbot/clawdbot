@@ -21,7 +21,7 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
@@ -645,7 +645,9 @@ export async function collectStateDeepFilesystemFindings(params: {
   const agentScope = await loadAgentScopeModule();
   const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
   const defaultAgentId = agentScope.resolveDefaultAgentId(params.cfg);
-  const ids = uniqueStrings([defaultAgentId, ...agentIds]).map((id) => normalizeAgentId(id));
+  const ids = uniqueStrings([LEGACY_IMPLICIT_AGENT_ID, defaultAgentId, ...agentIds]).map((id) =>
+    normalizeAgentId(id),
+  );
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");

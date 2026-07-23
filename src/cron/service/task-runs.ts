@@ -222,25 +222,27 @@ function tryCreateCronTaskRunRecord(params: {
   childSessionKey?: string;
 }): string | undefined {
   try {
+    const explicitJobAgentId = params.job?.agentId?.trim();
+    const childSessionKey =
+      params.childSessionKey ??
+      (params.job
+        ? resolveCronTaskChildSessionKey({
+            state: params.state,
+            job: params.job,
+            startedAt: params.startedAt,
+          })
+        : undefined);
     const task = createRunningTaskRun({
       runtime: "cron",
       sourceId: params.jobId,
       ownerKey: "",
       scopeKind: "system",
-      childSessionKey:
-        params.childSessionKey ??
-        (params.job
-          ? resolveCronTaskChildSessionKey({
-              state: params.state,
-              job: params.job,
-              startedAt: params.startedAt,
-            })
-          : undefined),
+      childSessionKey,
       agentId:
-        params.job?.agentId ??
-        (params.childSessionKey
+        (explicitJobAgentId ? normalizeAgentId(explicitJobAgentId) : undefined) ??
+        (childSessionKey
           ? resolveAgentIdFromSessionKey(
-              params.childSessionKey,
+              childSessionKey,
               resolveCurrentDefaultAgentId(params.state),
             )
           : requireCronAgentId(resolveCurrentDefaultAgentId(params.state))),

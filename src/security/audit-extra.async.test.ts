@@ -365,7 +365,7 @@ Read the requested file and summarize it.
     }
 
     const findings = await collectStateDeepFilesystemFindings({
-      cfg: { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig,
+      cfg: { agents: { list: [{ id: "ops", default: true }] } } as OpenClawConfig,
       env: {},
       stateDir,
       platform: "linux",

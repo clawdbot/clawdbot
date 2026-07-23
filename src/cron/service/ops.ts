@@ -11,6 +11,7 @@ import {
 import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   clearCronJobActive,
@@ -560,10 +561,13 @@ function resolveJobLastRunStatus(job: CronJob): CronJobsLastRunStatusFilter {
 }
 
 function resolveEffectiveJobAgentId(
-  job: { agentId?: string | null },
+  job: { agentId?: string | null; sessionKey?: string | null },
   defaultAgentId: string | undefined,
 ) {
-  const agentId = normalizeOptionalAgentId(job.agentId) ?? normalizeOptionalAgentId(defaultAgentId);
+  const agentId =
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(parseAgentSessionKey(job.sessionKey)?.agentId) ??
+    normalizeOptionalAgentId(defaultAgentId);
   if (!agentId) {
     throw new Error("Cron job requires an agent id or prepared configured default.");
   }
@@ -595,7 +599,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       }
       if (
         requestedAgentId &&
-        resolveEffectiveJobAgentId(job, state.deps.defaultAgentId) !== requestedAgentId
+        resolveEffectiveJobAgentId(job, resolveCurrentDefaultAgentId(state)) !== requestedAgentId
       ) {
         return false;
       }

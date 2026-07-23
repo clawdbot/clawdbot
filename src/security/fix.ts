@@ -9,7 +9,7 @@ import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runExec } from "../process/exec.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
 type SecurityFixChmodAction = {
@@ -337,6 +337,7 @@ async function collectSecurityPermissionTargets(params: {
   }
 
   const ids = new Set<string>();
+  ids.add(LEGACY_IMPLICIT_AGENT_ID);
   ids.add(resolveDefaultAgentId(params.cfg));
   for (const agent of listAgentEntries(params.cfg)) {
     if (!agent || typeof agent !== "object") {
