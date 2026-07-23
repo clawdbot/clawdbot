@@ -153,6 +153,47 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
+  it("synthesizes terminal health when the final model request becomes stale", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let utilityModelRef: string | undefined = "openai/gpt-a";
+    let resolveModel: ((value: ReturnType<typeof modelMessage>) => void) | undefined;
+    const harness = createHarness({
+      completeModel: vi.fn(
+        () =>
+          new Promise<ReturnType<typeof modelMessage>>((resolve) => {
+            resolveModel = resolve;
+          }),
+      ),
+      resolveUtilityModelRef: vi.fn(() => utilityModelRef),
+    });
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Running tests" },
+      }),
+    );
+    harness.observer.handleEvent(
+      event({
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 0, endedAt: 40_000 },
+      }),
+    );
+    await flushObserver();
+    expect(harness.completeModel).toHaveBeenCalledOnce();
+
+    utilityModelRef = "openai/gpt-b";
+    resolveModel?.(modelMessage({ headline: "Stale final model", health: "done" }));
+    await flushObserver();
+
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Running tests",
+      health: "done",
+      revision: 2,
+    });
+    harness.observer.dispose();
+  });
+
   it("does not cap model-free preamble headlines at six sessions", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

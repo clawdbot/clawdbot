@@ -133,4 +133,40 @@ describe("session observer preamble publisher", () => {
     expect(publisher.generation(session)).toBe(1);
     publisher.dispose();
   });
+
+  it("preserves duplicate suppression across dormant-state revival", () => {
+    const original = state("Earlier headline");
+    const publish = vi.fn();
+    const publisher = createSessionObserverPreamblePublisher({
+      now: () => 1_000,
+      setTimeoutFn: setTimeout,
+      clearTimeoutFn: clearTimeout,
+      isCurrent: () => true,
+      publish,
+    });
+    publisher.handle(original, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: 1_000,
+      sessionKey: original.sessionKey,
+      agentId: original.agentId,
+      data: { kind: "preamble", progressText: "Checking files" },
+    });
+
+    const revived = state("Reviewing the implementation");
+    revived.lastPreambleHeadline = original.lastPreambleHeadline;
+    publisher.handle(revived, {
+      runId: "run-1",
+      seq: 2,
+      stream: "item",
+      ts: 2_000,
+      sessionKey: revived.sessionKey,
+      agentId: revived.agentId,
+      data: { kind: "preamble", progressText: "Checking files" },
+    });
+
+    expect(publish).toHaveBeenCalledOnce();
+    publisher.dispose();
+  });
 });

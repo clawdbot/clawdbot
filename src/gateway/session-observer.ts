@@ -11,10 +11,10 @@ import { getAgentRunContext } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createSessionObserverAskRuntime } from "./session-observer-ask.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
+import { createSessionObserverCompletion } from "./session-observer-completion.js";
 import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
 import { createSessionObserverModelSlots } from "./session-observer-model-slots.js";
 import {
-  buildSessionObserverPrompt,
   createDormantSessionObserverRun,
   defaultCompleteModel,
   defaultPersistDigest,
@@ -22,17 +22,13 @@ import {
   defaultReadSession,
   isTerminalLifecycleEvent,
   markSessionObserverRunSuperseded,
-  normalizeSessionObserverModelOutput,
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
   rememberSessionObserverRevisionFloor,
-  SESSION_OBSERVER_MODEL_MAX_TOKENS,
-  SESSION_OBSERVER_SYSTEM_PROMPT,
   synthesizeSessionObserverTerminalDigest,
 } from "./session-observer-model.js";
 import type {
   DormantSessionObserverRun,
-  PreparedModel,
   SessionObserverDeps,
   SessionObserverRevisionFloor,
   SessionObserverState,
@@ -44,7 +40,6 @@ const observerLog = createSubsystemLogger("gateway/session-observer");
 
 const MIN_NOTES_PER_DIGEST = 4;
 const MIN_DIGEST_INTERVAL_MS = 12_000;
-const MODEL_TIMEOUT_MS = 10_000;
 const MAX_DIGESTS_PER_RUN = 40;
 const MAX_LIVE_DIGESTS_PER_RUN = MAX_DIGESTS_PER_RUN - 1;
 const MAX_CONSECUTIVE_FAILURES = 2;
@@ -116,7 +111,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       deps.broadcastToConnIds("session.observer", digest, audience.recipients(state.sessionKey), {
         dropIfSlow: true,
       });
-      void persistAcceptedDigest(state, digest, false);
+      void persistAcceptedDigest(state, digest, false, "preamble");
     },
   });
 
@@ -249,91 +244,15 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     );
   }
 
-  const ensurePrepared = async (state: SessionObserverState): Promise<PreparedModel> => {
-    const modelRef = state.utilityModelRef;
-    if (!modelRef) {
-      throw new Error("session observer utility model is unavailable");
-    }
-    state.preparedPromise ??= prepareModel({
-      cfg: deps.getConfig(),
-      agentId: state.agentId,
-      modelRef,
-      useUtilityModel: true,
-      allowMissingApiKeyModes: ["aws-sdk"],
-    });
-    return await state.preparedPromise;
-  };
-
-  const requestModelDigest = async (state: SessionObserverState, notes: readonly string[]) => {
-    const controller = new AbortController();
-    state.activeController = controller;
-    const timeout = setTimeoutFn(() => controller.abort(), MODEL_TIMEOUT_MS);
-    const aborted = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener(
-        "abort",
-        () => reject(new Error("session observer model call timed out or was cancelled")),
-        { once: true },
-      );
-    });
-    try {
-      const execute = async () => {
-        const prepared = await ensurePrepared(state);
-        if (!modelStateIsCurrent(state) || controller.signal.aborted) {
-          throw new Error("session observer state is no longer active");
-        }
-        if ("error" in prepared) {
-          throw new Error(prepared.error);
-        }
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          if (!modelStateIsCurrent(state) || controller.signal.aborted) {
-            throw new Error("session observer state is no longer active");
-          }
-          const result = await completeModel({
-            model: prepared.model,
-            auth: prepared.auth,
-            cfg: deps.getConfig(),
-            context: {
-              systemPrompt: SESSION_OBSERVER_SYSTEM_PROMPT,
-              messages: [
-                {
-                  role: "user",
-                  content: buildSessionObserverPrompt(state, notes),
-                  timestamp: now(),
-                },
-              ],
-            },
-            options: {
-              maxTokens: Math.min(
-                SESSION_OBSERVER_MODEL_MAX_TOKENS,
-                Math.floor(prepared.model.maxTokens),
-              ),
-              temperature: 0.2,
-              signal: controller.signal,
-            },
-          });
-          if (result.stopReason === "error") {
-            throw new Error(result.errorMessage?.trim() || "session observer completion failed");
-          }
-          const text = result.content
-            .filter((block): block is { type: "text"; text: string } => block.type === "text")
-            .map((block) => block.text)
-            .join("")
-            .trim();
-          const parsed = normalizeSessionObserverModelOutput(text);
-          if (parsed) {
-            return parsed;
-          }
-        }
-        throw new Error("session observer returned invalid JSON twice");
-      };
-      return await Promise.race([execute(), aborted]);
-    } finally {
-      clearTimeoutFn(timeout);
-      if (state.activeController === controller) {
-        state.activeController = undefined;
-      }
-    }
-  };
+  const requestModelDigest = createSessionObserverCompletion({
+    getConfig: deps.getConfig,
+    prepareModel,
+    completeModel,
+    now,
+    setTimeoutFn,
+    clearTimeoutFn,
+    isCurrent: modelStateIsCurrent,
+  });
 
   const pendingNotes = (state: SessionObserverState) =>
     state.notes.filter((note) => note.sequence > state.lastDigestNoteSequence);
@@ -422,12 +341,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           state,
           selectedNotes.map((note) => note.text),
         );
-        if (
+        const stale =
           !modelStateIsCurrent(state) ||
           !modelSlots.requestIsCurrent(state, requestGeneration) ||
           (!final && state.terminalHealth !== undefined) ||
-          preamblePublisher.generation(state) !== requestedPreambleGeneration
-        ) {
+          preamblePublisher.generation(state) !== requestedPreambleGeneration;
+        if (stale) {
+          if (final && states.get(state.sessionKey) === state) {
+            void synthesizeTerminalDigest({ state });
+            dormantRuns.delete(state.runId);
+            dropState(state);
+          }
           return;
         }
         // A session reset swaps sessionId under the same key; a digest accepted
@@ -464,11 +388,16 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           dormantRuns.delete(state.runId);
         }
       } catch (error) {
-        if (
+        const stale =
           !modelStateIsCurrent(state) ||
           !modelSlots.requestIsCurrent(state, requestGeneration) ||
-          (!final && state.terminalHealth !== undefined)
-        ) {
+          (!final && state.terminalHealth !== undefined);
+        if (stale) {
+          if (final && states.get(state.sessionKey) === state) {
+            void synthesizeTerminalDigest({ state });
+            dormantRuns.delete(state.runId);
+            dropState(state);
+          }
           return;
         }
         state.consecutiveFailures += 1;

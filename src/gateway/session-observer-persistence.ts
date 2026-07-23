@@ -11,10 +11,17 @@ export function createSessionObserverDigestPersister(params: {
   stillCurrent: (runId: string, sessionKey: string) => () => boolean;
   onError: (state: SessionObserverState, error: unknown) => void;
 }) {
-  return async (state: SessionObserverState, digest: SessionObserverDigest, final: boolean) => {
+  const preamblePersistedAt = new WeakMap<SessionObserverState, number>();
+  return async (
+    state: SessionObserverState,
+    digest: SessionObserverDigest,
+    final: boolean,
+    kind: "model" | "preamble" = "model",
+  ) => {
+    const lastPersistedAt =
+      kind === "preamble" ? preamblePersistedAt.get(state) : state.lastPersistedAt;
     const due =
-      state.lastPersistedAt === undefined ||
-      params.now() - state.lastPersistedAt >= PERSIST_INTERVAL_MS;
+      lastPersistedAt === undefined || params.now() - lastPersistedAt >= PERSIST_INTERVAL_MS;
     if (!final && !due) {
       return;
     }
@@ -30,7 +37,11 @@ export function createSessionObserverDigestPersister(params: {
           stillCurrent: params.stillCurrent(state.runId, state.sessionKey),
         });
         if (accepted) {
-          state.lastPersistedAt = params.now();
+          if (kind === "preamble") {
+            preamblePersistedAt.set(state, params.now());
+          } else {
+            state.lastPersistedAt = params.now();
+          }
         }
         return;
       } catch (error) {
