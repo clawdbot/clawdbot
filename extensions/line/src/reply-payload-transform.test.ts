@@ -450,6 +450,30 @@ describe("parseLineDirectives", () => {
     });
   });
 
+  describe("overlong action payloads", () => {
+    it("caps device control postback data despite an overlong device name", () => {
+      // The device slug is embedded in every control's postback data; an unbounded
+      // name pushes the data past LINE's 300-unit action cap and the whole flex
+      // message would come back HTTP 400.
+      const longName = "Very Long Device Name ".repeat(30);
+      const result = parseLineDirectives({
+        text: `[[device: ${longName} | Streaming Box | Playing | Play/Pause:toggle]]`,
+      });
+      const flexMessage = requireFlexMessage(getLineData(result).flexMessage, "long device name");
+      const footer = flexMessage.contents?.footer as {
+        contents?: Array<{ contents?: Array<{ action?: { data?: string } }> }>;
+      };
+      const datas = (footer?.contents ?? [])
+        .flatMap((row) => row.contents ?? [])
+        .flatMap((button) => (button.action?.data ? [button.action.data] : []));
+
+      expect(datas.length).toBeGreaterThan(0);
+      for (const data of datas) {
+        expect(data.length).toBeLessThanOrEqual(300);
+      }
+    });
+  });
+
   describe("appletv_remote", () => {
     it("parses appletv remote variants", () => {
       const cases = [

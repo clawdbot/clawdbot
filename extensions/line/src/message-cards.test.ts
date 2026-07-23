@@ -5,6 +5,7 @@ import { datetimePickerAction, messageAction, postbackAction, uriAction } from "
 import { registerLineCardCommand } from "./card-command.js";
 import {
   createActionCard,
+  createAppleTvRemoteCard,
   createCarousel,
   createDeviceControlCard,
   createEventCard,
@@ -14,6 +15,7 @@ import {
   createMediaPlayerCard,
 } from "./flex-templates.js";
 import {
+  buildTemplateMessageFromPayload,
   createConfirmTemplate,
   createButtonTemplate,
   createTemplateCarousel,
@@ -477,6 +479,108 @@ describe("action label/data surrogate-safe truncation", () => {
 
     expect(extraAction?.label).toBe("x".repeat(14));
     expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
+  });
+
+  it("uriAction truncates uri on surrogate boundaries", () => {
+    // 999 code units + 😀 = 1001; the 1000-unit slice cuts the emoji.
+    const uri = `https://e.example/?q=${"u".repeat(978)}😀`;
+    const action = uriAction("Open", uri) as { uri: string };
+
+    expect(action.uri).toBe(`https://e.example/?q=${"u".repeat(978)}`);
+    expect(loneHighSurrogate.test(action.uri)).toBe(false);
+  });
+
+  it("buttons template payload uri actions truncate past the 1000-unit cap", () => {
+    const template = buildTemplateMessageFromPayload({
+      type: "buttons",
+      text: "Pick",
+      actions: [{ type: "uri", label: "Open", uri: `https://e.example/?q=${"u".repeat(1200)}` }],
+    });
+
+    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
+      actions: Array<{ uri?: string }>;
+    };
+    const uriTemplateAction = expectDefined(
+      buttonsTemplate.actions[0],
+      "buttons template uri action",
+    );
+    expect(uriTemplateAction.uri).toHaveLength(1000);
+  });
+
+  it("media control postback data truncates on surrogate boundaries", () => {
+    // 299 code units + 😀 = 301; the 300-unit slice cuts the emoji.
+    const overlongData = `${"d".repeat(299)}😀`;
+    const card = createMediaPlayerCard({
+      title: "Track",
+      controls: {
+        previous: { data: overlongData },
+        play: { data: overlongData },
+        pause: { data: overlongData },
+        next: { data: overlongData },
+      },
+      extraActions: [{ label: "Extra", data: overlongData }],
+    });
+    const footer = card.footer as {
+      contents: Array<{ contents?: Array<{ action?: { data?: string } }> }>;
+    };
+    const datas = footer.contents
+      .flatMap((content) => content.contents ?? [])
+      .flatMap((button) => (button.action?.data ? [button.action.data] : []));
+
+    expect(datas).toHaveLength(5);
+    for (const data of datas) {
+      expect(data).toBe("d".repeat(299));
+      expect(loneHighSurrogate.test(data)).toBe(false);
+    }
+  });
+
+  it("device control postback data truncates on surrogate boundaries", () => {
+    const card = createDeviceControlCard({
+      deviceName: "Device",
+      controls: [{ label: "On", data: `${"d".repeat(299)}😀` }],
+    });
+    const footer = card.footer as {
+      contents: Array<{ contents: Array<{ action?: { data: string } }> }>;
+    };
+    const action = footer.contents
+      .flatMap((row) => row.contents)
+      .find((button) => button.action)?.action;
+
+    expect(action?.data).toBe("d".repeat(299));
+    expect(loneHighSurrogate.test(action?.data ?? "")).toBe(false);
+  });
+
+  it("apple tv remote postback data truncates on surrogate boundaries", () => {
+    const overlongData = `${"d".repeat(299)}😀`;
+    const card = createAppleTvRemoteCard({
+      deviceName: "TV",
+      actionData: {
+        up: overlongData,
+        down: overlongData,
+        left: overlongData,
+        right: overlongData,
+        select: overlongData,
+        menu: overlongData,
+        home: overlongData,
+        play: overlongData,
+        pause: overlongData,
+        volumeUp: overlongData,
+        volumeDown: overlongData,
+        mute: overlongData,
+      },
+    });
+    const body = card.body as {
+      contents: Array<{ contents?: Array<{ action?: { data?: string } }> }>;
+    };
+    const datas = body.contents
+      .flatMap((row) => row.contents ?? [])
+      .flatMap((button) => (button.action?.data ? [button.action.data] : []));
+
+    expect(datas).toHaveLength(12);
+    for (const data of datas) {
+      expect(data).toBe("d".repeat(299));
+      expect(loneHighSurrogate.test(data)).toBe(false);
+    }
   });
 });
 

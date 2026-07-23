@@ -5,12 +5,13 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 export type Action = messagingApi.Action;
 const LINE_ACTION_LABEL_LIMIT = 20;
 const LINE_ACTION_DATA_LIMIT = 300;
+const LINE_ACTION_URI_LIMIT = 1000;
 
 export function truncateLineActionLabel(label: string, limit = LINE_ACTION_LABEL_LIMIT): string {
   return truncateUtf16Safe(label, limit);
 }
 
-function truncateLineActionData(data: string): string {
+export function truncateLineActionData(data: string): string {
   return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
 }
 
@@ -32,7 +33,7 @@ export function uriAction(label: string, uri: string): Action {
   return {
     type: "uri",
     label: truncateLineActionLabel(label),
-    uri,
+    uri: truncateUtf16Safe(uri, LINE_ACTION_URI_LIMIT),
   };
 }
 

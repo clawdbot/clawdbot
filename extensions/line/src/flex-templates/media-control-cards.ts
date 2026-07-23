@@ -1,5 +1,5 @@
 // Line plugin module implements media control cards behavior.
-import { truncateLineActionLabel } from "../actions.js";
+import { truncateLineActionData, truncateLineActionLabel } from "../actions.js";
 import type {
   FlexBox,
   FlexBubble,
@@ -161,7 +161,7 @@ export function createMediaPlayerCard(params: {
           action: {
             type: "postback",
             label: "⏮",
-            data: controls.previous.data,
+            data: truncateLineActionData(controls.previous.data),
           },
           style: "secondary",
           flex: 1,
@@ -175,7 +175,7 @@ export function createMediaPlayerCard(params: {
           action: {
             type: "postback",
             label: "▶",
-            data: controls.play.data,
+            data: truncateLineActionData(controls.play.data),
           },
           style: isPlaying ? "secondary" : "primary",
           flex: 1,
@@ -190,7 +190,7 @@ export function createMediaPlayerCard(params: {
           action: {
             type: "postback",
             label: "⏸",
-            data: controls.pause.data,
+            data: truncateLineActionData(controls.pause.data),
           },
           style: isPlaying ? "primary" : "secondary",
           flex: 1,
@@ -205,7 +205,7 @@ export function createMediaPlayerCard(params: {
           action: {
             type: "postback",
             label: "⏭",
-            data: controls.next.data,
+            data: truncateLineActionData(controls.next.data),
           },
           style: "secondary",
           flex: 1,
@@ -235,7 +235,7 @@ export function createMediaPlayerCard(params: {
               action: {
                 type: "postback",
                 label: truncateLineActionLabel(action.label, 15),
-                data: action.data,
+                data: truncateLineActionData(action.data),
               },
               style: "secondary",
               flex: 1,
@@ -315,7 +315,7 @@ export function createAppleTvRemoteCard(params: {
     action: {
       type: "postback",
       label,
-      data,
+      data: truncateLineActionData(data),
     },
     style,
     height: "sm",
@@ -519,7 +519,7 @@ export function createDeviceControlCard(params: {
           action: {
             type: "postback",
             label: truncateLineActionLabel(buttonLabel, 18),
-            data: ctrl.data,
+            data: truncateLineActionData(ctrl.data),
           },
           style: ctrl.style ?? "secondary",
           flex: 1,
