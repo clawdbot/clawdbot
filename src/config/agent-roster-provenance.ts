@@ -3,14 +3,29 @@ import { isRecord } from "../utils.js";
 import { INCLUDE_KEY } from "./includes.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
-function containsIncludeDirective(value: unknown): boolean {
+function rosterEntryBoundaryContainsInclude(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (Object.hasOwn(value, INCLUDE_KEY)) {
+    return true;
+  }
+  return [value.id, value.default].some(
+    (field) => isRecord(field) && Object.hasOwn(field, INCLUDE_KEY),
+  );
+}
+
+function authoredRosterBoundaryContainsInclude(value: unknown): boolean {
+  if (isRecord(value) && Object.hasOwn(value, INCLUDE_KEY)) {
+    return true;
+  }
   if (Array.isArray(value)) {
-    return value.some(containsIncludeDirective);
+    return value.some(rosterEntryBoundaryContainsInclude);
   }
   if (!isRecord(value)) {
     return false;
   }
-  return Object.hasOwn(value, INCLUDE_KEY) || Object.values(value).some(containsIncludeDirective);
+  return Object.values(value).some(rosterEntryBoundaryContainsInclude);
 }
 
 function readRosterValue(raw: unknown): unknown {
@@ -23,6 +38,14 @@ function readRosterValue(raw: unknown): unknown {
   return Object.hasOwn(raw.agents, "list") ? raw.agents.list : undefined;
 }
 
+/**
+ * Roster include ownership decision table:
+ * - Include-owned: an include contributes membership or default metadata at agents.entries/list,
+ *   an entry object, an id/default field, a nested entries/list $include, or an ambiguous
+ *   byte-identical roster contribution.
+ * - Locally owned: ancestor includes contribute only unrelated config, or an include is nested
+ *   inside entry-internal identity/model/etc. fields that cannot change membership or default.
+ */
 export function includeContributionOwnsAgentRoster(event: {
   path: readonly string[];
   value: unknown;
@@ -36,7 +59,18 @@ export function includeContributionOwnsAgentRoster(event: {
       (Object.hasOwn(event.value, "entries") || Object.hasOwn(event.value, "list"))
     );
   }
-  return event.path[0] === "agents" && (event.path[1] === "entries" || event.path[1] === "list");
+  if (event.path[0] !== "agents") {
+    return false;
+  }
+  if (event.path[1] === "entries") {
+    return event.path.length <= 3 || event.path[3] === "default";
+  }
+  if (event.path[1] === "list") {
+    // IncludeProcessor keeps array items at the list's logical owner path: an
+    // item include is agents.list, while its id/default fields occupy path[2].
+    return event.path.length <= 2 || event.path[2] === "id" || event.path[2] === "default";
+  }
+  return false;
 }
 
 /** Whether include/env resolution produced a non-empty roster before raw migrations. */
@@ -55,7 +89,7 @@ export function configIncludeOwnsAgentRosterValues(params: {
     return false;
   }
   const authoredRoster = readRosterValue(params.parsed);
-  if (containsIncludeDirective(authoredRoster)) {
+  if (authoredRosterBoundaryContainsInclude(authoredRoster)) {
     return true;
   }
   return params.includeContributesRoster === true;

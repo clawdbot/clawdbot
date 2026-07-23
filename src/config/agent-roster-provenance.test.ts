@@ -116,6 +116,46 @@ describe("agent roster include provenance", () => {
       includeOwned: true,
       expected: true,
     },
+    {
+      label: "entry-internal identity include",
+      parsed: {
+        agents: {
+          entries: {
+            main: {
+              default: true,
+              identity: { $include: "./identity.json" },
+            },
+          },
+        },
+      },
+      resolved: {
+        agents: {
+          entries: {
+            main: {
+              default: true,
+              identity: { name: "Main" },
+            },
+          },
+        },
+      },
+      includeOwned: false,
+      expected: false,
+    },
+    {
+      label: "legacy list membership id include",
+      parsed: {
+        agents: {
+          list: [{ id: { $include: "./id.json" }, default: true }],
+        },
+      },
+      resolved: {
+        agents: {
+          list: [{ id: "10", default: true }],
+        },
+      },
+      includeOwned: false,
+      expected: true,
+    },
   ])("classifies $label", ({ parsed, resolved, includeOwned, expected }) => {
     expect(
       configIncludeOwnsAgentRoster(

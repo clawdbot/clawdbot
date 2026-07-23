@@ -138,6 +138,56 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
+  it("keeps an entry-internal identity include locally roster-owned", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            entries: {
+              main: {
+                default: true,
+                identity: { $include: "./identity.json" },
+              },
+            },
+          },
+        }),
+      );
+      await fs.writeFile(path.join(configDir, "identity.json"), JSON.stringify({ name: "Main" }));
+      resetConfigRuntimeState();
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.includeProvenance?.agentRoster).toBe(false);
+      expect(configIncludeOwnsAgentRoster(snapshot)).toBe(false);
+    });
+  });
+
+  it("records a legacy list id include as roster-owned", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({
+          agents: {
+            list: [{ id: { $include: "./agent-id.json" }, default: true }],
+          },
+        }),
+      );
+      await fs.writeFile(path.join(configDir, "agent-id.json"), JSON.stringify("10"));
+      resetConfigRuntimeState();
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.sourceConfigBeforeMigrations?.agents?.list?.[0]?.id).toBe("10");
+      expect(snapshot.includeProvenance?.agentRoster).toBe(true);
+      expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
+    });
+  });
+
   it("preserves malformed agents values for validation", () => {
     expect(migratePersistedImplicitMainRoster({ agents: "invalid" })).toEqual({
       config: { agents: "invalid" },
