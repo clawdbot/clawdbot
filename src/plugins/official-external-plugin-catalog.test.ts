@@ -916,7 +916,7 @@ describe("official external plugin catalog", () => {
       const initial = await loadHostedCatalog({
         feedProfile: "acme",
         catalogConfig,
-        fetchImpl: vi.fn(async () => new Response(accepted.body, { status: 200 })),
+        fetchImpl: vi.fn(async () => dsseResponse(accepted.body, { status: 200 })),
         snapshotStore,
       });
       expect(initial.source).toBe("hosted");
@@ -924,7 +924,7 @@ describe("official external plugin catalog", () => {
       const result = await loadHostedCatalog({
         feedProfile: "acme",
         catalogConfig,
-        fetchImpl: vi.fn(async () => new Response(conflicting.body, { status: 200 })),
+        fetchImpl: vi.fn(async () => dsseResponse(conflicting.body, { status: 200 })),
         snapshotStore,
       });
 
@@ -1051,7 +1051,7 @@ describe("official external plugin catalog", () => {
       const acceptedPrevious = await loadHostedCatalog({
         feedProfile: "acme",
         catalogConfig: signedCatalogConfig(previous.publicKeyPem, "acme-root-2026-q2"),
-        fetchImpl: vi.fn(async () => new Response(previous.body, { status: 200 })),
+        fetchImpl: vi.fn(async () => dsseResponse(previous.body, { status: 200 })),
         now: () => new Date("2026-06-22T00:00:08.000Z"),
         snapshotStore,
       });
@@ -1060,7 +1060,7 @@ describe("official external plugin catalog", () => {
       const acceptedCurrent = await loadHostedCatalog({
         feedProfile: "acme",
         catalogConfig: signedCatalogConfig(current.publicKeyPem, "acme-root-2026-q3"),
-        fetchImpl: vi.fn(async () => new Response(current.body, { status: 200 })),
+        fetchImpl: vi.fn(async () => dsseResponse(current.body, { status: 200 })),
         now: () => new Date("2026-06-22T00:00:09.000Z"),
         snapshotStore,
       });
@@ -1078,7 +1078,7 @@ describe("official external plugin catalog", () => {
       const rejectedRollback = await loadHostedCatalog({
         feedProfile: "acme",
         catalogConfig: signedCatalogConfig(rolledBack.publicKeyPem, "acme-root-2026-q4"),
-        fetchImpl: vi.fn(async () => new Response(rolledBack.body, { status: 200 })),
+        fetchImpl: vi.fn(async () => dsseResponse(rolledBack.body, { status: 200 })),
         now: () => new Date("2026-06-22T00:00:10.000Z"),
         snapshotStore,
       });
@@ -1141,7 +1141,7 @@ describe("official external plugin catalog", () => {
       const result = await loadHostedCatalog({
         feedProfile: "acme",
         catalogConfig: signedCatalogConfig(repaired.publicKeyPem, "acme-root-2026-q3"),
-        fetchImpl: vi.fn(async () => new Response(repaired.body, { status: 200 })),
+        fetchImpl: vi.fn(async () => dsseResponse(repaired.body, { status: 200 })),
         snapshotStore,
       });
 
@@ -1228,7 +1228,7 @@ describe("official external plugin catalog", () => {
     const live = await loadHostedCatalog({
       feedProfile: "acme",
       catalogConfig,
-      fetchImpl: vi.fn(async () => new Response(legacyBody, { status: 200 })),
+      fetchImpl: vi.fn(async () => dsseResponse(legacyBody, { status: 200 })),
       snapshotStore: null,
     });
 
@@ -1490,6 +1490,29 @@ describe("official external plugin catalog", () => {
     if (result.source === "bundled-fallback") {
       expect(result.error).toContain(expectedError);
     }
+  });
+
+  it.each([
+    ["configured profile", {}],
+    ["direct feed URL override", { feedUrl: "https://clawhub.ai/v1/feeds/plugins" }],
+  ])("keeps a legacy signed profile without feedId usable via %s", async (_label, options) => {
+    const signed = signedHostedCatalogFeed({
+      feed: hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/legacy-profile" }),
+    });
+    const catalogConfig = signedCatalogConfig(signed.publicKeyPem);
+    delete catalogConfig.feeds?.acme?.feedId;
+
+    const result = await loadHostedCatalog({
+      feedProfile: "acme",
+      ...options,
+      catalogConfig,
+      fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.feed?.id).toBe("openclaw-official-external-plugins");
+    expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
   });
 
   it("preserves signed profile verification for direct feed URL overrides", async () => {

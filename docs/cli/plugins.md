@@ -569,11 +569,18 @@ deployments can inject both `OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID` and
 fetch. Public keys must come from a trusted release or operator channel, not
 from a key endpoint on the feed host.
 
-OpenClaw verifies the DSSE envelope and then requires its decoded payload ID to
-match the selected profile's `feedId`, preventing a valid document for one feed
-from being replayed through another profile. The feed-profile configuration
-surface is landing separately with the presentation metadata needed by Control
-UI; this trust binding does not restore the retired root `marketplaces` key.
+OpenClaw verifies the DSSE envelope and, when a profile declares `feedId`,
+requires the decoded payload ID to match it. The built-in `clawhub-public`
+profile always declares its identity, preventing a valid document for another
+feed from being replayed through that profile.
+
+During the staged rollout, existing custom signed profiles that omit `feedId`
+retain signature verification without payload-identity binding. New custom
+profiles should declare `feedId`. The feed-profile configuration surface is
+landing separately with the presentation metadata needed by Control UI; its
+Doctor diagnostic must ask the operator to supply a missing identity and must
+not infer one from the feed URL. This trust binding does not restore the retired
+root `marketplaces` key.
 
 ## Related
 

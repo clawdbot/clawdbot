@@ -510,11 +510,6 @@ function resolveHostedCatalogFeedSource(params: {
     if (profileName !== undefined && !profile) {
       throw new Error(`hosted catalog feed profile "${profileName}" is not configured`);
     }
-    if (profile?.verification?.mode === "signed" && !profile.feedId) {
-      throw new HostedCatalogTrustConfigurationError(
-        `signed hosted catalog feed profile "${profileName}" requires feedId`,
-      );
-    }
     return {
       url,
       hostnameAllowlist: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST,
@@ -530,11 +525,6 @@ function resolveHostedCatalogFeedSource(params: {
   const profile = profileConfig.feeds[profileName];
   if (!profile) {
     throw new Error(`hosted catalog feed profile "${profileName}" is not configured`);
-  }
-  if (profile.verification?.mode === "signed" && !profile.feedId) {
-    throw new HostedCatalogTrustConfigurationError(
-      `signed hosted catalog feed profile "${profileName}" requires feedId`,
-    );
   }
   const url = resolveHostedCatalogFeedUrl(profile.url);
   return {
