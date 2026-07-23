@@ -93,4 +93,64 @@ describe("buildRuntimeReadiness", () => {
       expect.objectContaining({ type: "plugin.storage.backend", requirement: "required" }),
     );
   });
+
+  it("orders workspace before core probes and plugin criteria by id", () => {
+    const readiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: { errors: [] },
+      additionalConditions: [
+        {
+          type: "plugin.z.last",
+          status: "True",
+          requirement: "advisory",
+          reason: "LastReady",
+          message: "Last is ready.",
+        },
+        {
+          type: "WorkspaceWritable",
+          status: "True",
+          requirement: "required",
+          reason: "WorkspaceWritable",
+          message: "Workspace is writable.",
+        },
+        {
+          type: "plugin.a.first",
+          status: "True",
+          requirement: "advisory",
+          reason: "FirstReady",
+          message: "First is ready.",
+        },
+      ],
+    });
+
+    expect(readiness.conditions.map((condition) => condition.type)).toEqual([
+      "ConfigLoaded",
+      "WorkspaceWritable",
+      "GatewayResponding",
+      "PluginsLoaded",
+      "plugin.a.first",
+      "plugin.z.last",
+    ]);
+  });
+
+  it("redacts and bounds plugin loader failures", () => {
+    const readiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: {
+        errors: [
+          {
+            id: "storage",
+            activated: true,
+            error: `password=super-secret-value-that-must-not-escape ${"x".repeat(700)}`,
+          },
+        ],
+      },
+    });
+    const condition = readiness.conditions.find((entry) => entry.type === "PluginsLoaded");
+
+    expect(condition?.message).not.toContain("super-secret-value-that-must-not-escape");
+    expect(Buffer.byteLength(condition?.message ?? "", "utf8")).toBeLessThanOrEqual(512);
+  });
 });
