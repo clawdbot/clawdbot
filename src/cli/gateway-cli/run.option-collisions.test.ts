@@ -1525,6 +1525,7 @@ describe("gateway run option collisions", () => {
 
     expect(process.env.OPENCLAW_HOSTING_PROFILE).toBe("container");
     expect(startGatewayServer).toHaveBeenCalledOnce();
+    expect(gatewayStartOptions().hostingProfileOverride).toBe("container");
   });
 
   it("rejects unsupported hosting profiles before gateway startup", async () => {
