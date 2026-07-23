@@ -263,6 +263,10 @@ type OfficialExternalProviderContract =
   | "webFetchProviders";
 
 const SUPPORTED_OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS = new Set([1, 2]);
+const officialExternalPluginCatalogEntrySchemaVersions = new WeakMap<
+  OfficialExternalPluginCatalogEntry,
+  number
+>();
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL =
   "https://clawhub.ai/v1/feeds/plugins";
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE = "clawhub-public";
@@ -361,9 +365,13 @@ function parseOfficialExternalPluginCatalogEntries(
     return raw.filter((entry): entry is OfficialExternalPluginCatalogEntry => isRecord(entry));
   }
   if (isOfficialExternalPluginCatalogFeed(raw)) {
-    return raw.entries.filter((entry): entry is OfficialExternalPluginCatalogEntry =>
+    const entries = raw.entries.filter((entry): entry is OfficialExternalPluginCatalogEntry =>
       isRecord(entry),
     );
+    for (const entry of entries) {
+      officialExternalPluginCatalogEntrySchemaVersions.set(entry, raw.schemaVersion);
+    }
+    return entries;
   }
   if (!isRecord(raw)) {
     return [];
@@ -1526,9 +1534,13 @@ export function resolveOfficialExternalPluginInstall(
 ): PluginPackageInstall | null {
   const state = normalizeOptionalString(entry.state);
   const publisherTrust = normalizeOptionalString(entry.publisher?.trust);
-  // Legacy schema-v1 entries have neither field and inherit the signed feed's trust. Once an
-  // entry declares either schema-v2 authority field, require the complete fail-closed pair.
-  if ((state || publisherTrust) && (state !== "available" || publisherTrust !== "official")) {
+  const feedSchemaVersion = officialExternalPluginCatalogEntrySchemaVersions.get(entry);
+  // Legacy schema-v1 entries inherit the feed's trust. Schema-v2 entries must carry their own
+  // complete authority pair; also fail closed if an unversioned entry declares only one field.
+  if (
+    ((feedSchemaVersion !== undefined && feedSchemaVersion >= 2) || state || publisherTrust) &&
+    (state !== "available" || publisherTrust !== "official")
+  ) {
     return null;
   }
   const manifest = getOfficialExternalPluginCatalogManifest(entry);

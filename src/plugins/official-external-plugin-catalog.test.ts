@@ -557,6 +557,14 @@ describe("official external plugin catalog", () => {
             ],
           },
         },
+        {
+          type: "plugin",
+          id: "@acme/missing-authority",
+          version: "1.0.0",
+          openclaw: {
+            install: { npmSpec: "@acme/missing-authority" },
+          },
+        },
       ],
     });
     const result = await loadHostedCatalog({
@@ -569,9 +577,10 @@ describe("official external plugin catalog", () => {
       "@acme/trusted",
       "@acme/disabled",
       "@acme/community",
+      "@acme/missing-authority",
     ]);
-    const [trusted, disabled, community] = result.entries;
-    if (!trusted || !disabled || !community) {
+    const [trusted, disabled, community, missingAuthority] = result.entries;
+    if (!trusted || !disabled || !community || !missingAuthority) {
       throw new Error("expected schema-v2 marketplace entries");
     }
     expect(resolveOfficialExternalPluginInstall(trusted)).toEqual({
@@ -583,6 +592,7 @@ describe("official external plugin catalog", () => {
     expect(disabled).not.toHaveProperty("featured");
     expect(resolveOfficialExternalPluginInstall(disabled)).toBeNull();
     expect(resolveOfficialExternalPluginInstall(community)).toBeNull();
+    expect(resolveOfficialExternalPluginInstall(missingAuthority)).toBeNull();
   });
 
   it("requires complete schema-v2 install authority when either trust field is present", () => {
