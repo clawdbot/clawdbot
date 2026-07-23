@@ -239,9 +239,7 @@ export async function buildClawAddPlan(params: {
   const agentCapabilityEffect = {
     ...(params.manifest.agent.sandbox ? { sandbox: params.manifest.agent.sandbox } : {}),
     ...(params.manifest.agent.tools ? { tools: params.manifest.agent.tools } : {}),
-    ...(params.manifest.agent.memorySearch
-      ? { memorySearch: params.manifest.agent.memorySearch }
-      : {}),
+    ...(params.manifest.agent.memory ? { memory: params.manifest.agent.memory } : {}),
     ...(params.manifest.agent.heartbeat ? { heartbeat: params.manifest.agent.heartbeat } : {}),
   };
   if (Object.keys(agentCapabilityEffect).length > 0) {

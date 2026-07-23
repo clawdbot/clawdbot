@@ -105,29 +105,34 @@ const agentSchema = z
         }
       })
       .optional(),
-    memorySearch: z
+    memory: z
       .object({
-        enabled: z.boolean().optional(),
-        rememberAcrossConversations: z.boolean().optional(),
-        sources: z
-          .array(z.enum(["memory", "sessions"]))
-          .min(1)
+        search: z
+          .object({
+            enabled: z.boolean().optional(),
+            rememberAcrossConversations: z.boolean().optional(),
+            sources: z
+              .array(z.enum(["memory", "sessions"]))
+              .min(1)
+              .optional(),
+          })
+          .strict()
+          .superRefine((search, ctx) => {
+            if (
+              search.sources?.includes("sessions") &&
+              search.rememberAcrossConversations !== true
+            ) {
+              ctx.addIssue({
+                code: "custom",
+                path: ["rememberAcrossConversations"],
+                message:
+                  "The sessions source requires rememberAcrossConversations: true in a portable Claw.",
+              });
+            }
+          })
           .optional(),
       })
       .strict()
-      .superRefine((memorySearch, ctx) => {
-        if (
-          memorySearch.sources?.includes("sessions") &&
-          memorySearch.rememberAcrossConversations !== true
-        ) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["rememberAcrossConversations"],
-            message:
-              "The sessions source requires rememberAcrossConversations: true in a portable Claw.",
-          });
-        }
-      })
       .optional(),
     heartbeat: z
       .object({

@@ -152,10 +152,12 @@ describe("parseClawManifest", () => {
           deny: ["exec"],
           fs: { workspaceOnly: true },
         },
-        memorySearch: {
-          enabled: true,
-          rememberAcrossConversations: true,
-          sources: ["memory", "sessions"],
+        memory: {
+          search: {
+            enabled: true,
+            rememberAcrossConversations: true,
+            sources: ["memory", "sessions"],
+          },
         },
       },
     });
@@ -167,8 +169,8 @@ describe("parseClawManifest", () => {
     for (const agent of [
       { id: "worker", tools: { profile: "future-profile" } },
       { id: "worker", tools: { allow: ["read"], alsoAllow: ["write"] } },
-      { id: "worker", memorySearch: { provider: "openai" } },
-      { id: "worker", memorySearch: { sources: ["sessions"] } },
+      { id: "worker", memory: { search: { provider: "openai" } } },
+      { id: "worker", memory: { search: { sources: ["sessions"] } } },
     ]) {
       expect(parseClawManifest({ schemaVersion: 1, agent }).ok).toBe(false);
     }

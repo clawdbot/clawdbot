@@ -53,10 +53,11 @@ agent:
     deny: [exec]
     fs:
       workspaceOnly: true
-  memorySearch:
-    enabled: true
-    rememberAcrossConversations: true
-    sources: [memory, sessions]
+  memory:
+    search:
+      enabled: true
+      rememberAcrossConversations: true
+      sources: [memory, sessions]
 workspace:
   bootstrapFiles: {}
 packages: []
@@ -77,7 +78,7 @@ Portable agent policy may select any built-in tool profile registered by the
 running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
 `tools.fs.workspaceOnly`. `tools.allow` remains available as an explicit
 allowlist but cannot be combined with `alsoAllow`. A Claw may also set
-`memorySearch.enabled`, choose the portable `memory` and `sessions` sources,
+`memory.search.enabled`, choose the portable `memory` and `sessions` sources,
 and opt into cross-conversation memory with `rememberAcrossConversations`.
 Declaring the `sessions` source requires that opt-in.
 Host policy still constrains these settings, and Claws do not carry custom

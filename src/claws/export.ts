@@ -86,18 +86,22 @@ function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawMani
         }
       : {}),
     ...(Object.keys(tools).length > 0 ? { tools } : {}),
-    ...(agent.memorySearch
+    ...(agent.memory?.search
       ? {
-          memorySearch: {
-            ...(agent.memorySearch.enabled !== undefined
-              ? { enabled: agent.memorySearch.enabled }
-              : {}),
-            ...(agent.memorySearch.rememberAcrossConversations !== undefined
-              ? {
-                  rememberAcrossConversations: agent.memorySearch.rememberAcrossConversations,
-                }
-              : {}),
-            ...(agent.memorySearch.sources?.length ? { sources: agent.memorySearch.sources } : {}),
+          memory: {
+            search: {
+              ...(agent.memory.search.enabled !== undefined
+                ? { enabled: agent.memory.search.enabled }
+                : {}),
+              ...(agent.memory.search.rememberAcrossConversations !== undefined
+                ? {
+                    rememberAcrossConversations: agent.memory.search.rememberAcrossConversations,
+                  }
+                : {}),
+              ...(agent.memory.search.sources?.length
+                ? { sources: agent.memory.search.sources }
+                : {}),
+            },
           },
         }
       : {}),

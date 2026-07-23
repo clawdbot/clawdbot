@@ -48,10 +48,12 @@ async function installedFixture(
         deny: ["exec"],
         fs: { workspaceOnly: true },
       },
-      memorySearch: {
-        enabled: true,
-        rememberAcrossConversations: true,
-        sources: ["memory", "sessions"],
+      memory: {
+        search: {
+          enabled: true,
+          rememberAcrossConversations: true,
+          sources: ["memory", "sessions"],
+        },
       },
     },
     workspace: {
@@ -158,6 +160,17 @@ async function installedFixture(
 describe("exportClawAgent", () => {
   it("writes a grouped package from one installed agent", async () => {
     const fixture = await installedFixture({ withPackage: true });
+    expect(fixture.plan.agent.config.memory?.search).toEqual({
+      enabled: true,
+      rememberAcrossConversations: true,
+      sources: ["memory", "sessions"],
+    });
+    expect(fixture.config.agents?.entries?.worker?.memory?.search).toEqual({
+      enabled: true,
+      rememberAcrossConversations: true,
+      sources: ["memory", "sessions"],
+    });
+    expect(fixture.config.agents?.entries?.worker).not.toHaveProperty("memorySearch");
     fixture.config.mcp!.servers!.docs!.env = {
       DOCS_TOKEN: "resolved-secret-must-not-be-exported",
     };
@@ -185,10 +198,12 @@ describe("exportClawAgent", () => {
             deny: ["exec"],
             fs: { workspaceOnly: true },
           },
-          memorySearch: {
-            enabled: true,
-            rememberAcrossConversations: true,
-            sources: ["memory", "sessions"],
+          memory: {
+            search: {
+              enabled: true,
+              rememberAcrossConversations: true,
+              sources: ["memory", "sessions"],
+            },
           },
         },
         workspace: {

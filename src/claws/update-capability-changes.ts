@@ -74,6 +74,31 @@ function compareRankedCapability(
       : "neutral";
 }
 
+function classifyToolSet(
+  current: unknown,
+  desired: unknown,
+): ClawUpdateCapabilityChange["classification"] {
+  if (!Array.isArray(current) || !Array.isArray(desired)) {
+    return "neutral";
+  }
+  const currentTools = new Set(
+    current.filter((value): value is string => typeof value === "string"),
+  );
+  const desiredTools = new Set(
+    desired.filter((value): value is string => typeof value === "string"),
+  );
+  if (currentTools.has("*") !== desiredTools.has("*")) {
+    return desiredTools.has("*") ? "escalation" : "reduction";
+  }
+  if (desiredTools.has("*")) {
+    return "neutral";
+  }
+  if ([...desiredTools].some((tool) => !currentTools.has(tool))) {
+    return "escalation";
+  }
+  return [...currentTools].some((tool) => !desiredTools.has(tool)) ? "reduction" : "neutral";
+}
+
 function classifyHeartbeatEvery(
   current: unknown,
   desired: unknown,
@@ -111,12 +136,7 @@ function classifyAgentCapability(
   desired: unknown,
   currentAgentExists: boolean,
 ): ClawUpdateCapabilityChange["classification"] {
-  if (
-    path === "tools.profile" ||
-    path === "tools.allow" ||
-    path === "tools.alsoAllow" ||
-    path === "tools.deny"
-  ) {
+  if (path === "tools.profile" || path === "tools.allow" || path === "tools.deny") {
     if (!currentAgentExists && desired !== undefined) {
       return "escalation";
     }
@@ -125,6 +145,17 @@ function classifyAgentCapability(
     }
     if (current === undefined) {
       return "reduction";
+    }
+  }
+  if (path === "tools.alsoAllow") {
+    if (!currentAgentExists && desired !== undefined) {
+      return "escalation";
+    }
+    if (desired === undefined) {
+      return "reduction";
+    }
+    if (current === undefined) {
+      return "escalation";
     }
   }
   if (desired === undefined) {
@@ -159,13 +190,13 @@ function classifyAgentCapability(
   if (path === "tools.fs.workspaceOnly") {
     return desired === true ? "reduction" : "escalation";
   }
-  if (path === "memorySearch.enabled") {
+  if (path === "memory.search.enabled") {
     return desired === false ? "reduction" : "escalation";
   }
-  if (path === "memorySearch.rememberAcrossConversations") {
+  if (path === "memory.search.rememberAcrossConversations") {
     return desired === true ? "escalation" : "reduction";
   }
-  if (path === "memorySearch.sources") {
+  if (path === "memory.search.sources") {
     if (!Array.isArray(current) || !Array.isArray(desired)) {
       return desired === undefined ? "reduction" : "escalation";
     }
@@ -194,17 +225,12 @@ function classifyAgentCapability(
     Array.isArray(current) &&
     Array.isArray(desired)
   ) {
-    const currentTools = new Set(
-      current.filter((value): value is string => typeof value === "string"),
-    );
-    return desired.some((value) => typeof value === "string" && !currentTools.has(value))
-      ? "escalation"
-      : "reduction";
+    return classifyToolSet(current, desired);
   }
   return path.startsWith("sandbox.") ||
     path.startsWith("tools.") ||
     path.startsWith("heartbeat.") ||
-    path.startsWith("memorySearch.")
+    path.startsWith("memory.search.")
     ? "escalation"
     : "neutral";
 }
@@ -228,6 +254,8 @@ function pushAgentCapabilityChanges(params: {
   desiredHeartbeat?: unknown;
   currentMemorySearch?: unknown;
   desiredMemorySearch?: unknown;
+  currentTools?: unknown;
+  desiredTools?: unknown;
 }): void {
   const fields = [
     ["sandbox", "mode"],
@@ -238,9 +266,9 @@ function pushAgentCapabilityChanges(params: {
     ["tools", "alsoAllow"],
     ["tools", "deny"],
     ["tools", "fs", "workspaceOnly"],
-    ["memorySearch", "enabled"],
-    ["memorySearch", "rememberAcrossConversations"],
-    ["memorySearch", "sources"],
+    ["memory", "search", "enabled"],
+    ["memory", "search", "rememberAcrossConversations"],
+    ["memory", "search", "sources"],
     ["heartbeat", "every"],
     ["heartbeat", "activeHours"],
     ["heartbeat", "isolatedSession"],
@@ -250,21 +278,31 @@ function pushAgentCapabilityChanges(params: {
   for (const field of fields) {
     const sandboxField = field[0] === "sandbox" ? field.slice(1) : undefined;
     const heartbeatField = field[0] === "heartbeat" ? field.slice(1) : undefined;
-    const memorySearchField = field[0] === "memorySearch" ? field.slice(1) : undefined;
+    const memorySearchField =
+      field[0] === "memory" && field[1] === "search" ? field.slice(2) : undefined;
+    const effectiveToolField =
+      field[0] === "tools" &&
+      (field[1] === "profile" || field[1] === "alsoAllow" || field[1] === "fs")
+        ? field.slice(1)
+        : undefined;
     const currentValue = sandboxField
       ? getPath(params.currentSandbox, sandboxField)
       : heartbeatField
         ? getPath(params.currentHeartbeat, heartbeatField)
         : memorySearchField
           ? getPath(params.currentMemorySearch, memorySearchField)
-          : getPath(params.currentAgent, field);
+          : effectiveToolField
+            ? getPath(params.currentTools, effectiveToolField)
+            : getPath(params.currentAgent, field);
     const desiredValue = sandboxField
       ? getPath(params.desiredSandbox, sandboxField)
       : heartbeatField
         ? getPath(params.desiredHeartbeat, heartbeatField)
         : memorySearchField
           ? getPath(params.desiredMemorySearch, memorySearchField)
-          : getPath(params.desiredAgent, field);
+          : effectiveToolField
+            ? getPath(params.desiredTools, effectiveToolField)
+            : getPath(params.desiredAgent, field);
     const profileField = field[0] === "tools" && field[1] === "profile";
     const current = profileField ? resolveProfileCapabilities(currentValue) : currentValue;
     const desired = profileField ? resolveProfileCapabilities(desiredValue) : desiredValue;
@@ -327,9 +365,21 @@ function resolveHeartbeat(config: OpenClawConfig, agentId: string): unknown {
   };
 }
 
+function resolvePortableTools(config: OpenClawConfig, agentId: string): unknown {
+  const globalTools = config.tools;
+  const agentTools = config.agents?.list?.find((agent) => agent.id === agentId)?.tools;
+  return {
+    profile: agentTools?.profile ?? globalTools?.profile,
+    alsoAllow: agentTools?.alsoAllow ?? globalTools?.alsoAllow,
+    fs: {
+      workspaceOnly: agentTools?.fs?.workspaceOnly ?? globalTools?.fs?.workspaceOnly ?? false,
+    },
+  };
+}
+
 function resolvePortableMemorySearch(config: OpenClawConfig, agentId: string): unknown {
-  const defaults = config.agents?.defaults?.memorySearch;
-  const overrides = config.agents?.list?.find((agent) => agent.id === agentId)?.memorySearch;
+  const defaults = config.memory?.search;
+  const overrides = config.agents?.list?.find((agent) => agent.id === agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const rememberAcrossConversations =
     overrides?.rememberAcrossConversations ?? defaults?.rememberAcrossConversations ?? false;
@@ -389,6 +439,8 @@ export function pushResolvedAgentCapabilityChanges(params: {
       ? resolvePortableMemorySearch(params.config, params.agentId)
       : undefined,
     desiredMemorySearch: resolvePortableMemorySearch(desiredConfig, params.agentId),
+    currentTools: currentAgent ? resolvePortableTools(params.config, params.agentId) : undefined,
+    desiredTools: resolvePortableTools(desiredConfig, params.agentId),
   });
 }
 

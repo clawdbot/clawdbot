@@ -13,12 +13,16 @@ function collectChanges(params: {
   defaults?: NonNullable<
     Parameters<typeof pushResolvedAgentCapabilityChanges>[0]["config"]["agents"]
   >["defaults"];
+  tools?: Parameters<typeof pushResolvedAgentCapabilityChanges>[0]["config"]["tools"];
+  memory?: Parameters<typeof pushResolvedAgentCapabilityChanges>[0]["config"]["memory"];
 }): Changes {
   const changes: Changes = [];
   pushResolvedAgentCapabilityChanges({
     changes,
     agentId: params.currentAgent.id,
     config: {
+      tools: params.tools,
+      memory: params.memory,
       agents: {
         defaults: params.defaults,
         list: [params.currentAgent],
@@ -227,15 +231,95 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     }
   });
 
+  it("classifies additive tool grants as escalations and removals as reductions", () => {
+    const added = collectChanges({
+      currentAgent: { id: "worker", tools: { profile: "coding" } },
+      desiredAgent: {
+        id: "worker",
+        tools: { profile: "coding", alsoAllow: ["browser"] },
+      },
+    });
+
+    expect(added).toContainEqual(
+      expect.objectContaining({
+        path: "agent.tools.alsoAllow",
+        classification: "escalation",
+        requiresDistinctConsent: true,
+      }),
+    );
+    expect(added).not.toContainEqual(expect.objectContaining({ path: "agent.tools.profile" }));
+
+    const removed = collectChanges({
+      currentAgent: {
+        id: "worker",
+        tools: { profile: "coding", alsoAllow: ["browser"] },
+      },
+      desiredAgent: { id: "worker", tools: { profile: "coding" } },
+    });
+    expect(removed).toContainEqual(
+      expect.objectContaining({
+        path: "agent.tools.alsoAllow",
+        classification: "reduction",
+        requiresDistinctConsent: false,
+      }),
+    );
+    expect(removed).not.toContainEqual(expect.objectContaining({ path: "agent.tools.profile" }));
+  });
+
+  it("classifies inherited profiles and wildcard reductions by effective capabilities", () => {
+    const inheritedExpansion = collectChanges({
+      currentAgent: { id: "worker" },
+      desiredAgent: { id: "worker", tools: { profile: "coding" } },
+      tools: { profile: "minimal" },
+    });
+    expect(inheritedExpansion).toContainEqual(
+      expect.objectContaining({
+        path: "agent.tools.profile",
+        classification: "escalation",
+        requiresDistinctConsent: true,
+      }),
+    );
+
+    const wildcardReduction = collectChanges({
+      currentAgent: { id: "worker", tools: { profile: "full" } },
+      desiredAgent: { id: "worker", tools: { profile: "coding" } },
+    });
+    expect(wildcardReduction).toContainEqual(
+      expect.objectContaining({
+        path: "agent.tools.profile",
+        classification: "reduction",
+        requiresDistinctConsent: false,
+      }),
+    );
+  });
+
+  it("classifies removal of workspace-only confinement against host defaults", () => {
+    const changes = collectChanges({
+      currentAgent: { id: "worker", tools: { fs: { workspaceOnly: true } } },
+      desiredAgent: { id: "worker" },
+      tools: { fs: { workspaceOnly: false } },
+    });
+
+    expect(changes).toContainEqual(
+      expect.objectContaining({
+        path: "agent.tools.fs.workspaceOnly",
+        classification: "escalation",
+        requiresDistinctConsent: true,
+      }),
+    );
+  });
+
   it("resolves built-in profile capabilities and portable policy changes", () => {
     const changes = collectChanges({
       currentAgent: {
         id: "worker",
         tools: { profile: "coding", fs: { workspaceOnly: false } },
-        memorySearch: {
-          enabled: false,
-          rememberAcrossConversations: false,
-          sources: ["memory"],
+        memory: {
+          search: {
+            enabled: false,
+            rememberAcrossConversations: false,
+            sources: ["memory"],
+          },
         },
       },
       desiredAgent: {
@@ -245,10 +329,12 @@ describe("pushResolvedAgentCapabilityChanges", () => {
           alsoAllow: ["cron"],
           fs: { workspaceOnly: true },
         },
-        memorySearch: {
-          enabled: true,
-          rememberAcrossConversations: true,
-          sources: ["memory", "sessions"],
+        memory: {
+          search: {
+            enabled: true,
+            rememberAcrossConversations: true,
+            sources: ["memory", "sessions"],
+          },
         },
       },
     });
@@ -263,7 +349,7 @@ describe("pushResolvedAgentCapabilityChanges", () => {
             current: "coding",
             desired: "full",
             currentCapabilities: expect.arrayContaining(["read", "write"]),
-            desiredCapabilities: ["*"],
+            desiredCapabilities: expect.arrayContaining(["*"]),
           }),
         }),
         expect.objectContaining({
@@ -272,17 +358,17 @@ describe("pushResolvedAgentCapabilityChanges", () => {
           requiresDistinctConsent: false,
         }),
         expect.objectContaining({
-          path: "agent.memorySearch.enabled",
+          path: "agent.memory.search.enabled",
           classification: "escalation",
           requiresDistinctConsent: true,
         }),
         expect.objectContaining({
-          path: "agent.memorySearch.rememberAcrossConversations",
+          path: "agent.memory.search.rememberAcrossConversations",
           classification: "escalation",
           requiresDistinctConsent: true,
         }),
         expect.objectContaining({
-          path: "agent.memorySearch.sources",
+          path: "agent.memory.search.sources",
           classification: "escalation",
           requiresDistinctConsent: true,
         }),
@@ -292,16 +378,50 @@ describe("pushResolvedAgentCapabilityChanges", () => {
 
   it("resolves inherited memory defaults before classifying updates", () => {
     const changes = collectChanges({
-      currentAgent: { id: "worker", memorySearch: { enabled: false } },
+      currentAgent: { id: "worker", memory: { search: { enabled: false } } },
       desiredAgent: { id: "worker" },
     });
 
     expect(changes).toContainEqual(
       expect.objectContaining({
-        path: "agent.memorySearch.enabled",
+        path: "agent.memory.search.enabled",
         classification: "escalation",
         current: expect.objectContaining({ summary: "false" }),
         desired: expect.objectContaining({ summary: "true" }),
+      }),
+    );
+  });
+
+  it("reads canonical top-level and per-agent memory search settings", () => {
+    const inherited = collectChanges({
+      currentAgent: { id: "worker" },
+      desiredAgent: { id: "worker" },
+      memory: {
+        search: {
+          enabled: true,
+          rememberAcrossConversations: true,
+          sources: ["memory", "sessions"],
+        },
+      },
+    });
+    expect(inherited.filter((change) => change.path.startsWith("agent.memory.search."))).toEqual(
+      [],
+    );
+
+    const overridden = collectChanges({
+      currentAgent: {
+        id: "worker",
+        memory: { search: { enabled: false } },
+      },
+      desiredAgent: {
+        id: "worker",
+        memory: { search: { enabled: true } },
+      },
+    });
+    expect(overridden).toContainEqual(
+      expect.objectContaining({
+        path: "agent.memory.search.enabled",
+        classification: "escalation",
       }),
     );
   });
