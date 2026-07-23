@@ -111,6 +111,25 @@ describe("buildHostingProfileConditions", () => {
     );
   });
 
+  it("rejects a remote proxy source for a loopback-only listener", () => {
+    expect(
+      buildHostingProfileConditions("reverse-proxy", {
+        ...facts,
+        bind: "loopback",
+        bindHost: "127.0.0.1",
+        authMode: "trusted-proxy",
+        trustedProxyUserHeader: "x-forwarded-user",
+        trustedProxySources: ["10.0.0.0/8"],
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: "TrustedProxyReady",
+        status: "False",
+        reason: "TrustedProxyIngressUnsafe",
+      }),
+    );
+  });
+
   it("requires pairing, a connected target, command approval, and a control channel", () => {
     const conditions = buildHostingProfileConditions("node-mode", facts, {
       pairing: { pairedCount: 1, pendingCount: 0 },

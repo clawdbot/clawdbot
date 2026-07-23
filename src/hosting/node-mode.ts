@@ -72,7 +72,7 @@ async function resolveNodeModeReadinessEvidenceWith(
         connectedCount,
       },
     };
-  } catch (error) {
+  } catch {
     const connectedCount = 0;
     return {
       pairing: {

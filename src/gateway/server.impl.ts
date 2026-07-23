@@ -1320,7 +1320,11 @@ export async function startGatewayServer(
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
   const resolveSelectedReadiness = createSelectedReadinessResolver();
-  let readinessRuntimeSnapshot = { config: cfgAtStart, registry: pluginRegistry };
+  let readinessRuntimeSnapshot = {
+    config: cfgAtStart,
+    registry: pluginRegistry,
+    auth: getResolvedAuth(),
+  };
   const resolveNodeModeReadiness = createNodeModeReadinessEvidenceResolver();
   let listConnectedNodesForReadiness: () => NodeSession[] = () => [];
   const evaluateRuntimeReadiness = async () => {
@@ -1332,7 +1336,7 @@ export async function startGatewayServer(
         override: opts.hostingProfileOverride,
       });
       const profile = profileSelection?.profile;
-      const auth = getResolvedAuth();
+      const auth = snapshot.auth;
       const [nodeMode, additionalConditions] = await Promise.all([
         profile === "node-mode"
           ? resolveNodeModeReadiness({
@@ -2031,7 +2035,11 @@ export async function startGatewayServer(
       readinessConfig = getRuntimeConfig(),
     ) => {
       pluginRegistry = loaded.pluginRegistry;
-      readinessRuntimeSnapshot = { config: readinessConfig, registry: pluginRegistry };
+      readinessRuntimeSnapshot = {
+        config: readinessConfig,
+        registry: pluginRegistry,
+        auth: getResolvedAuth(),
+      };
       baseGatewayMethods = loaded.gatewayMethods;
       for (const key of attachedPluginGatewayHandlerKeys) {
         delete attachedGatewayExtraHandlers[key];

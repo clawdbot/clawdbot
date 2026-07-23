@@ -241,6 +241,15 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
   }
   const loopbackConfigured =
     isTrustedProxyAddress("127.0.0.1", validSources) || isTrustedProxyAddress("::1", validSources);
+  if (isLoopbackHost(facts.bindHost) && !loopbackConfigured) {
+    return {
+      type: "TrustedProxyReady",
+      status: "False",
+      requirement: "required",
+      reason: "TrustedProxyIngressUnsafe",
+      message: "A loopback listener requires a loopback trusted proxy source.",
+    };
+  }
   if (loopbackConfigured && !facts.trustedProxyAllowLoopback) {
     return {
       type: "TrustedProxyReady",
