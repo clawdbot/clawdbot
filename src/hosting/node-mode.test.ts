@@ -176,7 +176,7 @@ describe("resolveNodeModeReadinessEvidence", () => {
     expect(loadPairing).toHaveBeenCalledTimes(2);
   });
 
-  it("returns timed-out pairing evidence when the pairing read never settles", async () => {
+  it("bounds timed-out pairing reads while allowing one recovery read", async () => {
     let now = 0;
     const loadPairing = vi.fn(() => new Promise<never>(() => {}));
     const resolveEvidence = createNodeModeReadinessEvidenceResolver({
@@ -193,8 +193,43 @@ describe("resolveNodeModeReadinessEvidence", () => {
       },
     });
     now = 10;
-    await resolveEvidence({ config: {}, connectedNodes: [] });
-    expect(loadPairing).toHaveBeenCalledTimes(1);
+    await expect(resolveEvidence({ config: {}, connectedNodes: [] })).resolves.toMatchObject({
+      pairing: { timedOut: true },
+    });
+    now = 20;
+    await expect(resolveEvidence({ config: {}, connectedNodes: [] })).resolves.toMatchObject({
+      pairing: { timedOut: true },
+    });
+    expect(loadPairing).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers when a replacement pairing read succeeds after a timeout", async () => {
+    const loadPairing = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<never>(() => {}))
+      .mockResolvedValueOnce({
+        paired: [{ nodeId: "node-1", commands: ["system.run"] }],
+        pending: [],
+      });
+    const resolveEvidence = createNodeModeReadinessEvidenceResolver({
+      listPairing: loadPairing,
+      timeoutMs: 5,
+      cacheTtlMs: 0,
+    });
+
+    await expect(resolveEvidence({ config: {}, connectedNodes: [] })).resolves.toMatchObject({
+      pairing: { timedOut: true },
+    });
+    await expect(
+      resolveEvidence({
+        config: {},
+        connectedNodes: [{ nodeId: "node-1", commands: ["system.run"] } as never],
+      }),
+    ).resolves.toMatchObject({
+      pairing: { pairedCount: 1 },
+      targets: { connectedCount: 1 },
+    });
+    expect(loadPairing).toHaveBeenCalledTimes(2);
   });
 
   it("does not expose pairing store exception messages", async () => {

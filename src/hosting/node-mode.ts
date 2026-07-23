@@ -6,6 +6,7 @@ import type { NodeModeReadinessEvidence } from "./profiles.js";
 
 const DEFAULT_NODE_MODE_PAIRING_CACHE_TTL_MS = 1_000;
 const DEFAULT_NODE_MODE_TIMEOUT_MS = 1_000;
+const MAX_NODE_MODE_PAIRING_READS = 2;
 
 type NodeModeReadinessParams = {
   config: OpenClawConfig;
@@ -112,25 +113,34 @@ export function createNodeModeReadinessEvidenceResolver(
     | {
         expiresAt: number;
         settled: boolean;
+        timedOut: boolean;
         value: ReturnType<NodePairingLoader>;
       }
     | undefined;
+  const activeReads = new Set<ReturnType<NodePairingLoader>>();
 
   const loadCachedPairing: NodePairingLoader = () => {
     const observedAt = now();
-    if (!cached || (cached.settled && observedAt >= cached.expiresAt)) {
+    const mayReplaceTimedOut =
+      cached?.timedOut === true && activeReads.size < MAX_NODE_MODE_PAIRING_READS;
+    if (!cached || (cached.settled && observedAt >= cached.expiresAt) || mayReplaceTimedOut) {
+      const value = listPairing();
       const next = {
         expiresAt: observedAt + cacheTtlMs,
         settled: false,
-        value: listPairing(),
+        timedOut: false,
+        value,
       };
       cached = next;
-      void next.value.then(
+      activeReads.add(value);
+      void value.then(
         () => {
           next.settled = true;
+          activeReads.delete(value);
         },
         () => {
           next.settled = true;
+          activeReads.delete(value);
         },
       );
     }
@@ -139,9 +149,10 @@ export function createNodeModeReadinessEvidenceResolver(
 
   return async (params) => {
     let timeout: NodeJS.Timeout | undefined;
+    const pairingRead = loadCachedPairing();
     try {
-      return await Promise.race([
-        resolveNodeModeReadinessEvidenceWith(params, loadCachedPairing),
+      const evidence = await Promise.race([
+        resolveNodeModeReadinessEvidenceWith(params, () => pairingRead),
         new Promise<NodeModeReadinessEvidence>((resolve) => {
           timeout = setTimeout(
             () =>
@@ -158,6 +169,10 @@ export function createNodeModeReadinessEvidenceResolver(
           timeout.unref?.();
         }),
       ]);
+      if (evidence.pairing?.timedOut && cached?.value === pairingRead) {
+        cached.timedOut = true;
+      }
+      return evidence;
     } finally {
       if (timeout) {
         clearTimeout(timeout);

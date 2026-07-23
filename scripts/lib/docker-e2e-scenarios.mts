@@ -532,7 +532,7 @@ export const mainLanes: DockerE2eLane[] = [
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
   serviceLane(
     "hosting-profiles",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:hosting-profiles",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/hosting-profiles-docker.sh",
     { stateScenario: "empty" },
   ),
   serviceLane("browser-cdp-snapshot", "pnpm test:docker:browser-cdp-snapshot", {
