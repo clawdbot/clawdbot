@@ -14,6 +14,8 @@ type ConfigSnapshot = {
   valid: boolean;
   path: string;
   hash: string | null;
+  parsed: unknown;
+  sourceConfigBeforeMigrations?: OpenClawConfig;
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
@@ -133,6 +135,7 @@ function snapshot(hash: string | null, config: OpenClawConfig): ConfigSnapshot {
     valid: true,
     path: "/tmp/openclaw.json",
     hash,
+    parsed: structuredClone(config),
     config: canonicalConfig,
     sourceConfig: canonicalConfig,
     runtimeConfig: canonicalConfig,
@@ -423,6 +426,47 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       defaults: { workspace: "/tmp/requested-workspace" },
       entries: { main: { default: true } },
     });
+  });
+
+  it("configures the requested workspace for a persisted pre-roster config", async () => {
+    const authoredConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    };
+    const preRosterSnapshot = snapshot("probe", authoredConfig);
+    mocks.state.initialSnapshot = preRosterSnapshot;
+    mocks.state.commitConfig = structuredClone(authoredConfig);
+    mocks.state.commitSnapshot = preRosterSnapshot;
+
+    await applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" }));
+
+    expect(mocks.state.persistedConfig?.agents).toMatchObject({
+      defaults: {
+        model: { primary: "openai/gpt-5.5" },
+        workspace: "/tmp/requested-workspace",
+      },
+      entries: { main: { default: true } },
+    });
+  });
+
+  it("preserves fleet workspace ownership when the roster comes from an include", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" }, workspace: "/tmp/current-workspace" },
+        entries: { main: { default: true } },
+      },
+    };
+    const includedRosterSnapshot = {
+      ...snapshot("probe", config),
+      parsed: { agents: { $include: "./agents.json5" } },
+      sourceConfigBeforeMigrations: config,
+    };
+    mocks.state.initialSnapshot = includedRosterSnapshot;
+    mocks.state.commitConfig = structuredClone(config);
+    mocks.state.commitSnapshot = includedRosterSnapshot;
+
+    await applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" }));
+
+    expect(mocks.state.persistedConfig?.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
   });
 
   it("keeps the fleet workspace and provisions the configured default agent", async () => {

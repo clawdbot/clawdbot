@@ -42,7 +42,6 @@ import {
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,
   readTailAssistantTextFromSessionTranscript,
-  SessionTranscriptAgentScopeMismatchError,
 } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -1090,7 +1089,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         sessionKey: "agent:worker:main",
         storePath: fixture.storePath(),
       }),
-    ).rejects.toBeInstanceOf(SessionTranscriptAgentScopeMismatchError);
+    ).rejects.toMatchObject({
+      code: "SESSION_TRANSCRIPT_AGENT_SCOPE_MISMATCH",
+      name: "SessionTranscriptAgentScopeMismatchError",
+    });
   });
 
   it("resolves an unscoped main alias with the configured agent owner", async () => {

@@ -953,7 +953,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          entries: { main: {} },
+          entries: { main: { default: true } },
         }),
       }),
       migrateCodexModelRefs: false,
@@ -969,7 +969,7 @@ describe("runDoctorConfigPreflight state migration", () => {
         }),
         agents: expect.objectContaining({
           defaults: expect.objectContaining({}),
-          entries: { main: {} },
+          entries: { main: { default: true } },
         }),
       }),
       pluginDoctorConfig: resolvedConfig,

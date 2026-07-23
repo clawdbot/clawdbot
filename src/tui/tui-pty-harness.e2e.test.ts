@@ -477,7 +477,10 @@ async function writeTuiPtyFixtureScript(dir: string) {
         await runTui({
           backend: new FixtureBackend(),
           config: {
-            agents: { defaults: { model: "fixture-provider/fixture-model" } },
+            agents: {
+              defaults: { model: "fixture-provider/fixture-model" },
+              entries: { main: { default: true } },
+            },
             session: { scope: "per-sender", mainKey: "main" },
           },
           deliver: false,

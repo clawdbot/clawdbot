@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope-config.js";
 import {
   readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
@@ -1120,7 +1120,7 @@ describe("activateSetupInference", () => {
       }),
     );
     const probeConfig = runCliAgent.mock.calls[0]?.[0].config;
-    expect(probeConfig?.agents?.list?.find((agent) => agent.id === "openclaw")).toEqual({
+    expect(listAgentEntries(probeConfig ?? {}).find((agent) => agent.id === "openclaw")).toEqual({
       id: "openclaw",
       params: { temperature: 0.2 },
       tools: { allow: ["read"], deny: ["exec"] },
@@ -1304,6 +1304,40 @@ describe("activateSetupInference", () => {
     expect(persistedConfig.agents?.defaults?.model).toBe("claude-cli/claude-opus-5");
     expect(persistedConfig.agents?.defaults?.workspace).toBeUndefined();
     expect(persistedConfig.gateway).toBeUndefined();
+  });
+
+  it("uses the materialized runtime roster when activating from a missing config file", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: { entries: { main: { default: true } } },
+    };
+    const configHarness = createConfigTransformHarness(runtimeConfig, runtimeConfig);
+
+    const result = await activateSetupInference({
+      kind: "claude-cli",
+      surface: "cli",
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({
+          exists: false,
+          valid: true,
+          path: "/tmp/openclaw.json",
+          config: runtimeConfig,
+          sourceConfig: runtimeConfig,
+          runtimeConfig,
+        })) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-4-8" });
+    expect(configHarness.current()).toMatchObject({
+      agents: {
+        defaults: { model: "claude-cli/claude-opus-4-8" },
+        entries: { main: { default: true } },
+      },
+    });
   });
 
   it.each([

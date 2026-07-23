@@ -1,6 +1,7 @@
 // Telegram plugin module implements state migrations behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -87,11 +88,26 @@ function resolveLegacySessionStorePath(params: {
   return path.join(resolveMigrationStateDir(params), "sessions", "sessions.json");
 }
 
+function resolveAgentSessionStorePath(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentId: string;
+}): string {
+  return resolveStorePath(params.cfg.session?.store, {
+    env: params.env,
+    agentId: params.agentId,
+  });
+}
+
 function resolveMigrationStateDir(params: { env: NodeJS.ProcessEnv; stateDir?: string }): string {
   return (
     params.stateDir ??
     path.dirname(
-      path.dirname(path.dirname(path.dirname(resolveStorePath(undefined, { env: params.env })))),
+      path.dirname(
+        path.dirname(
+          path.dirname(resolveStorePath(undefined, { env: params.env, agentId: "main" })),
+        ),
+      ),
     )
   );
 }
@@ -309,12 +325,20 @@ function detectTelegramMessageCacheLegacyStateMigration(params: {
   env: NodeJS.ProcessEnv;
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const storePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
+  const storePath = resolveAgentSessionStorePath({
+    ...params,
+    agentId: resolveDefaultAgentId(params.cfg),
+  });
+  const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
   const runtimePersistedPath = resolveTelegramMessageCachePath(storePath);
   const legacyStorePath = resolveLegacySessionStorePath(params);
   const legacyPersistedPath = resolveTelegramMessageCachePath(legacyStorePath);
   const scopeKey = resolveTelegramMessageCachePersistentScopeKey(runtimePersistedPath);
-  return uniqueStrings([runtimePersistedPath, legacyPersistedPath]).flatMap((persistedPath) => {
+  return uniqueStrings([
+    runtimePersistedPath,
+    resolveTelegramMessageCachePath(legacyMainStorePath),
+    legacyPersistedPath,
+  ]).flatMap((persistedPath) => {
     if (!fileExists(persistedPath)) {
       return [];
     }
@@ -444,12 +468,16 @@ function detectTelegramSentMessageCacheLegacyStateMigration(params: {
   env: NodeJS.ProcessEnv;
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const storePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const storePath = resolveAgentSessionStorePath({ ...params, agentId: defaultAgentId });
+  const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
   const legacyStorePath = resolveLegacySessionStorePath(params);
-  const sources = uniqueStrings([storePath, legacyStorePath]).map((sourceStorePath) => ({
-    targetStorePath: storePath,
-    sourcePath: `${sourceStorePath}.telegram-sent-messages.json`,
-  }));
+  const sources = uniqueStrings([storePath, legacyMainStorePath, legacyStorePath]).map(
+    (sourceStorePath) => ({
+      targetStorePath: storePath,
+      sourcePath: `${sourceStorePath}.telegram-sent-messages.json`,
+    }),
+  );
   return sources.flatMap((source) => {
     if (!fileExists(source.sourcePath)) {
       return [];
@@ -468,8 +496,10 @@ function detectTelegramSentMessageCacheLegacyStateMigration(params: {
       preview: `- Telegram sent-message cache: ${source.sourcePath} → plugin state (${TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE})`,
       readEntries: () =>
         listTelegramLegacySentMessageCacheEntries({
-          cfg: { session: { store: source.targetStorePath } },
+          cfg: params.cfg,
+          agentId: defaultAgentId,
           persistedPath: source.sourcePath,
+          targetStorePath: source.targetStorePath,
         }),
     };
   });
@@ -512,7 +542,11 @@ function detectTelegramMessageDispatchLegacyStateMigration(params: {
   env: NodeJS.ProcessEnv;
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const storePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
+  const storePath = resolveAgentSessionStorePath({
+    ...params,
+    agentId: resolveDefaultAgentId(params.cfg),
+  });
+  const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
   const legacyStorePath = resolveLegacySessionStorePath(params);
   const env = params.stateDir ? { ...params.env, OPENCLAW_STATE_DIR: params.stateDir } : params.env;
   const namespace = resolvePersistentDedupePluginStateNamespace({
@@ -520,12 +554,14 @@ function detectTelegramMessageDispatchLegacyStateMigration(params: {
     namespacePrefix: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
   });
   return listTelegramAccountIds(params.cfg).flatMap((accountId) => {
-    const sources = uniqueStrings([storePath, legacyStorePath]).map((sourceStorePath) => ({
-      sourcePath: resolveTelegramMessageDispatchLegacyPath({
-        storePath: sourceStorePath,
-        namespace: accountId,
+    const sources = uniqueStrings([storePath, legacyMainStorePath, legacyStorePath]).map(
+      (sourceStorePath) => ({
+        sourcePath: resolveTelegramMessageDispatchLegacyPath({
+          storePath: sourceStorePath,
+          namespace: accountId,
+        }),
       }),
-    }));
+    );
     const jsonPlans: ChannelLegacyStateMigrationPlan[] = sources.flatMap((source) => {
       const sourcePath = source.sourcePath;
       if (!fileExists(sourcePath)) {
@@ -612,7 +648,11 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
     });
     return topicNameCacheImportSource({ sourceStorePath: storePath });
   });
-  const defaultStorePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
+  const defaultStorePath = resolveAgentSessionStorePath({
+    ...params,
+    agentId: resolveDefaultAgentId(params.cfg),
+  });
+  const legacyMainStorePath = resolveAgentSessionStorePath({ ...params, agentId: "main" });
   const defaultAccountStorePath = resolveStorePath(params.cfg.session?.store, {
     env: params.env,
     agentId: resolveDefaultTelegramAccountId(params.cfg),
@@ -622,6 +662,7 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
     [
       ...accountSources,
       topicNameCacheImportSource({ sourceStorePath: defaultStorePath }),
+      topicNameCacheImportSource({ sourceStorePath: legacyMainStorePath }),
       topicNameCacheImportSource({
         sourceStorePath: legacyStorePath,
         targetStorePath: defaultAccountStorePath,

@@ -395,6 +395,21 @@ describe("resolveSubagentToolPolicyForSession", () => {
 });
 
 describe("resolveEffectiveToolPolicy", () => {
+  it("uses the configured default agent policy for an unscoped session alias", () => {
+    const cfg = {
+      agents: {
+        entries: {
+          ops: { default: true, tools: { deny: ["exec"] } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveEffectiveToolPolicy({ config: cfg, sessionKey: "main" });
+
+    expect(result.agentId).toBe("ops");
+    expect(result.agentPolicy).toEqual({ deny: ["exec"] });
+  });
+
   it("keeps slash-containing modelId scoped to the selected provider", () => {
     const cfg = {
       tools: {

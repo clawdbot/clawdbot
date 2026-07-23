@@ -311,7 +311,7 @@ export function resolveSessionKeyForRequest(opts: {
   const storeAgentId = explicitSessionKey
     ? isUnscopedSessionKeySentinel(explicitSessionKey)
       ? (requestedAgentId ?? defaultAgentId)
-      : resolveAgentIdFromSessionKey(explicitSessionKey)
+      : resolveAgentIdFromSessionKey(explicitSessionKey, defaultAgentId)
     : (requestedAgentId ?? defaultAgentId);
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
@@ -407,7 +407,7 @@ export function resolveSession(opts: {
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
   const sessionAgentId = opts.agentId?.trim()
     ? normalizeAgentId(opts.agentId)
-    : resolveAgentIdFromSessionKey(sessionKey);
+    : resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(opts.cfg));
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({

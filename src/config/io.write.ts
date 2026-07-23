@@ -106,7 +106,9 @@ export async function writeConfigFileFromContext(
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
   const hasResolvedAuthoredIncludes =
     hasAuthoredIncludes && !containsConfigIncludeDirective(snapshot.sourceConfig);
-  if (snapshot.valid && snapshot.exists) {
+  // Missing snapshots still need runtime-to-authored projection. Callers authoring an
+  // exact bootstrap roster mark that intent through explicitSetPaths.
+  if (snapshot.valid) {
     persistCandidate = resolvePersistCandidateForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,

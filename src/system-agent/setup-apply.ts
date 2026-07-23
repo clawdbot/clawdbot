@@ -1,7 +1,12 @@
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
-import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import {
+  hasAgentRosterProperty,
+  listAgentEntries,
+  toAgentEntriesRecord,
+} from "../agents/agent-scope-config.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
+import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -378,13 +383,13 @@ export async function applySystemAgentSetup(
   const { configureGatewayForSetup } = await import("../wizard/setup.gateway-config.js");
   const buildSetupCandidate = async (
     currentBaseConfig: OpenClawConfig,
-    hasPersistedConfig: boolean,
+    hasAuthoredRoster: boolean,
   ) => {
     const roster = listAgentEntries(currentBaseConfig);
-    // A fresh no-file config is represented by this minimal main entry; once a
-    // config is persisted, even the same roster shape is established state.
+    // Pre-roster configs materialize this minimal main entry in memory. Only an
+    // authored roster establishes fleet workspace ownership.
     const isBootstrapMain =
-      !hasPersistedConfig &&
+      !hasAuthoredRoster &&
       roster.length === 1 &&
       normalizeAgentId(roster[0]?.id) === "main" &&
       roster[0]?.default === true &&
@@ -392,7 +397,7 @@ export async function applySystemAgentSetup(
     const workspaceConflict = isBootstrapMain
       ? undefined
       : resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
-    const currentHasRoster = hasPersistedConfig && roster.length > 0 && !isBootstrapMain;
+    const currentHasRoster = hasAuthoredRoster && roster.length > 0 && !isBootstrapMain;
     const allowWorkspaceWrite =
       params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
     let setupBaseConfig = currentBaseConfig;
@@ -480,7 +485,11 @@ export async function applySystemAgentSetup(
           // Rebuild config and Gateway settings from the same locked snapshot.
           // A retry can preserve unrelated concurrent edits without carrying
           // stale settings from the losing attempt into service setup or probes.
-          const setupCandidate = await buildSetupCandidate(currentConfig, context.snapshot.exists);
+          const setupCandidate = await buildSetupCandidate(
+            currentConfig,
+            hasAgentRosterProperty(context.snapshot.parsed) ||
+              configIncludeOwnsAgentRoster(context.snapshot),
+          );
           const finalizedConfig = finalizeConfig
             ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)
             : setupCandidate.nextConfig;

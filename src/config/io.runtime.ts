@@ -490,5 +490,5 @@ async function finalizeCommittedConfigWrite(params: {
     }
     throw error;
   }
-  return { ...writeResult, persistedConfig: canonicalSourceConfig };
+  return writeResult;
 }

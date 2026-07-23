@@ -2,6 +2,7 @@
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -18,7 +19,7 @@ function resolveExplicitSessionSqliteMaintenancePaths(options: DoctorOptions): s
   // Explicit path mode intentionally bypasses runtime config. Resolve through
   // the same selector as the migration so ownership checks cover exact targets.
   const targets = resolveSessionStoreTargets(
-    {},
+    { agents: { entries: { [LEGACY_IMPLICIT_AGENT_ID]: { default: true } } } },
     {
       store: options.sessionSqliteStore,
       ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),

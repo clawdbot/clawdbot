@@ -116,7 +116,7 @@ type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationText
   storePath?: string;
 };
 
-export class SessionTranscriptAgentScopeMismatchError extends Error {
+class SessionTranscriptAgentScopeMismatchError extends Error {
   readonly code = "SESSION_TRANSCRIPT_AGENT_SCOPE_MISMATCH";
 
   constructor(

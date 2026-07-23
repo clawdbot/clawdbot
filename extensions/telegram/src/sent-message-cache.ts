@@ -1,6 +1,7 @@
 // Telegram plugin module implements sent message cache behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -31,6 +32,8 @@ type SentMessageState = {
   bucketsByScope: Map<string, SentMessageBucket>;
 };
 
+type SentMessageConfig = Pick<OpenClawConfig, "agents" | "session">;
+
 function getSentMessageState(): SentMessageState {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const existing = globalStore[TELEGRAM_SENT_MESSAGES_STATE_KEY] as SentMessageState | undefined;
@@ -48,13 +51,28 @@ function createSentMessageStore(): SentMessageStore {
   return new Map<string, Map<string, number>>();
 }
 
-function resolveSentMessageStorePath(cfg?: Pick<OpenClawConfig, "session">): string {
-  return `${resolveStorePath(cfg?.session?.store)}.telegram-sent-messages.json`;
+function resolveSentMessageAgentId(cfg?: SentMessageConfig, agentId?: string): string {
+  return agentId?.trim() || (cfg?.agents ? resolveDefaultAgentId(cfg as OpenClawConfig) : "main");
 }
 
-function resolveSentMessageScopeKey(cfg?: Pick<OpenClawConfig, "session">): string {
-  const storePath = resolveStorePath(cfg?.session?.store);
+function resolveSentMessageStorePath(cfg?: SentMessageConfig, agentId?: string): string {
+  return `${resolveStorePath(cfg?.session?.store, {
+    agentId: resolveSentMessageAgentId(cfg, agentId),
+  })}.telegram-sent-messages.json`;
+}
+
+function sentMessageScopeKeyForStorePath(storePath: string): string {
   return createHash("sha256").update(storePath, "utf8").digest("hex").slice(0, 24);
+}
+
+function resolveSentMessageScopeKey(cfg?: SentMessageConfig, agentId?: string): string {
+  // This 24-hour cache follows the current agent owner. Do not revive a prior owner's
+  // transient bucket when the configured default changes.
+  return sentMessageScopeKeyForStorePath(
+    resolveStorePath(cfg?.session?.store, {
+      agentId: resolveSentMessageAgentId(cfg, agentId),
+    }),
+  );
 }
 
 function sentMessageEntryKey(scopeKey: string, chatId: string, messageId: string): string {
@@ -142,7 +160,7 @@ function readPersistedSentMessages(scopeKey: string): SentMessageStore {
   return store;
 }
 
-function getSentMessageBucket(cfg?: Pick<OpenClawConfig, "session">): SentMessageBucket {
+function getSentMessageBucket(cfg?: SentMessageConfig): SentMessageBucket {
   const state = getSentMessageState();
   const scopeKey = resolveSentMessageScopeKey(cfg);
   const existing = state.bucketsByScope.get(scopeKey);
@@ -157,7 +175,7 @@ function getSentMessageBucket(cfg?: Pick<OpenClawConfig, "session">): SentMessag
   return bucket;
 }
 
-function getSentMessages(cfg?: Pick<OpenClawConfig, "session">): SentMessageStore {
+function getSentMessages(cfg?: SentMessageConfig): SentMessageStore {
   return getSentMessageBucket(cfg).store;
 }
 
@@ -177,7 +195,7 @@ function persistSentMessage(
 export function recordSentMessage(
   chatId: number | string,
   messageId: number,
-  cfg?: Pick<OpenClawConfig, "session">,
+  cfg?: SentMessageConfig,
 ): void {
   const scopeKey = String(chatId);
   const idKey = String(messageId);
@@ -201,7 +219,7 @@ export function recordSentMessage(
 export function wasSentByBot(
   chatId: number | string,
   messageId: number,
-  cfg?: Pick<OpenClawConfig, "session">,
+  cfg?: SentMessageConfig,
 ): boolean {
   const scopeKey = String(chatId);
   const idKey = String(messageId);
@@ -215,11 +233,15 @@ export function wasSentByBot(
 }
 
 export function listTelegramLegacySentMessageCacheEntries(params: {
-  cfg?: Pick<OpenClawConfig, "session">;
+  cfg?: SentMessageConfig;
+  agentId?: string;
   persistedPath?: string;
+  targetStorePath?: string;
 }): Array<{ key: string; value: PersistedSentMessage; ttlMs?: number; timestamp?: number }> {
-  const scopeKey = resolveSentMessageScopeKey(params.cfg);
-  const filePath = params.persistedPath ?? resolveSentMessageStorePath(params.cfg);
+  const scopeKey = params.targetStorePath
+    ? sentMessageScopeKeyForStorePath(params.targetStorePath)
+    : resolveSentMessageScopeKey(params.cfg, params.agentId);
+  const filePath = params.persistedPath ?? resolveSentMessageStorePath(params.cfg, params.agentId);
   const legacy = fs.existsSync(filePath)
     ? readLegacySentMessages(filePath)
     : createSentMessageStore();
