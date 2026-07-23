@@ -51,10 +51,18 @@ function withScannedGatewayReadiness(
         reason: "GatewayUnavailable",
         message: "Gateway did not respond to the readiness request.",
       };
-  const conditions = [
-    ...readiness.conditions.filter((condition) => condition.type !== "GatewayResponding"),
-    gatewayCondition,
-  ];
+  const gatewayIndex = readiness.conditions.findIndex(
+    (condition) => condition.type === "GatewayResponding",
+  );
+  const conditions = readiness.conditions.filter(
+    (condition) => condition.type !== "GatewayResponding",
+  );
+  if (gatewayIndex >= 0) {
+    conditions.splice(Math.min(gatewayIndex, conditions.length), 0, gatewayCondition);
+  } else {
+    const pluginIndex = conditions.findIndex((condition) => condition.type === "PluginsLoaded");
+    conditions.splice(pluginIndex >= 0 ? pluginIndex : conditions.length, 0, gatewayCondition);
+  }
   const failures = Array.from(
     new Set(
       conditions
