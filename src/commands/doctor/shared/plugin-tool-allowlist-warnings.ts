@@ -203,7 +203,7 @@ function buildEffectiveSandboxToolPolicy(params: {
   globalPolicy: unknown;
   nonSandboxToolPolicyBlocksMcp: boolean;
 }): ActiveSandboxToolPolicy {
-  const agentLabel = params.agentLabel ?? "agents.list[].tools.sandbox.tools";
+  const agentLabel = params.agentLabel ?? "agents.entries.*.tools.sandbox.tools";
   const allow = pickSandboxToolPolicyField({
     agentPolicy: params.agentPolicy,
     globalPolicy: params.globalPolicy,

@@ -46,8 +46,8 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
         agents: { list: [{ id: "main", default: true, tools: { profile: "messaging" } }] },
       }),
     ).toMatchObject({
-      source: "agents.list[0].tools.profile",
-      fix: 'Add agents.list[0].tools.alsoAllow: ["skill_workshop"].',
+      source: 'agents.entries["main"].tools.profile',
+      fix: 'Add agents.entries["main"].tools.alsoAllow: ["skill_workshop"].',
     });
 
     expect(
@@ -55,8 +55,8 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
         agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
       }),
     ).toMatchObject({
-      source: "agents.list[0].tools.allow",
-      fix: 'Add "skill_workshop" to agents.list[0].tools.allow.',
+      source: 'agents.entries["main"].tools.allow',
+      fix: 'Add "skill_workshop" to agents.entries["main"].tools.allow.',
     });
   });
 
@@ -68,7 +68,7 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
       }),
     ).toMatchObject({
       source: "tools.profile",
-      fix: 'Add agents.list[0].tools.alsoAllow: ["skill_workshop"].',
+      fix: 'Add agents.entries["main"].tools.alsoAllow: ["skill_workshop"].',
     });
   });
 
@@ -101,7 +101,7 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
       }),
     ).toMatchObject({
       source: 'tools.byProvider["openai"].profile',
-      fix: 'Add agents.list[0].tools.byProvider["openai"].alsoAllow: ["skill_workshop"].',
+      fix: 'Add agents.entries["main"].tools.byProvider["openai"].alsoAllow: ["skill_workshop"].',
     });
   });
 
@@ -120,8 +120,8 @@ describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
         },
       }),
     ).toMatchObject({
-      source: 'agents.list[0].tools.byProvider["openai"].allow',
-      fix: 'Add "skill_workshop" to agents.list[0].tools.byProvider["openai"].allow.',
+      source: 'agents.entries["main"].tools.byProvider["openai"].allow',
+      fix: 'Add "skill_workshop" to agents.entries["main"].tools.byProvider["openai"].allow.',
     });
   });
 
