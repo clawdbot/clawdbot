@@ -599,6 +599,9 @@ export const es: TranslationMap = {
     worktreeName: "Nombre del worktree",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Los nombres de worktree usan letras minúsculas, dígitos y guiones.",
+    incognito: "Incógnito",
+    incognitoDescription: "Conservar este hilo solo hasta que se reinicie el Gateway",
+    startAsDraft: "Iniciar como borrador",
     messagePlaceholder: "¿En qué debería trabajar esta sesión?",
     readingAttachment: "Leyendo archivo adjunto",
     start: "Iniciar sesión",
@@ -620,6 +623,7 @@ export const es: TranslationMap = {
     limit: "Límite",
     filters: "Filtros",
     createdBy: "Creado por {name}",
+    archivedBy: "Archivado por {name}",
     filterByCreator: "Filtrar por creador",
     allCreators: "Todas las personas",
     filterControls: "Filtros de sesión",
@@ -749,6 +753,7 @@ export const es: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "Hilo de incógnito",
     cloudWorkerPlacement: "Trabajador en la nube: {state}",
     cloudWorkerPlacementConflict: "Worker en la nube: {state} · 1 conflicto de espacio de trabajo",
     cloudWorkerPlacementConflicts:
@@ -2443,6 +2448,8 @@ export const es: TranslationMap = {
     toolRuns: "{count} ejecuciones",
     identity: {
       title: "Identidad",
+      menuLabel: "Menú de identidad",
+      menuButtonLabel: "Menú de identidad y de la aplicación para {name}",
       description: "Tu perfil en este gateway.",
       loading: "Cargando tu identidad…",
       profileUnavailable: "No se pudo cargar tu perfil de identidad.",
@@ -3856,6 +3863,9 @@ export const es: TranslationMap = {
   },
   chat: {
     disconnected: "Desconectado de la puerta de enlace.",
+    sendErrors: {
+      activeLeafChanged: "El hilo cambió de rama — revísalo y vuelve a enviarlo.",
+    },
     waitingForApproval: "Esperando aprobación…",
     startupStatus: {
       preparingWorkspace: "Preparando espacio de trabajo…",
@@ -3873,6 +3883,7 @@ export const es: TranslationMap = {
       readOnly: "Solo lectura",
       suggest: "Sugerir",
       draft: "Borrador",
+      publishDraft: "Publicar borrador",
       members: "Miembros",
       selected: "Miembro",
       noPeople: "No se encontraron personas vinculadas.",
@@ -3892,6 +3903,7 @@ export const es: TranslationMap = {
       copyPath: "Copiar ruta",
       copyBranch: "Copiar nombre de la rama",
       copied: "Copiado",
+      incognito: "Hilo de incógnito",
       branches: "Ramas del hilo",
       branchSwitchUnavailable:
         "El cambio de rama no está disponible mientras el agente está trabajando.",
@@ -4183,6 +4195,7 @@ export const es: TranslationMap = {
       openInCanvas: "Abrir en lienzo",
       reply: "Responder",
       replyToMessage: "Responder al mensaje",
+      replyingTo: "Respondiendo a {name}",
       rewind: "Rebobinar",
       rewindConfirm: "¿Rebobinar hasta antes de este mensaje?",
       rewindToHere: "Rebobinar hasta aquí",
