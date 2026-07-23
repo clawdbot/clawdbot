@@ -1345,6 +1345,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     }),
   );
   if (authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value)) {
+    const authoredList = authoredRoster.value;
     const nextIdByPriorId = new Map(
       [...entryIdentityByNextId].map(([nextId, priorId]) => [priorId, nextId]),
     );
@@ -1360,7 +1361,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       if (Object.hasOwn(nextEntries, explicitId)) {
         return normalizeAgentId(explicitId);
       }
-      const authoredIndex = authoredRoster.value.findIndex(
+      const authoredIndex = authoredList.findIndex(
         (entry) => isRecord(entry) && entry.id === explicitId,
       );
       const resolvedEntry = authoredIndex < 0 ? undefined : resolvedLegacyList?.[authoredIndex];
@@ -1412,7 +1413,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
         );
       }
       const index = parseArrayIndexPathSegment(unsetPath[2] ?? "");
-      const authoredEntry = index === undefined ? undefined : authoredRoster.value[index];
+      const authoredEntry = index === undefined ? undefined : authoredList[index];
       const resolvedEntry = index === undefined ? undefined : resolvedLegacyList?.[index];
       const usesExplicitIdentity =
         index !== undefined && structurallyExplicitLegacyIndexes.has(index);
