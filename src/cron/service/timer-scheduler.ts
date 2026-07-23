@@ -4,6 +4,7 @@ import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
 } from "../../process/gateway-work-admission.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
@@ -636,7 +637,9 @@ async function onAdmittedTimer(state: CronServiceState) {
       if (state.store?.jobs?.length) {
         for (const job of state.store.jobs) {
           const agentId =
-            typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : defaultAgentId;
+            typeof job.agentId === "string" && job.agentId.trim()
+              ? normalizeAgentId(job.agentId)
+              : resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
           addStoreTarget(agentId, state.deps.resolveSessionStorePath(agentId));
         }
       } else {

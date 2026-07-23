@@ -96,7 +96,14 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       version: 1,
       jobs: [
         createDueIsolatedJob({ id: "default-job", nowMs: now }),
-        { ...createDueIsolatedJob({ id: "worker-job", nowMs: now }), agentId: "worker" },
+        {
+          ...createDueIsolatedJob({ id: "worker-job", nowMs: now }),
+          agentId: undefined,
+          enabled: false,
+          sessionKey: "agent:worker:main",
+          sessionTarget: "main",
+          payload: { kind: "systemEvent", text: "worker task" },
+        },
       ],
     });
 

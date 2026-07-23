@@ -2,7 +2,7 @@ import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 
 type PromptMessage = Record<string, unknown>;
@@ -113,7 +113,9 @@ export async function mergeSessionTranscriptContext(params: {
   ) {
     return;
   }
-  const agentId = params.agentId?.trim() || resolveAgentIdFromSessionKey(params.sessionKey);
+  // Routed channel turns provide agentId; direct callers may derive only an
+  // explicitly scoped owner. Unscoped keys without routing context fail closed.
+  const agentId = params.agentId?.trim() || parseAgentSessionKey(params.sessionKey)?.agentId;
   if (!agentId) {
     throw new Error("Session transcript context requires an agent owner.");
   }
