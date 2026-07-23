@@ -78,6 +78,9 @@ export function prepareEmbeddedRunTerminal(input: {
     model: input.model,
     assistant: terminalAssistant,
   });
+  const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
+  const terminalAssistantCanOwnFinalText =
+    finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
@@ -101,9 +104,12 @@ export function prepareEmbeddedRunTerminal(input: {
     .toReversed()
     .map((text) => text.trim())
     .find((text) => text.length > 0);
-  const finalAssistantVisibleText =
-    resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText;
-  const finalAssistantRawText = resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText;
+  const finalAssistantVisibleText = terminalAssistantCanOwnFinalText
+    ? (resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText)
+    : undefined;
+  const finalAssistantRawText = terminalAssistantCanOwnFinalText
+    ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
+    : undefined;
   // A yielded attempt ends before message_end. Its aborted tool-call assistant,
   // not an earlier completed cycle, owns paused-turn classification.
   const payloadAssistant = attempt.yieldDetected
@@ -154,7 +160,6 @@ export function prepareEmbeddedRunTerminal(input: {
     toolTrustedLocalMedia: attempt.toolTrustedLocalMedia,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
   });
-  const finalAssistantStopReason = (terminalAssistant?.stopReason ?? "").trim().toLowerCase();
   const recoveredFinalAssistantTextAfterPromptTimeout =
     timedOutDuringPrompt && ["completed", "end_turn", "stop"].includes(finalAssistantStopReason)
       ? (finalAssistantVisibleText ?? finalAssistantRawText)?.trim()

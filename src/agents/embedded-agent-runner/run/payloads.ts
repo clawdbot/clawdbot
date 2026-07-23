@@ -738,7 +738,7 @@ export function buildEmbeddedRunPayloads(params: {
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts =
-    suppressAssistantArtifacts || runAborted
+    suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface
       ? []
       : (shouldUseCanonicalFinalAnswer
           ? [fallbackAnswerSourceText]
