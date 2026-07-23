@@ -81,12 +81,6 @@ async function resolveNodeModeReadinessEvidenceWith(
   }
 }
 
-export async function resolveNodeModeReadinessEvidence(
-  params: NodeModeReadinessParams,
-): Promise<NodeModeReadinessEvidence> {
-  return await resolveNodeModeReadinessEvidenceWith(params, listNodePairing);
-}
-
 export function createNodeModeReadinessEvidenceResolver(
   deps: {
     listPairing?: typeof listNodePairing;

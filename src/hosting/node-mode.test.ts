@@ -4,8 +4,11 @@ const listNodePairing = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/node-pairing.js", () => ({ listNodePairing }));
 
-const { createNodeModeReadinessEvidenceResolver, resolveNodeModeReadinessEvidence } =
-  await import("./node-mode.js");
+const { createNodeModeReadinessEvidenceResolver } = await import("./node-mode.js");
+const resolveNodeModeReadinessEvidence = createNodeModeReadinessEvidenceResolver({
+  listPairing: listNodePairing,
+  cacheTtlMs: 0,
+});
 
 describe("resolveNodeModeReadinessEvidence", () => {
   it("keeps paired but disconnected nodes out of connected target evidence", async () => {
