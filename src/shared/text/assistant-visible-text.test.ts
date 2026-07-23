@@ -852,6 +852,18 @@ describe("stripMinimaxToolCallXml", () => {
 });
 
 describe("sanitizeAssistantVisibleText", () => {
+  it.each([
+    { name: "closing run shorter", input: "before ```<think>private</think>`` after" },
+    { name: "closing run longer", input: "before ``<think>private</think>``` after" },
+  ])("strips reasoning tags wrapped in unequal backtick runs ($name)", ({ input }) => {
+    expect(sanitizeAssistantVisibleText(input)).not.toContain("<think>");
+  });
+
+  it("still preserves a reasoning tag inside a real code span", () => {
+    const input = "before ``<think>private</think>`` after";
+    expect(sanitizeAssistantVisibleText(input)).toContain("<think>");
+  });
+
   it("strips minimax, tool XML, downgraded tool markers, and think tags in one pass", () => {
     const input = [
       '<invoke name="read">payload</invoke></minimax:tool_call>',

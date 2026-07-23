@@ -19,6 +19,48 @@ describe("shared/text/code-regions", () => {
     expect(isInsideCode(params.positionSelector(text, regionEnd), regions)).toBe(params.expected);
   }
 
+  describe("unequal backtick runs (#113148)", () => {
+    it.each([
+      {
+        name: "does not open a code span when the closing run is shorter",
+        text: "before ```<think>private</think>`` after",
+        expectedSlices: [],
+      },
+      {
+        name: "does not open a code span when the closing run is longer",
+        text: "before ``<think>private</think>``` after",
+        expectedSlices: [],
+      },
+      {
+        name: "does not open a code span from a lone run",
+        text: "a ``` b",
+        expectedSlices: [],
+      },
+      {
+        name: "still pairs runs of equal length",
+        text: "before ``code`` after",
+        expectedSlices: ["``code``"],
+      },
+      {
+        name: "pairs the first run of matching length, skipping shorter ones between",
+        text: "``a`b``c",
+        expectedSlices: ["``a`b``"],
+      },
+      {
+        name: "resumes scanning after a closed span",
+        text: "`one` and ``two``",
+        expectedSlices: ["`one`", "``two``"],
+      },
+      {
+        name: "leaves an unmatched run before a valid span as literal text",
+        text: "``` then `real` tail",
+        expectedSlices: ["`real`"],
+      },
+    ] as const)("$name", ({ text, expectedSlices }) => {
+      expectCodeRegionSlices(text, expectedSlices);
+    });
+  });
+
   it.each([
     {
       name: "finds fenced and inline code regions without double-counting inline code inside fences",
