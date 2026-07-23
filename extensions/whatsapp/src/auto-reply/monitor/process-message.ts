@@ -83,6 +83,10 @@ const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   timeoutMs: 2_000,
 };
 
+function formatAudioTranscriptForAgent(transcript: string): string {
+  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
+}
+
 type WhatsAppMessageReceivedHookConfig = {
   pluginHooks?: {
     messageReceived?: boolean;
@@ -289,14 +293,21 @@ export async function processMessage(params: {
     }
   }
 
-  // If we have a transcript, replace the agent-facing body so the agent sees the spoken text.
+  // Frame transcript provenance in the agent-facing body; the raw text stays in
+  // context.Transcript for mention and downstream media handling.
   // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
   // (used by features such as tts.auto: "inbound") still sees this as an
   // audio message. The transcript and transcribed media index are also stored on
   // context so downstream media understanding does not transcribe it again.
   const msgForAgent: AdmittedWebInboundMessage =
     audioTranscript !== undefined
-      ? { ...params.msg, payload: { ...params.msg.payload, body: audioTranscript } }
+      ? {
+          ...params.msg,
+          payload: {
+            ...params.msg.payload,
+            body: formatAudioTranscriptForAgent(audioTranscript),
+          },
+        }
       : params.msg;
   const visibleReplyTo = resolveVisibleWhatsAppReplyContext({
     msg: params.msg,
