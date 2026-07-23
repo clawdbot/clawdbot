@@ -112,6 +112,13 @@ type AgentEventState = {
       clearListeners?: Map<string, (claimId: string) => void>;
     }
   >;
+  runContextQueueClaimsById?: Map<
+    string,
+    {
+      lifecycleGeneration: string;
+      claimIds: Set<string>;
+    }
+  >;
   lifecycleGeneration: string;
   lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
@@ -239,6 +246,7 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext,
   }
   const existing = state.runContextById.get(runId);
   if (!existing) {
+    state.runContextQueueClaimsById?.delete(runId);
     state.runContextById.set(runId, {
       ...context,
       lifecycleGeneration: context.lifecycleGeneration ?? state.lifecycleGeneration,
@@ -370,6 +378,7 @@ export function claimAgentRunContext(
     );
     return claimId;
   }
+  state.runContextQueueClaimsById?.delete(runId);
   state.runContextById.set(runId, {
     ...context,
     lifecycleGeneration,
@@ -383,6 +392,74 @@ export function claimAgentRunContext(
 /** Returns the currently registered context for a run, if it has not been cleared or swept. */
 export function getAgentRunContext(runId: string) {
   return getAgentEventState().runContextById.get(runId);
+}
+
+function getAgentRunContextQueueClaims(state = getAgentEventState()) {
+  state.runContextQueueClaimsById ??= new Map();
+  return state.runContextQueueClaimsById;
+}
+
+/**
+ * Claims command-lane queue ownership so scheduler wait is not mistaken for run inactivity.
+ */
+export function claimAgentRunContextQueue(
+  runId: string,
+  lifecycleGeneration?: string,
+): string | undefined {
+  const state = getAgentEventState();
+  const context = state.runContextById.get(runId);
+  const contextLifecycleGeneration = context?.lifecycleGeneration ?? state.lifecycleGeneration;
+  if (
+    !context ||
+    (lifecycleGeneration !== undefined && contextLifecycleGeneration !== lifecycleGeneration)
+  ) {
+    return undefined;
+  }
+  const claimId = randomUUID();
+  const claimsById = getAgentRunContextQueueClaims(state);
+  const existing = claimsById.get(runId);
+  if (existing && existing.lifecycleGeneration === contextLifecycleGeneration) {
+    existing.claimIds.add(claimId);
+  } else {
+    claimsById.set(runId, {
+      lifecycleGeneration: contextLifecycleGeneration,
+      claimIds: new Set([claimId]),
+    });
+  }
+  return claimId;
+}
+
+/**
+ * Releases one enqueue's queue ownership.
+ * The final release restarts the inactivity clock at actual execution admission.
+ */
+export function releaseAgentRunContextQueue(
+  runId: string,
+  claimId: string | undefined,
+  lifecycleGeneration?: string,
+): void {
+  if (!claimId) {
+    return;
+  }
+  const state = getAgentEventState();
+  const claimsById = getAgentRunContextQueueClaims(state);
+  const claims = claimsById.get(runId);
+  if (
+    !claims ||
+    (lifecycleGeneration !== undefined && claims.lifecycleGeneration !== lifecycleGeneration) ||
+    !claims.claimIds.delete(claimId)
+  ) {
+    return;
+  }
+  if (claims.claimIds.size > 0) {
+    return;
+  }
+  claimsById.delete(runId);
+  const context = state.runContextById.get(runId);
+  if (!context || context.lifecycleGeneration !== claims.lifecycleGeneration) {
+    return;
+  }
+  context.lastActiveAt = Date.now();
 }
 
 /** Records the latest next-check proposal on the matching paced cron run. */
@@ -524,6 +601,7 @@ export function clearAgentRunContext(
     return;
   }
   state.runContextById.delete(runId);
+  state.runContextQueueClaimsById?.delete(runId);
   state.seqByRun.delete(runId);
   clearAgentRunUsage(runId, lifecycleGeneration ?? existing?.lifecycleGeneration);
 }
@@ -561,12 +639,23 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
   const now = Date.now();
   let swept = 0;
   for (const [runId, ctx] of state.runContextById.entries()) {
+    const queueClaims = state.runContextQueueClaimsById?.get(runId);
+    // Command-lane ownership is active scheduler state. Sweeping it would let
+    // registry maintenance false-terminal work before the lane admits it.
+    if (
+      queueClaims &&
+      queueClaims.lifecycleGeneration === ctx.lifecycleGeneration &&
+      queueClaims.claimIds.size > 0
+    ) {
+      continue;
+    }
     // Use lastActiveAt (refreshed on every event) to avoid sweeping active runs.
     // Fall back to registeredAt, then treat missing timestamps as infinitely old.
     const lastSeen = ctx.lastActiveAt ?? ctx.registeredAt;
     const age = lastSeen ? now - lastSeen : Infinity;
     if (age > maxAgeMs) {
       state.runContextById.delete(runId);
+      state.runContextQueueClaimsById?.delete(runId);
       state.seqByRun.delete(runId);
       clearAgentRunUsage(runId, ctx.lifecycleGeneration);
       getAgentRunContextOwners(state).delete(runId);
@@ -740,5 +829,6 @@ export function resetAgentEventsForTest(options?: { preserveListeners?: boolean 
     state.auditListeners.clear();
   }
   state.runContextById.clear();
+  getAgentRunContextQueueClaims(state).clear();
   getAgentRunContextOwners(state).clear();
 }
