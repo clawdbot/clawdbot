@@ -985,6 +985,9 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "ENETRESET" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ENETUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ERR_TLS_CERT_ALTNAME_INVALID" })).toBe(
+      "timeout",
+    );
   });
 
   it("infers rate-limit and overload from symbolic error codes", () => {
