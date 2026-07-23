@@ -1,3 +1,4 @@
+import { includeContributionOwnsAgentRoster } from "./agent-roster-provenance.js";
 import { ConfigIncludeError } from "./includes.js";
 import type { ConfigIoContext } from "./io.context.js";
 import { maybeRecoverSuspiciousConfigRead } from "./io.observe-recovery.js";
@@ -82,6 +83,7 @@ export async function readConfigFileSnapshotInternal(
   const includeFileHashesForWrite: Record<string, string> = {};
   const includeFileTargetsForWrite: Record<string, string> = {};
   const includeFilePathsForWatch = new Set<string>();
+  let agentRosterIncludeOwned = false;
 
   try {
     const raw = await deps.measure("config.snapshot.read.file", () =>
@@ -125,6 +127,9 @@ export async function readConfigFileSnapshotInternal(
           includeFileHashesForWrite,
           includeFileTargetsForWrite,
           includeFilePathsForWatch,
+          (event) => {
+            agentRosterIncludeOwned ||= includeContributionOwnsAgentRoster(event);
+          },
         ),
       );
     } catch (error) {
@@ -200,6 +205,7 @@ export async function readConfigFileSnapshotInternal(
           exists: true,
           raw: snapshotRaw,
           parsed: snapshotParsed,
+          includeProvenance: { agentRoster: agentRosterIncludeOwned },
           sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
           sourceConfig: coerceConfig(effectiveConfigRaw),
           valid: false,
@@ -276,6 +282,7 @@ export async function readConfigFileSnapshotInternal(
             exists: true,
             raw: snapshotRaw,
             parsed: snapshotParsed,
+            includeProvenance: { agentRoster: agentRosterIncludeOwned },
             sourceConfigBeforeMigrations: coerceConfig(readResolution.resolvedConfigRaw),
             sourceConfig: coerceConfig(effectiveConfigRaw),
             valid: true,

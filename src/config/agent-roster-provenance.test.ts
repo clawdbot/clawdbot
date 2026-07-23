@@ -8,6 +8,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 function snapshot(params: {
   parsed: unknown;
   sourceConfigBeforeMigrations: OpenClawConfig;
+  agentRosterIncludeOwned?: boolean;
 }): ConfigFileSnapshot {
   return {
     path: "/tmp/openclaw.json",
@@ -15,6 +16,7 @@ function snapshot(params: {
     exists: true,
     raw: "{}",
     parsed: params.parsed,
+    includeProvenance: { agentRoster: params.agentRosterIncludeOwned === true },
     sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
     sourceConfig: params.sourceConfigBeforeMigrations,
     resolved: params.sourceConfigBeforeMigrations,
@@ -60,6 +62,7 @@ describe("agent roster include provenance", () => {
           },
         },
       },
+      agentRosterIncludeOwned: true,
     });
 
     expect(configIncludeOwnsAgentRoster(value)).toBe(true);
@@ -69,48 +72,59 @@ describe("agent roster include provenance", () => {
     const value = snapshot({
       parsed: { $include: "./base.json" },
       sourceConfigBeforeMigrations: { agents: { entries: {} } },
+      agentRosterIncludeOwned: true,
     });
 
     expect(hasResolvedRosterBeforeMigrations(value)).toBe(false);
     expect(configIncludeOwnsAgentRoster(value)).toBe(true);
   });
 
-  it("conservatively assigns an agents-scoped include ownership when roster shape is unchanged", () => {
-    const entries = { main: { default: true } };
-    const value = snapshot({
+  it.each([
+    {
+      label: "unrelated ancestor include with a local roster",
+      parsed: { $include: "./channels.json", agents: { entries: {} } },
+      resolved: { agents: { entries: {} } },
+      includeOwned: false,
+      expected: false,
+    },
+    {
+      label: "roster-contributing ancestor include",
       parsed: {
-        agents: { $include: "./empty-roster.json", entries },
+        $include: "./base.json",
+        agents: { entries: { main: { default: true } } },
       },
-      sourceConfigBeforeMigrations: { agents: { entries } },
-    });
-
-    expect(configIncludeOwnsAgentRoster(value)).toBe(true);
-  });
-
-  it("treats an ancestor include with an identical roster contribution as include-owned", () => {
-    const entries = { main: { default: true } };
-    const value = snapshot({
+      resolved: {
+        agents: { entries: { main: { default: true }, ops: {} } },
+      },
+      includeOwned: true,
+      expected: true,
+    },
+    {
+      label: "identical ancestor include contribution",
       parsed: {
-        $include: "./channels.json",
-        agents: { entries },
+        $include: "./base.json",
+        agents: { entries: { main: { default: true } } },
       },
-      sourceConfigBeforeMigrations: { agents: { entries } },
-    });
-
-    expect(configIncludeOwnsAgentRoster(value)).toBe(true);
-  });
-
-  it("keeps ancestor-include ownership conservative across local env resolution", () => {
-    const value = snapshot({
-      parsed: {
-        $include: "./channels.json",
-        agents: { entries: { main: { default: true, agentDir: "${MAIN_AGENT_DIR}" } } },
-      },
-      sourceConfigBeforeMigrations: {
-        agents: { entries: { main: { default: true, agentDir: "/srv/main" } } },
-      },
-    });
-
-    expect(configIncludeOwnsAgentRoster(value)).toBe(true);
+      resolved: { agents: { entries: { main: { default: true } } } },
+      includeOwned: true,
+      expected: true,
+    },
+    {
+      label: "direct agents.entries include",
+      parsed: { agents: { entries: { $include: "./entries.json" } } },
+      resolved: { agents: { entries: { ops: { default: true } } } },
+      includeOwned: true,
+      expected: true,
+    },
+  ])("classifies $label", ({ parsed, resolved, includeOwned, expected }) => {
+    expect(
+      configIncludeOwnsAgentRoster(
+        snapshot({
+          parsed,
+          sourceConfigBeforeMigrations: resolved,
+          agentRosterIncludeOwned: includeOwned,
+        }),
+      ),
+    ).toBe(expected);
   });
 });

@@ -649,6 +649,72 @@ describe("config model validation", () => {
     ]);
   });
 
+  it("allows model validation while repairing a malformed previous default roster", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    await expect(
+      checkTouchedTextModelRefs({
+        config: {
+          agents: {
+            entries: {
+              main: { default: true },
+              ops: {},
+            },
+          },
+        },
+        previousConfig: {
+          agents: {
+            entries: {
+              main: { default: true },
+              ops: { default: true },
+            },
+          },
+        },
+        touchedPaths: [["agents", "entries", "ops", "default"]],
+        resolveModelRef,
+      }),
+    ).resolves.toEqual({ refsChecked: 0, refsTotal: 0, errors: [] });
+  });
+
+  it("revalidates fallbacks when roster repair also changes an ambiguous default provider", async () => {
+    const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
+
+    const result = await checkTouchedTextModelRefs({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "provider-b/main", fallbacks: ["backup"] },
+          },
+          entries: {
+            main: { default: true },
+            ops: {},
+          },
+        },
+      },
+      previousConfig: {
+        agents: {
+          defaults: {
+            model: { primary: "provider-a/main", fallbacks: ["backup"] },
+          },
+          entries: {
+            main: { default: true },
+            ops: { default: true },
+          },
+        },
+      },
+      touchedPaths: [
+        ["agents", "defaults", "model", "primary"],
+        ["agents", "entries", "ops", "default"],
+      ],
+      resolveModelRef,
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(resolveModelRef.mock.calls.map(([call]) => call.ref.path)).toContain(
+      "agents.defaults.model.fallbacks.0",
+    );
+  });
+
   it("validates touched fallback and per-agent model refs", async () => {
     const resolveModelRef = vi.fn(async (_params: ResolverInput) => undefined);
     const config: OpenClawConfig = {

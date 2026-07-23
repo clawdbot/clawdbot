@@ -1459,6 +1459,7 @@ export function resolvePersistCandidateForWrite(params: {
   sourceConfigBeforeMigrations?: unknown;
   nextConfig: unknown;
   rootAuthoredConfig?: unknown;
+  agentRosterIncludeOwned?: boolean;
   unsetPaths?: readonly string[][];
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: unknown;
@@ -1473,6 +1474,7 @@ export function resolvePersistCandidateForWrite(params: {
     configIncludeOwnsAgentRosterValues({
       parsed: rootAuthoredConfig,
       sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations ?? params.sourceConfig,
+      includeContributesRoster: params.agentRosterIncludeOwned,
     });
   if (includeOwnsRoster) {
     // Canonical roster writes replace the whole roster atomically. Any included contribution

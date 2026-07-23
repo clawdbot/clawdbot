@@ -72,10 +72,9 @@ export function loadReplySessionInitializationSnapshot(params: {
 }): ReplySessionInitializationSnapshot {
   const storePath = resolveSessionStorePathForScope(params);
   const store = Object.fromEntries(
-    listSessionEntriesReadOnly({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntriesReadOnly({ agentId: params.agentId, storePath }).map(
+      ({ sessionKey, entry }) => [sessionKey, entry],
+    ),
   );
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;

@@ -92,6 +92,52 @@ describe("persisted implicit-main roster migration", () => {
     });
   });
 
+  it("keeps an unrelated ancestor include from owning a locally authored roster", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({
+          $include: "./channels.json",
+          agents: { entries: {} },
+        }),
+      );
+      await fs.writeFile(
+        path.join(configDir, "channels.json"),
+        JSON.stringify({ channels: { telegram: { enabled: true } } }),
+      );
+      resetConfigRuntimeState();
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.includeProvenance?.agentRoster).toBe(false);
+      expect(configIncludeOwnsAgentRoster(snapshot)).toBe(false);
+    });
+  });
+
+  it("records an identical ancestor roster contribution as include-owned", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const entries = { main: { default: true } };
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({ $include: "./base.json", agents: { entries } }),
+      );
+      await fs.writeFile(
+        path.join(configDir, "base.json"),
+        JSON.stringify({ agents: { entries } }),
+      );
+      resetConfigRuntimeState();
+
+      const snapshot = await readConfigFileSnapshot();
+
+      expect(snapshot.includeProvenance?.agentRoster).toBe(true);
+      expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
+    });
+  });
+
   it("preserves malformed agents values for validation", () => {
     expect(migratePersistedImplicitMainRoster({ agents: "invalid" })).toEqual({
       config: { agents: "invalid" },

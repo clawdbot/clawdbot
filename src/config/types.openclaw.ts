@@ -279,6 +279,8 @@ export type ConfigFileSnapshot = {
   path: string;
   /** Lexical and canonical file paths reached while resolving $include directives. */
   includedPaths?: string[];
+  /** Include contribution provenance needed by authored-layer repair decisions. */
+  includeProvenance?: { agentRoster: boolean };
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */

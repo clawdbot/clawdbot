@@ -23,12 +23,20 @@ function readRosterValue(raw: unknown): unknown {
   return Object.hasOwn(raw.agents, "list") ? raw.agents.list : undefined;
 }
 
-function hasAncestorRosterInclude(raw: unknown): boolean {
-  return (
-    isRecord(raw) &&
-    (Object.hasOwn(raw, INCLUDE_KEY) ||
-      (isRecord(raw.agents) && Object.hasOwn(raw.agents, INCLUDE_KEY)))
-  );
+export function includeContributionOwnsAgentRoster(event: {
+  path: readonly string[];
+  value: unknown;
+}): boolean {
+  if (event.path.length === 0) {
+    return hasAgentRosterProperty(event.value);
+  }
+  if (event.path.length === 1 && event.path[0] === "agents") {
+    return (
+      isRecord(event.value) &&
+      (Object.hasOwn(event.value, "entries") || Object.hasOwn(event.value, "list"))
+    );
+  }
+  return event.path[0] === "agents" && (event.path[1] === "entries" || event.path[1] === "list");
 }
 
 /** Whether include/env resolution produced a non-empty roster before raw migrations. */
@@ -40,6 +48,7 @@ export function hasResolvedRosterBeforeMigrations(snapshot: ConfigFileSnapshot):
 export function configIncludeOwnsAgentRosterValues(params: {
   parsed: unknown;
   sourceConfigBeforeMigrations: unknown;
+  includeContributesRoster?: boolean;
 }): boolean {
   const resolved = params.sourceConfigBeforeMigrations;
   if (!hasAgentRosterProperty(resolved)) {
@@ -49,13 +58,7 @@ export function configIncludeOwnsAgentRosterValues(params: {
   if (containsIncludeDirective(authoredRoster)) {
     return true;
   }
-  if (!hasAncestorRosterInclude(params.parsed)) {
-    return false;
-  }
-  // Shape comparison cannot prove that an ancestor include contributed nothing:
-  // an included entry may be byte-identical to the local one. Treat that
-  // ambiguity as include ownership so later writes cannot flatten or delete it.
-  return true;
+  return params.includeContributesRoster === true;
 }
 
 /** Whether an include, rather than the authored root, owns agents.entries. */
@@ -63,5 +66,6 @@ export function configIncludeOwnsAgentRoster(snapshot: ConfigFileSnapshot): bool
   return configIncludeOwnsAgentRosterValues({
     parsed: snapshot.parsed,
     sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+    includeContributesRoster: snapshot.includeProvenance?.agentRoster,
   });
 }

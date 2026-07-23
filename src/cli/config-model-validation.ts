@@ -4,6 +4,7 @@ import {
   resolveAgentExplicitModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -155,11 +156,12 @@ function collectTouchedTextModelRefs(params: {
     ? new Map(previousRefs.map((ref) => [modelRefComparisonKey(ref), ref]))
     : undefined;
   const previousDefaultAgentId = params.previousConfig
-    ? resolveDefaultAgentId(params.previousConfig)
+    ? tryResolveDefaultAgentId(params.previousConfig)
     : undefined;
   const defaultPrimaryProviderChanged =
     defaultPrimaryTouched &&
     (!previousRefs ||
+      previousDefaultAgentId === undefined ||
       resolveDefaultModelForAgent({ cfg: params.config }).provider !==
         resolveDefaultModelForAgent({
           cfg: params.previousConfig!,
