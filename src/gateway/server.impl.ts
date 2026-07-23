@@ -1574,7 +1574,7 @@ export async function startGatewayServer(
       removeRemoteNodeInfoForConnection(nodeId, connId);
     },
   });
-  listConnectedNodesForReadiness = () => nodeRegistry.listConnected();
+  listConnectedNodesForReadiness = () => nodeRegistry.listCurrentConnectedSync();
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
     nodeRegistry,

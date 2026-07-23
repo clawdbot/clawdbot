@@ -10,11 +10,10 @@ import type { HostingProfileId } from "./types.js";
 export const HOSTING_PROFILE_IDS = ["local", "container", "reverse-proxy", "node-mode"] as const;
 
 export const HOSTING_PROFILE_ENV = "OPENCLAW_HOSTING_PROFILE";
-export const HOSTING_PROFILE_CONTRACT_VERSION = 1 as const;
 
-export type HostingProfileSource = "argument" | "environment" | "config";
+type HostingProfileSource = "argument" | "environment" | "config";
 
-export type HostingProfileSelection = {
+type HostingProfileSelection = {
   profile: HostingProfileId;
   source: HostingProfileSource;
 };
@@ -98,12 +97,6 @@ export function resolveHostingProfileSelection(
   }
   const config = resolveExplicitHostingProfile(params.config?.hosting?.profile, "hosting.profile");
   return config ? { profile: config, source: "config" } : undefined;
-}
-
-export function resolveHostingProfile(
-  params: Parameters<typeof resolveHostingProfileSelection>[0] = {},
-): HostingProfileId | undefined {
-  return resolveHostingProfileSelection(params)?.profile;
 }
 
 type HostingRuntimeFacts = {
@@ -232,18 +225,22 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
       message: "Trusted-proxy auth requires a non-empty userHeader.",
     };
   }
-  if (facts.trustedProxySources.length === 0) {
+  const validSources = facts.trustedProxySources.filter((source) => {
+    const candidate = source.trim();
+    const address = candidate.split("/", 1)[0];
+    return Boolean(address && isTrustedProxyAddress(address, [candidate]));
+  });
+  if (validSources.length === 0) {
     return {
       type: "TrustedProxyReady",
       status: "False",
       requirement: "required",
       reason: "TrustedProxySourcesMissing",
-      message: "Reverse-proxy profile requires at least one trusted proxy source.",
+      message: "Reverse-proxy profile requires at least one valid trusted proxy source.",
     };
   }
   const loopbackConfigured =
-    isTrustedProxyAddress("127.0.0.1", facts.trustedProxySources) ||
-    isTrustedProxyAddress("::1", facts.trustedProxySources);
+    isTrustedProxyAddress("127.0.0.1", validSources) || isTrustedProxyAddress("::1", validSources);
   if (loopbackConfigured && !facts.trustedProxyAllowLoopback) {
     return {
       type: "TrustedProxyReady",
@@ -259,7 +256,7 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
     status: "True",
     requirement: "required",
     reason: "TrustedProxyReady",
-    message: `Trusted-proxy auth accepts ${facts.trustedProxyUserHeader} from ${facts.trustedProxySources.length} configured source${facts.trustedProxySources.length === 1 ? "" : "s"}.`,
+    message: `Trusted-proxy auth accepts ${facts.trustedProxyUserHeader} from ${validSources.length} configured source${validSources.length === 1 ? "" : "s"}.`,
   };
 }
 

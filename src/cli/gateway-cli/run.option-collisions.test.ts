@@ -456,6 +456,7 @@ describe("gateway run option collisions", () => {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
       channelAutostartSuppression?: { reason?: string };
+      hostingProfileOverride?: string;
       ambientEnvTriggers?: "allow" | "suppress";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;

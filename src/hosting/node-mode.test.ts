@@ -46,6 +46,28 @@ describe("resolveNodeModeReadinessEvidence", () => {
     });
   });
 
+  it("ignores a connected session from a retired pairing generation", async () => {
+    listNodePairing.mockResolvedValue({
+      paired: [{ nodeId: "node-1", commands: ["system.run"], pairingGeneration: "generation-2" }],
+      pending: [],
+    });
+
+    const evidence = await resolveNodeModeReadinessEvidence({
+      config: {},
+      connectedNodes: [
+        {
+          nodeId: "node-1",
+          pairingGeneration: "generation-1",
+          commands: ["system.run"],
+        } as never,
+      ],
+    });
+
+    expect(evidence.targets?.connectedCount).toBe(0);
+    expect(evidence.controlChannel?.connectedCount).toBe(0);
+    expect(evidence.commandApproval?.configured).toBe(false);
+  });
+
   it("applies the canonical command deny policy to paired commands", async () => {
     listNodePairing.mockResolvedValue({
       paired: [{ nodeId: "node-1", commands: ["system.run"] }],
@@ -155,8 +177,11 @@ describe("resolveNodeModeReadinessEvidence", () => {
   });
 
   it("returns timed-out pairing evidence when the pairing read never settles", async () => {
+    let now = 0;
+    const loadPairing = vi.fn(() => new Promise<never>(() => {}));
     const resolveEvidence = createNodeModeReadinessEvidenceResolver({
-      listPairing: () => new Promise(() => {}),
+      listPairing: loadPairing,
+      now: () => now,
       timeoutMs: 5,
       cacheTtlMs: 0,
     });
@@ -165,6 +190,21 @@ describe("resolveNodeModeReadinessEvidence", () => {
       pairing: {
         timedOut: true,
         error: "Node pairing readiness exceeded 5ms.",
+      },
+    });
+    now = 10;
+    await resolveEvidence({ config: {}, connectedNodes: [] });
+    expect(loadPairing).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not expose pairing store exception messages", async () => {
+    const resolveEvidence = createNodeModeReadinessEvidenceResolver({
+      listPairing: () => Promise.reject(new Error("failed with token=secret")),
+    });
+
+    await expect(resolveEvidence({ config: {}, connectedNodes: [] })).resolves.toMatchObject({
+      pairing: {
+        error: "Node pairing state is unavailable.",
       },
     });
   });
