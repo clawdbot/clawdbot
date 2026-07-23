@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -22,19 +23,25 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardCard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
+import {
+  WorkboardStaleSnapshotError,
+  type PersistedWorkboardAttachment,
+  type PersistedWorkboardBoard,
+  type PersistedWorkboardCard,
+  type PersistedWorkboardNotificationSubscription,
+  type WorkboardKeyedStore,
 } from "./persistence-types.js";
+import { assertProofHistoryTransition } from "./store-card-helpers.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
 const SCHEMA_VERSION = 3;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
+// Enumerable symbol properties survive top-level card spreads, which keeps the read snapshot
+// bound to derived writes. Symbol keys are intentionally omitted from JSON output and fingerprints.
+const WORKBOARD_CARD_SNAPSHOT = Symbol("workboard.cardSnapshot");
 type Row = Record<string, unknown>;
+type SnapshotCard = WorkboardCard & { [WORKBOARD_CARD_SNAPSHOT]?: string };
 type WorkboardSqliteStores = {
   cards: WorkboardKeyedStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
@@ -43,6 +50,27 @@ type WorkboardSqliteStores = {
   dataVersion: () => number;
   close: () => void;
 };
+
+function cardFingerprint(card: WorkboardCard): string {
+  return createHash("sha256").update(JSON.stringify(card)).digest("hex");
+}
+
+function cardSnapshot(card: WorkboardCard): string | undefined {
+  return (card as SnapshotCard)[WORKBOARD_CARD_SNAPSHOT];
+}
+
+function attachCardSnapshot(
+  card: WorkboardCard,
+  fingerprint = cardFingerprint(card),
+): WorkboardCard {
+  Object.defineProperty(card, WORKBOARD_CARD_SNAPSHOT, {
+    configurable: true,
+    enumerable: true,
+    value: fingerprint,
+    writable: true,
+  });
+  return card;
+}
 
 export function resolveWorkboardSqlitePath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), ...WORKBOARD_DB_RELATIVE_PATH);
@@ -588,6 +616,33 @@ function readExecution(row: Row): WorkboardExecution | undefined {
   };
 }
 
+function readProof(db: DatabaseSync, cardId: string, preloaded?: CardChildRows): WorkboardProof[] {
+  return childRows(db, "workboard_card_proof", cardId, preloaded).map((child) => {
+    const entry: WorkboardProof = {
+      id: requiredString(child, "id"),
+      status: requiredString(child, "status") as WorkboardProof["status"],
+      createdAt: requiredNumber(child, "created_at"),
+    };
+    const label = stringValue(child, "label");
+    const command = stringValue(child, "command");
+    const url = stringValue(child, "url");
+    const note = stringValue(child, "note");
+    if (label) {
+      entry.label = label;
+    }
+    if (command) {
+      entry.command = command;
+    }
+    if (url) {
+      entry.url = url;
+    }
+    if (note) {
+      entry.note = note;
+    }
+    return entry;
+  });
+}
+
 function readMetadata(
   db: DatabaseSync,
   row: Row,
@@ -662,30 +717,7 @@ function readMetadata(
     }
     return entry;
   });
-  const proof = childRows(db, "workboard_card_proof", cardId, preloaded).map((child) => {
-    const entry: WorkboardProof = {
-      id: requiredString(child, "id"),
-      status: requiredString(child, "status") as WorkboardProof["status"],
-      createdAt: requiredNumber(child, "created_at"),
-    };
-    const label = stringValue(child, "label");
-    const command = stringValue(child, "command");
-    const url = stringValue(child, "url");
-    const note = stringValue(child, "note");
-    if (label) {
-      entry.label = label;
-    }
-    if (command) {
-      entry.command = command;
-    }
-    if (url) {
-      entry.url = url;
-    }
-    if (note) {
-      entry.note = note;
-    }
-    return entry;
-  });
+  const proof = readProof(db, cardId, preloaded);
   const artifacts = childRows(db, "workboard_card_artifacts", cardId, preloaded).map((child) => {
     const entry: WorkboardArtifact = {
       id: requiredString(child, "id"),
@@ -883,6 +915,14 @@ function insertChildren<T>(
 ): void {
   db.prepare(`DELETE FROM ${table} WHERE card_id = ?`).run(cardId);
   entries?.forEach(insert);
+}
+
+function assertPersistedProofHistoryTransition(db: DatabaseSync, card: WorkboardCard): void {
+  assertProofHistoryTransition(
+    readProof(db, card.id),
+    card.metadata?.proof,
+    "persisted card update",
+  );
 }
 
 function insertCard(db: DatabaseSync, card: WorkboardCard): void {
@@ -1198,18 +1238,67 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
 class WorkboardSqliteCardStore implements WorkboardKeyedStore {
   constructor(private readonly db: DatabaseSync) {}
 
-  async register(key: string, value: PersistedWorkboardCard): Promise<void> {
+  private assertPayload(key: string, value: PersistedWorkboardCard): void {
     if (value.version !== 1 || value.card.id !== key) {
       throw new Error("invalid workboard card payload");
     }
-    runTransaction(this.db, () => insertCard(this.db, value.card));
+  }
+
+  private write(
+    key: string,
+    value: PersistedWorkboardCard,
+    expected?: PersistedWorkboardCard,
+  ): void {
+    this.assertPayload(key, value);
+    if (expected) {
+      this.assertPayload(key, expected);
+    }
+    const fingerprint = runTransaction(this.db, () => {
+      const currentRow = this.db.prepare("SELECT * FROM workboard_cards WHERE id = ?").get(key) as
+        | Row
+        | undefined;
+      if (currentRow) {
+        const expectedFingerprint = cardSnapshot(expected?.card ?? value.card);
+        const currentCard = readCard(this.db, currentRow);
+        if (!expectedFingerprint || cardFingerprint(currentCard) !== expectedFingerprint) {
+          throw new WorkboardStaleSnapshotError(key);
+        }
+        // Child rows are rewritten from the card snapshot. Both guards run before any DELETE so
+        // stale snapshots and proof-history rewrites fail the entire transaction. CAS runs first
+        // so semantic metadata mutations can retry from the current canonical card.
+        assertPersistedProofHistoryTransition(this.db, value.card);
+      } else if (expected || cardSnapshot(value.card)) {
+        throw new WorkboardStaleSnapshotError(key);
+      }
+      insertCard(this.db, value.card);
+      const persistedRow = this.db
+        .prepare("SELECT * FROM workboard_cards WHERE id = ?")
+        .get(key) as Row | undefined;
+      if (!persistedRow) {
+        throw new Error(`workboard card was not persisted: ${key}`);
+      }
+      return cardFingerprint(readCard(this.db, persistedRow));
+    });
+    attachCardSnapshot(value.card, fingerprint);
+  }
+
+  async register(key: string, value: PersistedWorkboardCard): Promise<void> {
+    this.write(key, value);
+  }
+
+  async compareAndSwap(
+    key: string,
+    expected: PersistedWorkboardCard,
+    value: PersistedWorkboardCard,
+  ): Promise<void> {
+    this.write(key, value, expected);
   }
 
   async lookup(key: string): Promise<PersistedWorkboardCard | undefined> {
     const row = this.db.prepare("SELECT * FROM workboard_cards WHERE id = ?").get(key) as
       | Row
       | undefined;
-    return row ? { version: 1, card: readCard(this.db, row) } : undefined;
+    return row ? { version: 1, card: attachCardSnapshot(readCard(this.db, row)) } : undefined;
   }
 
   async delete(key: string): Promise<boolean> {
@@ -1238,7 +1327,7 @@ class WorkboardSqliteCardStore implements WorkboardKeyedStore {
     const preloaded = loadCardChildRows(this.db);
     return rows.map((row) => ({
       key: requiredString(row, "id"),
-      value: { version: 1, card: readCard(this.db, row, preloaded) },
+      value: { version: 1, card: attachCardSnapshot(readCard(this.db, row, preloaded)) },
     }));
   }
 }

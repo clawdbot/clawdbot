@@ -7,15 +7,17 @@ import type {
   WorkboardMetadata,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardCard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
+import {
+  WorkboardStaleSnapshotError,
+  type PersistedWorkboardAttachment,
+  type PersistedWorkboardBoard,
+  type PersistedWorkboardCard,
+  type PersistedWorkboardNotificationSubscription,
+  type WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
 import {
+  assertProofHistoryTransition,
   assertCanMutateClaimedCard,
   cardBoardId,
   cardParentIds,
@@ -63,9 +65,15 @@ import {
   normalizeTemplateId,
   normalizeTimestamp,
   normalizeTitle,
+  removeUndefinedMetadataFields,
   syncExecutionSessionKey,
-  trimMetadataToBudget,
 } from "./store-normalizers.js";
+
+const MAX_METADATA_WRITE_ATTEMPTS = 3;
+type WorkboardUpdateOptions = {
+  allowMetadataDependencyLinks?: boolean;
+  enforceStatusHolds?: boolean;
+};
 
 export class WorkboardCoreStore {
   private mutationQueue: Promise<unknown> = Promise.resolve();
@@ -122,15 +130,41 @@ export class WorkboardCoreStore {
   protected async updateMetadata(
     id: string,
     mutate: (existing: WorkboardCard) => WorkboardMetadata,
-    options: { preserveProofId?: string } = {},
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.get(id);
-      if (!existing) {
-        throw new Error(`card not found: ${id}`);
+      for (let attempt = 1; attempt <= MAX_METADATA_WRITE_ATTEMPTS; attempt += 1) {
+        const existing = await this.get(id);
+        if (!existing) {
+          throw new Error(`card not found: ${id}`);
+        }
+        try {
+          // Re-run the semantic append against a fresh snapshot after a cross-connection CAS miss.
+          return await this.updateCardFromSnapshot(existing, {
+            metadata: mutate(existing),
+          });
+        } catch (error) {
+          if (
+            !(error instanceof WorkboardStaleSnapshotError) ||
+            attempt === MAX_METADATA_WRITE_ATTEMPTS
+          ) {
+            throw error;
+          }
+        }
       }
-      return await this.updateCard(id, { metadata: mutate(existing) }, options);
+      throw new Error("unreachable metadata write retry state");
     });
+  }
+
+  protected async persistCard(card: WorkboardCard, existing?: WorkboardCard): Promise<void> {
+    if (existing) {
+      assertProofHistoryTransition(existing.metadata?.proof, card.metadata?.proof);
+    }
+    const value = { version: 1 as const, card };
+    if (existing && this.store.compareAndSwap) {
+      await this.store.compareAndSwap(card.id, { version: 1, card: existing }, value);
+      return;
+    }
+    await this.store.register(card.id, value);
   }
 
   protected async deleteDetachedAttachments(
@@ -292,19 +326,23 @@ export class WorkboardCoreStore {
     return entry?.version === 1 ? entry.card : undefined;
   }
 
-  private async removeReferencesToCard(cardId: string): Promise<void> {
+  private async removeReferencesToCard(cardId: string): Promise<WorkboardCard[]> {
+    const updatedCards: WorkboardCard[] = [];
     for (const card of await this.list()) {
       const links = card.metadata?.links;
       if (!links?.some((link) => link.targetCardId === cardId)) {
         continue;
       }
-      await this.updateCard(card.id, {
-        metadata: {
-          ...card.metadata,
-          links: links.filter((link) => link.targetCardId !== cardId),
-        },
-      });
+      updatedCards.push(
+        await this.updateCard(card.id, {
+          metadata: {
+            ...card.metadata,
+            links: links.filter((link) => link.targetCardId !== cardId),
+          },
+        }),
+      );
     }
+    return updatedCards;
   }
 
   async create(
@@ -317,6 +355,7 @@ export class WorkboardCoreStore {
   protected async createDirect(
     input: WorkboardLinkedCreateInput,
     scope?: WorkboardMutationScope,
+    options: { onParentPersisted?: (parent: WorkboardCard) => void } = {},
   ): Promise<WorkboardCard> {
     const now = Date.now();
     const requestedStatus = normalizeStatus(input.status, "todo");
@@ -391,7 +430,7 @@ export class WorkboardCoreStore {
       },
       { allowDependencyLinks: false, allowArchivedAt: false },
     );
-    const syncedMetadata = trimMetadataToBudget(
+    const syncedMetadata = removeUndefinedMetadataFields(
       syncExecutionAttemptMetadata(metadata, execution, now),
     );
     const boardId = syncedMetadata.automation?.boardId ?? "default";
@@ -433,17 +472,23 @@ export class WorkboardCoreStore {
       ...(completedAt ? { completedAt } : {}),
       ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
     };
-    await this.store.register(card.id, { version: 1, card });
+    await this.persistCard(card);
     try {
       for (const parent of parentCards) {
         card = await this.linkCardsDirect(parent.id, card.id, now, {
           allowStatusOnlyActiveChild: true,
+          onParentPersisted: options.onParentPersisted,
           scope,
         });
       }
     } catch (error) {
       await this.store.delete(card.id);
-      await this.removeReferencesToCard(card.id);
+      const cleanedParents = await this.removeReferencesToCard(card.id);
+      for (const cleanedParent of cleanedParents) {
+        if (parents.includes(cleanedParent.id)) {
+          options.onParentPersisted?.(cleanedParent);
+        }
+      }
       throw error;
     }
     return card;
@@ -462,16 +507,20 @@ export class WorkboardCoreStore {
   protected async updateCard(
     id: string,
     patch: WorkboardCardPatch,
-    options: {
-      allowMetadataDependencyLinks?: boolean;
-      enforceStatusHolds?: boolean;
-      preserveProofId?: string;
-    } = {},
+    options: WorkboardUpdateOptions = {},
   ): Promise<WorkboardCard> {
     const existing = await this.get(id);
     if (!existing) {
       throw new Error(`card not found: ${id}`);
     }
+    return await this.updateCardFromSnapshot(existing, patch, options);
+  }
+
+  private async updateCardFromSnapshot(
+    existing: WorkboardCard,
+    patch: WorkboardCardPatch,
+    options: WorkboardUpdateOptions = {},
+  ): Promise<WorkboardCard> {
     const lifecycleStatusSourceUpdatedAt = lifecycleStatusSourceUpdatedAtFromPatch(patch.metadata);
     const existingLifecycleStatusSourceUpdatedAt =
       existing.metadata?.lifecycleStatusSourceUpdatedAt;
@@ -524,7 +573,6 @@ export class WorkboardCoreStore {
         : normalizeExecution(effectivePatch.execution);
     let metadata = normalizeMetadata(effectivePatch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
-      preserveProofId: options.preserveProofId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
       // Status patches often spread existing metadata. Only a newly supplied
@@ -549,13 +597,10 @@ export class WorkboardCoreStore {
       }
     }
     if (Object.keys(automationPatch).length > 0) {
-      metadata = trimMetadataToBudget(
-        {
-          ...metadata,
-          automation: normalizeAutomationPatch(automationPatch, metadata.automation),
-        },
-        options,
-      );
+      metadata = removeUndefinedMetadataFields({
+        ...metadata,
+        automation: normalizeAutomationPatch(automationPatch, metadata.automation),
+      });
     }
     const next = removeUndefinedCardFields({
       ...existing,
@@ -602,9 +647,8 @@ export class WorkboardCoreStore {
       ...(startedAt ? { startedAt } : {}),
       ...(completedAt ? { completedAt } : {}),
     });
-    next.metadata = trimMetadataToBudget(
+    next.metadata = removeUndefinedMetadataFields(
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
-      options,
     );
     next.events = appendEvent(next, updateEvent(existing, next), now);
     if (options.enforceStatusHolds && effectivePatch.status !== undefined) {
@@ -622,7 +666,7 @@ export class WorkboardCoreStore {
     if (metadataIsEmpty(next.metadata)) {
       delete next.metadata;
     }
-    await this.store.register(next.id, { version: 1, card: next });
+    await this.persistCard(next, existing);
     await this.deleteDetachedAttachments(existing, next);
     return next;
   }
@@ -742,7 +786,11 @@ export class WorkboardCoreStore {
     parentId: string,
     childId: string,
     now = Date.now(),
-    options: { allowStatusOnlyActiveChild?: boolean; scope?: WorkboardMutationScope } = {},
+    options: {
+      allowStatusOnlyActiveChild?: boolean;
+      onParentPersisted?: (parent: WorkboardCard) => void;
+      scope?: WorkboardMutationScope;
+    } = {},
   ): Promise<WorkboardCard> {
     if (parentId.trim() === childId.trim()) {
       throw new Error("parent and child cards must differ.");
@@ -794,9 +842,10 @@ export class WorkboardCoreStore {
           targetCardId: parent.id,
           createdAt: now,
         });
-    await this.updateCard(parent.id, {
+    const nextParent = await this.updateCard(parent.id, {
       metadata: { ...parent.metadata, links: nextParentLinks },
     });
+    options.onParentPersisted?.(nextParent);
     const nextChild = await this.updateCard(child.id, {
       metadata: { ...child.metadata, links: nextChildLinks },
     });
@@ -857,7 +906,7 @@ export class WorkboardCoreStore {
   }
 
   protected async recordDispatch(card: WorkboardCard, now: number): Promise<WorkboardCard> {
-    const metadata = trimMetadataToBudget(
+    const metadata = removeUndefinedMetadataFields(
       normalizeMetadata(
         {
           ...card.metadata,
@@ -878,7 +927,7 @@ export class WorkboardCoreStore {
       ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
       events: appendEvent(card, { kind: "dispatch" }, now),
     });
-    await this.store.register(card.id, { version: 1, card: next });
+    await this.persistCard(next, card);
     return next;
   }
 
@@ -886,7 +935,7 @@ export class WorkboardCoreStore {
     card: WorkboardCard,
     now: number,
   ): Promise<WorkboardCard> {
-    const metadata = trimMetadataToBudget({
+    const metadata = removeUndefinedMetadataFields({
       ...card.metadata,
       workerLogs: [
         ...(card.metadata?.workerLogs ?? []),
@@ -908,7 +957,7 @@ export class WorkboardCoreStore {
       ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
       events: appendEvent(card, { kind: "orchestration" }, now),
     });
-    await this.store.register(card.id, { version: 1, card: next });
+    await this.persistCard(next, card);
     return next;
   }
 

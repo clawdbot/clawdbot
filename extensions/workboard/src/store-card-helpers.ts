@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   WORKBOARD_STATUSES,
   type WorkboardAttemptStatus,
@@ -11,6 +12,7 @@ import {
   type WorkboardExecution,
   type WorkboardMetadata,
   type WorkboardNotification,
+  type WorkboardProof,
   type WorkboardRunAttempt,
   type WorkboardStatus,
 } from "@openclaw/workboard-contract";
@@ -131,12 +133,54 @@ export function appendEvent(
   ].slice(-MAX_CARD_EVENTS);
 }
 
+function proofEvidence(proof: WorkboardProof): Omit<WorkboardProof, "status"> {
+  const { status: _status, ...evidence } = proof;
+  return evidence;
+}
+
+export function assertProofHistoryTransition(
+  existing: readonly WorkboardProof[] | undefined,
+  next: readonly WorkboardProof[] | undefined,
+  context = "card update",
+): void {
+  const existingEntries = existing ?? [];
+  const nextEntries = next ?? [];
+  const nextIds = new Set(nextEntries.map((proof) => proof.id));
+  if (nextIds.size !== nextEntries.length) {
+    throw new Error(`${context} cannot contain duplicate proof ids.`);
+  }
+  for (const [index, previous] of existingEntries.entries()) {
+    const current = nextEntries[index];
+    if (!current || !nextIds.has(previous.id)) {
+      throw new Error(`${context} cannot remove proof history: ${previous.id}`);
+    }
+    if (current.id !== previous.id) {
+      throw new Error(`${context} must append new proof after existing history: ${previous.id}`);
+    }
+    if (!isDeepStrictEqual(proofEvidence(previous), proofEvidence(current))) {
+      throw new Error(`${context} cannot rewrite proof evidence: ${previous.id}`);
+    }
+    const resolvesPendingProof = previous.status === "unknown" && current.status !== "unknown";
+    if (current.status !== previous.status && !resolvesPendingProof) {
+      throw new Error(`${context} cannot rewrite proof status: ${previous.id}`);
+    }
+  }
+}
+
 function latestMetadataIdChanged(
   existing: readonly { id: string }[] | undefined,
   next: readonly { id: string }[] | undefined,
 ): boolean {
   const latestId = next?.at(-1)?.id;
   return Boolean(latestId && latestId !== existing?.at(-1)?.id);
+}
+
+function metadataIdAdded(
+  existing: readonly { id: string }[] | undefined,
+  next: readonly { id: string }[] | undefined,
+): boolean {
+  const existingIds = new Set(existing?.map((entry) => entry.id));
+  return next?.some((entry) => !existingIds.has(entry.id)) ?? false;
 }
 
 export function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
@@ -254,10 +298,7 @@ export function updateEvent(
   ) {
     return { kind: "link_added" };
   }
-  if (
-    (existing.metadata?.proof?.length ?? 0) !== (next.metadata?.proof?.length ?? 0) ||
-    latestMetadataIdChanged(existing.metadata?.proof, next.metadata?.proof)
-  ) {
+  if (metadataIdAdded(existing.metadata?.proof, next.metadata?.proof)) {
     return { kind: "proof_added" };
   }
   if (

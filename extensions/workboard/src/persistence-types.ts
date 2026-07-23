@@ -27,8 +27,16 @@ export type PersistedWorkboardAttachment = {
   contentBase64: string;
 };
 
+export class WorkboardStaleSnapshotError extends Error {
+  constructor(cardId: string) {
+    super(`workboard card changed since it was read: ${cardId}`);
+    this.name = "WorkboardStaleSnapshotError";
+  }
+}
+
 export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   register(key: string, value: T): Promise<void>;
+  compareAndSwap?(key: string, expected: T, value: T): Promise<void>;
   lookup(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
   entries(): Promise<Array<{ key: string; value: T }>>;

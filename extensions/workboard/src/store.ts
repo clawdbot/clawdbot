@@ -37,7 +37,7 @@ import {
   metadataIsEmpty,
   normalizeBoardId,
   normalizeTimestamp,
-  trimMetadataToBudget,
+  removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 
@@ -238,12 +238,12 @@ export class WorkboardStore extends WorkboardNotificationStore {
         if (diagnostics.length === 0 && !latest.metadata?.diagnostics?.length) {
           continue;
         }
-        const metadata = trimMetadataToBudget({ ...latest.metadata, diagnostics });
+        const metadata = removeUndefinedMetadataFields({ ...latest.metadata, diagnostics });
         const next = removeUndefinedCardFields({
           ...latest,
           metadata: metadataIsEmpty(metadata) ? undefined : metadata,
         });
-        await this.store.register(next.id, { version: 1, card: next });
+        await this.persistCard(next, latest);
         if (diagnostics.length > 0) {
           rows.push({ card: next, diagnostics });
         }

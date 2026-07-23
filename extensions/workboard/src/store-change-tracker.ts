@@ -14,11 +14,20 @@ export class WorkboardChangeTracker {
   }
 
   track<T>(store: WorkboardKeyedStore<T>): WorkboardKeyedStore<T> {
+    const compareAndSwap = store.compareAndSwap?.bind(store);
     return {
       register: async (key, value) => {
         await store.register(key, value);
         this.mutationRevision += 1;
       },
+      ...(compareAndSwap
+        ? {
+            compareAndSwap: async (key: string, expected: T, value: T) => {
+              await compareAndSwap(key, expected, value);
+              this.mutationRevision += 1;
+            },
+          }
+        : {}),
       lookup: async (key) => await store.lookup(key),
       delete: async (key) => {
         const deleted = await store.delete(key);

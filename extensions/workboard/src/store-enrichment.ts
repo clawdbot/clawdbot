@@ -17,7 +17,6 @@ import {
   MAX_CARD_ARTIFACTS,
   MAX_CARD_ATTACHMENTS,
   MAX_CARD_NOTIFICATIONS,
-  MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
 } from "./store-constants.js";
 import { WorkboardCoreStore } from "./store-core.js";
@@ -45,18 +44,14 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
   ): Promise<WorkboardCard> {
     const now = Date.now();
     const proof = normalizeProofInput(input, now);
-    return await this.updateMetadata(
-      id,
-      (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-        };
-      },
-      { preserveProofId: proof.id },
-    );
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+      return {
+        ...metadata,
+        proof: [...(metadata.proof ?? []), proof],
+      };
+    });
   }
 
   async addProofWithArtifact(
@@ -71,19 +66,15 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!artifact) {
       throw new Error("artifact url or path is required.");
     }
-    return await this.updateMetadata(
-      id,
-      (existing) => {
-        assertCanMutateClaimedCard(existing, scope);
-        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-        return {
-          ...metadata,
-          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-          artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
-        };
-      },
-      { preserveProofId: proof.id },
-    );
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+      return {
+        ...metadata,
+        proof: [...(metadata.proof ?? []), proof],
+        artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
+      };
+    });
   }
 
   async addArtifact(
@@ -134,7 +125,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
         });
         if (!updated.metadata?.attachments?.some((entry) => entry.id === attachment.id)) {
           await this.attachmentStore.delete(attachment.id);
-          throw new Error("attachment metadata was trimmed before it could be indexed.");
+          throw new Error("attachment metadata was not retained.");
         }
         return updated;
       } catch (error) {

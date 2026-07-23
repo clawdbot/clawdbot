@@ -322,7 +322,6 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       },
       {
         enforceStatusHolds: true,
-        ...(proof ? { preserveProofId: proofId ?? proof.id } : {}),
       },
     );
   }
@@ -529,7 +528,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ...updated,
         events: appendEvent(updated, { kind: "specified" }, now),
       };
-      await this.store.register(specified.id, { version: 1, card: specified });
+      await this.persistCard(specified, updated);
       return specified;
     });
   }
@@ -556,6 +555,8 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const existingCardIds = new Set((await this.list()).map((card) => card.id));
       const children: WorkboardCard[] = [];
       const reusedChildSnapshots = new Map<string, WorkboardCard>();
+      const reusedChildWrittenSnapshots = new Map<string, WorkboardCard>();
+      let lastWrittenParent: WorkboardCard | undefined;
       try {
         for (const rawChild of childrenInput) {
           if (!rawChild || typeof rawChild !== "object" || Array.isArray(rawChild)) {
@@ -574,20 +575,30 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 deriveChildIdempotencyKey(parentAutomation?.idempotencyKey, children.length + 1),
             },
             scope === null ? undefined : scope,
+            {
+              onParentPersisted: (nextParent) => {
+                lastWrittenParent = nextParent;
+              },
+            },
           );
           const reusedUnlinkedChild =
             existingCardIds.has(created.id) && !cardParentIds(created).includes(parent.id);
           if (reusedUnlinkedChild) {
             reusedChildSnapshots.set(created.id, created);
           }
-          children.push(
-            cardParentIds(created).includes(parent.id)
-              ? created
-              : await this.linkCardsDirect(parent.id, created.id, Date.now(), {
-                  allowStatusOnlyActiveChild: true,
-                  scope: scope === null ? undefined : scope,
-                }),
-          );
+          const linkedChild = cardParentIds(created).includes(parent.id)
+            ? created
+            : await this.linkCardsDirect(parent.id, created.id, Date.now(), {
+                allowStatusOnlyActiveChild: true,
+                onParentPersisted: (nextParent) => {
+                  lastWrittenParent = nextParent;
+                },
+                scope: scope === null ? undefined : scope,
+              });
+          if (reusedUnlinkedChild) {
+            reusedChildWrittenSnapshots.set(created.id, linkedChild);
+          }
+          children.push(linkedChild);
         }
         const summary = normalizeBoundedString(input.summary, undefined, 2000, "decompose summary");
         const completeParent = input.completeParent !== false;
@@ -621,22 +632,28 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 { enforceStatusHolds: true },
               );
             })();
+        lastWrittenParent = updatedParent;
         const decomposedParent = {
           ...updatedParent,
           events: appendEvent(updatedParent, { kind: "decomposed" }),
         };
-        await this.store.register(decomposedParent.id, { version: 1, card: decomposedParent });
+        await this.persistCard(decomposedParent, updatedParent);
         return { parent: decomposedParent, children };
       } catch (error) {
+        for (const child of reusedChildSnapshots.values()) {
+          const writtenChild = reusedChildWrittenSnapshots.get(child.id);
+          if (writtenChild) {
+            await this.persistCard(child, writtenChild);
+          }
+        }
+        if (lastWrittenParent) {
+          await this.persistCard(parent, lastWrittenParent);
+        }
         for (const child of children.toReversed()) {
           if (!existingCardIds.has(child.id)) {
             await this.deleteDirect(child.id);
           }
         }
-        for (const child of reusedChildSnapshots.values()) {
-          await this.store.register(child.id, { version: 1, card: child });
-        }
-        await this.store.register(parent.id, { version: 1, card: parent });
         throw error;
       }
     });
