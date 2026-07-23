@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildHostingProfileConditions,
   requiredCriteriaForHostingProfile,
-  resolveHostingProfile,
   resolveHostingProfileSelection,
 } from "./profiles.js";
 
@@ -17,14 +16,7 @@ const facts = {
 
 describe("resolveHostingProfile", () => {
   it("preserves baseline readiness when unset and honors startup precedence", () => {
-    expect(resolveHostingProfile()).toBeUndefined();
-    expect(
-      resolveHostingProfile({
-        config: { hosting: { profile: "local" } },
-        env: { OPENCLAW_HOSTING_PROFILE: "container" },
-        override: "reverse-proxy",
-      }),
-    ).toBe("reverse-proxy");
+    expect(resolveHostingProfileSelection()).toBeUndefined();
     expect(
       resolveHostingProfileSelection({
         config: { hosting: { profile: "local" } },
@@ -100,6 +92,23 @@ describe("buildHostingProfileConditions", () => {
         trustedProxyAllowLoopback: true,
       }),
     ).toContainEqual(expect.objectContaining({ type: "TrustedProxyReady", status: "True" }));
+  });
+
+  it("rejects reverse-proxy profiles without a valid trusted source", () => {
+    expect(
+      buildHostingProfileConditions("reverse-proxy", {
+        ...facts,
+        authMode: "trusted-proxy",
+        trustedProxyUserHeader: "x-forwarded-user",
+        trustedProxySources: [" ", "not-an-address"],
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        type: "TrustedProxyReady",
+        status: "False",
+        reason: "TrustedProxySourcesMissing",
+      }),
+    );
   });
 
   it("requires pairing, a connected target, command approval, and a control channel", () => {

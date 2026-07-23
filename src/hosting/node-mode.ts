@@ -12,6 +12,16 @@ type NodeModeReadinessParams = {
   connectedNodes: readonly NodeSession[];
 };
 
+type NodePairingSnapshot = Awaited<ReturnType<typeof listNodePairing>> & {
+  paired: Array<
+    Awaited<ReturnType<typeof listNodePairing>>["paired"][number] & {
+      pairingGeneration?: string;
+    }
+  >;
+};
+
+type NodePairingLoader = () => Promise<NodePairingSnapshot>;
+
 function commandSet(value: unknown): Set<string> {
   return new Set(
     Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [],
@@ -20,14 +30,18 @@ function commandSet(value: unknown): Set<string> {
 
 async function resolveNodeModeReadinessEvidenceWith(
   params: NodeModeReadinessParams,
-  loadPairing: typeof listNodePairing,
+  loadPairing: NodePairingLoader,
 ): Promise<NodeModeReadinessEvidence> {
   try {
     const pairing = await loadPairing();
     const pairedByNodeId = new Map(pairing.paired.map((entry) => [entry.nodeId, entry]));
-    const connectedPairedNodes = params.connectedNodes.filter((entry) =>
-      pairedByNodeId.has(entry.nodeId),
-    );
+    const connectedPairedNodes = params.connectedNodes.filter((entry) => {
+      const paired = pairedByNodeId.get(entry.nodeId);
+      if (!paired) {
+        return false;
+      }
+      return !paired.pairingGeneration || entry.pairingGeneration === paired.pairingGeneration;
+    });
     let executableApprovedCommandCount = 0;
     for (const node of connectedPairedNodes) {
       const approvedCommands = pairedByNodeId.get(node.nodeId)?.commands ?? [];
@@ -64,7 +78,7 @@ async function resolveNodeModeReadinessEvidenceWith(
       pairing: {
         pairedCount: 0,
         pendingCount: 0,
-        error: error instanceof Error ? error.message : String(error),
+        error: "Node pairing state is unavailable.",
       },
       targets: {
         knownCount: 0,
@@ -83,30 +97,42 @@ async function resolveNodeModeReadinessEvidenceWith(
 
 export function createNodeModeReadinessEvidenceResolver(
   deps: {
-    listPairing?: typeof listNodePairing;
+    listPairing?: NodePairingLoader;
     now?: () => number;
     cacheTtlMs?: number;
     timeoutMs?: number;
   } = {},
 ): (params: NodeModeReadinessParams) => Promise<NodeModeReadinessEvidence> {
-  const listPairing = deps.listPairing ?? listNodePairing;
+  const listPairing =
+    deps.listPairing ?? (() => listNodePairing(undefined, { includePairingGeneration: true }));
   const now = deps.now ?? Date.now;
   const cacheTtlMs = Math.max(0, deps.cacheTtlMs ?? DEFAULT_NODE_MODE_PAIRING_CACHE_TTL_MS);
   const timeoutMs = Math.max(1, deps.timeoutMs ?? DEFAULT_NODE_MODE_TIMEOUT_MS);
   let cached:
     | {
         expiresAt: number;
-        value: ReturnType<typeof listNodePairing>;
+        settled: boolean;
+        value: ReturnType<NodePairingLoader>;
       }
     | undefined;
 
-  const loadCachedPairing: typeof listNodePairing = () => {
+  const loadCachedPairing: NodePairingLoader = () => {
     const observedAt = now();
-    if (!cached || observedAt >= cached.expiresAt) {
-      cached = {
+    if (!cached || (cached.settled && observedAt >= cached.expiresAt)) {
+      const next = {
         expiresAt: observedAt + cacheTtlMs,
+        settled: false,
         value: listPairing(),
       };
+      cached = next;
+      void next.value.then(
+        () => {
+          next.settled = true;
+        },
+        () => {
+          next.settled = true;
+        },
+      );
     }
     return cached.value;
   };
