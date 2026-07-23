@@ -1235,6 +1235,65 @@ describe("loadGatewayPlugins", () => {
     expect(handleGatewayRequest).not.toHaveBeenCalled();
   });
 
+  test("lets a configured plugin start only an agent run whose required receipt it owns", async () => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), {
+        id: "configured-receipt-owner",
+        origin: "config",
+      }),
+    );
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(
+      createTestContext("configured-receipt-owner-agent"),
+    );
+    const runtime = runtimeModule.createPluginRuntime();
+    const params = {
+      message: "resume the admitted request",
+      sessionKey: "agent:main:slack:channel:C123:thread:1784768109.234419",
+      idempotencyKey: "configured-owner-run",
+      requestMessageId: "1784768109.234419",
+      deliver: true,
+      inputProvenance: {
+        kind: "inter_session",
+        messageSentReceiptPluginId: "configured-receipt-owner",
+      },
+    };
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () => runtime.gateway.request("agent", params),
+      ),
+    ).resolves.toEqual({ runId: "run-1" });
+
+    expect(getRequiredLastDispatchedParams()).not.toHaveProperty("requestMessageId");
+    expect(getLastDispatchedClientInternal().trustedRequestMessageId).toBe("1784768109.234419");
+    expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("configured-receipt-owner");
+
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () =>
+          runtime.gateway.request("agent", {
+            ...params,
+            inputProvenance: {
+              ...params.inputProvenance,
+              messageSentReceiptPluginId: "another-plugin",
+            },
+          }),
+      ),
+    ).rejects.toThrow("bundled or trusted official plugins");
+    await expect(
+      gatewayRequestScopeModule.withPluginRuntimePluginScope(
+        { pluginId: "configured-receipt-owner", pluginOrigin: "config" },
+        () =>
+          runtime.gateway.request("agent", params, {
+            scopes: ["operator.admin"],
+          }),
+      ),
+    ).rejects.toThrow("bundled or trusted official plugins");
+  });
+
   test("does not let arbitrary plugin nodes runtime mint admin scope for browser proxy", async () => {
     loadOpenClawPlugins.mockReturnValue(
       addLoadedPlugin(createRegistry([]), { id: "third-party", origin: "global" }),

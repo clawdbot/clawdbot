@@ -495,7 +495,16 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
 ): Promise<T> {
   const scope = getPluginRuntimeGatewayRequestScope();
   const pluginId = scope?.pluginId?.trim();
-  if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
+  const trustedOfficial = canTrustedOfficialPluginRequestScopes(scope ?? {});
+  const receiptOwner = (
+    params.inputProvenance as { messageSentReceiptPluginId?: unknown } | undefined
+  )?.messageSentReceiptPluginId;
+  const configuredReceiptOwner =
+    method === "agent" &&
+    scope?.pluginOrigin === "config" &&
+    options?.scopes === undefined &&
+    receiptOwner === pluginId;
+  if (!trustedOfficial && !configuredReceiptOwner) {
     throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
   }
   const trustedRequestMessageId =
@@ -504,7 +513,7 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     params.requestMessageId.trim()
       ? params.requestMessageId.trim()
       : undefined;
-  const syntheticScopes = normalizeOperatorScopeList(options?.scopes);
+  const syntheticScopes = trustedOfficial ? normalizeOperatorScopeList(options?.scopes) : undefined;
   return await dispatchGatewayMethodInProcess<T>(method, params, {
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
