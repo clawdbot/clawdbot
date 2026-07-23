@@ -142,6 +142,7 @@ describe("message_sending hook runner", () => {
 
 describe("message_sent hook runner", () => {
   const demoChannelCtx = { channelId: "demo-channel" };
+  const sentEvent = { to: "user-123", content: "hello", success: true };
 
   it.each([
     {
@@ -158,5 +159,52 @@ describe("message_sent hook runner", () => {
       event,
       channelCtx: demoChannelCtx,
     });
+  });
+
+  it("fails closed when the required receipt handler is missing or rejects", async () => {
+    const missing = createHookRunnerWithRegistry([]);
+    await expect(
+      missing.runner.runMessageSent(sentEvent, demoChannelCtx, {
+        requiredPluginId: "gaia-workflow-preflight",
+      }),
+    ).rejects.toThrow(/required message_sent handler/u);
+
+    const rejecting = createHookRunnerWithRegistry([
+      {
+        hookName: "message_sent",
+        handler: vi.fn().mockRejectedValue(new Error("ledger unavailable")),
+      },
+    ]);
+    await expect(
+      rejecting.runner.runMessageSent(sentEvent, demoChannelCtx, {
+        requiredPluginId: "test-plugin",
+      }),
+    ).rejects.toThrow("ledger unavailable");
+  });
+
+  it("fails closed when the required receipt handler times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const started = createDeferred<void>();
+      const { runner } = createHookRunnerWithRegistry([
+        {
+          hookName: "message_sent",
+          handler: vi.fn(() => {
+            started.resolve();
+            return new Promise<void>(() => {});
+          }),
+          timeoutMs: 5,
+        },
+      ]);
+      const receipt = runner.runMessageSent(sentEvent, demoChannelCtx, {
+        requiredPluginId: "test-plugin",
+      });
+      const rejected = expect(receipt).rejects.toThrow(/timed out after 5ms/u);
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(5);
+      await rejected;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

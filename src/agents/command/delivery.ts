@@ -928,6 +928,7 @@ export async function deliverAgentCommandResult(
     if (deliveryTarget && !deliveryStatus) {
       params.assertDeliveryCurrent?.();
       const restartAbort = createRestartOnlyAbortSignal(opts.abortSignal);
+      const receiptPluginId = opts.inputProvenance?.messageSentReceiptPluginId;
       let send: DurableSendResult;
       try {
         send = await sendDurableMessageBatch({
@@ -936,6 +937,15 @@ export async function deliverAgentCommandResult(
           to: deliveryTarget,
           accountId: resolvedAccountId,
           payloads: deliveryPayloads,
+          requireUnknownSendReconciliation: Boolean(receiptPluginId),
+          replyPayloadSendingHook: receiptPluginId
+            ? {
+                kind: "final" as const,
+                runId: opts.runId,
+                messageSentReceiptPluginId: receiptPluginId,
+                context: { channelId: deliveryChannel, runId: opts.runId },
+              }
+            : undefined,
           session: outboundSession,
           replyToId: resolvedReplyToId ?? null,
           threadId: resolvedThreadTarget ?? null,

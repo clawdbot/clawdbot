@@ -129,6 +129,15 @@ function latestOutboundDeliveryArgs(): {
   payloads: ReplyPayload[];
   bestEffort?: boolean;
   queuePolicy?: string;
+  requireUnknownSendReconciliation?: boolean;
+  replyPayloadSendingHook?: {
+    kind?: string;
+    channel?: string;
+    sessionKey?: string;
+    runId?: string;
+    messageSentReceiptPluginId?: string;
+    context?: Record<string, unknown>;
+  };
 } {
   const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
   if (!args || typeof args !== "object") {
@@ -143,6 +152,15 @@ function latestOutboundDeliveryArgs(): {
     payloads: ReplyPayload[];
     bestEffort?: boolean;
     queuePolicy?: string;
+    requireUnknownSendReconciliation?: boolean;
+    replyPayloadSendingHook?: {
+      kind?: string;
+      channel?: string;
+      sessionKey?: string;
+      runId?: string;
+      messageSentReceiptPluginId?: string;
+      context?: Record<string, unknown>;
+    };
   };
 }
 
@@ -686,6 +704,45 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(normalizerOptions.agentId).toBe("tester");
     expect(normalizerOptions.sessionKey).toBeUndefined();
     expect(normalizerOptions.workspaceDir).toBe("/tmp/agent-workspace");
+  });
+
+  it("binds an owner-declared delivery to its awaited durable receipt", async () => {
+    await deliverMediaReplyForTest(
+      { key: "agent:tester:slack:channel:C123", agentId: "tester" } as never,
+      {
+        runId: "request-1",
+        replyAccountId: "workspace-1",
+        threadId: "root-1",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "owner_handoff",
+          messageSentReceiptPluginId: "receipt-owner",
+        },
+      },
+    );
+
+    expect(latestOutboundDeliveryArgs()).toMatchObject({
+      channel: "slack",
+      accountId: "workspace-1",
+      replyToId: "root-1",
+      requireUnknownSendReconciliation: true,
+      replyPayloadSendingHook: {
+        kind: "final",
+        runId: "request-1",
+        messageSentReceiptPluginId: "receipt-owner",
+        context: {
+          channelId: "slack",
+          runId: "request-1",
+        },
+      },
+    });
+
+    await deliverMediaReplyForTest(
+      { key: "agent:tester:slack:channel:C123", agentId: "tester" } as never,
+      { runId: "ordinary-run" },
+    );
+    expect(latestOutboundDeliveryArgs().requireUnknownSendReconciliation).toBe(false);
+    expect(latestOutboundDeliveryArgs().replyPayloadSendingHook).toBeUndefined();
   });
 
   it("keeps LINE directive-only replies intact for local preview when delivery is disabled", async () => {

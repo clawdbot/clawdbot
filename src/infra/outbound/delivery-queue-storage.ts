@@ -40,6 +40,7 @@ export type QueuedReplyPayloadSendingHook = {
   channel?: string;
   sessionKey?: string;
   runId?: string;
+  messageSentReceiptPluginId?: string;
   context: PluginHookReplyPayloadSendingContext;
 };
 

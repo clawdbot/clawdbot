@@ -134,6 +134,9 @@ export type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMeta
 
 /** Durable FIFO-ish ingress queue with claims, duplicate detection, and retention pruning. */
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
+  lookup(
+    id: string,
+  ): Promise<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> | null>;
   enqueue(
     id: string,
     payload: TPayload,
@@ -1229,6 +1232,11 @@ export function createChannelIngressQueue<
   };
 
   return {
+    async lookup(id) {
+      const { db } = openStateDatabase(options.stateDir);
+      const row = selectRow(db, queueName, normalizePart(id, ""));
+      return row ? rowToEnqueueResult<TPayload, TMetadata, TCompletedMetadata>(row) : null;
+    },
     enqueue,
     listPending,
     listClaims,

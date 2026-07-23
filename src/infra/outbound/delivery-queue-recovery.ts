@@ -10,6 +10,12 @@ import type {
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  buildCanonicalSentMessageHookContext,
+  toPluginMessageContext,
+  toPluginMessageSentEvent,
+} from "../../hooks/message-hook-mappers.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
   createRecoveryReplayPacer,
@@ -399,6 +405,36 @@ async function runReconciledSentCommitHooks(params: {
   }
 }
 
+async function runReconciledSentMessageHook(entry: QueuedDelivery, result: OutboundDeliveryResult) {
+  const receiptPluginId = entry.replyPayloadSendingHook?.messageSentReceiptPluginId;
+  const hookRunner = getGlobalHookRunner();
+  if (!receiptPluginId) {
+    return;
+  }
+  if (!hookRunner) {
+    throw new Error("Required message_sent receipt plugin runner is unavailable");
+  }
+  const canonical = buildCanonicalSentMessageHookContext({
+    ...entry.replyPayloadSendingHook!.context,
+    to: entry.to,
+    accountId: entry.accountId,
+    runId: entry.replyPayloadSendingHook!.runId,
+    content: entry.payloads[0]?.text ?? "",
+    success: true,
+    messageId: result.messageId,
+    replyToId:
+      entry.effectiveReplyToId !== undefined
+        ? (entry.effectiveReplyToId ?? undefined)
+        : (entry.replyToId ?? undefined),
+    threadId: entry.threadId ?? undefined,
+  });
+  await hookRunner.runMessageSent(
+    toPluginMessageSentEvent(canonical),
+    toPluginMessageContext(canonical),
+    { requiredPluginId: receiptPluginId },
+  );
+}
+
 async function moveEntryToFailedWithLogging(
   entryId: string,
   log: RecoveryLogger,
@@ -452,6 +488,7 @@ async function persistRecoveredPostSendState(opts: {
     await markDeliveryPlatformOutcomeUnknown(opts.entry.id, opts.stateDir);
     return "marked";
   } catch (markErr) {
+    if (opts.entry.replyPayloadSendingHook?.messageSentReceiptPluginId) throw markErr;
     // A result proves at least one send completed. If the intermediate marker
     // is unavailable, direct ack still removes the replayable intent.
     opts.log.warn(
@@ -491,6 +528,8 @@ async function drainQueuedEntry(opts: {
     });
     if (reconciliation?.status === "sent") {
       try {
+        const result = buildReconciledSentResult(entry, reconciliation);
+        await runReconciledSentMessageHook(entry, result);
         await ackDelivery(entry.id, opts.stateDir);
         await runReconciledSentCommitHooks({
           entry,
@@ -498,7 +537,6 @@ async function drainQueuedEntry(opts: {
           reconciliation,
           log: opts.log,
         });
-        const result = buildReconciledSentResult(entry, reconciliation);
         emitQueuedAuditTerminals(entry, () =>
           completedOutboundAuditTerminals({
             payloadCount: entry.payloads.length,
@@ -509,11 +547,11 @@ async function drainQueuedEntry(opts: {
         opts.onRecovered?.(entry);
         opts.log.info(`Delivery entry ${entry.id} reconciled unknown_after_send as already sent`);
         return "recovered";
-      } catch (ackErr) {
-        if (getErrnoCode(ackErr) === "ENOENT") {
+      } catch (finalizeErr) {
+        if (getErrnoCode(finalizeErr) === "ENOENT") {
           return "already-gone";
         }
-        const errMsg = `failed to ack reconciled sent delivery: ${formatErrorMessage(ackErr)}`;
+        const errMsg = `failed to finalize reconciled sent delivery: ${formatErrorMessage(finalizeErr)}`;
         opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
         opts.onFailed?.(entry, errMsg);
         try {

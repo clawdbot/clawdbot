@@ -3,9 +3,19 @@ import { describe, expect, it } from "vitest";
 import {
   annotateInterSessionPromptText,
   isAgentMediatedCompletionSourceTool,
+  normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "./input-provenance.js";
+
+it("preserves an owner-declared message receipt requirement", () => {
+  expect(
+    normalizeInputProvenance({
+      kind: "inter_session",
+      messageSentReceiptPluginId: "gaia-workflow-preflight",
+    })?.messageSentReceiptPluginId,
+  ).toBe("gaia-workflow-preflight");
+});
 
 describe("annotateInterSessionPromptText", () => {
   it("marks inter-session prompt text as non-user-authored", () => {

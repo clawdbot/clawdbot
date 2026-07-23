@@ -696,11 +696,13 @@ async function persistQueuedPreSendState(params: {
 async function persistQueuedPostSendState(params: {
   queueId: string;
   queuePolicy: OutboundDeliveryQueuePolicy;
+  failClosed?: boolean;
 }): Promise<QueuedPostSendState> {
   try {
     await markDeliveryPlatformOutcomeUnknown(params.queueId);
     return "marked";
   } catch (markErr: unknown) {
+    if (params.failClosed) throw markErr;
     log.warn(
       `failed to mark queued delivery ${params.queueId} as platform-outcome-unknown; falling back to direct ack (${params.queuePolicy}): ${formatErrorMessage(markErr)}`,
     );
@@ -1104,13 +1106,15 @@ function createMessageSentEmitter(params: {
   requestMessageId?: string;
   replyToId?: string;
   threadId?: string | number;
+  messageSentReceiptPluginId?: string;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
-}): { emitMessageSent: (event: MessageSentEvent) => void; hasMessageSentHooks: boolean } {
+}) {
+  const requiredReceipts: Array<Promise<void>> = [];
   const hasMessageSentHooks = params.hookRunner?.hasHooks("message_sent") ?? false;
   const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
   const emitMessageSent = (event: MessageSentEvent) => {
-    if (!hasMessageSentHooks && !canEmitInternalHook) {
+    if (!hasMessageSentHooks && !canEmitInternalHook && !params.messageSentReceiptPluginId) {
       return;
     }
     const canonical = buildCanonicalSentMessageHookContext({
@@ -1137,17 +1141,29 @@ function createMessageSentEmitter(params: {
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
     });
-    if (hasMessageSentHooks) {
-      fireAndForgetHook(
-        params.hookRunner!.runMessageSent(
-          toPluginMessageSentEvent(canonical),
-          toPluginMessageContext(canonical),
-        ),
-        "deliverOutboundPayloads: message_sent plugin hook failed",
-        (message) => {
-          log.warn(message);
-        },
+    if (hasMessageSentHooks || params.messageSentReceiptPluginId) {
+      if (!params.hookRunner) {
+        throw new Error("Required message_sent receipt plugin runner is unavailable");
+      }
+      const hook = params.hookRunner.runMessageSent(
+        toPluginMessageSentEvent(canonical),
+        toPluginMessageContext(canonical),
+        params.messageSentReceiptPluginId
+          ? { requiredPluginId: params.messageSentReceiptPluginId }
+          : undefined,
       );
+      if (params.messageSentReceiptPluginId && event.success) {
+        void hook.catch(() => {});
+        requiredReceipts.push(hook);
+      } else {
+        fireAndForgetHook(
+          hook,
+          "deliverOutboundPayloads: message_sent plugin hook failed",
+          (message) => {
+            log.warn(message);
+          },
+        );
+      }
     }
     if (!canEmitInternalHook) {
       return;
@@ -1167,7 +1183,7 @@ function createMessageSentEmitter(params: {
       },
     );
   };
-  return { emitMessageSent, hasMessageSentHooks };
+  return { emitMessageSent, hasMessageSentHooks, requiredReceipts };
 }
 
 async function applyMessageSendingHook(params: {
@@ -1478,6 +1494,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   const platformQueueStateDir = queueId ? undefined : params.deliveryQueueStateDir;
   const exactReconciliationRequired =
     params.requireUnknownSendReconciliation === true && platformQueueId !== undefined;
+  const failClosed = exactReconciliationRequired;
   let queuedPreSendState: QueuedPreSendState | undefined;
   let queuedPostSendState: QueuedPostSendState | undefined;
   let platformSendRoute: PlatformSendRoute | undefined;
@@ -1568,7 +1585,11 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     onDeliveryResult: async (result) => {
       deliveredResults.push(result);
       if (queueId && queuedPostSendState === undefined) {
-        queuedPostSendState = await persistQueuedPostSendState({ queueId, queuePolicy });
+        queuedPostSendState = await persistQueuedPostSendState({
+          queueId,
+          queuePolicy,
+          failClosed,
+        });
       }
       await params.onDeliveryResult?.(result);
     },
@@ -1608,7 +1629,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
         const postSendState =
           queuedPostSendState ??
           (partialSendEvidence
-            ? await persistQueuedPostSendState({ queueId, queuePolicy })
+            ? await persistQueuedPostSendState({ queueId, queuePolicy, failClosed })
             : undefined);
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
@@ -1638,7 +1659,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
         const postSendState =
           queuedPostSendState ??
           (results.length > 0 || queuedPreSendState === "marked"
-            ? await persistQueuedPostSendState({ queueId, queuePolicy })
+            ? await persistQueuedPostSendState({ queueId, queuePolicy, failClosed })
             : queuedPreSendState === "acked"
               ? "acked"
               : undefined);
@@ -1699,7 +1720,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       deliveredResults = err.results;
     }
     if (queueId) {
-      if (isDeliveryAbortError(err)) {
+      if (isDeliveryAbortError(err) && !failClosed) {
         const acked = await ackDelivery(queueId)
           .then(() => true)
           .catch(() => false);
@@ -1716,12 +1737,14 @@ async function deliverOutboundPayloadsWithQueueCleanup(
       } else if (!platformResultsReturned) {
         const sendEvidence =
           deliveredResults.length > 0 ||
+          (exactReconciliationRequired && queuedPreSendState === "marked") ||
           (err instanceof OutboundDeliveryError && err.sentBeforeError);
         if (sendEvidence) {
           try {
             queuedPostSendState ??= await persistQueuedPostSendState({
               queueId,
               queuePolicy,
+              failClosed,
             });
             if (queuedPostSendState === "marked") {
               await failDeliveryAfterPlatformSend(queueId, formatErrorMessage(err));
@@ -2106,7 +2129,7 @@ async function deliverOutboundPayloadsCore(
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
-  const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
+  const { emitMessageSent, hasMessageSentHooks, requiredReceipts } = createMessageSentEmitter({
     hookRunner,
     channel,
     to,
@@ -2116,6 +2139,7 @@ async function deliverOutboundPayloadsCore(
     requestMessageId: params.replyPayloadSendingHook?.context.messageId,
     replyToId: params.replyToId ?? undefined,
     threadId: params.threadId ?? undefined,
+    messageSentReceiptPluginId: params.replyPayloadSendingHook?.messageSentReceiptPluginId,
     mirrorIsGroup,
     mirrorGroupId,
   });
@@ -2542,6 +2566,7 @@ async function deliverOutboundPayloadsCore(
       params.onError?.(err, payloadSummary);
     }
   }
+  await Promise.all(requiredReceipts);
   if (params.mirror && deliveredMirrorPayloads.length > 0) {
     const deliveredMirror = {
       text: deliveredMirrorPayloads

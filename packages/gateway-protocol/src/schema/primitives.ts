@@ -41,6 +41,7 @@ export const InputProvenanceSchema = closedObject({
   sourceSessionKey: Type.Optional(Type.String()),
   sourceChannel: Type.Optional(Type.String()),
   sourceTool: Type.Optional(Type.String()),
+  messageSentReceiptPluginId: Type.Optional(Type.String()),
 });
 
 /** Closed gateway client id schema aligned with `GATEWAY_CLIENT_IDS`. */
