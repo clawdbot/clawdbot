@@ -6,6 +6,12 @@ import OSLog
 // Module-internal: ChatViewModel extension files share this logger.
 let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 
+struct ChatLiveRunState: Equatable, Sendable {
+    let sequence: Int
+    let outputTokens: Int?
+    let terminal: Bool
+}
+
 @MainActor
 @Observable
 public final class OpenClawChatViewModel {
@@ -111,9 +117,14 @@ public final class OpenClawChatViewModel {
     var questionRefreshRetryTask: Task<Void, Never>?
     var questionRefreshRetryDelaysMs: [Int64] = [1000, 2000, 4000]
     var hasActiveSessionRunWithoutChatSnapshot = false
+    var activeSessionRunIDs: [String] = []
+    var liveRunStateByRunID: [String: ChatLiveRunState] = [:]
 
     public private(set) var sessionKey: String {
-        didSet { syncContextUsageFraction() }
+        didSet {
+            syncContextUsageFraction()
+            syncActiveSessionRunIDsFromCurrentSession()
+        }
     }
 
     public internal(set) var sessionId: String?
@@ -127,7 +138,10 @@ public final class OpenClawChatViewModel {
     private(set) var timelineRevision: UInt64 = 0
     /// Setter is module-internal for the transcript-cache extension only.
     public internal(set) var sessions: [OpenClawChatSessionEntry] = [] {
-        didSet { syncContextUsageFraction() }
+        didSet {
+            syncContextUsageFraction()
+            syncActiveSessionRunIDsFromCurrentSession()
+        }
     }
 
     public internal(set) var swarmSessions: [OpenClawChatSessionEntry] = []
@@ -1286,6 +1300,8 @@ extension OpenClawChatViewModel {
         self.updateStreamingAssistantText(nil)
         clearPlan()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
+        self.activeSessionRunIDs = []
+        self.liveRunStateByRunID.removeAll()
         resetSlashCommandCatalog()
         self.sessionBranches = []
         self.isLoadingSessionBranches = false

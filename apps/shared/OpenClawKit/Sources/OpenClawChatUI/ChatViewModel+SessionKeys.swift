@@ -34,6 +34,126 @@ extension OpenClawChatViewModel {
             })
     }
 
+    static func preferredLiveUsageRunID(
+        localRunIDs: Set<String>,
+        sessionActiveRunIDs: [String]) -> String?
+    {
+        sessionActiveRunIDs.first(where: localRunIDs.contains) ??
+            localRunIDs.min() ??
+            sessionActiveRunIDs.first
+    }
+
+    var liveLocalRunIDs: Set<String> {
+        Set(self.pendingRuns.filter { self.liveRunStateByRunID[$0]?.terminal != true })
+    }
+
+    var liveAdvertisedRunIDs: [String] {
+        self.activeSessionRunIDs.filter { self.liveRunStateByRunID[$0]?.terminal != true }
+    }
+
+    var liveUsageRunID: String? {
+        Self.preferredLiveUsageRunID(
+            localRunIDs: self.liveLocalRunIDs,
+            sessionActiveRunIDs: self.liveAdvertisedRunIDs)
+    }
+
+    var liveRunOutputTokens: Int? {
+        self.liveUsageRunID.flatMap { self.liveRunStateByRunID[$0]?.outputTokens }
+    }
+
+    var hasAdvertisedLiveRun: Bool {
+        !self.liveAdvertisedRunIDs.isEmpty
+    }
+
+    func updateActiveSessionRunIDs(_ runIDs: [String]?) {
+        guard let runIDs else { return }
+        var seen = Set<String>()
+        let normalized = runIDs.compactMap { runID -> String? in
+            guard let runID = Self.normalizedRunID(runID),
+                  seen.insert(runID).inserted
+            else {
+                return nil
+            }
+            return runID
+        }
+        let authoritativeRunIDs = Set(normalized)
+        let removedStates = self.liveRunStateByRunID.filter { !authoritativeRunIDs.contains($0.key) }
+        for (runID, state) in removedStates where state.terminal || !self.pendingRuns.contains(runID) {
+            // Explicit absence releases a terminal tombstone, but the sequence
+            // stays monotonic if the gateway later reuses the same run ID.
+            self.liveRunStateByRunID[runID] = ChatLiveRunState(
+                sequence: state.sequence,
+                outputTokens: nil,
+                terminal: false)
+        }
+        guard normalized != self.activeSessionRunIDs else { return }
+        self.activeSessionRunIDs = normalized
+        self.markTimelineChanged()
+    }
+
+    func syncActiveSessionRunIDsFromCurrentSession() {
+        guard let session = self.currentSessionEntry() else {
+            self.updateActiveSessionRunIDs([])
+            return
+        }
+        if let activeRunIDs = session.activeRunIds {
+            self.updateActiveSessionRunIDs(activeRunIDs)
+        } else if session.hasActiveRun == false {
+            self.updateActiveSessionRunIDs([])
+        }
+    }
+
+    func ownsLiveTelemetryRun(_ runID: String) -> Bool {
+        self.liveRunStateByRunID[runID]?.terminal != true &&
+            (self.pendingRuns.contains(runID) || self.activeSessionRunIDs.contains(runID))
+    }
+
+    @discardableResult
+    func applyLiveRunUsage(runID: String, sequence: Int, outputTokens: Int) -> Bool {
+        guard sequence > 0, outputTokens > 0, self.ownsLiveTelemetryRun(runID) else { return false }
+        let previous = self.liveRunStateByRunID[runID]
+        guard sequence > (previous?.sequence ?? 0), previous?.terminal != true else { return false }
+        self.liveRunStateByRunID[runID] = ChatLiveRunState(
+            sequence: sequence,
+            outputTokens: max(outputTokens, previous?.outputTokens ?? 0),
+            terminal: false)
+        return true
+    }
+
+    @discardableResult
+    func applyLiveRunLifecycle(runID: String, sequence: Int, terminal: Bool) -> Bool {
+        guard sequence > 0, self.ownsLiveTelemetryRun(runID) else { return false }
+        let previous = self.liveRunStateByRunID[runID]
+        guard sequence > (previous?.sequence ?? 0), previous?.terminal != true else { return false }
+        self.liveRunStateByRunID[runID] = ChatLiveRunState(
+            sequence: sequence,
+            outputTokens: previous?.outputTokens,
+            terminal: terminal)
+        return true
+    }
+
+    func retireTerminalRun(_ runID: String?) {
+        guard let runID = Self.normalizedRunID(runID) else { return }
+        let previous = self.liveRunStateByRunID[runID]
+        self.liveRunStateByRunID[runID] = ChatLiveRunState(
+            sequence: previous?.sequence ?? 0,
+            outputTokens: previous?.outputTokens,
+            terminal: true)
+    }
+
+    func clearLiveRunState(for runID: String) {
+        self.liveRunStateByRunID[runID] = nil
+    }
+
+    func invalidateIncompleteLiveRunUsage() {
+        for (runID, state) in self.liveRunStateByRunID where !state.terminal && state.outputTokens != nil {
+            self.liveRunStateByRunID[runID] = ChatLiveRunState(
+                sequence: state.sequence,
+                outputTokens: nil,
+                terminal: false)
+        }
+    }
+
     /// Session mutations and their ordering use the routed gateway identity,
     /// never a presentation alias such as `main`.
     func sessionMutationIdentity(for key: String, listedKey: String? = nil) -> String {

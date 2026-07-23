@@ -1357,9 +1357,12 @@ function latestTranscriptAnnouncement(
   return null;
 }
 
-function chatRenderItemGuardDependencies(item: ChatRenderItem): readonly unknown[] {
+function chatRenderItemGuardDependencies(
+  item: ChatRenderItem,
+  runOutputTokens: number | null | undefined,
+): readonly unknown[] {
   if (item.kind === "stream-run") {
-    return [item.key, ...item.parts];
+    return [item.key, ...item.parts, runOutputTokens];
   }
   if (item.kind === "work-group") {
     return [item.key, item.durationMs, item.hasError, ...item.groups];
@@ -1453,7 +1456,6 @@ function renderChatThreadContents(
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
-    waitingApproval: Boolean(props.waitingApproval),
     runActive: Boolean(props.runActive),
     planStatus: props.planStatus,
     questionPrompts: props.questionPrompts,
