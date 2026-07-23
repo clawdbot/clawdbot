@@ -121,7 +121,7 @@ describe("agent roster include provenance", () => {
       configIncludeOwnsAgentRoster(
         snapshot({
           parsed,
-          sourceConfigBeforeMigrations: resolved,
+          sourceConfigBeforeMigrations: resolved as OpenClawConfig,
           agentRosterIncludeOwned: includeOwned,
         }),
       ),
