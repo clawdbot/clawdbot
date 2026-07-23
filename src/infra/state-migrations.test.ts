@@ -1933,6 +1933,53 @@ describe("state migrations", () => {
     await expect(fs.readFile(`${routingPath}.migrated`, "utf8")).resolves.toContain("robot wake");
   });
 
+  it("archives conflicting legacy voice wake JSON without overwriting shared SQLite", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const settingsDir = path.join(stateDir, "settings");
+    const triggersPath = path.join(settingsDir, "voicewake.json");
+    const routingPath = path.join(settingsDir, "voicewake-routing.json");
+    await setVoiceWakeTriggers(["sqlite-wake"], stateDir);
+    await setVoiceWakeRoutingConfig(
+      {
+        defaultTarget: { mode: "current" },
+        routes: [{ trigger: "sqlite route", target: { agentId: "sqlite-agent" } }],
+      },
+      stateDir,
+    );
+    await fs.mkdir(settingsDir, { recursive: true });
+    await fs.writeFile(triggersPath, JSON.stringify({ triggers: ["legacy-wake"] }), "utf8");
+    await fs.writeFile(
+      routingPath,
+      JSON.stringify({
+        defaultTarget: { agentId: "legacy-default" },
+        routes: [{ trigger: "legacy route", target: { agentId: "legacy-agent" } }],
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({
+      triggers: ["sqlite-wake"],
+    });
+    await expect(loadVoiceWakeRoutingConfig(stateDir)).resolves.toMatchObject({
+      defaultTarget: { mode: "current" },
+      routes: [{ trigger: "sqlite route", target: { agentId: "sqlite-agent" } }],
+    });
+    await expectMissingPath(triggersPath);
+    await expectMissingPath(routingPath);
+    await expect(fs.readFile(`${triggersPath}.migrated`, "utf8")).resolves.toContain("legacy-wake");
+    await expect(fs.readFile(`${routingPath}.migrated`, "utf8")).resolves.toContain("legacy route");
+
+    const after = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(after.voiceWake.hasLegacy).toBe(false);
+  });
+
   it("auto-migrates standalone legacy JSON settings", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

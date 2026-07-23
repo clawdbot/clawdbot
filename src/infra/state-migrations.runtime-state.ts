@@ -56,15 +56,6 @@ function normalizeLegacyVoiceWakeTriggers(input: unknown): string[] {
   return triggers.length > 0 ? triggers : DEFAULT_VOICEWAKE_TRIGGERS;
 }
 
-function legacyVoiceWakeTriggersMatch(
-  rows: Array<{ trigger: string }>,
-  triggers: string[],
-): boolean {
-  return (
-    rows.length === triggers.length && rows.every((row, index) => row.trigger === triggers[index])
-  );
-}
-
 function legacyVoiceWakeTargetColumns(target: {
   agentId?: string;
   mode?: "current";
@@ -81,57 +72,6 @@ function legacyVoiceWakeTargetColumns(target: {
     return { targetAgentId: null, targetMode: "session", targetSessionKey: target.sessionKey };
   }
   return { targetAgentId: null, targetMode: "current", targetSessionKey: null };
-}
-
-function legacyVoiceWakeTargetColumnsMatch(
-  left: ReturnType<typeof legacyVoiceWakeTargetColumns>,
-  right: {
-    target_agent_id?: string | null;
-    target_mode?: string | null;
-    target_session_key?: string | null;
-  },
-): boolean {
-  return (
-    left.targetAgentId === (right.target_agent_id ?? null) &&
-    left.targetMode === right.target_mode &&
-    left.targetSessionKey === (right.target_session_key ?? null)
-  );
-}
-
-function legacyVoiceWakeRoutingMatches(
-  configRow: {
-    default_target_agent_id: string | null;
-    default_target_mode: string;
-    default_target_session_key: string | null;
-  },
-  routeRows: Array<{
-    target_agent_id: string | null;
-    target_mode: string;
-    target_session_key: string | null;
-    trigger: string;
-  }>,
-  routingConfig: ReturnType<typeof normalizeVoiceWakeRoutingConfig>,
-): boolean {
-  const defaultTarget = legacyVoiceWakeTargetColumns(routingConfig.defaultTarget);
-  if (
-    !legacyVoiceWakeTargetColumnsMatch(defaultTarget, {
-      target_agent_id: configRow.default_target_agent_id,
-      target_mode: configRow.default_target_mode,
-      target_session_key: configRow.default_target_session_key,
-    })
-  ) {
-    return false;
-  }
-  return (
-    routeRows.length === routingConfig.routes.length &&
-    routeRows.every((row, index) => {
-      const route = routingConfig.routes[index];
-      if (!route || row.trigger !== route.trigger) {
-        return false;
-      }
-      return legacyVoiceWakeTargetColumnsMatch(legacyVoiceWakeTargetColumns(route.target), row);
-    })
-  );
 }
 
 export function migrateLegacyVoiceWakeSettings(params: {
@@ -169,13 +109,9 @@ export function migrateLegacyVoiceWakeSettings(params: {
                 .orderBy("position", "asc"),
             ).rows;
             if (existing.length > 0) {
-              if (!legacyVoiceWakeTriggersMatch(existing, triggers)) {
-                warnings.push(
-                  `Left legacy voice wake triggers in place because shared SQLite state already has different triggers: ${params.detected.triggersPath}`,
-                );
-              } else {
-                shouldArchive = true;
-              }
+              // SQLite is canonical after the first import. Retire the legacy source so
+              // a divergent snapshot cannot block every subsequent Gateway startup.
+              shouldArchive = true;
               return;
             }
             const updatedAtMs = Date.now();
@@ -244,21 +180,9 @@ export function migrateLegacyVoiceWakeSettings(params: {
                 .where("config_key", "=", VOICEWAKE_CONFIG_KEY),
             );
             if (existing) {
-              const routeRows = executeSqliteQuerySync(
-                db,
-                stateDb
-                  .selectFrom("voicewake_routing_routes")
-                  .select(["target_agent_id", "target_mode", "target_session_key", "trigger"])
-                  .where("config_key", "=", VOICEWAKE_CONFIG_KEY)
-                  .orderBy("position", "asc"),
-              ).rows;
-              if (legacyVoiceWakeRoutingMatches(existing, routeRows, routingConfig)) {
-                shouldArchive = true;
-              } else {
-                warnings.push(
-                  `Left legacy voice wake routing in place because shared SQLite routing already exists with different routes: ${params.detected.routingPath}`,
-                );
-              }
+              // SQLite is canonical after the first import. Retire the legacy source so
+              // a divergent snapshot cannot block every subsequent Gateway startup.
+              shouldArchive = true;
               return;
             }
             const updatedAtMs = Date.now();
