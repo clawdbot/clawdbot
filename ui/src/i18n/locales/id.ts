@@ -671,8 +671,8 @@ export const id: TranslationMap = {
     openWorkboardCard: "Buka kartu Workboard",
     dashboardAvailable: "Dasbor tersedia",
     approvalNeeded: "Perlu persetujuan",
-    queuedMessage: "{count} pesan dalam antrean untuk dikirim",
-    queuedMessages: "{count} pesan dalam antrean untuk dikirim",
+    queuedMessage: "{count} pesan mengantre untuk dikirim",
+    queuedMessages: "{count} pesan mengantre untuk dikirim",
     noSessions: "Tidak ada sesi yang ditemukan.",
     noActiveSessions: "Tidak ada thread aktif.",
     noArchivedSessions: "Tidak ada sesi yang diarsipkan.",
@@ -3031,7 +3031,7 @@ export const id: TranslationMap = {
     eventStale: "Sesi kedaluwarsa",
   },
   connection: {
-    queuedCount: "{count} dalam antrean",
+    queuedCount: "{count} mengantre",
     reconnecting: "Menghubungkan kembali…",
     retryNow: "Coba lagi sekarang",
     access: {
@@ -4218,7 +4218,7 @@ export const id: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "Offline — pesan akan diantrekan dan dikirim saat koneksi kembali.",
-      offlineQueuedHint: "Offline — {count} dalam antrean; pesan dikirim saat koneksi kembali.",
+      offlineQueuedHint: "Offline — {count} mengantre; pesan akan dikirim saat koneksi kembali.",
       preparingModel: "Menyiapkan model...",
       responding: "{name} sedang merespons...",
       sendingMessage: "Mengirim pesan...",

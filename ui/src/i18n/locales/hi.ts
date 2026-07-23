@@ -668,8 +668,8 @@ export const hi: TranslationMap = {
     openWorkboardCard: "Workboard कार्ड खोलें",
     dashboardAvailable: "डैशबोर्ड उपलब्ध है",
     approvalNeeded: "अनुमोदन आवश्यक",
-    queuedMessage: "{count} संदेश भेजने के लिए कतारबद्ध",
-    queuedMessages: "{count} संदेश भेजने के लिए कतारबद्ध",
+    queuedMessage: "{count} संदेश भेजने के लिए कतार में है",
+    queuedMessages: "{count} संदेश भेजने के लिए कतार में हैं",
     noSessions: "कोई सत्र नहीं मिला।",
     noActiveSessions: "कोई सक्रिय थ्रेड नहीं।",
     noArchivedSessions: "कोई संग्रहित सत्र नहीं।",
@@ -2996,7 +2996,7 @@ export const hi: TranslationMap = {
     eventStale: "पुराना सत्र",
   },
   connection: {
-    queuedCount: "{count} कतारबद्ध",
+    queuedCount: "{count} कतार में",
     reconnecting: "फिर से कनेक्ट हो रहा है…",
     retryNow: "अभी फिर से प्रयास करें",
     access: {
@@ -4170,7 +4170,7 @@ export const hi: TranslationMap = {
       placeholderWithAttachments: "संदेश जोड़ें या और छवियाँ पेस्ट करें...",
       placeholderDisconnected: "चैट शुरू करने के लिए gateway से कनेक्ट करें...",
       offlineHint: "ऑफ़लाइन — कनेक्शन वापस आने पर संदेश कतार में रखे जाएँगे और भेजे जाएँगे।",
-      offlineQueuedHint: "ऑफ़लाइन — {count} कतारबद्ध; कनेक्शन वापस आने पर संदेश भेजे जाते हैं।",
+      offlineQueuedHint: "ऑफ़लाइन — {count} कतार में; कनेक्शन बहाल होने पर संदेश भेजे जाएंगे।",
       preparingModel: "मॉडल तैयार हो रहा है...",
       responding: "{name} जवाब दे रहा है...",
       sendingMessage: "संदेश भेजा जा रहा है...",

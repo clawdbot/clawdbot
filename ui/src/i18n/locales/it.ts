@@ -4265,7 +4265,7 @@ export const it: TranslationMap = {
       offlineHint:
         "Offline — i messaggi verranno messi in coda e inviati al ritorno della connessione.",
       offlineQueuedHint:
-        "Offline — {count} in coda; i messaggi vengono inviati al ritorno della connessione.",
+        "Offline — {count} in coda; i messaggi verranno inviati al ripristino della connessione.",
       preparingModel: "Preparazione del modello...",
       responding: "{name} sta rispondendo...",
       sendingMessage: "Invio messaggio...",
