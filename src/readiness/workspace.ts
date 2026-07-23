@@ -163,6 +163,17 @@ export function createWorkspaceReadinessEvidenceResolver(options?: {
       return cached.evidence;
     }
 
+    if (
+      pending &&
+      (pending.config !== params.config ||
+        pending.generation !== requestedGeneration ||
+        pending.workspaceDir !== workspaceDir)
+    ) {
+      // A retired probe may not be cancellable (for example, blocked filesystem I/O).
+      // Detach it so the current workspace generation can establish fresh evidence.
+      pending = undefined;
+    }
+
     if (!pending) {
       const entry = {
         config: params.config,

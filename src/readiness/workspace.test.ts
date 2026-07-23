@@ -143,13 +143,13 @@ describe("createWorkspaceReadinessEvidenceResolver", () => {
   });
 
   it("does not publish evidence from a retired config snapshot", async () => {
-    let releaseProbe:
-      | ((value: { writable: true; reason: string; message: string }) => void)
-      | undefined;
+    const releaseProbes: Array<
+      (value: { writable: true; reason: string; message: string }) => void
+    > = [];
     const probe = vi.fn(
       () =>
         new Promise<{ writable: true; reason: string; message: string }>((resolve) => {
-          releaseProbe = resolve;
+          releaseProbes.push(resolve);
         }),
     );
     const resolveEvidence = createWorkspaceReadinessEvidenceResolver({
@@ -161,10 +161,11 @@ describe("createWorkspaceReadinessEvidenceResolver", () => {
     const first = resolveEvidence({ config: firstConfig });
     const next = resolveEvidence({ config: nextConfig });
 
-    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
-    releaseProbe?.({ writable: true, reason: "WorkspaceWritable", message: "ready" });
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+    releaseProbes[0]?.({ writable: true, reason: "WorkspaceWritable", message: "retired" });
+    releaseProbes[1]?.({ writable: true, reason: "WorkspaceWritable", message: "ready" });
     await expect(first).resolves.toMatchObject({ reason: "WorkspaceNotChecked" });
-    await expect(next).resolves.toMatchObject({ reason: "WorkspaceNotChecked" });
-    expect(probe).toHaveBeenCalledTimes(1);
+    await expect(next).resolves.toMatchObject({ reason: "WorkspaceWritable" });
+    expect(probe).toHaveBeenCalledTimes(2);
   });
 });

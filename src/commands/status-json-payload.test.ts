@@ -199,6 +199,71 @@ describe("status-json-payload", () => {
     });
   });
 
+  it("preserves canonical condition order when applying scan reachability", () => {
+    const payload = buildStatusJsonPayload({
+      summary: {
+        readiness: {
+          ready: true,
+          failures: [],
+          advisories: [],
+          conditions: [
+            {
+              type: "ConfigLoaded",
+              status: "True",
+              requirement: "required",
+              reason: "ConfigLoaded",
+              message: "Runtime configuration loaded.",
+            },
+            {
+              type: "GatewayResponding",
+              status: "Unknown",
+              requirement: "required",
+              reason: "GatewayNotChecked",
+              message: "Gateway was not checked.",
+            },
+            {
+              type: "PluginsLoaded",
+              status: "True",
+              requirement: "advisory",
+              reason: "PluginsLoaded",
+              message: "Plugins loaded.",
+            },
+          ],
+        },
+      },
+      surface: {
+        cfg: { gateway: {} },
+        update: { root: "/tmp/openclaw", installKind: "package" } as never,
+        tailscaleMode: "off",
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+        gatewayConnection: { url: "ws://127.0.0.1:18789" },
+        gatewayReachable: false,
+        gatewayProbe: null,
+        gatewayProbeAuth: null,
+        gatewaySelf: null,
+        gatewayProbeAuthWarning: null,
+        gatewayService: { label: "gateway", installed: false, loadedText: "not installed" },
+        nodeService: { label: "node", installed: false, loadedText: "not installed" },
+      },
+      osSummary: { platform: "linux" },
+      memory: null,
+      memoryPlugin: null,
+      agents: [],
+      secretDiagnostics: [],
+    });
+
+    expect(payload.readiness.conditions.map((condition) => condition.type)).toEqual([
+      "ConfigLoaded",
+      "GatewayResponding",
+      "PluginsLoaded",
+    ]);
+    expect(payload.readiness.conditions[1]).toMatchObject({
+      status: "False",
+      reason: "GatewayUnavailable",
+    });
+  });
+
   it("includes model-pricing health from the gateway probe", () => {
     const payload = buildStatusJsonPayload({
       summary: { ok: true },
