@@ -499,6 +499,7 @@ enum class GatewayMethod(
   SessionsCompanionAsk("sessions.companion.ask"),
   SessionsCompanionState("sessions.companion.state"),
   SessionsCompanionReset("sessions.companion.reset"),
+  Ready("ready"),
 }
 
 enum class GatewayEvent(
