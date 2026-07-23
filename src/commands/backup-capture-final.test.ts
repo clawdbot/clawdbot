@@ -19,14 +19,15 @@ describe("backup capture-final command", () => {
   });
 });
 
-function createRuntimeCapture(): RuntimeEnv & { logs: string[]; exit: ReturnType<typeof vi.fn> } {
+function createRuntimeCapture() {
   const logs: string[] = [];
+  const exit = vi.fn<RuntimeEnv["exit"]>();
   return {
     logs,
-    log(value) {
+    log(value: unknown) {
       logs.push(String(value));
     },
     error: vi.fn(),
-    exit: vi.fn(),
+    exit,
   };
 }
