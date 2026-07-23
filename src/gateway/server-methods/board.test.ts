@@ -1008,50 +1008,33 @@ describe("board gateway methods", () => {
     expect(triggerCronJob).toHaveBeenCalledWith("job-1", expect.any(Object));
   });
 
-  it("caps board.event payloads at 8KB and notices at 500 characters", async () => {
+  it("caps board.event payloads and preserves Unicode at the notice boundary", async () => {
     const { invoke } = createHarness();
     await invoke("board.widget.put", {
       sessionKey: "session",
       name: "counter",
       content: { kind: "html", html: "ok" },
     });
+    const clippedCodeUnits = 500 - "[dashboard] ".length - " on widget counter".length - 1;
+    // JSON's opening quote places the emoji across the legacy slice boundary.
+    const payload = `${"x".repeat(clippedCodeUnits - 2)}😀tail`;
+    await invoke("board.event", { sessionKey: "session", widget: "counter", payload });
+    const unicodeNotice = peekSystemEvents("session")[0] ?? "";
+    expect(unicodeNotice.length).toBeLessThanOrEqual(500);
+    expect(unicodeNotice).not.toContain(String.fromCharCode(0xd83d));
+    expect(unicodeNotice).toMatch(/… on widget counter$/u);
     await invoke("board.event", {
       sessionKey: "session",
       widget: "counter",
       payload: "x".repeat(1_000),
     });
-    expect(peekSystemEvents("session")[0]).toHaveLength(500);
+    expect(peekSystemEvents("session")[1]).toHaveLength(500);
     const oversized = await invoke("board.event", {
       sessionKey: "session",
       widget: "counter",
       payload: "x".repeat(8_193),
     });
     expect(oversized.mock.calls[0]?.[0]).toBe(false);
-  });
-
-  it("does not split surrogate pairs when truncating board.event notices", async () => {
-    const { invoke } = createHarness();
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "counter",
-      content: { kind: "html", html: "ok" },
-    });
-    const prefix = "[dashboard] ";
-    const suffix = " on widget counter";
-    const clippedCodeUnits = 500 - prefix.length - suffix.length - 1;
-
-    // JSON serialization adds a leading quote, placing the emoji's high surrogate
-    // at the old slice boundary when the payload contains clippedCodeUnits - 2 ASCII units.
-    await invoke("board.event", {
-      sessionKey: "session",
-      widget: "counter",
-      payload: `${"x".repeat(clippedCodeUnits - 2)}😀tail`,
-    });
-
-    const notice = peekSystemEvents("session")[0] ?? "";
-    expect(notice.length).toBeLessThanOrEqual(500);
-    expect(notice).not.toContain(String.fromCharCode(0xd83d));
-    expect(notice).toMatch(/… on widget counter$/u);
   });
 
   it("keeps board state across the real sessions.reset handler", async () => {
