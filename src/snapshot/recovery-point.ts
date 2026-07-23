@@ -396,6 +396,11 @@ function assertCanonicalComponentOrder(components: readonly RecoveryPointCompone
 function assertDependencies(components: readonly RecoveryPointComponent[]): void {
   const byId = new Map(components.map((component) => [component.id, component]));
   for (const component of components) {
+    if (!isDeepStrictEqual(component.dependsOn, component.dependsOn.toSorted(compareCodeUnits))) {
+      throw new Error(
+        `Recovery point component ${component.id} dependencies are not in canonical order.`,
+      );
+    }
     const dependencies = new Set<string>();
     for (const dependency of component.dependsOn) {
       if (!byId.has(dependency)) {
