@@ -11,8 +11,6 @@ import {
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type OfficialExternalPluginCatalogEntry,
   type OfficialExternalPluginCatalogFeed,
-  DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV,
-  DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV,
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogManifest,
   isOfficialExternalPluginCatalogFeed,
@@ -47,11 +45,32 @@ type ConfiguredHostedCatalogLoadParams = NonNullable<
 type HostedCatalogLoadParams = ConfiguredHostedCatalogLoadParams & {
   catalogConfig?: HostedCatalogConfig;
 };
+type HostedCatalogLoadResult = Awaited<
+  ReturnType<typeof loadConfiguredHostedOfficialExternalPluginCatalogEntries>
+>;
 
 function loadHostedCatalog(
   params: HostedCatalogLoadParams = {},
 ): ReturnType<typeof loadConfiguredHostedOfficialExternalPluginCatalogEntries> {
   return loadConfiguredHostedOfficialExternalPluginCatalogEntries(params);
+}
+
+function expectHosted(
+  result: HostedCatalogLoadResult,
+): asserts result is Extract<HostedCatalogLoadResult, { source: "hosted" }> {
+  expect(result.source).toBe("hosted");
+}
+
+function expectHostedSnapshot(
+  result: HostedCatalogLoadResult,
+): asserts result is Extract<HostedCatalogLoadResult, { source: "hosted-snapshot" }> {
+  expect(result.source).toBe("hosted-snapshot");
+}
+
+function expectBundledFallback(
+  result: HostedCatalogLoadResult,
+): asserts result is Extract<HostedCatalogLoadResult, { source: "bundled-fallback" }> {
+  expect(result.source).toBe("bundled-fallback");
 }
 
 function createInMemoryHostedCatalogSnapshotStore(
@@ -371,9 +390,8 @@ describe("official external plugin catalog", () => {
 
     const result = await loadHostedCatalog({
       env: {
-        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
-        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV]:
-          signed.publicKeyPem,
+        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
+        OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY: signed.publicKeyPem,
       },
       ifModifiedSince: "Mon, 22 Jun 2026 00:00:00 GMT",
       fetchImpl,
@@ -381,7 +399,7 @@ describe("official external plugin catalog", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(result.source).toBe("hosted");
+    expectHosted(result);
     expect(result.feed?.id).toBe("clawhub-official");
     expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
   });
@@ -402,15 +420,14 @@ describe("official external plugin catalog", () => {
         },
       },
       env: {
-        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
-        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV]:
-          signed.publicKeyPem,
+        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
+        OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY: signed.publicKeyPem,
       },
       fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
       snapshotStore: null,
     });
 
-    expect(result.source).toBe("hosted");
+    expectHosted(result);
     expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
   });
 
@@ -430,13 +447,13 @@ describe("official external plugin catalog", () => {
         },
       },
       env: {
-        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "incomplete",
+        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "incomplete",
       },
       fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
       snapshotStore: null,
     });
 
-    expect(result.source).toBe("hosted");
+    expectHosted(result);
     expect(result.trust).toBeUndefined();
   });
 
@@ -447,15 +464,14 @@ describe("official external plugin catalog", () => {
 
     const result = await loadHostedCatalog({
       env: {
-        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
-        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_PUBLIC_KEY_ENV]:
-          signed.publicKeyPem,
+        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
+        OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY: signed.publicKeyPem,
       },
       fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
       snapshotStore: null,
     });
 
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     expect(result.entries).toEqual([]);
     expect(result.error).toContain(
       'feed id "openclaw-official-external-plugins" did not match expected "clawhub-official"',
@@ -466,14 +482,14 @@ describe("official external plugin catalog", () => {
     const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
     const result = await loadHostedCatalog({
       env: {
-        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
+        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
       },
       fetchImpl,
       snapshotStore: null,
     });
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     expect(result.entries).toEqual([]);
     expect(result.error).toContain("requires both key id and public key env vars");
   });
@@ -483,14 +499,14 @@ describe("official external plugin catalog", () => {
     const result = await loadHostedCatalog({
       feedUrl: "https://clawhub.ai/v1/feeds/plugins",
       env: {
-        [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_TRUSTED_KEY_ID_ENV]: "acme-root",
+        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
       },
       fetchImpl,
       snapshotStore: null,
     });
 
     expect(fetchImpl).not.toHaveBeenCalled();
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     expect(result.entries).toEqual([]);
     expect(result.error).toContain("requires both key id and public key env vars");
   });
@@ -572,7 +588,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expect(result.source).toBe("hosted");
+    expectHosted(result);
     expect(result.entries.map((entry) => entry.id)).toEqual([
       "@acme/trusted",
       "@acme/disabled",
@@ -901,7 +917,7 @@ describe("official external plugin catalog", () => {
       snapshotStore,
     });
 
-    expect(accepted.source).toBe("hosted");
+    expectHosted(accepted);
     expect(accepted.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v10"]);
     if (accepted.source === "hosted") {
       expect(accepted.trust).toMatchObject({
@@ -921,7 +937,7 @@ describe("official external plugin catalog", () => {
       snapshotStore,
     });
 
-    expect(rolledBack.source).toBe("hosted-snapshot");
+    expectHostedSnapshot(rolledBack);
     expect(rolledBack.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v10"]);
     if (rolledBack.source === "hosted-snapshot") {
       expect(rolledBack.error).toContain("signed feed sequence is older");
@@ -952,7 +968,7 @@ describe("official external plugin catalog", () => {
         fetchImpl: vi.fn(async () => dsseResponse(accepted.body, { status: 200 })),
         snapshotStore,
       });
-      expect(initial.source).toBe("hosted");
+      expectHosted(initial);
 
       const result = await loadHostedCatalog({
         feedProfile: "acme",
@@ -961,7 +977,7 @@ describe("official external plugin catalog", () => {
         snapshotStore,
       });
 
-      expect(result.source).toBe("hosted-snapshot");
+      expectHostedSnapshot(result);
       expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v10"]);
       if (result.source === "hosted-snapshot") {
         expect(result.error).toContain("payload changed without a sequence increment");
@@ -990,7 +1006,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
     });
 
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     if (result.source === "bundled-fallback") {
       expect(result.error).toContain("signed envelope payload is invalid");
     }
@@ -1023,7 +1039,7 @@ describe("official external plugin catalog", () => {
       snapshotStore,
     });
 
-    expect(rejected.source).toBe("bundled-fallback");
+    expectBundledFallback(rejected);
     await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: malformed.body });
 
     const result = await loadHostedCatalog({
@@ -1033,7 +1049,7 @@ describe("official external plugin catalog", () => {
       snapshotStore,
     });
 
-    expect(result.source).toBe("hosted");
+    expectHosted(result);
     expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/repaired-current"]);
     await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: valid.body });
   });
@@ -1058,7 +1074,7 @@ describe("official external plugin catalog", () => {
       snapshotStore,
     });
 
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     if (result.source === "bundled-fallback") {
       expect(result.error).toContain("signature is invalid");
     }
@@ -1088,7 +1104,7 @@ describe("official external plugin catalog", () => {
         now: () => new Date("2026-06-22T00:00:08.000Z"),
         snapshotStore,
       });
-      expect(acceptedPrevious.source).toBe("hosted");
+      expectHosted(acceptedPrevious);
 
       const acceptedCurrent = await loadHostedCatalog({
         feedProfile: "acme",
@@ -1116,7 +1132,7 @@ describe("official external plugin catalog", () => {
         snapshotStore,
       });
 
-      expect(rejectedRollback.source).toBe("bundled-fallback");
+      expectBundledFallback(rejectedRollback);
       expect(rejectedRollback.entries).toEqual([]);
       if (rejectedRollback.source === "bundled-fallback") {
         expect(rejectedRollback.error).toContain("signed feed sequence is older");
@@ -1129,7 +1145,7 @@ describe("official external plugin catalog", () => {
         offline: true,
         snapshotStore,
       });
-      expect(retainedCurrent.source).toBe("hosted-snapshot");
+      expectHostedSnapshot(retainedCurrent);
       expect(retainedCurrent.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-v9"]);
     } finally {
       closeOpenClawStateDatabaseForTest();
@@ -1205,7 +1221,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
     });
 
-    expect(unsigned.source).toBe("bundled-fallback");
+    expectBundledFallback(unsigned);
     expect(unsigned.entries).toEqual([]);
     if (unsigned.source === "bundled-fallback") {
       expect(unsigned.error).toContain("signed envelope is malformed");
@@ -1224,7 +1240,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: signedSnapshot,
     });
 
-    expect(offline.source).toBe("hosted-snapshot");
+    expectHostedSnapshot(offline);
     expect(offline.entries.map((entry) => entry.name)).toEqual(["@openclaw/signed-offline"]);
 
     const unsignedSnapshot = createInMemoryHostedCatalogSnapshotStore([
@@ -1245,7 +1261,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: unsignedSnapshot,
     });
 
-    expect(rejectedSnapshot.source).toBe("bundled-fallback");
+    expectBundledFallback(rejectedSnapshot);
     if (rejectedSnapshot.source === "bundled-fallback") {
       expect(rejectedSnapshot.error).toContain("signed envelope is malformed");
     }
@@ -1265,7 +1281,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expect(live.source).toBe("bundled-fallback");
+    expectBundledFallback(live);
     if (live.source === "bundled-fallback") {
       expect(live.error).toContain("signed envelope is malformed");
     }
@@ -1279,7 +1295,7 @@ describe("official external plugin catalog", () => {
       ]),
     });
 
-    expect(offline.source).toBe("hosted-snapshot");
+    expectHostedSnapshot(offline);
     expect(offline.entries.map((entry) => entry.name)).toEqual(["@openclaw/legacy-snapshot"]);
   });
 
@@ -1300,7 +1316,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: createInMemoryHostedCatalogSnapshotStore(),
     });
 
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     expect(result.entries).toEqual([]);
     expect(result.error).toContain("must use application/vnd.dsse+json");
   });
@@ -1339,7 +1355,7 @@ describe("official external plugin catalog", () => {
       now: () => new Date("2026-06-22T00:00:30.000Z"),
       snapshotStore,
     });
-    expect(seeded.source).toBe("hosted");
+    expectHosted(seeded);
     expect(
       resolveOfficialExternalPluginInstall(seeded.entries[0]!, { catalogConfig }),
     ).not.toBeNull();
@@ -1351,7 +1367,7 @@ describe("official external plugin catalog", () => {
       now: () => new Date("2026-06-22T00:01:01.000Z"),
       snapshotStore: null,
     });
-    expect(expiredFresh.source).toBe("bundled-fallback");
+    expectBundledFallback(expiredFresh);
     expect(expiredFresh.entries).toEqual([]);
     expect(expiredFresh.error).toContain("signed feed expired");
 
@@ -1365,7 +1381,7 @@ describe("official external plugin catalog", () => {
       now: () => new Date("2026-06-22T00:01:01.000Z"),
       snapshotStore,
     });
-    expect(expiredSnapshot.source).toBe("hosted-snapshot");
+    expectHostedSnapshot(expiredSnapshot);
     expect(expiredSnapshot.entries).toHaveLength(1);
     expect(expiredSnapshot.entries[0]).toMatchObject({
       id: "@openclaw/expiring",
@@ -1385,7 +1401,7 @@ describe("official external plugin catalog", () => {
       now: () => new Date("2026-06-22T00:01:01.000Z"),
       snapshotStore,
     });
-    expect(expiredOffline.source).toBe("hosted-snapshot");
+    expectHostedSnapshot(expiredOffline);
     expect(expiredOffline.entries[0]).toMatchObject({ state: "unavailable" });
     expect(expiredOffline.error).toContain("signed feed expired");
 
@@ -1396,7 +1412,7 @@ describe("official external plugin catalog", () => {
       now: () => new Date("2026-06-22T00:01:01.000Z"),
       snapshotStore,
     });
-    expect(expiredAfterError.source).toBe("hosted-snapshot");
+    expectHostedSnapshot(expiredAfterError);
     expect(expiredAfterError.entries[0]).toMatchObject({ state: "unavailable" });
     expect(expiredAfterError.error).toContain("signed feed expired");
   });
@@ -1417,7 +1433,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     expect(result.entries).toEqual([]);
     expect(result.error).toContain("expiresAt must be later than generatedAt");
   });
@@ -1438,7 +1454,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     expect(result.error).toContain("requires a valid expiresAt value");
   });
 
@@ -1477,7 +1493,7 @@ describe("official external plugin catalog", () => {
       offline: true,
       snapshotStore,
     });
-    expect(stale.source).toBe("hosted-snapshot");
+    expectHostedSnapshot(stale);
     expect(stale.entries[0]).toMatchObject({ name: "@openclaw/legacy", state: "unavailable" });
     expect(resolveOfficialExternalPluginInstall(stale.entries[0]!, { catalogConfig })).toBeNull();
     expect(stale.error).toContain("has no expiresAt");
@@ -1489,7 +1505,7 @@ describe("official external plugin catalog", () => {
       now: () => new Date("2026-06-22T00:00:30.000Z"),
       snapshotStore,
     });
-    expect(updated.source).toBe("hosted");
+    expectHosted(updated);
     expect(updated.entries.map((entry) => entry.name)).toEqual(["@openclaw/current"]);
   });
 
@@ -1518,7 +1534,7 @@ describe("official external plugin catalog", () => {
     const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
     const result = await loadHostedCatalog({ feedUrl, fetchImpl, snapshotStore: null });
 
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     expect(fetchImpl).not.toHaveBeenCalled();
     if (result.source === "bundled-fallback") {
       expect(result.error).toContain(expectedError);
@@ -1543,7 +1559,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expect(result.source).toBe("hosted");
+    expectHosted(result);
     expect(result.feed?.id).toBe("openclaw-official-external-plugins");
     expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
   });
@@ -1563,7 +1579,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expect(result.source).toBe("bundled-fallback");
+    expectBundledFallback(result);
     if (result.source === "bundled-fallback") {
       expect(result.error).toContain("signed envelope is malformed");
     }
@@ -1606,7 +1622,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expect(result.source).toBe("hosted");
+    expectHosted(result);
     expect(result.entries.map((entry) => entry.name)).toEqual(["@acme/known-source"]);
   });
 
@@ -1624,7 +1640,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expect(mismatch.source).toBe("bundled-fallback");
+    expectBundledFallback(mismatch);
     if (mismatch.source === "bundled-fallback") {
       expect(mismatch.error).toContain("checksum mismatch");
       expect(mismatch.metadata?.checksum).toMatch(/^sha256:[0-9a-f]{64}$/u);
@@ -1635,7 +1651,7 @@ describe("official external plugin catalog", () => {
       fetchImpl: vi.fn(async () => new Response("12345", { status: 200 })),
       snapshotStore: null,
     });
-    expect(oversized.source).toBe("bundled-fallback");
+    expectBundledFallback(oversized);
     if (oversized.source === "bundled-fallback") {
       expect(oversized.error).toContain("exceeds 4 bytes");
     }
@@ -1653,7 +1669,7 @@ describe("official external plugin catalog", () => {
       snapshotStore: null,
     });
 
-    expect(nonStreaming.source).toBe("bundled-fallback");
+    expectBundledFallback(nonStreaming);
     if (nonStreaming.source === "bundled-fallback") {
       expect(nonStreaming.error).toContain("streaming response body unavailable");
     }
@@ -1680,7 +1696,7 @@ describe("official external plugin catalog", () => {
       now: () => new Date("2026-06-22T00:00:01.000Z"),
       snapshotStore,
     });
-    expect(seeded.source).toBe("hosted");
+    expectHosted(seeded);
 
     const reused = await loadHostedCatalog({
       ifNoneMatch: '"snapshot-v1"',
@@ -1689,7 +1705,7 @@ describe("official external plugin catalog", () => {
       ),
       snapshotStore,
     });
-    expect(reused.source).toBe("hosted-snapshot");
+    expectHostedSnapshot(reused);
     if (reused.source === "hosted-snapshot") {
       expect(reused.snapshot.savedAt).toBe("2026-06-22T00:00:01.000Z");
     }
