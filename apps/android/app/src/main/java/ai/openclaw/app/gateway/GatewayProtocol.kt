@@ -495,6 +495,7 @@ enum class GatewayMethod(
   SessionSuggestionsList("session.suggestions.list"),
   SessionSuggestionsResolve("session.suggestions.resolve"),
   SessionTyping("session.typing"),
+  Ready("ready"),
 }
 
 enum class GatewayEvent(
