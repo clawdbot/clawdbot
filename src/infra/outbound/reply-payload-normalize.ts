@@ -1,6 +1,9 @@
 // Reply-payload normalization projects loose tool/agent objects onto the
 // outbound-supported reply payload fields.
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload as InternalReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 
@@ -47,7 +50,13 @@ export function normalizeOutboundReplyPayload(
   const channelData = readObjectValue(payload.channelData) as OutboundReplyPayload["channelData"];
   const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
   const replyToId = readStringValue(payload.replyToId);
-  const location = normalizeOutboundLocation(payload.location);
+  const rawLocation = payload.location;
+  // Some producers pad the unused optional `location` slot with a blank string;
+  // treat blank as absent but keep real locations strict (mirrors message-action-runner, #112013).
+  const location =
+    typeof rawLocation === "string" && normalizeOptionalString(rawLocation) === undefined
+      ? undefined
+      : normalizeOutboundLocation(rawLocation);
   const videoAsNote = payload.videoAsNote === true ? true : undefined;
   return {
     text,

@@ -509,6 +509,23 @@ describe("normalizeOutboundReplyPayload", () => {
     });
   });
 
+  it("treats a blank-string location as absent", () => {
+    // Some producers pad the unused optional location slot with a blank string.
+    const empty = normalizeOutboundReplyPayload({ text: "hi", location: "" });
+    expect(empty.location).toBeUndefined();
+    expect(empty.text).toBe("hi");
+    expect(normalizeOutboundReplyPayload({ text: "hi", location: "   " }).location).toBeUndefined();
+  });
+
+  it("keeps a non-blank invalid location strict", () => {
+    expect(() => normalizeOutboundReplyPayload({ location: "Main stage" })).toThrow(
+      "location must be an object",
+    );
+    expect(() => normalizeOutboundReplyPayload({ location: [1, 2] })).toThrow(
+      "location must be an object",
+    );
+  });
+
   it.each(["source", "isLive", "caption"])(
     "rejects unsupported outbound location %s semantics from loose payloads",
     (field) => {
