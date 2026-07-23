@@ -40,8 +40,25 @@ type CoerceDisplayValueOptions = {
   includeZero?: boolean;
   includeNonFinite?: boolean;
   maxStringChars?: number;
+  maxUrlStringChars?: number;
   maxArrayEntries?: number;
 };
+
+const DEFAULT_MAX_STRING_CHARS = 160;
+const DEFAULT_MAX_URL_STRING_CHARS = 1024;
+
+function parseHttpUrl(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isHttpUrl(value: string): boolean {
+  return Boolean(parseHttpUrl(value));
+}
 
 /** Normalize a tool name for fallback display. */
 export function normalizeToolName(name?: string): string {
@@ -117,7 +134,8 @@ function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
 ): string | undefined {
-  const maxStringChars = opts.maxStringChars ?? 160;
+  const maxStringChars = opts.maxStringChars ?? DEFAULT_MAX_STRING_CHARS;
+  const maxUrlStringChars = opts.maxUrlStringChars ?? DEFAULT_MAX_URL_STRING_CHARS;
   const maxArrayEntries = opts.maxArrayEntries ?? 3;
 
   if (value === null || value === undefined) {
@@ -133,9 +151,10 @@ function coerceDisplayValue(
       return undefined;
     }
     const firstLine = redactToolPayloadText(rawLine);
-    if (firstLine.length > maxStringChars) {
-      const half = Math.floor((maxStringChars - 1) / 2);
-      return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxStringChars - 1 - half))}`;
+    const maxChars = isHttpUrl(rawLine) ? maxUrlStringChars : maxStringChars;
+    if (firstLine.length > maxChars) {
+      const half = Math.floor((maxChars - 1) / 2);
+      return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxChars - 1 - half))}`;
     }
     return firstLine;
   }
