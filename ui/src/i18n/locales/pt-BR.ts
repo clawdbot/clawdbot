@@ -598,6 +598,9 @@ export const pt_BR: TranslationMap = {
     worktreeName: "Nome do worktree",
     worktreeNamePlaceholder: "auto",
     worktreeNameInvalid: "Nomes de worktree usam letras minúsculas, dígitos e hifens.",
+    incognito: "Anônimo",
+    incognitoDescription: "Manter esta conversa apenas até o Gateway reiniciar",
+    startAsDraft: "Iniciar como rascunho",
     messagePlaceholder: "Em que esta sessão deve trabalhar?",
     readingAttachment: "Lendo anexo",
     start: "Iniciar sessão",
@@ -619,6 +622,7 @@ export const pt_BR: TranslationMap = {
     limit: "Limite",
     filters: "Filtros",
     createdBy: "Criado por {name}",
+    archivedBy: "Arquivada por {name}",
     filterByCreator: "Filtrar por criador",
     allCreators: "Todas as pessoas",
     filterControls: "Filtros de sessão",
@@ -747,6 +751,7 @@ export const pt_BR: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "Conversa anônima",
     cloudWorkerPlacement: "Worker na nuvem: {state}",
     cloudWorkerPlacementConflict: "Worker na nuvem: {state} · 1 conflito de workspace",
     cloudWorkerPlacementConflicts: "Worker na nuvem: {state} · {count} conflitos de workspace",
@@ -2423,6 +2428,8 @@ export const pt_BR: TranslationMap = {
     toolRuns: "{count} execuções",
     identity: {
       title: "Identidade",
+      menuLabel: "Menu de identidade",
+      menuButtonLabel: "Menu de identidade e do aplicativo de {name}",
       description: "Seu perfil neste gateway.",
       loading: "Carregando sua identidade…",
       profileUnavailable: "Não foi possível carregar seu perfil de identidade.",
@@ -3830,6 +3837,9 @@ export const pt_BR: TranslationMap = {
   },
   chat: {
     disconnected: "Desconectado do gateway.",
+    sendErrors: {
+      activeLeafChanged: "A conversa mudou de ramificação — revise e reenvie.",
+    },
     waitingForApproval: "Aguardando aprovação…",
     startupStatus: {
       preparingWorkspace: "Preparando espaço de trabalho…",
@@ -3847,6 +3857,7 @@ export const pt_BR: TranslationMap = {
       readOnly: "Somente leitura",
       suggest: "Sugerir",
       draft: "Rascunho",
+      publishDraft: "Publicar rascunho",
       members: "Membros",
       selected: "Membro",
       noPeople: "Nenhuma pessoa pareada encontrada.",
@@ -3866,6 +3877,7 @@ export const pt_BR: TranslationMap = {
       copyPath: "Copiar caminho",
       copyBranch: "Copiar nome do branch",
       copied: "Copiado",
+      incognito: "Conversa anônima",
       branches: "Ramificações do thread",
       branchSwitchUnavailable:
         "A troca de ramificação não está disponível enquanto o agente está trabalhando.",
@@ -4157,6 +4169,7 @@ export const pt_BR: TranslationMap = {
       openInCanvas: "Abrir no canvas",
       reply: "Responder",
       replyToMessage: "Responder à mensagem",
+      replyingTo: "Respondendo a {name}",
       rewind: "Retroceder",
       rewindConfirm: "Retroceder para antes desta mensagem?",
       rewindToHere: "Retroceder até aqui",
