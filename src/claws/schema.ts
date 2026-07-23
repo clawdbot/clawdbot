@@ -91,7 +91,10 @@ const agentSchema = z
         allow: z.array(nonEmptyString).min(1).optional(),
         alsoAllow: z.array(nonEmptyString).min(1).optional(),
         deny: z.array(nonEmptyString).min(1).optional(),
-        fs: z.object({ workspaceOnly: z.boolean().optional() }).strict().optional(),
+        fs: z
+          .object({ workspaceOnly: z.literal(true).optional() })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((tools, ctx) => {

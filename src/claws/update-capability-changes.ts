@@ -6,6 +6,7 @@ import { expandToolGroups, resolveToolProfilePolicy } from "../agents/tool-polic
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 
 type ClawUpdateCapabilityValue = {
   summary: string;
@@ -381,8 +382,7 @@ function resolvePortableMemorySearch(config: OpenClawConfig, agentId: string): u
   const defaults = config.memory?.search;
   const overrides = config.agents?.list?.find((agent) => agent.id === agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
-  const rememberAcrossConversations =
-    overrides?.rememberAcrossConversations ?? defaults?.rememberAcrossConversations ?? false;
+  const rememberAcrossConversations = resolveRememberAcrossConversations(config, agentId);
   const sessionMemory =
     rememberAcrossConversations ||
     (overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false);

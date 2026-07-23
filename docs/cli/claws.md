@@ -76,8 +76,9 @@ available in `CLAW.md` frontmatter.
 
 Portable agent policy may select any built-in tool profile registered by the
 running OpenClaw version, then refine it with `alsoAllow`, `deny`, and
-`tools.fs.workspaceOnly`. `tools.allow` remains available as an explicit
-allowlist but cannot be combined with `alsoAllow`. A Claw may also set
+`tools.fs.workspaceOnly: true`. A Claw cannot set that field to `false` and
+weaken host filesystem confinement. `tools.allow` remains available as an
+explicit allowlist but cannot be combined with `alsoAllow`. A Claw may also set
 `memory.search.enabled`, choose the portable `memory` and `sessions` sources,
 and opt into cross-conversation memory with `rememberAcrossConversations`.
 Declaring the `sessions` source requires that opt-in.

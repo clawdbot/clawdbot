@@ -165,6 +165,15 @@ describe("parseClawManifest", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("rejects portable policy that disables host filesystem confinement", () => {
+    const result = parseClawManifest({
+      schemaVersion: 1,
+      agent: { id: "worker", tools: { fs: { workspaceOnly: false } } },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it("rejects unknown profiles, conflicting allowlists, and non-portable memory settings", () => {
     for (const agent of [
       { id: "worker", tools: { profile: "future-profile" } },

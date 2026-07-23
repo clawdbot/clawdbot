@@ -41,7 +41,7 @@ type ClawAgent = {
     alsoAllow?: string[];
     deny?: string[];
     fs?: {
-      workspaceOnly?: boolean;
+      workspaceOnly?: true;
     };
   };
   memory?: {

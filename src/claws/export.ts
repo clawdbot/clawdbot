@@ -62,9 +62,7 @@ function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawMani
     ...(agent.tools?.allow?.length ? { allow: agent.tools.allow } : {}),
     ...(agent.tools?.alsoAllow?.length ? { alsoAllow: agent.tools.alsoAllow } : {}),
     ...(agent.tools?.deny?.length ? { deny: agent.tools.deny } : {}),
-    ...(agent.tools?.fs?.workspaceOnly !== undefined
-      ? { fs: { workspaceOnly: agent.tools.fs.workspaceOnly } }
-      : {}),
+    ...(agent.tools?.fs?.workspaceOnly === true ? { fs: { workspaceOnly: true as const } } : {}),
   };
   return {
     id: agent.id,

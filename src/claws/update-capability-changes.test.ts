@@ -426,6 +426,31 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     );
   });
 
+  it("uses contextual memory defaults when classifying cross-conversation recall", () => {
+    const changes = collectChanges({
+      currentAgent: {
+        id: "worker",
+        memory: { search: { rememberAcrossConversations: false } },
+      },
+      desiredAgent: { id: "worker" },
+    });
+
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agent.memory.search.rememberAcrossConversations",
+          classification: "escalation",
+          requiresDistinctConsent: true,
+        }),
+        expect.objectContaining({
+          path: "agent.memory.search.sources",
+          classification: "escalation",
+          requiresDistinctConsent: true,
+        }),
+      ]),
+    );
+  });
+
   it("treats tool policies on a restored missing agent as escalations", () => {
     for (const field of ["allow", "deny"] as const) {
       const changes: Changes = [];
