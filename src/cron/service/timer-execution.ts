@@ -242,7 +242,7 @@ async function executeMainSessionCronJob(
   const cronRunSessionKey = resolveMainSessionCronRunSessionKey(
     job,
     cronStartedAt,
-    state.deps.defaultAgentId,
+    state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
   );
   const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
   // Main-session jobs enqueue text into a per-run child session so each cron

@@ -172,9 +172,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   pendingChanges = pendingChanges || legacyStep.state.pendingChanges;
   fixHints = legacyStep.state.fixHints;
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
-  const rosterMigration = migratePersistedImplicitMainRoster(snapshot.parsed);
+  const rosterMigrationNeeded = [snapshot.sourceConfigBeforeMigrations, snapshot.parsed].some(
+    (source) => source !== undefined && migratePersistedImplicitMainRoster(source).changed,
+  );
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
-  if (snapshot.exists && rosterMigration.changed && !includeOwnsRoster) {
+  if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
     const migrated = migratePersistedImplicitMainRoster(candidate).config as OpenClawConfig;
     const migratedRoster = readAgentRosterProperty(migrated);

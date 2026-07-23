@@ -13,6 +13,10 @@ function requireCronAgentId(agentId: string | undefined): string {
   }
   return normalizeAgentId(agentId);
 }
+
+function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
+  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
+}
 import {
   createRunningTaskRun,
   finalizeTaskRunById,
@@ -74,13 +78,13 @@ function resolveCronTaskChildSessionKey(params: {
     return resolveMainSessionCronRunSessionKey(
       params.job,
       params.startedAt,
-      params.state.deps.defaultAgentId,
+      resolveCurrentDefaultAgentId(params.state),
     );
   }
   if (params.job.sessionTarget === "current") {
     return resolveCronAgentSessionKey({
       sessionKey: `cron:${params.job.id}`,
-      agentId: requireCronAgentId(params.job.agentId ?? params.state.deps.defaultAgentId),
+      agentId: requireCronAgentId(params.job.agentId ?? resolveCurrentDefaultAgentId(params.state)),
     });
   }
   const explicitSessionKey = params.job.sessionKey?.trim();
@@ -94,7 +98,7 @@ function resolveCronTaskChildSessionKey(params: {
   }
   return resolveCronAgentSessionKey({
     sessionKey: `cron:${params.job.id}`,
-    agentId: requireCronAgentId(params.job.agentId ?? params.state.deps.defaultAgentId),
+    agentId: requireCronAgentId(params.job.agentId ?? resolveCurrentDefaultAgentId(params.state)),
   });
 }
 
@@ -235,8 +239,11 @@ function tryCreateCronTaskRunRecord(params: {
       agentId:
         params.job?.agentId ??
         (params.childSessionKey
-          ? resolveAgentIdFromSessionKey(params.childSessionKey, params.state.deps.defaultAgentId)
-          : requireCronAgentId(params.state.deps.defaultAgentId)),
+          ? resolveAgentIdFromSessionKey(
+              params.childSessionKey,
+              resolveCurrentDefaultAgentId(params.state),
+            )
+          : requireCronAgentId(resolveCurrentDefaultAgentId(params.state))),
       runId: params.runId,
       label: params.job?.name,
       task: params.job?.name || params.jobId,
