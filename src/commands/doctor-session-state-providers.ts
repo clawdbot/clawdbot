@@ -4,7 +4,7 @@ import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   resolveAgentModelFallbacksOverride,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/selection.js";
 import {
@@ -56,8 +56,8 @@ function repairExample(repair: DoctorSessionRouteStateRepair): string {
   return `${repair.key} (${repair.reasons.join(", ")})`;
 }
 
-function resolveSessionAgentId(cfg: OpenClawConfig, sessionKey: string): string {
-  return parseAgentSessionKey(sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
+function resolveSessionAgentId(cfg: OpenClawConfig, sessionKey: string): string | undefined {
+  return parseAgentSessionKey(sessionKey)?.agentId ?? tryResolveDefaultAgentId(cfg);
 }
 
 /** Resolves the currently configured provider/model/runtime route for a session key. */
@@ -65,8 +65,11 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   env?: NodeJS.ProcessEnv;
-}): DoctorSessionRouteState {
+}): DoctorSessionRouteState | undefined {
   const agentId = resolveSessionAgentId(params.cfg, params.sessionKey);
+  if (!agentId) {
+    return undefined;
+  }
   const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
   const configuredModelRefs = new Set<string>();
   const addRef = (provider: string, model: string) => {
@@ -493,8 +496,10 @@ export async function runPluginSessionStateDoctorRepairs(params: {
     if (!entryMayContainPluginSessionRouteState(sessionKey, entry)) {
       continue;
     }
-    scanStore[sessionKey] = entry as unknown as Record<string, unknown>;
     const agentId = resolveSessionAgentId(params.cfg, sessionKey);
+    if (!agentId) {
+      continue;
+    }
     let route = routeByAgentId.get(agentId);
     if (!route) {
       route = resolveConfiguredDoctorSessionStateRoute({
@@ -502,8 +507,12 @@ export async function runPluginSessionStateDoctorRepairs(params: {
         sessionKey,
         env: params.env,
       });
+      if (!route) {
+        continue;
+      }
       routeByAgentId.set(agentId, route);
     }
+    scanStore[sessionKey] = entry as unknown as Record<string, unknown>;
     routes[sessionKey] = route;
   }
   if (Object.keys(scanStore).length === 0) {

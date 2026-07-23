@@ -2,12 +2,28 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
+import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
 describe("collectEnabledInsecureOrDangerousFlags", () => {
+  it("keeps plugin contract checks enabled for a malformed roster", () => {
+    const flags = collectEnabledInsecureOrDangerousFlags(
+      asConfig({
+        agents: { entries: { alpha: {}, beta: {} } },
+        plugins: {
+          entries: {
+            acpx: { config: { permissionMode: "approve-all" } },
+          },
+        },
+      }),
+    );
+
+    expect(flags).toContain("plugins.entries.acpx.config.permissionMode=approve-all");
+  });
+
   it("collects manifest-declared dangerous plugin config values", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(

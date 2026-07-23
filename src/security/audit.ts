@@ -3,8 +3,8 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { hasAgentRosterProperty, listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
@@ -649,7 +649,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   }
 
   const agents = listAgentEntries(cfg);
-  const defaultAgentId = agents.length > 0 ? resolveDefaultAgentId(cfg) : undefined;
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const riskyAgents = agents
     .filter(
       (entry) =>
@@ -943,6 +943,28 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   }
 
   return findings;
+}
+
+function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const agents = listAgentEntries(cfg);
+  // A missing roster is the supported pre-roster compatibility state and is
+  // materialized by config loading. An explicitly authored empty roster is invalid.
+  if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
+    return [];
+  }
+  const defaultCount = agents.filter((agent) => agent?.default === true).length;
+  if (defaultCount === 1) {
+    return [];
+  }
+  return [
+    {
+      checkId: "config.agent_roster.invalid_default_count",
+      severity: "warn",
+      title: "Agent roster has an invalid default selection",
+      detail: `Expected exactly one agents.entries default=true entry, found ${defaultCount}.`,
+      remediation: "Run `openclaw doctor --fix` to repair the authored agent roster.",
+    },
+  ];
 }
 
 function formatNamesPreview(names: readonly string[]): string {
@@ -1267,7 +1289,7 @@ async function createAuditExecutionContext(
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
-  const defaultAgentId = listAgentEntries(cfg).length > 0 ? resolveDefaultAgentId(cfg) : undefined;
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const configuredDefaultWorkspace = cfg.agents?.defaults?.workspace?.trim();
   const workspaceDir =
     opts.workspaceDir ??
@@ -1313,6 +1335,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const auditNonDeep = await loadAuditNonDeepModule();
 
   findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
+  findings.push(...collectAgentRosterFindings(cfg));
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(

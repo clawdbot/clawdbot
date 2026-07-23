@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
@@ -53,7 +53,8 @@ function collectPluginProviderIds(
     };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
   const snapshot = resolvePluginMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
@@ -308,7 +309,10 @@ export function repairStaleAgentModelRefs(
       }
     }
     if (inheritingAgentIds.length === 0) {
-      inheritingAgentIds.push(resolveDefaultAgentId(cfg));
+      const defaultAgentId = tryResolveDefaultAgentId(cfg);
+      if (defaultAgentId) {
+        inheritingAgentIds.push(defaultAgentId);
+      }
     }
     let commonPersisted: Set<string> | undefined;
     for (const agentId of inheritingAgentIds) {
@@ -334,7 +338,10 @@ export function repairStaleAgentModelRefs(
       .filter((agent) => isRecord(agent) && typeof agent.id === "string" && !isRecord(agent.models))
       .map((agent) => agent.id as string);
     if (inheritingAgentIds.length === 0) {
-      inheritingAgentIds.push(resolveDefaultAgentId(cfg));
+      const defaultAgentId = tryResolveDefaultAgentId(cfg);
+      if (defaultAgentId) {
+        inheritingAgentIds.push(defaultAgentId);
+      }
     }
     for (const agentId of inheritingAgentIds) {
       const persisted = persistedForAgent(agentId);

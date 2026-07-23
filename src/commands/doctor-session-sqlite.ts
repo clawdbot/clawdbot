@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
@@ -515,7 +515,7 @@ function isLegacySessionRecordOwnedByTarget(
   });
   return ownerAgentId
     ? ownerAgentId === target.agentId
-    : target.agentId === resolveDefaultAgentId(cfg);
+    : target.agentId === tryResolveDefaultAgentId(cfg);
 }
 
 function shouldFilterLegacySessionRecordsByTarget(target: SessionStoreTarget): boolean {

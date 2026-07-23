@@ -25,7 +25,7 @@ import {
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveAgentConfig } from "../agent-scope-config.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "../agent-scope-config.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   createCliJsonlStreamingParser,
@@ -334,6 +334,7 @@ function buildClaudeLiveArgs(params: {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.claudeLiveSessionTestApi")] = {
     buildClaudeLiveArgs,
+    readConfiguredExecPolicy,
     resetClaudeLiveSessionsForTest,
   };
 }
@@ -975,7 +976,12 @@ function readConfiguredExecPolicy(context: PreparedCliRunContext): {
   ask: ExecAsk;
   agentId: string;
 } {
-  const agentId = context.params.agentId ?? resolveAgentIdFromSessionKey(context.params.sessionKey);
+  const agentId =
+    context.params.agentId ??
+    resolveAgentIdFromSessionKey(
+      context.params.sessionKey,
+      context.params.config ? resolveDefaultAgentId(context.params.config) : undefined,
+    );
   const agentExec = context.params.config
     ? resolveAgentConfig(context.params.config, agentId)?.tools?.exec
     : undefined;

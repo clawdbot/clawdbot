@@ -139,8 +139,9 @@ export function resolveAgentIdFromSessionKey(
   if (parsed?.agentId) {
     return normalizeAgentId(parsed.agentId);
   }
-  if (configuredDefaultAgentId) {
-    return normalizeAgentId(configuredDefaultAgentId);
+  const configuredDefault = configuredDefaultAgentId?.trim();
+  if (configuredDefault) {
+    return normalizeAgentId(configuredDefault);
   }
   throw new Error(
     "Session key does not contain an agent id; resolve it with the configured default agent.",

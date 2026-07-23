@@ -1,7 +1,11 @@
 // Agent scope tests cover which per-agent fields may flatten into runtime defaults.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
+import {
+  resolveAgentConfig,
+  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
+} from "./agent-scope-config.js";
 
 vi.unmock("./agent-scope-config.js");
 
@@ -15,6 +19,10 @@ describe("agent roster resolution", () => {
         agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
       }),
     ).toBe("beta");
+  });
+
+  it("offers a non-throwing diagnostic lookup for malformed rosters", () => {
+    expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBeUndefined();
   });
 });
 

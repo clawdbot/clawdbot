@@ -25,7 +25,7 @@ import {
 } from "./doctor-heartbeat-main-session-repair.test-support.js";
 import {
   detectStateIntegrityHealthIssues,
-  noteStateIntegrity,
+  noteStateIntegrity as noteStateIntegrityRaw,
   stateIntegrityIssueToHealthFinding,
   stateIntegrityIssueToRepairEffect,
 } from "./doctor-state-integrity.js";
@@ -41,6 +41,24 @@ vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
 }));
 
 const noteMock = vi.fn();
+
+function withMainAgentRoster(cfg: OpenClawConfig): OpenClawConfig {
+  if (cfg.agents?.entries || cfg.agents?.list) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    agents: { ...cfg.agents, entries: { main: { default: true } } },
+  };
+}
+
+async function noteStateIntegrity(
+  cfg: OpenClawConfig,
+  prompter: Parameters<typeof noteStateIntegrityRaw>[1],
+  configPath?: string,
+) {
+  return noteStateIntegrityRaw(withMainAgentRoster(cfg), prompter, configPath);
+}
 
 function setupSessionState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, homeDir: string) {
   const agentId = "main";
@@ -95,9 +113,10 @@ function hasRepairPromptMessage(
 }
 
 async function runStateIntegrity(cfg: OpenClawConfig) {
-  setupSessionState(cfg, process.env, process.env.HOME ?? "");
+  const effectiveConfig = withMainAgentRoster(cfg);
+  setupSessionState(effectiveConfig, process.env, process.env.HOME ?? "");
   const confirmRuntimeRepair = vi.fn(async () => false);
-  await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+  await noteStateIntegrity(effectiveConfig, { confirmRuntimeRepair, note: noteMock });
   return confirmRuntimeRepair;
 }
 
@@ -111,7 +130,10 @@ function writeSessionStore(
 }
 
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
-  await noteStateIntegrity(cfg, { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock });
+  await noteStateIntegrity(withMainAgentRoster(cfg), {
+    confirmRuntimeRepair: vi.fn(async () => false),
+    note: noteMock,
+  });
   return stateIntegrityText();
 }
 
@@ -157,6 +179,18 @@ describe("structured state integrity findings", () => {
       target: path.join(tempHome, ".openclaw"),
       dryRunSafe: false,
     });
+  });
+
+  it("skips default-owned session repairs for an ambiguous roster", async () => {
+    fs.mkdirSync(path.join(tempHome, ".openclaw"), { recursive: true });
+    await noteStateIntegrityRaw(
+      { agents: { entries: { alpha: {}, beta: {} } } },
+      { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock },
+    );
+
+    expect(stateIntegrityText()).toContain(
+      "Skipped default-agent session and transcript integrity checks because the agent roster does not have exactly one default.",
+    );
   });
 
   it("reports permissive state and config file permissions as structured findings", () => {
@@ -237,6 +271,7 @@ async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir
   const cfg: OpenClawConfig = {
     agents: {
       defaults: {},
+      entries: { main: { default: true } },
     },
     memory: {
       backend: "qmd",

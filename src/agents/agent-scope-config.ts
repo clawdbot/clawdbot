@@ -150,6 +150,15 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   return normalizeAgentId(defaults[0]!.id);
 }
 
+/** Returns the configured default when diagnostics must tolerate an invalid raw roster. */
+export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefined {
+  try {
+    return resolveDefaultAgentId(cfg);
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);

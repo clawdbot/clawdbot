@@ -30,6 +30,7 @@ import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "./agent-scope-config.js";
 export {
   listAgentEntries,
@@ -43,6 +44,7 @@ export {
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 

@@ -10,7 +10,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentEntries,
   resolveDefaultAgentDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
   clearWedgedSubagentRecoveryAbort,
@@ -178,13 +178,16 @@ function formatOrphanAgentDirPreview(entries: OrphanAgentDir[], limit = 3): stri
 
 function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgentDir[] {
   const configuredIds = new Set<string>();
-  configuredIds.add(normalizeAgentId(resolveDefaultAgentId(cfg)));
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  if (defaultAgentId) {
+    configuredIds.add(normalizeAgentId(defaultAgentId));
+  }
   for (const entry of listAgentEntries(cfg)) {
     configuredIds.add(normalizeAgentId(entry.id));
   }
 
   const agentsRoot = path.join(stateDir, "agents");
-  const liveDefaultAgentDir = resolveDefaultAgentDir(cfg);
+  const liveDefaultAgentDir = defaultAgentId ? resolveDefaultAgentDir(cfg) : undefined;
   try {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
@@ -199,7 +202,7 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         if (!hasNestedAgentDir) {
           return false;
         }
-        if (areComparablePathsEqual(nestedAgentDir, liveDefaultAgentDir)) {
+        if (liveDefaultAgentDir && areComparablePathsEqual(nestedAgentDir, liveDefaultAgentDir)) {
           return false;
         }
         if (!configuredIds.has(agentId)) {
@@ -780,10 +783,12 @@ export function detectStateIntegrityHealthIssues(
   const homedir = () => resolveRequiredHomeDir(env, params?.homedir ?? os.homedir);
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const agentId = resolveDefaultAgentId(cfg);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const storeDir = path.dirname(storePath);
+  const agentId = tryResolveDefaultAgentId(cfg);
+  const sessionsDir = agentId
+    ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
+    : undefined;
+  const storePath = agentId ? resolveStorePath(cfg.session?.store, { agentId }) : undefined;
+  const storeDir = storePath ? path.dirname(storePath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
 
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
@@ -861,8 +866,12 @@ export function detectStateIntegrityHealthIssues(
 
   if (stateDirExists) {
     const dirCandidates = new Map<string, "Sessions dir" | "Session store dir" | "OAuth dir">();
-    dirCandidates.set(sessionsDir, "Sessions dir");
-    dirCandidates.set(storeDir, "Session store dir");
+    if (sessionsDir) {
+      dirCandidates.set(sessionsDir, "Sessions dir");
+    }
+    if (storeDir) {
+      dirCandidates.set(storeDir, "Session store dir");
+    }
     if (requireOAuthDir) {
       dirCandidates.set(oauthDir, "OAuth dir");
     }
@@ -1046,21 +1055,25 @@ export async function noteStateIntegrity(
   const stateDir = resolveStateDir(env, homedir);
   const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
-  const agentId = resolveDefaultAgentId(cfg);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const storeDir = path.dirname(storePath);
-  const absoluteStorePath = path.resolve(storePath);
+  const agentId = tryResolveDefaultAgentId(cfg);
+  const sessionsDir = agentId
+    ? resolveSessionTranscriptsDirForAgent(agentId, env, homedir)
+    : undefined;
+  const storePath = agentId ? resolveStorePath(cfg.session?.store, { agentId }) : undefined;
+  const storeDir = storePath ? path.dirname(storePath) : undefined;
+  const absoluteStorePath = storePath ? path.resolve(storePath) : undefined;
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
-  const displaySessionsDir = shortenHomePath(sessionsDir);
-  const displayStoreDir = shortenHomePath(storeDir);
+  const displaySessionsDir = sessionsDir ? shortenHomePath(sessionsDir) : undefined;
+  const displayStoreDir = storeDir ? shortenHomePath(storeDir) : undefined;
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
-  const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
+  const suppressOrphanTranscriptWarning = agentId
+    ? shouldSuppressOrphanTranscriptWarning(cfg, agentId)
+    : false;
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -1184,8 +1197,12 @@ export async function noteStateIntegrity(
 
   if (stateDirExists) {
     const dirCandidates = new Map<string, string>();
-    dirCandidates.set(sessionsDir, "Sessions dir");
-    dirCandidates.set(storeDir, "Session store dir");
+    if (sessionsDir) {
+      dirCandidates.set(sessionsDir, "Sessions dir");
+    }
+    if (storeDir) {
+      dirCandidates.set(storeDir, "Session store dir");
+    }
     if (requireOAuthDir) {
       dirCandidates.set(oauthDir, "OAuth dir");
     } else if (!existsDir(oauthDir)) {
@@ -1277,6 +1294,19 @@ export async function noteStateIntegrity(
         `  Restore the missing agents.list entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
       ].join("\n"),
     );
+  }
+
+  if (!agentId || !sessionsDir || !storePath || !absoluteStorePath || !displaySessionsDir) {
+    warnings.push(
+      "- Skipped default-agent session and transcript integrity checks because the agent roster does not have exactly one default.",
+    );
+    if (warnings.length > 0) {
+      noteFn(warnings.join("\n"), "State integrity");
+    }
+    if (changes.length > 0) {
+      noteFn(changes.join("\n"), "Doctor changes");
+    }
+    return;
   }
 
   // The doctor importer is uncached and returns one mutable parse, avoiding the

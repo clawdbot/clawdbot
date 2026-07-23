@@ -32,6 +32,7 @@ describe("agent id session-key boundary", () => {
   it("keeps legacy keys absent at parse time and resolves them only with a configured default", () => {
     expect(parseAgentSessionKey("main")?.agentId).toBeUndefined();
     expect(() => resolveAgentIdFromSessionKey("main")).toThrow("configured default agent");
+    expect(() => resolveAgentIdFromSessionKey("main", "   ")).toThrow("configured default agent");
     expect(resolveAgentIdFromSessionKey("main", "primary")).toBe("primary");
     expect(resolveAgentIdFromSessionKey("agent:worker:main", "primary")).toBe("worker");
   });
