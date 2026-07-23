@@ -150,6 +150,7 @@ describe("slack socket reconnect loop", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
+      lastTransportActivityAt: expect.any(Number),
       healthState: "degraded",
       lastError: expect.stringContaining("without bot_id"),
     });

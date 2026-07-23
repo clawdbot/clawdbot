@@ -614,6 +614,7 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
+      lastTransportActivityAt: expect.any(Number),
       ...expected,
     });
   });
@@ -628,6 +629,7 @@ describe("connected identity health", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: expect.any(Number),
+      lastTransportActivityAt: expect.any(Number),
       healthState: "degraded",
       lastError: "request_timeout",
     });
