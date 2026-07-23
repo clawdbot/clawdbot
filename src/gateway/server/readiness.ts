@@ -65,10 +65,17 @@ async function withReadinessEvaluationTimeout<T>(
   }
 }
 
-function buildReadinessEvaluationFailure(error: unknown): CanonicalReadinessResult {
+function buildReadinessEvaluationFailure(
+  error: unknown,
+  metadata?: Pick<
+    CanonicalReadinessResult,
+    "profileContractVersion" | "profile" | "profileSource" | "activation"
+  >,
+): CanonicalReadinessResult {
   const timedOut = error instanceof ReadinessEvaluationTimeoutError;
   const reason = timedOut ? "ReadinessEvaluationTimedOut" : "ReadinessEvaluationFailed";
   return {
+    ...metadata,
     ready: false,
     conditions: [
       {
@@ -415,6 +422,10 @@ export async function evaluateConfiguredGatewayReadiness(params: {
   config: OpenClawConfig;
   evaluateGateway: ReadinessChecker;
   evaluateRuntime: () => Promise<CanonicalReadinessResult>;
+  failureMetadata?: Pick<
+    CanonicalReadinessResult,
+    "profileContractVersion" | "profile" | "profileSource" | "activation"
+  >;
   timeoutMs?: number;
 }): Promise<CanonicalGatewayReadinessResult> {
   if (params.config.gateway?.readiness === undefined) {
@@ -426,6 +437,10 @@ export async function evaluateConfiguredGatewayReadiness(params: {
 async function evaluateCanonicalGatewayReadiness(params: {
   evaluateGateway: ReadinessChecker;
   evaluateRuntime: () => Promise<CanonicalReadinessResult>;
+  failureMetadata?: Pick<
+    CanonicalReadinessResult,
+    "profileContractVersion" | "profile" | "profileSource" | "activation"
+  >;
   timeoutMs?: number;
 }): Promise<CanonicalGatewayReadinessResult> {
   let gateway: ReadinessResult | undefined;
@@ -441,7 +456,7 @@ async function evaluateCanonicalGatewayReadiness(params: {
   } catch (error) {
     return mergeReadinessResults(
       gateway ?? { ready: false, failing: [], uptimeMs: 0 },
-      buildReadinessEvaluationFailure(error),
+      buildReadinessEvaluationFailure(error, params.failureMetadata),
       { runtimeConditionsFirst: true },
     );
   }

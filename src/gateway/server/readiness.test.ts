@@ -568,6 +568,16 @@ describe("canonical configured Gateway readiness", () => {
       config: { gateway: { readiness: {} } },
       evaluateGateway: () => gateway,
       evaluateRuntime: () => new Promise<never>(() => {}),
+      failureMetadata: {
+        profileContractVersion: 1,
+        profile: "container",
+        profileSource: "config",
+        activation: {
+          runtimeId: "runtime-1",
+          incarnationId: "incarnation-1",
+          profile: "container",
+        },
+      },
       timeoutMs: 5,
     });
 
@@ -575,6 +585,14 @@ describe("canonical configured Gateway readiness", () => {
       ready: false,
       failing: ["ReadinessEvaluationTimedOut"],
       failures: ["ReadinessEvaluationTimedOut"],
+      profileContractVersion: 1,
+      profile: "container",
+      profileSource: "config",
+      activation: {
+        runtimeId: "runtime-1",
+        incarnationId: "incarnation-1",
+        profile: "container",
+      },
     });
     expect(result.conditions).toContainEqual({
       type: "ReadinessEvaluationComplete",

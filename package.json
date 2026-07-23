@@ -1694,7 +1694,6 @@
     "test:docker:compose-setup": "bash scripts/e2e/compose-setup.sh",
     "test:docker:e2e-build": "bash scripts/e2e/build-image.sh",
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
-    "test:docker:hosting-profiles": "bash scripts/e2e/hosting-profiles-docker.sh",
     "test:docker:kitchen-sink-plugin": "bash scripts/e2e/kitchen-sink-plugin-docker.sh",
     "test:docker:kitchen-sink-rpc": "bash scripts/e2e/kitchen-sink-rpc-docker.sh",
     "test:docker:live-acp-bind": "bash scripts/test-live-acp-bind-docker.sh",

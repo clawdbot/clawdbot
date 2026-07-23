@@ -453,7 +453,7 @@ export const mainLanes = [
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
   serviceLane(
     "hosting-profiles",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:hosting-profiles",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/hosting-profiles-docker.sh",
     { stateScenario: "empty" },
   ),
   serviceLane("browser-cdp-snapshot", "pnpm test:docker:browser-cdp-snapshot", {
@@ -843,7 +843,7 @@ const primaryReleasePathChunks = {
     serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
     serviceLane(
       "hosting-profiles",
-      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:hosting-profiles",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/hosting-profiles-docker.sh",
       { stateScenario: "empty" },
     ),
     serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload", {

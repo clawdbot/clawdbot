@@ -182,7 +182,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:hosting-profiles",
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 bash scripts/e2e/hosting-profiles-docker.sh",
         imageKind: "functional",
         live: false,
         name: "hosting-profiles",
