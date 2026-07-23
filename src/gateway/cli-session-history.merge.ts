@@ -6,6 +6,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { redactSensitiveText } from "../logging/redact.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
@@ -113,7 +114,14 @@ function isEquivalentImportedMessage(existing: unknown, imported: unknown): bool
 
   const existingText = extractComparableText(existing);
   const importedText = extractComparableText(imported);
-  if (!existingText || !importedText || existingText !== importedText) {
+  if (!existingText || !importedText) {
+    return false;
+  }
+  // The gateway transcript persists the redacted form while the CLI import
+  // keeps the full text, so also accept the redacted form of the import.
+  // (Only mask the import side: masking is not idempotent, an already
+  // masked token can degrade to "***" on a second pass.)
+  if (existingText !== importedText && existingText !== redactSensitiveText(importedText)) {
     return false;
   }
 

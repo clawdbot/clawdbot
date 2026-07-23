@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
   augmentChatHistoryWithCliSessionImports,
@@ -842,6 +843,31 @@ describe("cli session history", () => {
     const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
     expect(merged[0]).toBe(localMessages[0]);
     expect(merged[1]).toBe(importedMessages[0]);
+  });
+
+  it("dedupes a redacted local transcript against the full imported text", () => {
+    const fullText =
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me";
+    const redactedText = redactSensitiveText(fullText);
+    expect(redactedText).not.toBe(fullText);
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const localMessages = [{ role: "user", content: redactedText, timestamp }];
+    const importedMessages = [{ role: "user", content: fullText, timestamp }];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toHaveLength(1);
+  });
+
+  it("keeps both messages when the imported text differs beyond redaction", () => {
+    const fullText =
+      "open https://host.example/chat?session=agent%3Amain%3Adashboard%3A123e4567-e89b-12d3-a456-426614174000 for me";
+    const redactedText = redactSensitiveText(fullText);
+    const timestamp = Date.parse("2026-07-23T00:00:00Z");
+    const localMessages = [{ role: "user", content: `${redactedText} (edited)`, timestamp }];
+    const importedMessages = [{ role: "user", content: fullText, timestamp }];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toHaveLength(2);
   });
 
   it("augments chat history when a session has a claude-cli binding", async () => {
