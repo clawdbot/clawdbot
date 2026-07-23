@@ -7,6 +7,7 @@ import {
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
+  navigationCopyEntries,
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
@@ -23,6 +24,7 @@ import {
   routeIdFromPath,
   type RouteId,
 } from "./app-routes.ts";
+import { t } from "./i18n/index.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
 /**
@@ -182,6 +184,13 @@ describe("formatDocumentTitle", () => {
 });
 
 describe("titleForRoute", () => {
+  it("keeps every navigation copy key backed by an English translation", () => {
+    for (const entry of navigationCopyEntries()) {
+      expect(t(entry.titleKey)).not.toBe(entry.titleKey);
+      expect(t(entry.subtitleKey)).not.toBe(entry.subtitleKey);
+    }
+  });
+
   it("returns expected titles for every route", () => {
     expect(
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, titleForRoute(routeId)])),

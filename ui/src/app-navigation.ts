@@ -355,6 +355,10 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   "new-session": { titleKey: "newSession.title", subtitleKey: "newSession.hint" },
 };
 
+export function navigationCopyEntries() {
+  return Object.values(NAVIGATION_COPY);
+}
+
 export function titleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].titleKey);
 }

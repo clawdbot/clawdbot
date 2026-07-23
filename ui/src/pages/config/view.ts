@@ -29,6 +29,7 @@ import {
   schemaType,
   type JsonSchema,
 } from "../../components/config-form.shared.ts";
+import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import {
   analyzeConfigSchema,
   renderConfigForm,
@@ -105,7 +106,6 @@ export type ConfigViewState = {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
-  expandedAdvancedSections: Set<string>;
   lastCustomThemeImportFocusToken: number | null;
   rawDiffCache?: RawDiffCache;
   schemaAnalysisCache?: SchemaAnalysisCache;
@@ -120,7 +120,6 @@ export function createConfigViewState(): ConfigViewState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
-    expandedAdvancedSections: new Set(),
     lastCustomThemeImportFocusToken: null,
     lastConfigContextKey: null,
     lastFormModeForScroll: null,
@@ -191,6 +190,7 @@ export type ConfigProps = {
   setChatMessageMaxWidth: (value: string | undefined) => void;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (enabled: boolean) => void;
+  forceShowAdvanced?: boolean;
   forceAdvancedSection?: string | null;
   sessionObserverEnabled?: boolean;
   sessionObserverUtilityModel?: string;
@@ -1595,7 +1595,6 @@ function resetConfigEphemeralState(viewState: ConfigViewState) {
   viewState.envRevealed = false;
   viewState.validityDismissed = false;
   viewState.revealedSensitivePaths.clear();
-  viewState.expandedAdvancedSections.clear();
   viewState.lastCustomThemeImportFocusToken = null;
   viewState.rawDiffCache = undefined;
 }
@@ -1632,6 +1631,54 @@ function toggleSensitivePathReveal(viewState: ConfigViewState, path: Array<strin
   }
 }
 
+function configValueExistsAtPath(
+  value: Record<string, unknown> | null,
+  pathString: string,
+): boolean {
+  if (!value || pathString === "<root>") {
+    return false;
+  }
+  const segments = pathString.split(".");
+  const visit = (current: unknown, index: number): boolean => {
+    if (index === segments.length) {
+      return current !== undefined;
+    }
+    if (current === null || typeof current !== "object") {
+      return false;
+    }
+    const segment = segments[index];
+    if (segment === "*") {
+      return Object.values(current).some((entry) => visit(entry, index + 1));
+    }
+    if (!segment || !Object.hasOwn(current, segment)) {
+      return false;
+    }
+    return visit((current as Record<string, unknown>)[segment], index + 1);
+  };
+  return visit(value, 0);
+}
+
+function renderUnsupportedPathSummary(paths: string[]) {
+  const marker = "__OPENCLAW_CONFIG_PATHS__";
+  const key =
+    paths.length === 1 ? "configView.formUnsafeCount" : "configView.formUnsafeCountPlural";
+  const [prefix, suffix = ""] = t(key, {
+    count: String(paths.length),
+    paths: marker,
+  }).split(marker);
+  return html`
+    <span class="config-content-callout__text">
+      ${prefix}${paths
+        .slice(0, 3)
+        .map(
+          (path, index) => html`${index > 0 ? ", " : ""}<code>${path}</code>`,
+        )}${suffix}${paths.length > 3
+        ? html` ${t("configView.formUnsafeMore", { count: String(paths.length - 3) })}`
+        : nothing}
+    </span>
+  `;
+}
+
 export function renderConfig(props: ConfigProps) {
   const viewState = props.viewState;
   const showModeToggle = props.showModeToggle ?? false;
@@ -1648,7 +1695,38 @@ export function renderConfig(props: ConfigProps) {
     include,
     exclude,
   );
-  const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
+  const unsupportedActivePaths = analysis.unsupportedPaths.filter(
+    (path) =>
+      path !== "<root>" &&
+      (!props.activeSection ||
+        path === props.activeSection ||
+        path.startsWith(`${props.activeSection}.`)) &&
+      configValueExistsAtPath(props.formValue, path),
+  );
+  const formUnsafe = unsupportedActivePaths.length > 0;
+  const schemaProperties = analysis.schema?.properties ?? {};
+  // Mirror the renderer's tier semantics (splitConfigSchemaByTier: unhinted
+  // leaves default to advanced) so the toolbar toggle appears exactly when the
+  // rendered scope can hide fields behind ghost rows; a mismatched predicate
+  // strands an enabled toggle with no control to turn it off. An active
+  // virtual section (__appearance__/__notifications__) renders no schema form,
+  // so it never offers the toggle.
+  const hasAdvancedInScope = () => {
+    const sectionKeys = props.activeSection
+      ? Object.hasOwn(schemaProperties, props.activeSection)
+        ? [props.activeSection]
+        : []
+      : Object.keys(schemaProperties);
+    return sectionKeys.some((key) => {
+      const node = schemaProperties[key];
+      if (!node) {
+        return false;
+      }
+      const split = splitConfigSchemaByTier({ schema: node, path: [key], hints: props.uiHints });
+      return split.advancedLeafCount > 0;
+    });
+  };
+  const effectiveShowAdvanced = props.forceShowAdvanced === true || props.showAdvancedSettings;
   const rawAvailable = props.rawAvailable ?? true;
   // An unsaved raw draft stays authoritative in the capability; hiding the
   // raw editor would show a stale form beside an apply that always refuses.
@@ -1931,7 +2009,8 @@ export function renderConfig(props: ConfigProps) {
       })
     : nothing;
 
-  const showAdvancedToggle = formMode === "form";
+  const showAdvancedToggle =
+    formMode === "form" && props.forceShowAdvanced !== true && hasAdvancedInScope();
   const showToolbar =
     showModeToggle || showSectionTabs || showAdvancedToggle || autoSaveStatus !== nothing;
   const applyBanner = renderConfigApplyBanner({
@@ -2064,7 +2143,20 @@ export function renderConfig(props: ConfigProps) {
           : formMode === "form"
             ? html`
                 ${formUnsafe && showModeToggle && rawAvailable
-                  ? html`<div class="callout info">${t("configView.formUnsafe")}</div>`
+                  ? html`
+                      <div class="config-content-callout">
+                        <div class="callout info">
+                          ${renderUnsupportedPathSummary(unsupportedActivePaths)}
+                          <button
+                            type="button"
+                            class="btn btn--sm"
+                            @click=${() => props.onFormModeChange("raw")}
+                          >
+                            ${t("configView.openRawEditor")}
+                          </button>
+                        </div>
+                      </div>
+                    `
                   : nothing}
                 ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
                 ${props.schemaLoading
@@ -2085,17 +2177,9 @@ export function renderConfig(props: ConfigProps) {
                       onPatch: props.onFormPatch,
                       activeSection: props.activeSection,
                       activeSubsection: effectiveSubsection,
-                      showAdvanced: props.showAdvancedSettings,
-                      expandedAdvancedSections: viewState.expandedAdvancedSections,
+                      showAdvanced: effectiveShowAdvanced,
                       forceAdvancedSection: props.forceAdvancedSection,
-                      onAdvancedSectionToggle: (section, expanded) => {
-                        if (expanded) {
-                          viewState.expandedAdvancedSections.add(section);
-                        } else {
-                          viewState.expandedAdvancedSections.delete(section);
-                        }
-                        requestUpdate();
-                      },
+                      onShowAdvanced: () => props.setShowAdvancedSettings(true),
                       sectionActions:
                         props.activeSection === "env"
                           ? html`
@@ -2230,9 +2314,11 @@ export function renderConfig(props: ConfigProps) {
                 `;
               })()}
       ${props.issues.length > 0
-        ? html`<div class="callout danger" style="margin-top: 12px;">
-            <pre class="code-block">
+        ? html`<div class="config-content-callout">
+            <div class="callout danger">
+              <pre class="code-block">
 ${unsafeHTML(highlightJsonHtml(JSON.stringify(props.issues, null, 2)))}</pre>
+            </div>
           </div>`
         : nothing}
     </div>
