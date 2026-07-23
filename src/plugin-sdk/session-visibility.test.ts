@@ -92,6 +92,19 @@ describe("scoped session access providers", () => {
     });
   });
 
+  it("keeps the current alias requester-owned when a configured default exists", () => {
+    const checker = createSessionVisibilityRowChecker({
+      action: "history",
+      defaultAgentId: "main",
+      requesterAgentId: "work",
+      requesterSessionKey: "agent:work:main",
+      visibility: "self",
+      a2aPolicy: createAgentToAgentPolicy({}),
+    });
+
+    expect(checker.check({ key: "current" })).toEqual({ allowed: true });
+  });
+
   it("grants only the exact requester, target, and action supplied by a provider", () => {
     const makeChecker = (action: "history" | "send") =>
       createSessionVisibilityChecker({
