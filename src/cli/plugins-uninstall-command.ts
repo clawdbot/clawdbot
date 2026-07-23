@@ -231,7 +231,9 @@ async function runPluginUninstallCommandUnlocked(
     let finalWriteOptions = mutationWriteOptions;
     let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
     if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForPendingPluginDirectoryRemoval(sourceConfig, pluginId);
+      const disabledConfig = prepareConfigForPendingPluginDirectoryRemoval(sourceConfig, pluginId, {
+        channelIds,
+      });
       const disabledCommit = await tracePluginLifecyclePhaseAsync(
         "config disable",
         () =>
