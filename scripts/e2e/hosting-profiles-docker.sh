@@ -38,7 +38,7 @@ run_scenario() {
   fi
   if [ "$scenario" = "reverse-proxy-ready" ]; then
     auth_args=()
-    gateway_setup='node "$entry" config set --batch-json '\''[{"path":"gateway.auth.mode","value":"trusted-proxy"},{"path":"gateway.auth.trustedProxy.userHeader","value":"x-forwarded-user"},{"path":"gateway.trustedProxies","value":["127.0.0.1"]}]'\'' >/dev/null;'
+    gateway_setup='node "$entry" config set --batch-json '\''[{"path":"gateway.auth.mode","value":"trusted-proxy"},{"path":"gateway.auth.trustedProxy.userHeader","value":"x-forwarded-user"},{"path":"gateway.auth.trustedProxy.allowLoopback","value":true},{"path":"gateway.trustedProxies","value":["127.0.0.1"]}]'\'' >/dev/null;'
   elif [ "$scenario" = "node-not-ready" ]; then
     # Trusted-CIDR approval admits the device connection but deliberately leaves its command
     # surface pending, unlike silent same-host or SSH-verified approval.

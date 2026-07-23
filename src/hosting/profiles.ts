@@ -1,6 +1,6 @@
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isLoopbackHost } from "../gateway/net.js";
+import { isLoopbackHost, isTrustedProxyAddress } from "../gateway/net.js";
 import {
   WORKSPACE_WRITABLE_CRITERION_ID,
   type ReadinessCondition,
@@ -10,6 +10,14 @@ import type { HostingProfileId } from "./types.js";
 export const HOSTING_PROFILE_IDS = ["local", "container", "reverse-proxy", "node-mode"] as const;
 
 export const HOSTING_PROFILE_ENV = "OPENCLAW_HOSTING_PROFILE";
+export const HOSTING_PROFILE_CONTRACT_VERSION = 1 as const;
+
+export type HostingProfileSource = "argument" | "environment" | "config";
+
+export type HostingProfileSelection = {
+  profile: HostingProfileId;
+  source: HostingProfileSource;
+};
 
 type HostingProfileDescriptor = {
   id: HostingProfileId;
@@ -70,18 +78,32 @@ function resolveExplicitHostingProfile(
   return profile;
 }
 
-export function resolveHostingProfile(
+export function resolveHostingProfileSelection(
   params: {
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
     override?: unknown;
   } = {},
-): HostingProfileId | undefined {
-  return (
-    resolveExplicitHostingProfile(params.override, "gateway startup override") ??
-    resolveExplicitHostingProfile(params.env?.[HOSTING_PROFILE_ENV], HOSTING_PROFILE_ENV) ??
-    resolveExplicitHostingProfile(params.config?.hosting?.profile, "hosting.profile")
+): HostingProfileSelection | undefined {
+  const override = resolveExplicitHostingProfile(params.override, "gateway startup override");
+  if (override) {
+    return { profile: override, source: "argument" };
+  }
+  const environment = resolveExplicitHostingProfile(
+    params.env?.[HOSTING_PROFILE_ENV],
+    HOSTING_PROFILE_ENV,
   );
+  if (environment) {
+    return { profile: environment, source: "environment" };
+  }
+  const config = resolveExplicitHostingProfile(params.config?.hosting?.profile, "hosting.profile");
+  return config ? { profile: config, source: "config" } : undefined;
+}
+
+export function resolveHostingProfile(
+  params: Parameters<typeof resolveHostingProfileSelection>[0] = {},
+): HostingProfileId | undefined {
+  return resolveHostingProfileSelection(params)?.profile;
 }
 
 type HostingRuntimeFacts = {
@@ -90,7 +112,8 @@ type HostingRuntimeFacts = {
   port: number;
   authMode: string;
   trustedProxyUserHeader?: string;
-  trustedProxyCount: number;
+  trustedProxySources: string[];
+  trustedProxyAllowLoopback: boolean;
 };
 
 export type NodeModeReadinessEvidence = {
@@ -209,7 +232,7 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
       message: "Trusted-proxy auth requires a non-empty userHeader.",
     };
   }
-  if (facts.trustedProxyCount === 0) {
+  if (facts.trustedProxySources.length === 0) {
     return {
       type: "TrustedProxyReady",
       status: "False",
@@ -218,12 +241,25 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
       message: "Reverse-proxy profile requires at least one trusted proxy source.",
     };
   }
+  const loopbackConfigured =
+    isTrustedProxyAddress("127.0.0.1", facts.trustedProxySources) ||
+    isTrustedProxyAddress("::1", facts.trustedProxySources);
+  if (loopbackConfigured && !facts.trustedProxyAllowLoopback) {
+    return {
+      type: "TrustedProxyReady",
+      status: "False",
+      requirement: "required",
+      reason: "TrustedProxyIngressUnsafe",
+      message:
+        "A loopback trusted proxy is configured, but gateway.auth.trustedProxy.allowLoopback is not enabled.",
+    };
+  }
   return {
     type: "TrustedProxyReady",
     status: "True",
     requirement: "required",
     reason: "TrustedProxyReady",
-    message: `Trusted-proxy auth accepts ${facts.trustedProxyUserHeader} from ${facts.trustedProxyCount} configured source${facts.trustedProxyCount === 1 ? "" : "s"}.`,
+    message: `Trusted-proxy auth accepts ${facts.trustedProxyUserHeader} from ${facts.trustedProxySources.length} configured source${facts.trustedProxySources.length === 1 ? "" : "s"}.`,
   };
 }
 
