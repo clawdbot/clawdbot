@@ -64,13 +64,17 @@ describe("arcee provider plugin", () => {
     const openRouterProfile = config?.auth?.profiles?.["openrouter:default"];
     expect(openRouterProfile?.provider).toBe("openrouter");
     expect(openRouterProfile?.mode).toBe("api_key");
-    const arceeConfig = config?.models?.providers?.arcee;
-    expect(arceeConfig?.baseUrl).toBe("https://openrouter.ai/api/v1");
-    expect(arceeConfig?.api).toBe("openai-completions");
-    expect(config?.models?.providers?.arcee?.models?.map((model) => model.id)).toEqual([
+    const openRouterConfig = config?.models?.providers?.openrouter;
+    expect(openRouterConfig?.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(openRouterConfig?.api).toBe("openai-completions");
+    expect(config?.models?.providers?.openrouter?.models?.map((model) => model.id)).toEqual([
       "arcee-ai/trinity-large-preview",
       "arcee-ai/trinity-large-thinking",
     ]);
+    expect(config?.models?.providers?.arcee).toBeUndefined();
+    expect(config?.agents?.defaults?.model).toEqual({
+      primary: "openrouter/arcee-ai/trinity-large-thinking",
+    });
   });
 
   it("keeps direct Arcee auth env candidates separate from OpenRouter", () => {
