@@ -92,17 +92,5 @@ export const TelegramConfigSchema = createLazyFacadeObjectValue<
     "TelegramConfigSchema",
   ),
 );
-/** @deprecated Import DiscordConfigSchema from the Discord plugin config API. */
-export const DiscordConfigSchema = createLazyFacadeObjectValue<
-  BundledObjectConfigSchema<NonNullable<ChannelConfig["discord"]>>
->(() =>
-  loadBundledConfigSchema<NonNullable<ChannelConfig["discord"]>>("discord", "DiscordConfigSchema"),
-);
-/** @deprecated Import MSTeamsConfigSchema from the Microsoft Teams plugin config API. */
-export const MSTeamsConfigSchema = createLazyFacadeObjectValue<
-  BundledObjectConfigSchema<NonNullable<ChannelConfig["msteams"]>>
->(() =>
-  loadBundledConfigSchema<NonNullable<ChannelConfig["msteams"]>>("msteams", "MSTeamsConfigSchema"),
-);
 export { GoogleChatConfigSchema } from "../config/zod-schema.providers-googlechat.js";
 export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";
