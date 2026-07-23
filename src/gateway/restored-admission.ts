@@ -197,7 +197,7 @@ async function writeRecord(filePath: string, value: RestoredAdmissionReadyRecord
 async function readRecordIfPresent(
   rootPath: string,
   relativePath: string,
-): Promise<unknown | undefined> {
+): Promise<unknown> {
   try {
     const read = await (
       await root(rootPath)
