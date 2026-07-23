@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { formatSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntry,
@@ -61,9 +60,7 @@ describe("embedded attempt transcript persistence", () => {
       sessionKey: "agent:main:embedded-generation",
       storePath,
     };
-    const marker = formatSqliteSessionFileMarker(target);
     await upsertSessionEntry(target, {
-      sessionFile: marker,
       sessionId: target.sessionId,
       updatedAt: 1,
     });
@@ -84,7 +81,7 @@ describe("embedded attempt transcript persistence", () => {
       throw new Error(`expected bootstrap page, got ${bootstrap.kind}`);
     }
 
-    const sessionManager = SessionManager.openFile(marker, dir, dir);
+    const sessionManager = SessionManager.open(target, dir);
     sessionManager.appendMessage({
       role: "user",
       content: "second turn",
