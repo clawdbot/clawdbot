@@ -649,8 +649,8 @@ export const zh_TW: TranslationMap = {
     openWorkboardCard: "開啟 Workboard 卡片",
     dashboardAvailable: "儀表板可用",
     approvalNeeded: "需要核准",
-    queuedMessage: "{count} 則訊息已排入待送佇列",
-    queuedMessages: "{count} 則訊息已排入待送佇列",
+    queuedMessage: "{count} 則訊息已排入傳送佇列",
+    queuedMessages: "{count} 則訊息已排入傳送佇列",
     noSessions: "找不到工作階段。",
     noActiveSessions: "沒有作用中的討論串。",
     noArchivedSessions: "沒有已封存的工作階段。",
@@ -2961,7 +2961,7 @@ export const zh_TW: TranslationMap = {
     eventStale: "過期工作階段",
   },
   connection: {
-    queuedCount: "{count} 則佇列中",
+    queuedCount: "{count} 個已排入佇列",
     reconnecting: "正在重新連線…",
     retryNow: "立即重試",
     access: {
@@ -4118,7 +4118,7 @@ export const zh_TW: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "離線——訊息將被排入佇列，並在連線恢復時傳送。",
-      offlineQueuedHint: "離線中 — {count} 則佇列中；連線恢復後將自動送出訊息。",
+      offlineQueuedHint: "離線 — {count} 則訊息已排入佇列；連線恢復後將會傳送。",
       preparingModel: "正在準備模型...",
       responding: "{name} 正在回覆...",
       sendingMessage: "正在傳送訊息...",

@@ -4218,7 +4218,8 @@ export const vi: TranslationMap = {
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       offlineHint: "Ngoại tuyến — tin nhắn sẽ được xếp hàng và gửi khi kết nối trở lại.",
-      offlineQueuedHint: "Ngoại tuyến — {count} đang chờ; tin nhắn sẽ gửi khi kết nối trở lại.",
+      offlineQueuedHint:
+        "Ngoại tuyến — {count} tin nhắn đang chờ; tin nhắn sẽ được gửi khi kết nối được khôi phục.",
       preparingModel: "Đang chuẩn bị mô hình...",
       responding: "{name} đang phản hồi...",
       sendingMessage: "Đang gửi tin nhắn...",
