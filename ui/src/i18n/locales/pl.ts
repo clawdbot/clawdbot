@@ -680,8 +680,8 @@ export const pl: TranslationMap = {
     openWorkboardCard: "Otwórz kartę Workboard",
     dashboardAvailable: "Pulpit dostępny",
     approvalNeeded: "Wymagane zatwierdzenie",
-    queuedMessage: "{count} wiadomość oczekuje na wysłanie",
-    queuedMessages: "{count} wiadomości oczekuje na wysłanie",
+    queuedMessage: "{count} wiadomość w kolejce do wysłania",
+    queuedMessages: "{count} wiadomości w kolejce do wysłania",
     noSessions: "Nie znaleziono sesji.",
     noActiveSessions: "Brak aktywnych wątków.",
     noArchivedSessions: "Brak zarchiwizowanych sesji.",
@@ -3058,7 +3058,7 @@ export const pl: TranslationMap = {
     eventStale: "Nieaktualna sesja",
   },
   connection: {
-    queuedCount: "{count} oczekujących",
+    queuedCount: "{count} w kolejce",
     reconnecting: "Ponowne łączenie…",
     retryNow: "Spróbuj ponownie teraz",
     access: {
@@ -3733,6 +3733,16 @@ export const pl: TranslationMap = {
   },
   login: {
     subtitle: "Panel Gateway",
+    deviceAuthMigration: {
+      banner: "Ta przeglądarka wymaga jednorazowego zatwierdzenia urządzenia po aktualizacji.",
+      action: "Zabezpiecz tę przeglądarkę",
+      secureContextRequired:
+        "Ta starsza przeglądarka pozostaje tymczasowo dostępna. Otwórz ją ponownie przez HTTPS lub localhost, aby zabezpieczyć ją tożsamością urządzenia.",
+      pendingUnavailable:
+        "Żądanie parowania przeglądarki nie jest jeszcze dostępne. Spróbuj ponownie za chwilę.",
+      loadFailed: "Nie można wczytać żądania parowania tej przeglądarki: {error}",
+      approvalFailed: "Nie można zabezpieczyć tej przeglądarki: {error}",
+    },
     passwordPlaceholder: "opcjonalne",
     showToken: "Pokaż token",
     hideToken: "Ukryj token",
@@ -4243,7 +4253,7 @@ export const pl: TranslationMap = {
       offlineHint:
         "Offline — wiadomości zostaną umieszczone w kolejce i wysłane po przywróceniu połączenia.",
       offlineQueuedHint:
-        "Offline — {count} oczekujących; wiadomości zostaną wysłane po przywróceniu połączenia.",
+        "Offline — {count} w kolejce; wiadomości zostaną wysłane po przywróceniu połączenia.",
       preparingModel: "Przygotowywanie modelu...",
       responding: "{name} odpowiada...",
       sendingMessage: "Wysyłanie wiadomości...",
