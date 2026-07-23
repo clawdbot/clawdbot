@@ -3840,6 +3840,20 @@ export const nl: TranslationMap = {
     },
     outputTokens: "{count} uitvoertokens",
     archivedSessionDisabled: "Herstel deze sessie om berichten te verzenden.",
+    sessionSharing: {
+      menu: "Thread delen",
+      current: "Zichtbaarheid van thread: {visibility}",
+      visibility: "Zichtbaarheid",
+      shared: "Gedeeld",
+      readOnly: "Alleen-lezen",
+      suggest: "Voorstellen",
+      draft: "Concept",
+      members: "Leden",
+      selected: "Lid",
+      noPeople: "Geen gekoppelde personen gevonden.",
+      readOnlyNotice:
+        "Alleen de eigenaar van de thread en leden kunnen acties uitvoeren in deze thread.",
+    },
     loadOlder: "Oudere laden",
     sessionHeader: {
       renameTooltip: "Sessie hernoemen",
