@@ -268,6 +268,33 @@ describe("recovery point composition", () => {
     ).rejects.toThrow("does not match the state owner's expected agents");
   });
 
+  it("rejects non-canonical dependency ordering", async () => {
+    const global = await createSnapshotFixture({ role: "global", userVersion: 7, byte: "a" });
+    const main = await createSnapshotFixture({
+      role: "agent",
+      agentId: "main",
+      userVersion: 11,
+      byte: "b",
+    });
+    const research = await createSnapshotFixture({
+      role: "agent",
+      agentId: "research",
+      userVersion: 12,
+      byte: "c",
+    });
+    const manifest = await createRecoveryPointManifest({
+      snapshots: [global.snapshot, main.snapshot, research.snapshot],
+      expectedAgentIds: ["main", "research"],
+      now: () => new Date("2026-07-21T16:00:00.000Z"),
+    });
+    manifest.components[2]!.dependsOn = ["sqlite/global", "sqlite/agent/main"];
+    manifest.recoveryPointId = recomputeIdentity(manifest);
+
+    expect(() => verifyRecoveryPointManifest(manifest)).toThrow(
+      "dependencies are not in canonical order",
+    );
+  });
+
   it("rejects unsupported obligation treatment, kind, and owner combinations", async () => {
     const global = await createSnapshotFixture({ role: "global", userVersion: 7, byte: "a" });
     const agent = await createSnapshotFixture({
