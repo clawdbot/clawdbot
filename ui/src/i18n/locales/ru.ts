@@ -597,6 +597,9 @@ export const ru: TranslationMap = {
     worktreeName: "Имя рабочего дерева",
     worktreeNamePlaceholder: "авто",
     worktreeNameInvalid: "Имена рабочих деревьев могут содержать строчные буквы, цифры и дефисы.",
+    incognito: "Инкогнито",
+    incognitoDescription: "Хранить эту ветку только до перезапуска Gateway",
+    startAsDraft: "Начать как черновик",
     messagePlaceholder: "Над чем должна работать эта сессия?",
     readingAttachment: "Чтение вложения",
     start: "Начать сессию",
@@ -618,6 +621,7 @@ export const ru: TranslationMap = {
     limit: "Лимит",
     filters: "Фильтры",
     createdBy: "Создано {name}",
+    archivedBy: "Архивировано пользователем {name}",
     filterByCreator: "Фильтр по создателю",
     allCreators: "Все люди",
     filterControls: "Фильтры сессий",
@@ -747,6 +751,7 @@ export const ru: TranslationMap = {
     unread: "Unread",
     worktreeSession: "Worktree session",
     automationAttached: "Automation attached",
+    incognito: "Ветка инкогнито",
     cloudWorkerPlacement: "Облачный исполнитель: {state}",
     cloudWorkerPlacementConflict: "Облачный воркер: {state} · 1 конфликт рабочего пространства",
     cloudWorkerPlacementConflicts:
@@ -2431,6 +2436,8 @@ export const ru: TranslationMap = {
     toolRuns: "{count} запусков",
     identity: {
       title: "Профиль",
+      menuLabel: "Меню профиля",
+      menuButtonLabel: "Меню профиля и приложения для {name}",
       description: "Ваш профиль на этом gateway.",
       loading: "Загрузка ваших данных…",
       profileUnavailable: "Не удалось загрузить профиль вашей учётной записи.",
@@ -3842,6 +3849,9 @@ export const ru: TranslationMap = {
   },
   chat: {
     disconnected: "Отключено от gateway.",
+    sendErrors: {
+      activeLeafChanged: "Ветка переключилась на другое ответвление — проверьте и отправьте снова.",
+    },
     waitingForApproval: "Ожидание подтверждения…",
     startupStatus: {
       preparingWorkspace: "Подготовка рабочей области…",
@@ -3859,6 +3869,7 @@ export const ru: TranslationMap = {
       readOnly: "Только чтение",
       suggest: "Предлагать",
       draft: "Черновик",
+      publishDraft: "Опубликовать черновик",
       members: "Участники",
       selected: "Участник",
       noPeople: "Связанные пользователи не найдены.",
@@ -3877,6 +3888,7 @@ export const ru: TranslationMap = {
       copyPath: "Копировать путь",
       copyBranch: "Скопировать имя ветки",
       copied: "Скопировано",
+      incognito: "Ветка инкогнито",
       branches: "Ветки обсуждения",
       branchSwitchUnavailable: "Переключение веток недоступно, пока агент работает.",
       branchSwitchRequiresAdmin:
@@ -4168,6 +4180,7 @@ export const ru: TranslationMap = {
       openInCanvas: "Открыть в холсте",
       reply: "Ответить",
       replyToMessage: "Ответить на сообщение",
+      replyingTo: "Ответ для {name}",
       rewind: "Перемотать",
       rewindConfirm: "Перемотать к состоянию до этого сообщения?",
       rewindToHere: "Перемотать сюда",
