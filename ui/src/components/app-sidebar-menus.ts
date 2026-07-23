@@ -26,9 +26,7 @@ import {
   isSidebarRouteActive,
   renderSidebarCustomizeMenu,
   renderSidebarMoreMenu,
-  renderSidebarMoreRow,
   renderSidebarNavRoute,
-  sidebarMoreMenuHoldsActiveRoute,
 } from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionGroupsElement } from "./app-sidebar-session-groups.ts";
 import {
@@ -47,10 +45,10 @@ import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElement {
   @state() protected customizeMenuPosition: { x: number; y: number } | null = null;
   @state() protected moreMenuPosition: { x: number; y: number } | null = null;
-  @state() protected sessionMenu: SidebarSessionMenuState | null = null;
+  @state() sessionMenu: SidebarSessionMenuState | null = null;
   @state() protected sessionMenuWork: SessionMenuWork | null = null;
-  @state() protected sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
-  @state() protected sessionSortMenuPosition: { x: number; y: number } | null = null;
+  @state() sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
+  @state() sessionSortMenuPosition: { x: number; y: number } | null = null;
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   @state() protected agentMenuPosition: { x: number; bottom: number } | null = null;
   @state() protected agentMenuFilter = "";
@@ -174,7 +172,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
   }
 
   /** A row outside the current selection retargets before the menu opens. */
-  protected openSessionMenuForRow(
+  openSessionMenu(
     session: SidebarRecentSession,
     x: number,
     y: number,
@@ -183,10 +181,10 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     if (!this.selectedSessionKeys.has(session.key)) {
       this.clearSessionSelection();
     }
-    this.openSessionMenu(session, x, y, trigger);
+    this.showSessionMenu(session, x, y, trigger);
   }
 
-  private openSessionMenu(
+  private showSessionMenu(
     session: SidebarRecentSession,
     x: number,
     y: number,
@@ -234,7 +232,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     });
   }
 
-  protected openSessionGroupMenu(group: string, x: number, y: number, trigger: HTMLElement | null) {
+  openSessionGroupMenu(group: string, x: number, y: number, trigger: HTMLElement | null) {
     const menuWidth = 224;
     const menuMaxHeight = 160;
     this.dismissTransientMenus();
@@ -255,7 +253,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
     }
   }
 
-  protected toggleSessionSortMenu(trigger: HTMLElement) {
+  toggleSessionSortMenu(trigger: HTMLElement) {
     if (this.sessionSortMenuPosition) {
       this.closeSessionSortMenu();
       return;
@@ -591,21 +589,6 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       },
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,
-    });
-  }
-
-  protected renderMoreRow() {
-    return renderSidebarMoreRow({
-      open: this.moreMenuPosition !== null,
-      active: sidebarMoreMenuHoldsActiveRoute({
-        activeRouteId: this.activeRouteId,
-        activeWorkboardBoardId: this.activeWorkboardBoardIsPinned()
-          ? this.activeWorkboardBoardId
-          : "",
-        sidebarEntries: this.sidebarEntries,
-        isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
-      }),
-      onToggle: (trigger) => this.toggleMoreMenu(trigger),
     });
   }
 

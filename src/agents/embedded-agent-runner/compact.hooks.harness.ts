@@ -760,6 +760,10 @@ export async function loadCompactHooksHarness(): Promise<{
         agentDir: input.agentDir,
         config: input.config,
         workspaceDir: input.workspaceDir,
+        metadataSnapshot: {
+          ...emptyPluginMetadataSnapshot,
+          workspaceDir: input.workspaceDir as string | undefined,
+        },
         createStores: () => ({ authStorage: {}, modelRegistry: {} }),
       },
       release: vi.fn(),

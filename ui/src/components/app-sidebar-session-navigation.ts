@@ -56,14 +56,13 @@ import { isStoppableCloudWorkerPlacement } from "./session-row-badges.ts";
 
 /** Session-row projection, selection, sorting, and agent scope navigation. */
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessionOwnershipElement {
-  @state() protected selectedSessionKeys: ReadonlySet<string> = new Set();
+  @state() selectedSessionKeys: ReadonlySet<string> = new Set();
   @state() protected expandedChildSessionKeys: ReadonlySet<string> = new Set();
   @state() protected collapsedActiveChildSessionKeys: ReadonlySet<string> = new Set();
-  @state() protected fullyShownChildSessionKeys: ReadonlySet<string> = new Set();
-  @state() protected sessionsGrouping: SidebarSessionsGrouping =
-    loadStoredSidebarSessionsGrouping();
+  @state() fullyShownChildSessionKeys: ReadonlySet<string> = new Set();
+  @state() sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() protected sessionsShowCron = loadStoredSidebarSessionsShowCron();
-  @state() protected sessionsStatusFilter: SidebarSessionStatusFilter =
+  @state() sessionsStatusFilter: SidebarSessionStatusFilter =
     loadStoredSidebarSessionStatusFilter();
 
   private sessionSelectionAnchor: string | null = null;
@@ -119,6 +118,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
 
   protected getRouteSessionKey(): string {
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
+  }
+
+  protected outboxCountForSessionKey(sessionKey: string): number {
+    return this.outboxCountForSession(sessionKey);
   }
 
   protected getSessionNavigationState() {
@@ -183,6 +186,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
         pullRequest: context?.sessions.pullRequestSummary(row.key),
+        outboxCount: this.outboxCountForSessionKey(row.key),
         unread: row.archived !== true && row.unread === true,
         lastReadAt: row.lastReadAt,
         attention:
@@ -335,7 +339,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     return this.visibleSessionRowsInOrder().filter((row) => this.selectedSessionKeys.has(row.key));
   }
 
-  protected handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession) {
+  handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession) {
     if (event.defaultPrevented || event.button !== 0) {
       return;
     }
@@ -398,7 +402,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     this.selectedSessionKeys = new Set(rows.slice(start, end + 1).map((row) => row.key));
   }
 
-  protected clearSessionSelection() {
+  clearSessionSelection() {
     this.sessionSelectionAnchor = null;
     if (this.selectedSessionKeys.size > 0) {
       this.selectedSessionKeys = new Set();
@@ -668,14 +672,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     this.selectSession(this.selectedAgentMainSessionKey(normalizeAgentId(agentId)));
   };
 
-  protected isSessionChildrenExpanded(session: SidebarRecentSession): boolean {
+  isSessionChildrenExpanded(session: SidebarRecentSession): boolean {
     return (
       this.expandedChildSessionKeys.has(session.key) ||
       (session.containsActiveDescendant && !this.collapsedActiveChildSessionKeys.has(session.key))
     );
   }
 
-  protected toggleSessionChildren(session: SidebarRecentSession) {
+  toggleSessionChildren(session: SidebarRecentSession) {
     const next = new Set(this.expandedChildSessionKeys);
     const collapsedActive = new Set(this.collapsedActiveChildSessionKeys);
     const fullyShown = new Set(this.fullyShownChildSessionKeys);
@@ -708,7 +712,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     this.fullyShownChildSessionKeys = fullyShown;
   }
 
-  protected showAllSessionChildren(sessionKey: string) {
+  showMoreChildren(sessionKey: string) {
     this.fullyShownChildSessionKeys = new Set(this.fullyShownChildSessionKeys).add(sessionKey);
   }
 
@@ -718,5 +722,5 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   }
 
   protected abstract closeAgentMenu(options?: { restoreFocus?: boolean }): void;
-  protected abstract readonly collapsedSessionSections: ReadonlySet<string>;
+  abstract readonly collapsedSessionSections: ReadonlySet<string>;
 }

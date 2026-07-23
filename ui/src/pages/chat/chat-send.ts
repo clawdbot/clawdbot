@@ -109,6 +109,7 @@ import {
   formatTerminalChatSendAckError,
   chatMessagesContainQueuedSend,
   OFFLINE_QUEUE_STORAGE_ERROR,
+  preserveQueuedUserTurn,
   sendQueuedChatMessageWithQueueMode as sendQueuedChatMessageWithQueueModeLifecycle,
   steerQueuedChatMessage as steerQueuedChatMessageLifecycle,
   type SteerSendDependencies,
@@ -814,6 +815,9 @@ async function sendQueuedChatMessage(
               hasAttachments ? attachments : undefined,
             ),
             timestamp: startedAt,
+            // Send identity keeps this optimistic turn on the same rendered
+            // bubble key as the pending row and the authoritative history copy.
+            __openclaw: { idempotencyKey: `${runId}:user` },
           },
         ];
       }
@@ -1390,6 +1394,10 @@ async function readCurrentStoredChatHistory(
   }
   syncChatQueueFromStoredOutbox(host, currentOutbox);
   if (chatMessagesContainQueuedSend(history.messages, item)) {
+    // Server history owns the turn, but the visible transcript may not have
+    // reloaded yet; materialize the turn locally before dropping the queue row
+    // or the bubble vanishes until loadChatHistory below resolves.
+    preserveQueuedUserTurn(host, item);
     const removed = removeQueuedMessageWithoutReleasing(host, item.id, outbox.sessionKey);
     if (!removed) {
       return "blocked";

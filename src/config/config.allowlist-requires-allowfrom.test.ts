@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   DiscordConfigSchema,
   IMessageConfigSchema,
-  SignalConfigSchema,
-  SlackConfigSchema,
   TelegramConfigSchema,
 } from "./zod-schema.providers-core.js";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
@@ -36,12 +34,6 @@ describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
       name: "telegram",
       schema: TelegramConfigSchema,
       config: { dmPolicy: "allowlist", botToken: "fake" },
-      issuePath: "allowFrom",
-    },
-    {
-      name: "signal",
-      schema: SignalConfigSchema,
-      config: { dmPolicy: "allowlist" },
       issuePath: "allowFrom",
     },
     {
@@ -80,26 +72,9 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
       },
     },
     {
-      name: "signal",
-      schema: SignalConfigSchema,
-      config: { allowFrom: ["+15550001111"], accounts: { work: { dmPolicy: "allowlist" } } },
-    },
-    {
       name: "discord",
       schema: DiscordConfigSchema,
       config: { allowFrom: ["123456789"], accounts: { work: { dmPolicy: "allowlist" } } },
-    },
-    {
-      name: "slack",
-      schema: SlackConfigSchema,
-      config: {
-        allowFrom: ["U123"],
-        botToken: "fake",
-        appToken: "fake",
-        accounts: {
-          work: { dmPolicy: "allowlist", botToken: "fake", appToken: "fake" },
-        },
-      },
     },
     {
       name: "whatsapp",
@@ -124,43 +99,6 @@ describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
       { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } },
       "allowFrom",
     );
-  });
-});
-
-describe("signal reply-to config", () => {
-  it("accepts channel and account scoped reply-to modes", () => {
-    const result = SignalConfigSchema.safeParse({
-      replyToMode: "first",
-      replyToModeByChatType: { direct: "all", group: "first" },
-      accounts: {
-        work: {
-          replyToMode: "off",
-          replyToModeByChatType: { direct: "first", group: "off" },
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  it("rejects unreachable Signal channel reply-to overrides", () => {
-    const result = SignalConfigSchema.safeParse({
-      replyToModeByChatType: { channel: "off" },
-    });
-
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects unreachable Signal account reply-to overrides", () => {
-    const result = SignalConfigSchema.safeParse({
-      accounts: {
-        work: {
-          replyToModeByChatType: { channel: "off" },
-        },
-      },
-    });
-
-    expect(result.success).toBe(false);
   });
 });
 

@@ -27,6 +27,14 @@ const mocks = vi.hoisted(() => ({
     }),
   ),
   extraGatewayServiceToRepairEffects: vi.fn((): readonly HealthRepairEffect[] => []),
+  callGateway: vi.fn(),
+  collectClawStateHealthFindings: vi.fn(
+    async (_options?: {
+      cronGateway?: {
+        list: (opts?: { includeDisabled?: boolean }) => Promise<readonly unknown[]>;
+      };
+    }) => [],
+  ),
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
@@ -37,6 +45,14 @@ vi.mock("../commands/doctor-gateway-services.js", () => ({
   detectExtraGatewayServiceIssues: mocks.detectExtraGatewayServiceIssues,
   extraGatewayServiceToHealthFinding: mocks.extraGatewayServiceToHealthFinding,
   extraGatewayServiceToRepairEffects: mocks.extraGatewayServiceToRepairEffects,
+}));
+
+vi.mock("../claws/doctor.js", () => ({
+  collectClawStateHealthFindings: mocks.collectClawStateHealthFindings,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
 }));
 
 const runtime = { log() {}, error() {}, exit() {} };
@@ -105,6 +121,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectGatewayDaemonFindings() {
       return [];
     },
+    async listGatewayCronJobs() {
+      return [];
+    },
     ...overrides,
   };
 }
@@ -157,6 +176,9 @@ describe("CORE_HEALTH_CHECKS", () => {
     mocks.detectExtraGatewayServiceIssues.mockResolvedValue([]);
     mocks.extraGatewayServiceToHealthFinding.mockClear();
     mocks.extraGatewayServiceToRepairEffects.mockClear();
+    mocks.callGateway.mockReset();
+    mocks.collectClawStateHealthFindings.mockReset();
+    mocks.collectClawStateHealthFindings.mockResolvedValue([]);
     tmp = undefined;
   });
 
@@ -193,6 +215,118 @@ describe("CORE_HEALTH_CHECKS", () => {
     );
 
     await expect(check.detect({ mode: "lint", runtime, cfg: {} })).resolves.toEqual([finding]);
+  });
+
+  it("includes Claw state diagnostics in core doctor checks", () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    expect(createCoreHealthChecks(createDeps()).map((check) => check.id)).toContain(
+      "core/doctor/claws-state",
+    );
+  });
+
+  it("passes one live Gateway cron inventory provider to Claw diagnostics", async () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    const listGatewayCronJobs = vi.fn(async () => []);
+    mocks.collectClawStateHealthFindings.mockImplementationOnce(async (options) => {
+      await options?.cronGateway?.list({ includeDisabled: true });
+      return [];
+    });
+    const check = getCheck(
+      createCoreHealthChecks(createDeps({ listGatewayCronJobs })),
+      "core/doctor/claws-state",
+    );
+    const ctx = { mode: "doctor" as const, runtime, cfg: {} };
+
+    await expect(check.detect(ctx)).resolves.toEqual([]);
+    expect(listGatewayCronJobs).toHaveBeenCalledOnce();
+    expect(listGatewayCronJobs).toHaveBeenCalledWith(ctx);
+  });
+
+  it("reads every stable Gateway cron inventory page for Claw diagnostics", async () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    const firstJob = { id: "job-1" };
+    const secondJob = { id: "job-2" };
+    mocks.callGateway
+      .mockResolvedValueOnce({
+        jobs: [firstJob],
+        snapshotRevision: "revision-1",
+        total: 2,
+        offset: 0,
+        limit: 200,
+        hasMore: true,
+        nextOffset: 1,
+      })
+      .mockResolvedValueOnce({
+        jobs: [secondJob],
+        snapshotRevision: "revision-1",
+        total: 2,
+        offset: 1,
+        limit: 200,
+        hasMore: false,
+        nextOffset: null,
+      });
+    let listedJobs: readonly unknown[] = [];
+    mocks.collectClawStateHealthFindings.mockImplementationOnce(async (options) => {
+      listedJobs = (await options?.cronGateway?.list({ includeDisabled: true })) ?? [];
+      return [];
+    });
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/claws-state");
+
+    await expect(check.detect({ mode: "doctor", runtime, cfg: {} })).resolves.toEqual([]);
+    expect(listedJobs).toEqual([firstJob, secondJob]);
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "cron.list",
+        params: { includeDisabled: true, limit: 200, offset: 0 },
+      }),
+    );
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "cron.list",
+        params: { includeDisabled: true, limit: 200, offset: 1 },
+      }),
+    );
+  });
+
+  it("rejects a Gateway cron inventory that changes between pages", async () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    mocks.callGateway
+      .mockResolvedValueOnce({
+        jobs: [{ id: "job-1" }],
+        snapshotRevision: "revision-1",
+        total: 2,
+        offset: 0,
+        limit: 200,
+        hasMore: true,
+        nextOffset: 1,
+      })
+      .mockResolvedValueOnce({
+        jobs: [{ id: "job-2" }],
+        snapshotRevision: "revision-2",
+        total: 2,
+        offset: 1,
+        limit: 200,
+        hasMore: false,
+        nextOffset: null,
+      });
+    mocks.collectClawStateHealthFindings.mockImplementationOnce(async (options) => {
+      await options?.cronGateway?.list({ includeDisabled: true });
+      return [];
+    });
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/claws-state");
+
+    await expect(check.detect({ mode: "doctor", runtime, cfg: {} })).rejects.toThrow(
+      "Gateway cron inventory changed while doctor was reading it.",
+    );
+  });
+
+  it("omits Claw state diagnostics without the experiment", () => {
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
+    expect(createCoreHealthChecks(createDeps()).map((check) => check.id)).not.toContain(
+      "core/doctor/claws-state",
+    );
   });
 
   it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {

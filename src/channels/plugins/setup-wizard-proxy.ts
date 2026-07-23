@@ -23,7 +23,7 @@ type ResolveGroupAllowlistParams = Parameters<
 /**
  * Delegates setup configured-state checks to a lazily loaded wizard.
  */
-export function createDelegatedResolveConfigured(loadWizard: () => Promise<ChannelSetupWizard>) {
+function createDelegatedResolveConfigured(loadWizard: () => Promise<ChannelSetupWizard>) {
   return async ({ cfg, accountId }: ResolveConfiguredParams) =>
     await (await loadWizard()).status.resolveConfigured({ cfg, accountId });
 }
@@ -31,7 +31,7 @@ export function createDelegatedResolveConfigured(loadWizard: () => Promise<Chann
 /**
  * Delegates setup preparation to a lazily loaded wizard.
  */
-export function createDelegatedPrepare(loadWizard: () => Promise<ChannelSetupWizard>) {
+function createDelegatedPrepare(loadWizard: () => Promise<ChannelSetupWizard>) {
   return async (params: Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0]) =>
     await (await loadWizard()).prepare?.(params);
 }
@@ -39,7 +39,7 @@ export function createDelegatedPrepare(loadWizard: () => Promise<ChannelSetupWiz
 /**
  * Delegates setup finalization to a lazily loaded wizard.
  */
-export function createDelegatedFinalize(loadWizard: () => Promise<ChannelSetupWizard>) {
+function createDelegatedFinalize(loadWizard: () => Promise<ChannelSetupWizard>) {
   return async (params: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]) =>
     await (await loadWizard()).finalize?.(params);
 }

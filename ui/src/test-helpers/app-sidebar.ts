@@ -37,6 +37,8 @@ export type SidebarLifecycleState = HTMLElement & {
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   offline: boolean;
+  outboxCountForSession: (sessionKey: string) => number;
+  queuedOutboxCount: number;
   lastError: string | null;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";

@@ -54,7 +54,7 @@ import { CLAW_OUTPUT_STABILITY } from "./types.js";
 
 export { ClawRemoveError } from "./lifecycle-delete-support.js";
 export { CLAW_REMOVE_PLAN_SCHEMA_VERSION } from "./lifecycle-remove-contract.js";
-export { readClawStatus } from "./lifecycle-status.js";
+export { readClawStatus, type ClawStatusRecord } from "./lifecycle-status.js";
 
 export const CLAW_REMOVE_RESULT_SCHEMA_VERSION = "openclaw.clawRemoveResult.v1" as const;
 type ClawRemoveResult = {

@@ -22,6 +22,24 @@
   justify-content: flex-start;
 }
 
+/* Freshly submitted composer text flows up into the transcript. Applied only
+   to the locally pending bubble (see shouldAnimateUserTurnEntry); the bubble
+   keeps a stable key through the history handoff so this never replays. */
+@keyframes chat-user-turn-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-bubble--user-turn-enter {
+  animation: chat-user-turn-enter var(--duration-normal) var(--ease-out) backwards;
+}
+
 .chat-group.chat-group--with-footer {
   --chat-group-avatar-column: 1;
   --chat-group-content-column: 2;

@@ -56,6 +56,21 @@
       "systemImage": "bubble.left.and.bubble.right",
       "markdownCapable": true,
       "preferSessionLookupForAnnounceTarget": true,
+      "setup": {
+        "fields": [
+          {
+            "key": "token",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token <token>", "description": "Discord bot token" }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": { "flags": "--use-env", "description": "Use DISCORD_BOT_TOKEN" }
+          }
+        ]
+      },
       "commands": {
         "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": true

@@ -1,8 +1,4 @@
-/**
- * Shared media tool helpers.
- *
- * Resolves provider/model config, local roots, auth availability, SSRF policy, and media reference inputs.
- */
+/** Shared media tool routing, auth, path, and reference helpers. */
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
@@ -237,6 +233,19 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
+}
+
+export function createCapabilityProviderRuntimeDeps<T extends CapabilityProvider>(
+  providers: readonly T[] | undefined,
+) {
+  const prepared = providers ? [...providers] : undefined;
+  return prepared
+    ? {
+        getProvider: (providerId?: string) =>
+          findCapabilityProviderById({ providers: prepared, providerId, normalizeProviderId }),
+        listProviders: () => prepared,
+      }
+    : undefined;
 }
 
 /**

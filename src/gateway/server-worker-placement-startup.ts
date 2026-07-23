@@ -127,8 +127,10 @@ function coordinateWorkerPlacementDispatch(
   };
   return {
     dispatch: async (request) => await runPlacementOperation(() => service.dispatch(request)),
-    forceDestroyEnvironment: (environmentId) =>
-      runExclusivePlacementOperation(() => service.forceDestroyEnvironment(environmentId)),
+    forceDestroyEnvironment: (environmentId, onCleanupError) =>
+      runExclusivePlacementOperation(() =>
+        service.forceDestroyEnvironment(environmentId, onCleanupError),
+      ),
     reclaim: async (request) => await runPlacementOperation(() => service.reclaim(request)),
     reconcile: () => runReconciliation(service.reconcile),
     reconcileActive: () => runReconciliation(service.reconcileActive),

@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   callMeetingBrowserProxyOnNode,
   createLocalMeetingRealtimeAudioTransport,
+  createMeetingRealtimeEngineBindings,
   createNodeMeetingRealtimeAudioTransport,
   leaveMeetingWithBrowser,
   openMeetingWithBrowser,
@@ -12,18 +13,10 @@ import {
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
   type MeetingBrowserRequestCaller,
-  type MeetingAgentConsultParams,
   type MeetingRealtimeAudioEngineHandle,
-  type MeetingRealtimeToolCallParams,
-  type MeetingRuntimePlatform,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  consultOpenClawAgentForZoomMeeting,
-  handleZoomMeetingsRealtimeConsultToolCall,
-  resolveZoomMeetingsRealtimeTools,
-} from "../agent-consult.js";
 import type { ZoomMeetingsConfig, ZoomMeetingsMode } from "../config.js";
 import {
   ZOOM_MEETINGS_SYSTEM_PROFILER_COMMAND,
@@ -43,12 +36,6 @@ import {
   ZOOM_MEETINGS_BROWSER_NODE_ADAPTER,
   ZOOM_MEETINGS_NODE_COMMAND,
 } from "./zoom-meetings-platform-constants.js";
-
-const ZOOM_MEETINGS_RUNTIME_PLATFORM = {
-  displayName: ZOOM_MEETINGS_PLATFORM_ADAPTER.displayName,
-  logScope: ZOOM_MEETINGS_PLATFORM_ADAPTER.logScope,
-  sessionIdPrefix: ZOOM_MEETINGS_PLATFORM_ADAPTER.id,
-} satisfies MeetingRuntimePlatform;
 
 type LocalAudioBridge = MeetingRealtimeAudioEngineHandle & {
   type: "command-pair";
@@ -126,37 +113,9 @@ async function rollbackZoomBrowserJoin(params: {
   }));
   if (!result.left) {
     params.logger.warn(
-      `${ZOOM_MEETINGS_RUNTIME_PLATFORM.logScope} browser rollback after realtime startup failure did not complete: ${result.note}`,
+      `${ZOOM_MEETINGS_PLATFORM_ADAPTER.logScope} browser rollback after realtime startup failure did not complete: ${result.note}`,
     );
   }
-}
-
-function realtimeBindings(params: {
-  config: ZoomMeetingsConfig;
-  fullConfig: OpenClawConfig;
-  runtime: PluginRuntime;
-  logger: RuntimeLogger;
-}) {
-  return {
-    platform: ZOOM_MEETINGS_RUNTIME_PLATFORM,
-    consultAgent: (consult: MeetingAgentConsultParams) =>
-      consultOpenClawAgentForZoomMeeting({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        ...consult,
-      }),
-    tools: resolveZoomMeetingsRealtimeTools(params.config.realtime.toolPolicy),
-    handleToolCall: (call: MeetingRealtimeToolCallParams) =>
-      handleZoomMeetingsRealtimeConsultToolCall({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        ...call,
-      }),
-  };
 }
 
 export async function assertBlackHole2chAvailable(params: {
@@ -205,9 +164,12 @@ async function startLocalAudioBridge(params: {
     bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
     bargeInCooldownMs: params.config.chrome.bargeInCooldownMs,
     logger: params.logger,
-    logScope: ZOOM_MEETINGS_RUNTIME_PLATFORM.logScope,
+    logScope: ZOOM_MEETINGS_PLATFORM_ADAPTER.logScope,
   });
-  const bindings = realtimeBindings(params);
+  const bindings = createMeetingRealtimeEngineBindings({
+    platform: ZOOM_MEETINGS_PLATFORM_ADAPTER,
+    ...params,
+  });
   try {
     const engine =
       params.mode === "agent"
@@ -368,7 +330,7 @@ export async function launchZoomMeetingOnNode(params: {
     });
   } catch (error) {
     params.logger.debug?.(
-      `${ZOOM_MEETINGS_RUNTIME_PLATFORM.logScope} node bridge cleanup ignored: ${
+      `${ZOOM_MEETINGS_PLATFORM_ADAPTER.logScope} node bridge cleanup ignored: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -433,10 +395,13 @@ export async function launchZoomMeetingOnNode(params: {
       bridgeId: result.bridgeId,
       logger: params.logger,
       commandName: ZOOM_MEETINGS_NODE_COMMAND,
-      logScope: ZOOM_MEETINGS_RUNTIME_PLATFORM.logScope,
+      logScope: ZOOM_MEETINGS_PLATFORM_ADAPTER.logScope,
       logPrefix: params.mode === "agent" ? "node agent" : "node",
     });
-    const bindings = realtimeBindings(params);
+    const bindings = createMeetingRealtimeEngineBindings({
+      platform: ZOOM_MEETINGS_PLATFORM_ADAPTER,
+      ...params,
+    });
     let engine: MeetingRealtimeAudioEngineHandle;
     try {
       engine =

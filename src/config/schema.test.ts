@@ -7,11 +7,7 @@ import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
-import {
-  DiscordConfigSchema,
-  SlackConfigSchema,
-  TelegramConfigSchema,
-} from "./zod-schema.providers-core.js";
+import { DiscordConfigSchema, TelegramConfigSchema } from "./zod-schema.providers-core.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -675,15 +671,6 @@ describe("config schema", () => {
 
     expect(
       TelegramConfigSchema.safeParse({
-        streaming: {
-          mode: "progress",
-          progress: { commentary: true },
-        },
-      }).success,
-    ).toBe(true);
-
-    expect(
-      SlackConfigSchema.safeParse({
         streaming: {
           mode: "progress",
           progress: { commentary: true },

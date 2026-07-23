@@ -27,7 +27,10 @@ import {
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { isLegacyRollingLogFilePath, resolveRollingLogFilePathForDate } from "./log-file-path.js";
+import { resolveDefaultRollingLogFile } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
+import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -58,6 +61,7 @@ type ResolvedSettings = {
   file: string;
   maxFileBytes: number;
 };
+type ResolvedRuntimeSettings = ResolvedSettings & { rolling: boolean };
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
 type LoggerConfigLoader = () => OpenClawConfig["logging"] | undefined;
@@ -508,15 +512,16 @@ function resolveDefaultActiveLogFile(): string {
       `${LOG_PREFIX}-vitest-${process.pid}-${formatLocalDate(new Date())}${LOG_SUFFIX}`,
     );
   }
-  return defaultRollingPathForToday();
+  return resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR });
 }
 
-function resolveSettings(): ResolvedSettings {
+function resolveSettings(): ResolvedRuntimeSettings {
   if (!canUseNodeFs()) {
     return {
       level: "silent",
       file: DEFAULT_LOG_FILE,
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+      rolling: false,
     };
   }
 
@@ -526,8 +531,9 @@ function resolveSettings(): ResolvedSettings {
   if (canUseSilentVitestFileLogFastPath(envLevel)) {
     return {
       level: "silent",
-      file: defaultRollingPathForToday(),
+      file: resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR }),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+      rolling: true,
     };
   }
 
@@ -539,18 +545,30 @@ function resolveSettings(): ResolvedSettings {
   const level = envLevel ?? fromConfig;
   const file = cfg?.file ?? resolveDefaultActiveLogFile();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
-  return { level, file, maxFileBytes };
+  const rolling = cfg?.file ? isLegacyRollingLogFilePath(cfg.file) : true;
+  return { level, file, maxFileBytes, rolling };
 }
 
-function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
+setLoggerFileTargetResolver(() => {
+  const { file, rolling } = resolveSettings();
+  return { file, rolling };
+});
+
+function settingsChanged(a: ResolvedRuntimeSettings | null, b: ResolvedRuntimeSettings) {
   if (!a) {
     return true;
   }
-  return a.level !== b.level || a.file !== b.file || a.maxFileBytes !== b.maxFileBytes;
+  return (
+    a.level !== b.level ||
+    a.file !== b.file ||
+    a.maxFileBytes !== b.maxFileBytes ||
+    a.rolling !== b.rolling
+  );
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
-  const settings = (loggingState.cachedSettings as ResolvedSettings | null) ?? resolveSettings();
+  const settings =
+    (loggingState.cachedSettings as ResolvedRuntimeSettings | null) ?? resolveSettings();
   if (!loggingState.cachedSettings) {
     loggingState.cachedSettings = settings;
   }
@@ -563,7 +581,7 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   return levelToMinLevel(level) >= levelToMinLevel(settings.level);
 }
 
-function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
+function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
     // Custom structured redaction runs at each transport boundary; avoid tslog pre-masking divergent records.
@@ -578,8 +596,8 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     return logger;
   }
 
-  const rollingFile = isRollingPath(settings.file);
-  let activeFile = resolveActiveLogFile(settings.file);
+  const rollingFile = settings.rolling;
+  let activeFile = resolveActiveLogFileWithMode(settings.file, rollingFile);
   fs.mkdirSync(path.dirname(activeFile), { recursive: true });
   // Clean up stale rolling logs when using a dated log filename.
   if (rollingFile) {
@@ -590,7 +608,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const nextActiveFile = resolveActiveLogFile(settings.file);
+      const nextActiveFile = resolveActiveLogFileWithMode(settings.file, rollingFile);
       if (nextActiveFile !== activeFile) {
         activeFile = nextActiveFile;
         fs.mkdirSync(path.dirname(activeFile), { recursive: true });
@@ -666,7 +684,7 @@ function appendLogLine(file: string, line: string): boolean {
 export function getLogger(): TsLogger<LogObj> {
   const settings = resolveSettings();
   const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
-  const cachedSettings = loggingState.cachedSettings as ResolvedSettings | null;
+  const cachedSettings = loggingState.cachedSettings as ResolvedRuntimeSettings | null;
   if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
     loggingState.cachedLogger = buildLogger(settings);
     loggingState.cachedSettings = settings;
@@ -723,7 +741,8 @@ export type PinoLikeLogger = {
 };
 
 export function getResolvedLoggerSettings(): LoggerResolvedSettings {
-  return resolveSettings();
+  const { rolling: _rolling, ...settings } = resolveSettings();
+  return settings;
 }
 
 // Test helpers
@@ -754,30 +773,13 @@ export const testApi = {
 };
 export { testApi as __test__ };
 
-function defaultRollingPathForToday(): string {
-  return rollingPathForDate(DEFAULT_LOG_DIR, new Date());
-}
-
-function rollingPathForDate(dir: string, date: Date): string {
-  const today = formatLocalDate(date);
-  return path.join(dir, `${LOG_PREFIX}-${today}${LOG_SUFFIX}`);
-}
-
 function resolveActiveLogFile(file: string): string {
-  const expandedFile = expandHomePrefix(file);
-  if (!isRollingPath(expandedFile)) {
-    return expandedFile;
-  }
-  return rollingPathForDate(path.dirname(expandedFile), new Date());
+  return resolveActiveLogFileWithMode(file, isLegacyRollingLogFilePath(file));
 }
 
-function isRollingPath(file: string): boolean {
-  const base = path.basename(file);
-  return (
-    base.startsWith(`${LOG_PREFIX}-`) &&
-    base.endsWith(LOG_SUFFIX) &&
-    base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
-  );
+function resolveActiveLogFileWithMode(file: string, rolling: boolean): string {
+  const expandedFile = expandHomePrefix(file);
+  return rolling ? resolveRollingLogFilePathForDate(expandedFile, new Date()) : expandedFile;
 }
 
 function pruneOldRollingLogs(dir: string): void {

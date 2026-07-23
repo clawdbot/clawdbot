@@ -15,6 +15,8 @@ Heartbeat runs **periodic agent turns** in the main session so the model can sur
 
 Heartbeat is a scheduled main-session turn - it does **not** create [background task](/automation/tasks) records. Task records are for detached work (ACP runs, subagents, isolated cron jobs).
 
+Under the hood, heartbeat cadence is owned by the cron scheduler: the gateway maintains one system-owned cron job per heartbeat-enabled agent (visible in `openclaw cron list --all` as `Heartbeat (agent-id)`). Each tick requests a heartbeat wake; the heartbeat runner still applies its own cooldown, active-hours, and busy guards, so a tick outside the configured window is skipped, not delivered. These monitor jobs are converged from your heartbeat config at startup and on config reload — edit `agents.*.heartbeat`, not the cron job.
+
 Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
 
 ## Quick start (beginner)

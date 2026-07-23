@@ -52,7 +52,9 @@ export type CronFormState = {
   staggerUnit: "seconds" | "minutes";
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
-  payloadKind: "systemEvent" | "agentTurn" | "command" | "script";
+  // "heartbeat" is system-owned and always payloadLocked; the form only
+  // displays it, never submits it.
+  payloadKind: "systemEvent" | "agentTurn" | "command" | "script" | "heartbeat";
   payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
@@ -92,6 +94,9 @@ function isCronPayload(value: unknown): value is CronPayload {
   }
   if (value.kind === "script") {
     return typeof value.script === "string";
+  }
+  if (value.kind === "heartbeat") {
+    return true;
   }
   return false;
 }
@@ -749,7 +754,7 @@ function parseStaggerSchedule(
 }
 
 function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
-  return payload?.kind === "command" || payload?.kind === "script";
+  return payload?.kind === "command" || payload?.kind === "script" || payload?.kind === "heartbeat";
 }
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {

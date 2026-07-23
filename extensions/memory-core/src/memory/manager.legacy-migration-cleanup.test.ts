@@ -86,6 +86,8 @@ describe("memory legacy migration cleanup", () => {
         );
         INSERT INTO memory_index_chunks_vec VALUES ('chunk-canonical', '[1,0,0]');
         INSERT INTO memory_index_chunks_vec VALUES ('chunk-ownerless', '[0,1,0]');
+        INSERT INTO memory_index_meta (key, value)
+          VALUES ('memory_vector_rebuild_v1', 'clean');
 
         CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE files (
@@ -128,23 +130,27 @@ describe("memory legacy migration cleanup", () => {
       vectorEnabled: boolean;
     }) =>
       ({
-        memory: { backend: "builtin" },
+        memory: {
+          backend: "builtin",
+          search: {
+            provider: params.provider,
+            model: params.provider === "none" ? "" : "text-embedding-3-small",
+            rememberAcrossConversations: false,
+            sources: ["memory"],
+            store: {
+              vector: {
+                enabled: params.vectorEnabled,
+                ...(params.extensionPath ? { extensionPath: params.extensionPath } : {}),
+              },
+            },
+            cache: { enabled: false },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+            query: { hybrid: { enabled: true } },
+          },
+        },
         agents: {
           defaults: {
             workspace: workspaceDir,
-            memorySearch: {
-              provider: params.provider,
-              model: params.provider === "none" ? "" : "text-embedding-3-small",
-              store: {
-                vector: {
-                  enabled: params.vectorEnabled,
-                  ...(params.extensionPath ? { extensionPath: params.extensionPath } : {}),
-                },
-              },
-              cache: { enabled: false },
-              sync: { watch: false, onSessionStart: false, onSearch: false },
-              query: { hybrid: { enabled: true } },
-            },
           },
           list: [{ id: "main", default: true }],
         },

@@ -20,7 +20,11 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  resolvePluginMetadataSnapshot,
+} from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
@@ -441,6 +445,7 @@ async function resolveModelOverride(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<
   | { kind: "reset" }
   | {
@@ -475,13 +480,24 @@ async function resolveModelOverride(params: {
       ? { workspaceDir: params.sessionEntry.spawnedWorkspaceDir }
       : {}),
   });
-  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
-    config: params.cfg,
-    workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
-    env: process.env,
-  });
+  const workspaceDir = params.sessionEntry?.spawnedWorkspaceDir ?? params.workspaceDir;
+  const manifestMetadataSnapshot =
+    params.metadataSnapshot &&
+    params.metadataSnapshot.pluginIds === undefined &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: params.metadataSnapshot,
+      config: params.cfg,
+      env: process.env,
+      workspaceDir,
+    })
+      ? params.metadataSnapshot
+      : resolvePluginMetadataSnapshot({
+          config: params.cfg,
+          ...(workspaceDir ? { workspaceDir } : {}),
+          env: process.env,
+        });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot.plugins,
+    manifestPlugins: manifestMetadataSnapshot?.plugins,
   };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
@@ -532,6 +548,7 @@ export function createSessionStatusTool(opts?: {
   sandboxed?: boolean;
   activeModelProvider?: string;
   activeModelId?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
   /** Active live-run route, kept separate from the persisted/origin delivery route. */
   activeDeliveryContext?: DeliveryContext;
 }): AnyAgentTool {
@@ -845,6 +862,7 @@ export function createSessionStatusTool(opts?: {
               agentId,
               agentDir: selectedAgentDir,
               workspaceDir: selectedWorkspaceDir,
+              metadataSnapshot: opts?.metadataSnapshot,
             });
             const modelSelection =
               selection.kind === "reset"

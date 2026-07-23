@@ -48,12 +48,18 @@
         "specifier": "./auth-presence",
         "exportName": "hasAnyWhatsAppAuth"
       },
-      "cliAddOptions": [
-        {
-          "flags": "--auth-dir <path>",
-          "description": "WhatsApp auth directory override"
-        }
-      ]
+      "setup": {
+        "fields": [
+          {
+            "key": "authDir",
+            "kind": "string",
+            "cli": {
+              "flags": "--auth-dir <path>",
+              "description": "WhatsApp auth directory override"
+            }
+          }
+        ]
+      }
     },
     "install": {
       "clawhubSpec": "clawhub:@openclaw/whatsapp",

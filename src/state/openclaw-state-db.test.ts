@@ -1227,6 +1227,32 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
   });
 
+  it("detects schema migrations committed in an uncheckpointed WAL", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const opened = openOpenClawStateDatabase(options);
+    const databasePath = opened.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(databasePath);
+    try {
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        PRAGMA user_version = 2;
+        UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary';
+      `);
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "strict-tables-v3",
+        path: databasePath,
+      });
+    } finally {
+      writer.close();
+    }
+  });
+
   it("rejects a placement turn claim tuple without an owner", () => {
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: createTempStateDir() },

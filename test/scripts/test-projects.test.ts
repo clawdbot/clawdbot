@@ -819,10 +819,6 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
-        "scripts/e2e/channel-plugin-trust-docker.sh",
-        ["test/scripts/docker-build-helper.test.ts", "test/scripts/test-projects.test.ts"],
-      ],
-      [
         "scripts/e2e/config-reload-source-docker.sh",
         [
           "test/scripts/docker-e2e-plan.test.ts",
@@ -2678,9 +2674,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/e2e/parallels/update-job-timeout.ts",
         "scripts/e2e/parallels/windows-smoke.ts",
         "scripts/e2e/parallels-windows-smoke.sh",
-        "scripts/e2e/lib/parallels-package/build-info-commit.mjs",
-        "scripts/e2e/lib/parallels-macos-common.sh",
-        "scripts/e2e/lib/parallels-package-common.sh",
       ]),
     ).toEqual([
       {
@@ -2690,7 +2683,6 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/parallels-smoke-model.test.ts",
           "test/scripts/parallels-npm-update-smoke.test.ts",
           "test/scripts/parallels-update-job-timeout.test.ts",
-          "test/scripts/parallels-lib-helpers.test.ts",
         ],
         watchMode: false,
       },
@@ -2702,18 +2694,6 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/restart-mac.test.ts"],
     });
-  });
-
-  it("routes Parallels common shell helpers through lib helper owner tests", () => {
-    for (const changedPath of [
-      "scripts/e2e/lib/parallels-macos-common.sh",
-      "scripts/e2e/lib/parallels-package-common.sh",
-    ]) {
-      expect(resolveChangedTestTargetPlan([changedPath]), changedPath).toEqual({
-        mode: "targets",
-        targets: ["test/scripts/parallels-lib-helpers.test.ts"],
-      });
-    }
   });
 
   it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {

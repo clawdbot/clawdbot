@@ -392,7 +392,9 @@ describe("memory index", () => {
           model: params.model ?? "mock-embed",
           fallback: params.fallback,
           outputDimensionality: params.outputDimensionality,
-          store: { vector: {} },
+          store: {
+            vector: params.vectorEnabled !== undefined ? { enabled: params.vectorEnabled } : {},
+          },
           remote: params.batchEnabled
             ? {
                 batch: { enabled: true },

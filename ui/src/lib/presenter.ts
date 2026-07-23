@@ -80,6 +80,9 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "script") {
     return `Script: ${p.script}`;
   }
+  if (p.kind === "heartbeat") {
+    return "Heartbeat monitor";
+  }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;
   if (delivery && delivery.mode !== "none") {

@@ -141,7 +141,7 @@ describe("createCronExitWatchers", () => {
       stderr: "",
     });
     // One-shot terminal state is persisted BEFORE firing (restart-safe).
-    expect(persistCompletion).toHaveBeenCalledWith("job-a");
+    expect(persistCompletion).toHaveBeenCalledWith(expect.objectContaining({ id: "job-a" }));
     expect(order).toEqual(["persist", "fire"]);
   });
 
@@ -385,10 +385,11 @@ describe("createCronExitWatchers", () => {
 
   it("retains a blocker and suppresses stale fire when removed during terminal persistence", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
-    let releasePersist = () => {};
+    let releasePersist: (release: () => void) => void = () => {};
+    const releaseCompletion = vi.fn();
     const persistCompletion = vi.fn(
       () =>
-        new Promise<void>((resolve) => {
+        new Promise<() => void>((resolve) => {
           releasePersist = resolve;
         }),
     );
@@ -410,9 +411,10 @@ describe("createCronExitWatchers", () => {
     w.reconcile([]);
     expect(w.activeJobIds()).toEqual(["job-a"]);
 
-    releasePersist();
+    releasePersist(releaseCompletion);
     await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
     expect(fireOnExit).not.toHaveBeenCalled();
+    expect(releaseCompletion).toHaveBeenCalledOnce();
   });
 
   it("is one-shot: a fired job is not re-armed on a later reconcile", async () => {

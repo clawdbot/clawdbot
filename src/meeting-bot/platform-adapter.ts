@@ -59,6 +59,29 @@ export type MeetingBrowserPermissionPlan = {
   optionalPermissions?: string[];
 };
 
+export type MeetingAgentConsultSurface = {
+  id: string;
+  provider: string;
+  lane: string;
+  surface: string;
+  userLabel: string;
+  assistantLabel: string;
+  questionSourceLabel: string;
+  workingResponseLabel: string;
+  extraSystemPrompt: string;
+};
+
+export type MeetingPlatformRuntimeMetadata = {
+  id: string;
+  displayName: string;
+  logScope: string;
+  agentConsult: Omit<MeetingAgentConsultSurface, "id" | "provider" | "lane">;
+  session: {
+    idPrefix: string;
+    participantIdentity(transport: string): string;
+  };
+};
+
 type MeetingBrowserAdapter<
   Mode extends string,
   Health extends MeetingBrowserHealth,
@@ -116,6 +139,8 @@ export interface MeetingPlatformAdapter<
   displayName: string;
   browserLabel: string;
   logScope: string;
+  agentConsult?: MeetingPlatformRuntimeMetadata["agentConsult"];
+  session?: MeetingPlatformRuntimeMetadata["session"];
   nodeCommandName: string;
   nodeConfigPath: string;
   urls: {

@@ -5,7 +5,7 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig, resolveAgentModelFallbacksOverride } from "./agent-scope.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
+import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import {
   createModelVisibilityPolicyWithFallbacks,
   type ModelVisibilityPolicy,

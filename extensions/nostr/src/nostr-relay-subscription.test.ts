@@ -6,25 +6,36 @@ type RelayHandlers = Parameters<SimplePool["subscribeMany"]>[2];
 
 function createHarness() {
   const handlers: RelayHandlers[] = [];
+  const abortController = new AbortController();
   const subscribeMany = vi.fn(
     (_relays: string[], _filter: unknown, nextHandlers: RelayHandlers) => {
       handlers.push(nextHandlers);
-      return { close: vi.fn() };
+      nextHandlers.abort?.addEventListener(
+        "abort",
+        () => nextHandlers.onclose?.([String(nextHandlers.abort?.reason ?? "aborted")]),
+        { once: true },
+      );
+      return {
+        close: vi.fn(async (reason?: string) => {
+          nextHandlers.onclose?.([reason ?? "closed by caller"]);
+        }),
+      };
     },
   );
   const onBackfillComplete = vi.fn<(relays: string[]) => void>();
+  const onClose = vi.fn<(relay: string, reasons: string[]) => void>();
   const group = createNostrRelaySubscriptionGroup({
     pool: { subscribeMany } as unknown as SimplePool,
     relays: ["wss://one.example", "wss://two.example"],
     filter: { kinds: [4] },
-    abort: new AbortController().signal,
+    abort: abortController.signal,
     onEvent: (_event: Event) => {},
     onBackfillComplete,
-    onClose: () => {},
+    onClose,
     eoseConfirmDeadlineMs: 10,
   });
   group.start();
-  return { group, handlers, onBackfillComplete, subscribeMany };
+  return { abortController, group, handlers, onBackfillComplete, onClose, subscribeMany };
 }
 
 describe("Nostr relay subscriptions", () => {
@@ -64,6 +75,24 @@ describe("Nostr relay subscriptions", () => {
     await Promise.resolve();
 
     expect(onBackfillComplete).not.toHaveBeenCalled();
+    await group.close("test complete");
+  });
+
+  it("does not report locally requested closes as relay failures", async () => {
+    const { abortController, group, onClose } = createHarness();
+
+    abortController.abort("closed by caller");
+    await group.close("closed by caller");
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("still reports closes initiated by the relay", async () => {
+    const { group, handlers, onClose } = createHarness();
+
+    handlers[0]?.onclose?.(["relay unavailable"]);
+
+    expect(onClose).toHaveBeenCalledWith("wss://one.example", ["relay unavailable"]);
     await group.close("test complete");
   });
 });

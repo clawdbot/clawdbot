@@ -78,6 +78,7 @@ export type SidebarRecentSession = {
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
+  outboxCount?: number;
   unread: boolean;
   lastReadAt?: number;
   attention: SidebarSessionAttention;

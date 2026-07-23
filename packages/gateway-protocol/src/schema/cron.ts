@@ -286,6 +286,15 @@ const CronPayloadSchema = Type.Union([
   }),
 ]);
 
+/**
+ * Reported payloads add the system-owned heartbeat monitor kind; it is
+ * gateway-converged only, so create/patch schemas intentionally omit it.
+ */
+const CronReportedPayloadSchema = Type.Union([
+  ...CronPayloadSchema.anyOf,
+  closedObject({ kind: Type.Literal("heartbeat") }),
+]);
+
 /** Partial cron payload for job updates. */
 const CronPayloadPatchSchema = Type.Union([
   closedObject({
@@ -520,7 +529,7 @@ export const CronJobSchema = closedObject({
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
-  payload: CronPayloadSchema,
+  payload: CronReportedPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
   state: CronJobStateSchema,

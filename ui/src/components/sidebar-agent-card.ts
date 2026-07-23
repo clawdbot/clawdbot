@@ -66,12 +66,13 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               : nothing}
           </span>
           ${this.approvalCount > 0
-            ? html`<span
-                class="sidebar-agent-approval-count sidebar-agent-card__approval-count"
-                aria-label=${approvalLabel}
-                title=${approvalLabel}
-                >${this.approvalCount}</span
-              >`
+            ? html`<openclaw-tooltip .content=${approvalLabel}>
+                <span
+                  class="sidebar-agent-approval-count sidebar-agent-card__approval-count"
+                  aria-label=${approvalLabel}
+                  >${this.approvalCount}</span
+                >
+              </openclaw-tooltip>`
             : nothing}
           ${this.menuUnread && !this.menuOpen
             ? html`<span

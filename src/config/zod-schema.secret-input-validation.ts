@@ -15,18 +15,6 @@ type TelegramConfigLike = {
   accounts?: Record<string, TelegramAccountLike | undefined>;
 };
 
-type SlackAccountLike = {
-  enabled?: unknown;
-  mode?: unknown;
-  signingSecret?: unknown;
-};
-
-type SlackConfigLike = {
-  mode?: unknown;
-  signingSecret?: unknown;
-  accounts?: Record<string, SlackAccountLike | undefined>;
-};
-
 // Only enabled accounts need per-account secret requirement checks.
 function forEachEnabledAccount<T extends { enabled?: unknown }>(
   accounts: Record<string, T | undefined> | undefined,
@@ -69,37 +57,6 @@ export function validateTelegramWebhookSecretRequirements(
         message:
           "channels.telegram.accounts.*.webhookUrl requires channels.telegram.webhookSecret or channels.telegram.accounts.*.webhookSecret",
         path: ["accounts", accountId, "webhookSecret"],
-      });
-    }
-  });
-}
-
-export function validateSlackSigningSecretRequirements(
-  value: SlackConfigLike,
-  ctx: z.RefinementCtx,
-): void {
-  const resolveMode = (mode: unknown) =>
-    mode === "http" || mode === "socket" || mode === "relay" ? mode : undefined;
-  const baseMode = resolveMode(value.mode) ?? "socket";
-  if (baseMode === "http" && !hasConfiguredSecretInput(value.signingSecret)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'channels.slack.mode="http" requires channels.slack.signingSecret',
-      path: ["signingSecret"],
-    });
-  }
-  forEachEnabledAccount(value.accounts, (accountId, account) => {
-    const accountMode = resolveMode(account.mode) ?? baseMode;
-    if (accountMode !== "http") {
-      return;
-    }
-    const accountSecret = account.signingSecret ?? value.signingSecret;
-    if (!hasConfiguredSecretInput(accountSecret)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          'channels.slack.accounts.*.mode="http" requires channels.slack.signingSecret or channels.slack.accounts.*.signingSecret',
-        path: ["accounts", accountId, "signingSecret"],
       });
     }
   });

@@ -166,6 +166,12 @@ export async function authenticateGatewayConnect(
       scopeCount: scopes.length,
       hasDeviceIdentity: Boolean(device),
     });
+    const authMessage = formatGatewayAuthFailureMessage({
+      authMode: resolvedAuth.mode,
+      authProvided,
+      reason: failedAuth.reason,
+      client: connectParams.client,
+    });
     const authLogDecision = shouldLimitMissingCredentialAuthLog({
       reason: failedAuth.reason,
       authProvided,
@@ -186,15 +192,9 @@ export async function authenticateGatewayConnect(
           ? ` suppressed=${authLogDecision.suppressedSinceLastLog}`
           : "";
       logWsControl.warn(
-        `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"}${suppressedText}`,
+        `unauthorized conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} role=${role} scopes=${scopes.length} auth=${authProvided} device=${device ? "yes" : "no"} platform=${formatForLog(connectParams.client.platform)} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")} reason=${failedAuth.reason ?? "unknown"} guidance=${formatForLog(authMessage)}${suppressedText}`,
       );
     }
-    const authMessage = formatGatewayAuthFailureMessage({
-      authMode: resolvedAuth.mode,
-      authProvided,
-      reason: failedAuth.reason,
-      client: connectParams.client,
-    });
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, authMessage, {
       ...(failedAuth.rateLimited === true
         ? {

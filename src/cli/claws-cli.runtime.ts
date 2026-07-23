@@ -402,6 +402,8 @@ export async function runClawsStatusCommand(
   }
 }
 
+export { runClawsUpdateCommand } from "./claws-update-cli.runtime.js";
+
 export async function runClawsRemoveCommand(
   target: string,
   opts: ClawsRemoveOptions,

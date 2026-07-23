@@ -21,6 +21,7 @@ import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-ty
 import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
+import type { ChannelSetupInput } from "./setup-input.js";
 export type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
@@ -39,7 +40,6 @@ import type {
   ChannelLogSink,
   ChannelSecurityContext,
   ChannelSecurityDmPolicy,
-  ChannelSetupInput,
   ChannelStatusIssue,
 } from "./types.core.js";
 export type { ChannelPairingAdapter } from "./pairing.types.js";
@@ -73,18 +73,14 @@ export type ChannelCapabilitiesDiagnostics = {
 
 type ChannelAdapterCallback<T extends (...args: never[]) => unknown> = T;
 
-export type ChannelSetupAdapter = {
-  resolveAccountId?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-    input?: ChannelSetupInput;
-  }) => string;
+export type ChannelSetupAdapter<Input extends { name?: string } = ChannelSetupInput> = {
+  resolveAccountId?: (params: { cfg: OpenClawConfig; accountId?: string; input?: Input }) => string;
   prepareAccountConfigInput?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
-    input: ChannelSetupInput;
+    input: Input;
     runtime: RuntimeEnv;
-  }) => Promise<ChannelSetupInput> | ChannelSetupInput;
+  }) => Promise<Input> | Input;
   resolveBindingAccountId?: (params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -98,19 +94,19 @@ export type ChannelSetupAdapter = {
   applyAccountConfig: (params: {
     cfg: OpenClawConfig;
     accountId: string;
-    input: ChannelSetupInput;
+    input: Input;
   }) => OpenClawConfig;
   afterAccountConfigWritten?: (params: {
     previousCfg: OpenClawConfig;
     cfg: OpenClawConfig;
     accountId: string;
-    input: ChannelSetupInput;
+    input: Input;
     runtime: RuntimeEnv;
   }) => Promise<void> | void;
   validateInput?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
-    input: ChannelSetupInput;
+    input: Input;
   }) => string | null;
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];

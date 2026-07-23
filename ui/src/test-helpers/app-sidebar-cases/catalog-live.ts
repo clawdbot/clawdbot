@@ -225,9 +225,12 @@ describe("AppSidebar session catalog pagination", () => {
     expect(local?.querySelector(".sidebar-session-catalog-host__head")).toBeNull();
     expect(local?.textContent).not.toContain("Gateway Mac");
     expect(local?.textContent).toContain("Local plan");
-    expect(local?.querySelector(".session-row-badge--pull-request")?.getAttribute("title")).toBe(
-      "#111751, #111772 · Merged",
-    );
+    const pullRequestBadge = local?.querySelector(".session-row-badge--pull-request");
+    expect(pullRequestBadge?.hasAttribute("title")).toBe(false);
+    expect(
+      (pullRequestBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+        ?.content,
+    ).toBe("#111751, #111772 · Merged");
     expect(local?.textContent).not.toContain("Remote review");
     expect(remote?.textContent).toContain("Build Node");
     expect(remote?.textContent).toContain("Remote review");
@@ -302,8 +305,11 @@ describe("AppSidebar session catalog pagination", () => {
       `[data-session-key="${backingSessionKey}"]`,
     );
     expect(linkedRow?.getAttribute("draggable")).toBe("true");
+    const pullRequestBadge = linkedRow?.querySelector(".session-row-badge--pull-request");
+    expect(pullRequestBadge?.hasAttribute("title")).toBe(false);
     expect(
-      linkedRow?.querySelector(".session-row-badge--pull-request")?.getAttribute("title"),
+      (pullRequestBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+        ?.content,
     ).toBe("#107302 · Draft");
     expect(linkedRow?.querySelector('[data-sidebar-session-pin="true"]')).not.toBeNull();
     expect(linkedRow?.querySelector('[data-session-menu="true"]')).not.toBeNull();

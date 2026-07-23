@@ -59,7 +59,8 @@
         "groupModel": "hybrid",
         "groupAllowFromFallbackToAllowFrom": true,
         "warnOnEmptyGroupSenderAllowlist": true
-      }
+      },
+      "setup": { "fields": [] }
     },
     "install": {
       "npmSpec": "@openclaw/msteams",

@@ -314,6 +314,17 @@ describe("google-meet node host bridge sessions", () => {
       expect(children[2]?.stdin?.write).toHaveBeenCalledWith(audio);
       expect(firstOutput?.stdin?.write).not.toHaveBeenCalled();
 
+      await expect(
+        handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "pushAudio",
+            bridgeId: start.bridgeId,
+            base64: "not-base64!",
+          }),
+        ),
+      ).rejects.toThrow("pushAudio base64 must be a valid audio payload");
+      expect(children[2]?.stdin?.write).toHaveBeenCalledTimes(1);
+
       await handleGoogleMeetNodeHostCommand(
         JSON.stringify({
           action: "stop",

@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Telegram plugin module implements setup core behavior.
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 import {
@@ -107,3 +108,23 @@ export const telegramSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove,
   namedAccountPromotionKeys,
 };
+
+export const telegramSetupContract = defineChannelSetupContract({
+  fields: {
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "Telegram bot token" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "Telegram bot token file" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use TELEGRAM_BOT_TOKEN" },
+    },
+  },
+  legacyAdapter: telegramSetupAdapter,
+});

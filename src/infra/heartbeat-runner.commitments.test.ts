@@ -476,6 +476,58 @@ describe("runHeartbeatOnce commitments", () => {
     });
   });
 
+  it("delivers due commitments on a targeted cron-monitor interval tick", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+      const dueSessionKey = "agent:main:telegram:user-155462274";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "last" },
+          },
+        },
+        session: { store: storePath },
+      };
+      await saveCommitmentStore(undefined, {
+        version: 1,
+        commitments: [buildCommitment({ id: "cm_interview", sessionKey: dueSessionKey, to: "1" })],
+      });
+      const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      const runner = startHeartbeatRunner({
+        cfg,
+        runOnce,
+        stableSchedulerSeed: "commitment-monitor-tick",
+      });
+
+      // Reach the agent's due slot first: scheduled-intent wakes defer with
+      // not-due until the phase boundary passes.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      // The cron heartbeat monitor pokes with an agentId; that targeted
+      // interval tick must keep the commitment fan-out the broadcast timer had.
+      requestHeartbeat({
+        source: "interval",
+        intent: "scheduled",
+        reason: "interval",
+        agentId: "main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(runOnce).toHaveBeenCalledTimes(2));
+      runner.stop();
+
+      expect(runOnce.mock.calls[0]?.[0]).toMatchObject({ agentId: "main", runScope: "global" });
+      expect(runOnce.mock.calls[1]?.[0]).toMatchObject({
+        agentId: "main",
+        runScope: "commitment-only",
+        sessionKey: dueSessionKey,
+      });
+    });
+  });
+
   it("delivers due commitments to the original scope when heartbeat target is last", async () => {
     const { result, sendTelegram, store } = await setupCommitmentCase();
 

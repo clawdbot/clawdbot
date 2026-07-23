@@ -29,14 +29,20 @@ function compareChannels(left: PluginPackageChannel, right: PluginPackageChannel
     : leftOrder - rightOrder;
 }
 
-function matchesChannel(channel: PluginPackageChannel, normalizedChannelId: string): boolean {
-  return (
-    channel.id?.toLowerCase() === normalizedChannelId ||
-    Boolean(channel.aliases?.some((alias) => alias.toLowerCase() === normalizedChannelId))
-  );
+function channelSetupOptions(channel: PluginPackageChannel): PluginPackageChannelCliOption[] {
+  // A migrating plugin may publish both surfaces so older cores keep working.
+  // The modern contract owns parsing here, so only its options may register;
+  // concatenating both would register flags that parseInput then rejects.
+  if (channel.setup) {
+    return channel.setup.fields.map((field) => field.cli);
+  }
+  return [...(channel.cliAddOptions ?? [])];
 }
 
-export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
+export function resolveChannelSetupCliOptionMetadata(
+  channelId?: string,
+  params: { includeAll?: boolean } = {},
+) {
   const bundledChannels = listBundledPackageChannelMetadata().toSorted(compareChannels);
   const catalogChannels = listRawChannelPluginCatalogEntries({
     excludeWorkspace: true,
@@ -46,31 +52,29 @@ export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
     .toSorted(compareChannels);
   const orderedChannels = [...bundledChannels, ...catalogChannels];
   const normalizedChannelId = channelId?.trim().toLowerCase();
-  // The selected channel's declarations win switch-identity dedupe so another
-  // channel's same-named option cannot control parsing arity or defaults for
-  // this invocation.
-  const channels = normalizedChannelId
-    ? [
-        ...orderedChannels.filter((channel) => matchesChannel(channel, normalizedChannelId)),
-        ...orderedChannels.filter((channel) => !matchesChannel(channel, normalizedChannelId)),
-      ]
-    : orderedChannels;
+  const selectedChannel = normalizedChannelId
+    ? (orderedChannels.find((channel) => channel.id?.toLowerCase() === normalizedChannelId) ??
+      orderedChannels.find((channel) =>
+        channel.aliases?.some((alias) => alias.toLowerCase() === normalizedChannelId),
+      ))
+    : undefined;
+  const channels = params.includeAll ? orderedChannels : selectedChannel ? [selectedChannel] : [];
+  // Keep pre-dedupe candidates available to detect cross-channel flag-arity conflicts.
+  const optionCandidates = channels.flatMap(channelSetupOptions);
   const seenSwitches = new Set<string>();
-  const options = channels
-    .flatMap((channel) => channel.cliAddOptions ?? [])
-    .filter((option) => {
-      const key = channelCliOptionSwitchKey(option.flags);
-      if (seenSwitches.has(key)) {
-        return false;
-      }
-      seenSwitches.add(key);
-      return true;
-    });
+  const options = optionCandidates.filter((option) => {
+    const key = channelCliOptionSwitchKey(option.flags);
+    if (seenSwitches.has(key)) {
+      return false;
+    }
+    seenSwitches.add(key);
+    return true;
+  });
   const valueMetadataByAttributeName = new Map<string, ChannelSetupCliOptionValueMetadata>();
-  for (const channel of normalizedChannelId
-    ? channels.filter((candidate) => matchesChannel(candidate, normalizedChannelId))
-    : []) {
-    for (const option of channel.cliAddOptions ?? []) {
+  // Value coercion metadata is a legacy-options mechanism; modern contracts
+  // type their fields, and their cliAddOptions never register above.
+  if (selectedChannel && !selectedChannel.setup) {
+    for (const option of selectedChannel.cliAddOptions ?? []) {
       if (!option.valueType) {
         continue;
       }
@@ -82,5 +86,5 @@ export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
     }
   }
 
-  return { options, valueMetadataByAttributeName };
+  return { options, optionCandidates, selectedChannel, valueMetadataByAttributeName };
 }

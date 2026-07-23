@@ -282,13 +282,13 @@ vi.mock("./agent-runtime-config.js", () => {
   };
 });
 
-vi.mock("../config/runtime-snapshot.js", () => ({
-  setRuntimeConfigSnapshot: vi.fn(),
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  isPluginMetadataSnapshotCompatible: () => false,
+  resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
 }));
 
-// Model selection is mocked below, so plugin discovery cannot affect these assertions.
-vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot: () => ({ plugins: [] }),
+vi.mock("../config/runtime-snapshot.js", () => ({
+  setRuntimeConfigSnapshot: vi.fn(),
 }));
 
 vi.mock("../config/sessions.js", () => ({

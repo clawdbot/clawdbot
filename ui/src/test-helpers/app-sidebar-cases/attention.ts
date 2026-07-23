@@ -180,6 +180,41 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
+  it("uses shared tooltips for Home and agent approval badges", async () => {
+    const mainKey = "agent:main:main";
+    const approval = {
+      id: "approval-main",
+      kind: "exec",
+      request: { command: "git status", sessionKey: mainKey },
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    } satisfies ExecApprovalRequest;
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      createSessionsHarness("main", [mainKey]).sessions,
+      "panel",
+      null,
+      [approval],
+    );
+
+    const homeBadge = sidebar.querySelector(".nav-item--home .session-approval-badge");
+    expect(homeBadge?.getAttribute("aria-label")).toBe("Approval needed");
+    expect(homeBadge?.hasAttribute("title")).toBe(false);
+    expect(
+      (homeBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+        ?.content,
+    ).toBe("Approval needed");
+
+    const agentBadge = sidebar.querySelector(".sidebar-agent-card__approval-count");
+    const agentLabel = agentBadge?.getAttribute("aria-label");
+    expect(agentLabel).toBeTruthy();
+    expect(agentBadge?.hasAttribute("title")).toBe(false);
+    expect(
+      (agentBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+        ?.content,
+    ).toBe(agentLabel);
+  });
+
   it("shows an error icon and reason for an unread failure", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [failedRow()]);

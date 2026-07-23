@@ -95,6 +95,7 @@ export const discordConfigAdapter = createScopedChannelConfigAdapter<
 
 export function createDiscordPluginBase(params: {
   setup: NonNullable<ChannelPlugin<ResolvedDiscordAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<ResolvedDiscordAccount>["setupContract"]>;
   setupWizard?: ChannelPlugin<ResolvedDiscordAccount>["setupWizard"];
 }): Pick<
   ChannelPlugin<ResolvedDiscordAccount>,
@@ -109,12 +110,14 @@ export function createDiscordPluginBase(params: {
   | "configSchema"
   | "config"
   | "setup"
+  | "setupContract"
   | "messaging"
   | "security"
   | "secrets"
 > {
   return {
     id: DISCORD_CHANNEL,
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
     meta: { ...getChatChannelMeta(DISCORD_CHANNEL) },
     capabilities: {

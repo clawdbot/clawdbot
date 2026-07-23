@@ -4,7 +4,8 @@
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
   "dependencies": {
-    "ws": "8.21.0"
+    "ws": "8.21.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -28,28 +29,59 @@
       "blurb": "signal-cli linked device; more setup (David Reagans: \"Hop on Discord.\").",
       "systemImage": "antenna.radiowaves.left.and.right",
       "markdownCapable": true,
-      "cliAddOptions": [
-        {
-          "flags": "--cli-path <path>",
-          "description": "Channel CLI path"
-        },
-        {
-          "flags": "--http-url <url>",
-          "description": "Channel HTTP service URL"
-        },
-        {
-          "flags": "--signal-number <e164>",
-          "description": "Signal account number (E.164)"
-        },
-        {
-          "flags": "--http-host <host>",
-          "description": "Signal HTTP daemon host"
-        },
-        {
-          "flags": "--http-port <port>",
-          "description": "Signal HTTP daemon port"
-        }
-      ]
+      "setup": {
+        "fields": [
+          {
+            "key": "signalNumber",
+            "kind": "string",
+            "cli": {
+              "flags": "--signal-number <e164>",
+              "description": "Signal account number (E.164)"
+            }
+          },
+          {
+            "key": "signalTransport",
+            "kind": "choice",
+            "choices": ["external-native", "container"],
+            "cli": {
+              "flags": "--signal-transport <kind>",
+              "description": "Signal HTTP transport (external-native or container)"
+            }
+          },
+          {
+            "key": "cliPath",
+            "kind": "string",
+            "cli": {
+              "flags": "--cli-path <path>",
+              "description": "signal-cli executable path"
+            }
+          },
+          {
+            "key": "httpUrl",
+            "kind": "string",
+            "cli": {
+              "flags": "--http-url <url>",
+              "description": "Signal HTTP service URL"
+            }
+          },
+          {
+            "key": "httpHost",
+            "kind": "string",
+            "cli": {
+              "flags": "--http-host <host>",
+              "description": "Signal HTTP daemon host"
+            }
+          },
+          {
+            "key": "httpPort",
+            "kind": "string",
+            "cli": {
+              "flags": "--http-port <port>",
+              "description": "Signal HTTP daemon port"
+            }
+          }
+        ]
+      }
     },
     "install": {
       "clawhubSpec": "clawhub:@openclaw/signal",

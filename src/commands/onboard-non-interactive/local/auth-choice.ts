@@ -21,6 +21,7 @@ import {
 import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
+import type { OnboardingAgentTarget } from "../../onboard-agent-target.js";
 import {
   applyCustomApiConfig,
   CustomApiError,
@@ -44,7 +45,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
-  workspaceDir?: string;
+  target: OnboardingAgentTarget;
 }): Promise<OpenClawConfig | null> {
   const { opts, runtime, baseConfig } = params;
   let authChoice = normalizeApiKeyTokenProviderAuthChoice({
@@ -93,6 +94,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   const resolveApiKey = (input: Parameters<typeof resolveNonInteractiveApiKey>[0]) =>
     resolveNonInteractiveApiKey({
       ...input,
+      agentDir: params.target.agentDir,
       secretInputMode: requestedSecretInputMode,
     });
   const toApiKeyCredential = (paramsLocal: {
@@ -141,7 +143,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     isDeprecatedAuthChoice(authChoice, {
       config: nextConfig,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: params.target.workspaceDir,
       env: process.env,
     })
   ) {
@@ -149,7 +151,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     // either plugin dispatch or built-in setup handling.
     const replacement = resolveDeprecatedAuthChoiceReplacement(authChoice, {
       config: nextConfig,
-      workspaceDir: params.workspaceDir,
+      workspaceDir: params.target.workspaceDir,
       env: process.env,
     });
     if (replacement) {
@@ -159,7 +161,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       runtime.error(
         formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
           config: nextConfig,
-          workspaceDir: params.workspaceDir,
+          workspaceDir: params.target.workspaceDir,
           env: process.env,
         })!,
       );
@@ -170,14 +172,14 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
     config: nextConfig,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: params.target.workspaceDir,
     env: process.env,
   });
   const deprecatedInstallChoice = deprecatedChoice
     ? undefined
     : resolveDeprecatedProviderInstallCatalogEntry(authChoice as string, {
         config: nextConfig,
-        workspaceDir: params.workspaceDir,
+        workspaceDir: params.target.workspaceDir,
         env: process.env,
         includeUntrustedWorkspacePlugins: false,
       });
@@ -196,7 +198,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         includeLegacyAliases: false,
         includeSkip: true,
         config: nextConfig,
-        workspaceDir: params.workspaceDir,
+        workspaceDir: params.target.workspaceDir,
         env: process.env,
       }).split("|"),
       ...GENERIC_NON_INTERACTIVE_AUTH_CHOICES,
@@ -216,6 +218,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     opts,
     runtime,
     baseConfig,
+    target: params.target,
     resolveApiKey: (input) =>
       resolveApiKey({
         ...input,

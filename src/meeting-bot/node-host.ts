@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
 import { MeetingNodeAudioPullWaiters } from "./node-audio-pull-waiters.js";
 
@@ -237,7 +238,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session || session.closed) {
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
-    const audio = Buffer.from(base64, "base64");
+    const audio = decodeMeetingAudioBase64(base64, "pushAudio");
     session.lastOutputAt = new Date().toISOString();
     session.lastOutputBytes += audio.byteLength;
     try {

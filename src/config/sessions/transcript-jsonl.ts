@@ -43,14 +43,6 @@ export function writeJsonlEntriesSync(filePath: string, entries: readonly unknow
   return content;
 }
 
-export function appendJsonlEntrySync(
-  filePath: string,
-  entry: unknown,
-  options?: { prefixNewline?: boolean },
-): string {
-  return appendSerializedJsonlEntrySync(filePath, serializeJsonlEntry(entry), options);
-}
-
 export function appendSerializedJsonlEntrySync(
   filePath: string,
   serializedEntry: string,

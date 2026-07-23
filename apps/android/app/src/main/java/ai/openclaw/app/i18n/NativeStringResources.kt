@@ -722,6 +722,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Milliseconds" to R.string.native_522ff63cdfa8c9a7,
     "Minimal" to R.string.native_057b5de48d7b90f1,
     "Missing" to R.string.native_6be36ca49ee85210,
+    "Mobile UI" to R.string.native_efac890edfc315fe,
     "Model" to R.string.native_5e2c614c23f02239,
     "Models" to R.string.native_d17d2d78d76e6a6c,
     "Molting" to R.string.native_fbd2ae2ba1642ca5,

@@ -7,6 +7,7 @@ import {
   type ApprovalBadgeSnapshot,
 } from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -38,9 +39,9 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
   @state() protected loadingChildSessionKeys: ReadonlySet<string> = new Set();
   @state() protected activeSessionLineageRoot: GatewaySessionRow | null = null;
   @state() protected sessionsScrollState: SidebarSessionsScrollState = "none";
-  @state() protected sessionMutationError: string | null = null;
-  @state() protected presencePayload: unknown;
-  @state() protected presenceInstanceId?: string;
+  @state() sessionMutationError: string | null = null;
+  @state() presencePayload: PresencePayload | undefined;
+  @state() presenceInstanceId?: string;
 
   protected sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   protected sessionCreatedOrder = new Map<string, number>();
@@ -97,7 +98,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
               return;
             }
             if (event.event === "presence") {
-              this.presencePayload = event.payload;
+              const presence = readPresenceEntries(event.payload);
+              this.presencePayload = presence ? { presence } : undefined;
               this.handleSessionCatalogPresence(event.payload);
             }
           }),
@@ -116,7 +118,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
       );
   }
 
-  protected approvalBadgeSnapshot(): ApprovalBadgeSnapshot {
+  approvalBadgeSnapshot(): ApprovalBadgeSnapshot {
     const queue = this.context?.overlays?.snapshot.approvalQueue ?? [];
     if (queue !== this.approvalBadgeQueue) {
       this.approvalBadgeQueue = queue;
@@ -300,7 +302,8 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     if (!connected) {
       this.presencePayload = undefined;
     } else if (clientChanged || connectedStarted) {
-      this.presencePayload = gateway.snapshot.hello?.snapshot;
+      const presence = readPresenceEntries(gateway.snapshot.hello?.snapshot);
+      this.presencePayload = presence ? { presence } : undefined;
     }
     if (!sourceOrClientChanged) {
       return;

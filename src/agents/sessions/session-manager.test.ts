@@ -22,7 +22,6 @@ import { loadSqliteMarkedSessionFile } from "./session-manager-file.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
-  findMostRecentSession,
   loadEntriesFromFile,
   parseSessionEntries,
   SessionManager,
@@ -684,102 +683,6 @@ describe("SessionManager.open", () => {
 
     expect(entries.map((entry) => entry.type)).toEqual(["session", "message", "message"]);
     expect(entries.filter((entry) => entry.type === "session")).toHaveLength(1);
-  });
-
-  it("continues a valid recent session when the header exceeds the first read chunk", async () => {
-    const dir = await makeTempDir();
-    const sessionFile = path.join(dir, "long-header-session.jsonl");
-    const longCwd = `/tmp/${"deep/".repeat(120)}`;
-    const header = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "long-header-session",
-      timestamp: "2026-06-18T00:00:00.000Z",
-      cwd: longCwd,
-    };
-    const userEntry = {
-      type: "message",
-      id: "user-1",
-      parentId: null,
-      timestamp: "2026-06-18T00:00:01.000Z",
-      message: { role: "user", content: "resume me" },
-    };
-    await fs.writeFile(
-      sessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(userEntry)}\n`,
-      "utf8",
-    );
-
-    expect(Buffer.byteLength(JSON.stringify(header), "utf8")).toBeGreaterThan(512);
-    expect(loadEntriesFromFile(sessionFile)).toHaveLength(2);
-    expect(findMostRecentSession(dir)).toBe(sessionFile);
-    expect(SessionManager.continueRecent(longCwd, dir).getSessionFile()).toBe(sessionFile);
-  });
-
-  it("does not continue a different cwd from a colliding session directory", async () => {
-    const dir = await makeTempDir();
-    const cwdA = "/home/alice/dev/client/app";
-    const cwdB = "/home/alice/dev/client-app";
-    const sessionA = path.join(dir, "session-a.jsonl");
-    const sessionB = path.join(dir, "session-b.jsonl");
-    const headerA = buildSessionHeader(cwdA, "session-a");
-    const headerB = buildSessionHeader(cwdB, "session-b");
-
-    await fs.writeFile(sessionA, `${JSON.stringify(headerA)}\n`, "utf8");
-    await fs.writeFile(sessionB, `${JSON.stringify(headerB)}\n`, "utf8");
-    await fs.utimes(
-      sessionA,
-      new Date("2026-06-18T00:00:00.000Z"),
-      new Date("2026-06-18T00:00:00.000Z"),
-    );
-    await fs.utimes(
-      sessionB,
-      new Date("2026-06-18T00:00:01.000Z"),
-      new Date("2026-06-18T00:00:01.000Z"),
-    );
-
-    expect(findMostRecentSession(dir)).toBe(sessionB);
-    expect(findMostRecentSession(dir, cwdA)).toBe(sessionA);
-    expect(SessionManager.continueRecent(cwdA, dir).getSessionFile()).toBe(sessionA);
-    await expect(SessionManager.list(cwdA, dir)).resolves.toEqual([
-      expect.objectContaining({ path: sessionA, cwd: cwdA }),
-    ]);
-  });
-
-  it("skips oversized recent session headers instead of hiding valid sessions", async () => {
-    const dir = await makeTempDir();
-    const validSessionFile = path.join(dir, "valid-session.jsonl");
-    const oversizedSessionFile = path.join(dir, "oversized-header-session.jsonl");
-    const validHeader = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "valid-session",
-      timestamp: "2026-06-18T00:00:00.000Z",
-      cwd: "/tmp/task-repo",
-    };
-    const oversizedHeader = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "oversized-header-session",
-      timestamp: "2026-06-18T00:00:01.000Z",
-      cwd: `/tmp/${"deep/".repeat(14_000)}`,
-    };
-
-    await fs.writeFile(validSessionFile, `${JSON.stringify(validHeader)}\n`, "utf8");
-    await fs.writeFile(oversizedSessionFile, `${JSON.stringify(oversizedHeader)}\n`, "utf8");
-    await fs.utimes(
-      validSessionFile,
-      new Date("2026-06-18T00:00:00.000Z"),
-      new Date("2026-06-18T00:00:00.000Z"),
-    );
-    await fs.utimes(
-      oversizedSessionFile,
-      new Date("2026-06-18T00:00:01.000Z"),
-      new Date("2026-06-18T00:00:01.000Z"),
-    );
-
-    expect(Buffer.byteLength(JSON.stringify(oversizedHeader), "utf8")).toBeGreaterThan(64 * 1024);
-    expect(findMostRecentSession(dir)).toBe(validSessionFile);
   });
 
   it("still migrates old transcript versions while bypassing the warm cache", async () => {
@@ -3312,47 +3215,6 @@ describe("parseSessionEntries", () => {
         call[0].includes("parseJsonlEntries: skipped 1 malformed JSONL line"),
       ),
     ).toBe(true);
-  });
-
-  it("buildSessionInfo logs warning for malformed lines via SessionManager.list", async () => {
-    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
-    const dir = await makeTempDir();
-    const sessionFile = path.join(dir, "session.jsonl");
-    const header = buildSessionHeader(dir);
-    const content = [
-      JSON.stringify(header),
-      "not valid json {{{",
-      JSON.stringify(buildMessageEntry(1, null)),
-    ].join("\n");
-    await fs.writeFile(sessionFile, content, "utf8");
-
-    const sessions = await SessionManager.list(dir, dir);
-
-    expect(sessions).toHaveLength(1);
-    expect(warnSpy).toHaveBeenCalled();
-    expect(
-      warnSpy.mock.calls.some((call) =>
-        call[0].includes("buildSessionInfo: skipped 1 malformed JSONL line"),
-      ),
-    ).toBe(true);
-  });
-
-  it("buildSessionInfo does not log warning for clean session listing", async () => {
-    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
-    const dir = await makeTempDir();
-    const sessionFile = path.join(dir, "session.jsonl");
-    const header = buildSessionHeader(dir);
-    const content = [JSON.stringify(header), JSON.stringify(buildMessageEntry(1, null))].join("\n");
-    await fs.writeFile(sessionFile, content, "utf8");
-
-    const sessions = await SessionManager.list(dir, dir);
-
-    expect(sessions).toHaveLength(1);
-    // buildSessionInfo must not log any warning for a clean listing.
-    const buildSessionInfoCalls = warnSpy.mock.calls.filter((call) =>
-      call[0].includes("buildSessionInfo"),
-    );
-    expect(buildSessionInfoCalls).toHaveLength(0);
   });
 });
 

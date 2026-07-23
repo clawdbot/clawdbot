@@ -1,12 +1,7 @@
 import { state } from "lit/decorators.js";
 import { AppSidebarSessionProjectionElement } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import {
-  listSessionCreators,
-  renderSessionCreatorFilter,
-  renderSessionOwnerChip,
-  type SessionCreatedBy,
-} from "./session-owner-chip.ts";
+import { listSessionCreators, type SessionCreatedBy } from "./session-owner-chip.ts";
 
 /** Creator attribution, solo dormancy, and filtering shared by sidebar session surfaces. */
 export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessionProjectionElement {
@@ -15,7 +10,7 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
   protected sessionCreatorOptions: readonly SessionCreatedBy[] = [];
   protected activeSessionCreatorId: string | null = null;
   protected sessionCreatorFilterActive = false;
-  protected sessionOwnershipVisible = false;
+  sessionOwnershipVisible = false;
 
   override updated() {
     super.updated();
@@ -77,24 +72,6 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
       return filtered;
     };
     return filterTree(projected);
-  }
-
-  protected renderSidebarSessionOwnerChip(session: SidebarRecentSession) {
-    return renderSessionOwnerChip(
-      this.sessionOwnershipVisible ? session.createdBy : undefined,
-      "row",
-    );
-  }
-
-  protected renderSidebarSessionCreatorFilter() {
-    return renderSessionCreatorFilter({
-      creators: this.sessionOwnershipVisible ? this.sessionCreatorOptions : [],
-      selectedId: this.sessionCreatorFilterActive ? this.sessionCreatorFilterId : null,
-      onChange: (creatorId) => {
-        this.sessionCreatorFilterId = creatorId;
-        void this.context?.sessions.setCreatorFilter(creatorId);
-      },
-    });
   }
 
   protected hideEmptyCreatorFilteredGroup(category: string | undefined, rowCount: number): boolean {

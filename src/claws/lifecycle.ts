@@ -37,7 +37,7 @@ function capabilityChange(
   };
 }
 
-type ClawAddPlanContext = {
+export type ClawAddPlanContext = {
   agentId?: string;
   workspace?: string;
   resumableWorkspace?: string;

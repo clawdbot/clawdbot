@@ -59,6 +59,7 @@ export const imessageSecurityAdapter =
 export function createIMessagePluginBase(params: {
   setupWizard?: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedIMessageAccount>,
   | "id"
@@ -70,6 +71,7 @@ export function createIMessagePluginBase(params: {
   | "config"
   | "security"
   | "setup"
+  | "setupContract"
   | "messaging"
 > {
   const base = createChannelPluginBase({
@@ -110,6 +112,7 @@ export function createIMessagePluginBase(params: {
     },
     security: imessageSecurityAdapter,
     setup: params.setup,
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
   });
   return {
     ...base,

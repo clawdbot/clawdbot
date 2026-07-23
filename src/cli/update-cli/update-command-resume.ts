@@ -11,6 +11,7 @@ import {
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
+import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
@@ -75,7 +76,7 @@ export async function resumePostCoreUpdate(params: {
       ? currentPluginInstallRecords
       : parentPluginInstallRecords;
 
-  const pluginUpdate = await updatePluginsAfterCoreUpdate({
+  const initialPluginUpdate = await updatePluginsAfterCoreUpdate({
     root: params.root,
     channel: params.channel,
     configSnapshot: restoredConfig.snapshot,
@@ -84,6 +85,15 @@ export async function resumePostCoreUpdate(params: {
     opts: params.opts,
     timeoutMs: params.timeoutMs,
     pluginInstallRecords,
+  });
+  const { pluginUpdate } = await completePostCorePluginUpdate({
+    root: params.root,
+    pluginUpdate: initialPluginUpdate,
+    // Only package/channel sync can replace the migration owner loaded by this process.
+    freshDoctorRequired: initialPluginUpdate.sync.changed || initialPluginUpdate.npm.changed,
+    yes: params.opts.yes === true,
+    json: params.opts.json === true,
+    timeoutMs: params.timeoutMs,
   });
   if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
     await writePostCorePluginUpdateResultFile(

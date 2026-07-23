@@ -43,8 +43,30 @@ describe("final worker workspace fences", () => {
         },
         { assertActive: async () => {}, resume: async () => {} },
       ),
-    ).rejects.toThrow("late remote write");
+    ).rejects.toMatchObject({
+      message: "late remote write",
+      reclaimDisposition: "preserve-result",
+    });
     expect(remoteVerifications).toBe(2);
+  });
+
+  it("keeps unchanged reconciliation fence failures retryable", async () => {
+    await expect(
+      verifyReconciledWorkspaceFinal(
+        {
+          manifestRef: "sha256:" + "a".repeat(64),
+          changed: false,
+          verifyStable: async () => {
+            throw new Error("late remote write");
+          },
+          verifyLocalStable: async () => {},
+        },
+        { assertActive: async () => {}, resume: async () => {} },
+      ),
+    ).rejects.toMatchObject({
+      message: "late remote write",
+      reclaimDisposition: "retry",
+    });
   });
 
   it("publishes between remote stability fences under quiescence", async () => {
@@ -121,7 +143,10 @@ describe("final worker workspace fences", () => {
           resume: async () => {},
         },
       ),
-    ).rejects.toThrow("quiescence expired during finalization");
+    ).rejects.toMatchObject({
+      message: "quiescence expired during finalization",
+      reclaimDisposition: "preserve-result",
+    });
     expect(log).toEqual([
       "remote",
       "quiescence",
@@ -131,6 +156,33 @@ describe("final worker workspace fences", () => {
       "quiescence",
       "discard-prepared",
     ]);
+  });
+
+  it("rejects a late write enrolled by the pre-apply renewal before applying", async () => {
+    let remoteVerifications = 0;
+    const apply = vi.fn(async () => {});
+    await expect(
+      verifyReconciledWorkspaceFinal(
+        {
+          manifestRef: "sha256:" + "c".repeat(64),
+          changed: true,
+          verifyStable: async () => {
+            remoteVerifications += 1;
+            if (remoteVerifications === 2) {
+              throw new Error("writer mutated before SIGSTOP");
+            }
+          },
+          verifyLocalStable: async () => {},
+          applyPreparedStagedResult: apply,
+          publishStagedResult: async () => {},
+        },
+        { assertActive: async () => {}, resume: async () => {} },
+      ),
+    ).rejects.toMatchObject({
+      message: "writer mutated before SIGSTOP",
+      reclaimDisposition: "retry",
+    });
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it("discards a prepared result when the final remote fence fails", async () => {

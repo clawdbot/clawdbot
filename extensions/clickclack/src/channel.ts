@@ -30,7 +30,7 @@ import {
   sendClickClackText,
 } from "./outbound.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { clickClackSetupAdapter } from "./setup-core.js";
+import { clickClackSetupAdapter, clickClackSetupContract } from "./setup-core.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
 import {
   buildClickClackTarget,
@@ -128,6 +128,7 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     configSchema: clickClackConfigSchema,
     config: clickClackConfigAdapter,
     setup: clickClackSetupAdapter,
+    setupContract: clickClackSetupContract,
     setupWizard: clickClackSetupWizard,
     secrets: {
       secretTargetRegistryEntries,

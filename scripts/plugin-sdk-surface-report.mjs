@@ -207,8 +207,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Net +1: public session catalog locator types after the protocol cleanup harvest.
       // +2: lifecycle-owned prepared model catalog sync and async readers.
       // The cumulative notes above describe the pre-retirement surface; the merged graph
-      // measures upstream's 4,723 exports plus 17 retained continuation/runtime exports.
-      4740,
+      // measures upstream's 4,696 exports plus 17 retained continuation/runtime exports.
+      4713,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -259,8 +259,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: config-backed main-session resolver for Gateway-hosted plugin services.
       // +6: outbound echo record/query helpers across channel-outbound and mirrors.
       // +2: lifecycle-owned prepared model catalog sync and async readers.
-      // The merged graph measures upstream's 2,881 callables plus five retained callables.
-      2886,
+      // The merged graph measures upstream's 2,846 callables plus five retained callables.
+      2851,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

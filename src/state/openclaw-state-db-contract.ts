@@ -20,6 +20,8 @@ export type OpenClawStateDatabase = {
 export type OpenClawStateDatabaseOptions = {
   env?: NodeJS.ProcessEnv;
   path?: string;
+  database?: OpenClawStateDatabase;
+  readOnly?: boolean;
 };
 export type OpenClawStateDatabaseSchemaMigration = {
   kind:

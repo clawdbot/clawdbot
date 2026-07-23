@@ -96,7 +96,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     ]);
     const message = new Message<true>(client, { id: "m1", channelId: "c1" }) as unknown as Message;
 
-    const hydrated = await hydrateDiscordMessageIfNeeded({
+    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
       client: { rest },
       message,
       messageChannelId: "c1",
@@ -109,6 +109,28 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(hydrated.mentionedUsers[0]?.globalName).toBe("Bob Builder");
     expect(hydrated.mentionedRoles).toEqual(["role1"]);
     expect(hydrated.referencedMessage?.content).toBe("earlier");
+  });
+
+  it("reports current-message hydration failures as unavailable", async () => {
+    const client = createInternalTestClient();
+    const rest = createFakeRestClient();
+    rest.get = vi.fn(async () => {
+      throw new Error("Discord REST unavailable");
+    });
+    const message = new Message(
+      client,
+      createMessagePayload({
+        content: "hello <@123>",
+      }),
+    );
+
+    const outcome = await hydrateDiscordMessageIfNeeded({
+      client: { rest },
+      message,
+      messageChannelId: "c1",
+    });
+
+    expect(outcome).toEqual({ kind: "unavailable", message });
   });
 
   it("uses referenced messages supplied by current-message hydration", async () => {
@@ -135,7 +157,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       }),
     );
 
-    const hydrated = await hydrateDiscordMessageIfNeeded({
+    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
       client: { rest },
       message,
       messageChannelId: "c1",
@@ -152,7 +174,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     ]);
     const message = new Message(client, createDefaultReplyPayload());
 
-    const hydrated = await hydrateDiscordMessageIfNeeded({
+    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
       client: { rest },
       message,
       messageChannelId: "c1",
@@ -194,7 +216,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     ]);
     const message = new Message(client, reply);
 
-    const hydrated = await hydrateDiscordMessageIfNeeded({
+    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
       client: { rest },
       message,
       messageChannelId: "c1",
@@ -213,7 +235,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     rest.get = get;
     const message = new Message(client, createDefaultReplyPayload());
 
-    const hydrated = await hydrateDiscordMessageIfNeeded({
+    const { message: hydrated } = await hydrateDiscordMessageIfNeeded({
       client: { rest },
       message,
       messageChannelId: "c1",

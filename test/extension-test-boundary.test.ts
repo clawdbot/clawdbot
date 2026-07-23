@@ -380,8 +380,6 @@ describe("non-extension test boundaries", () => {
       "GoogleChatConfigSchema",
       "IMessageConfigSchema",
       "MSTeamsConfigSchema",
-      "SignalConfigSchema",
-      "SlackConfigSchema",
       "TelegramConfigSchema",
       "WhatsAppConfigSchema",
     ]);

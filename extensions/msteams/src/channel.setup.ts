@@ -5,7 +5,7 @@ import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
-import { msteamsSetupAdapter } from "./setup-core.js";
+import { msteamsSetupAdapter, msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -75,4 +75,5 @@ export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {
   },
   setupWizard: msteamsSetupWizard,
   setup: msteamsSetupAdapter,
+  setupContract: msteamsSetupContract,
 };

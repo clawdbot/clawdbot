@@ -728,6 +728,12 @@ function declarativeFields(job: CronJob, includeEnabled: boolean) {
 export async function add(state: CronServiceState, input: CronJobCreate, opts?: CronAddOptions) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
+    // Heartbeat monitors are gateway-converged system jobs; without this
+    // boundary any internal caller could upsert the declaration key and
+    // hijack the monitor despite the transport schemas excluding the kind.
+    if (input.payload?.kind === "heartbeat" && opts?.systemOwned !== true) {
+      throw new Error("heartbeat payloads are system-owned; jobs cannot be created with them");
+    }
     await ensureLoaded(state, { skipRecompute: true });
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
@@ -753,6 +759,13 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
     const existing = matches[0];
 
     if (existing) {
+      // A declarative upsert may not repurpose an existing heartbeat monitor
+      // with a different payload; only the gateway's own convergence touches it.
+      if (existing.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
+        throw new Error(
+          "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
+        );
+      }
       const now = state.deps.nowMs();
       const nextJob = structuredClone(existing);
       applyDeclarativeJobSpec(nextJob, normalizedInput, {
@@ -832,9 +845,23 @@ async function updateLoadedJob(params: {
 }) {
   const { state, id, patch, precondition } = params;
   warnIfDisabled(state, "update");
+  // Mirrors the add-time boundary: no caller may patch a job into (or edit)
+  // the system-owned heartbeat payload; the gateway converges via add only.
+  if (patch.payload?.kind === "heartbeat") {
+    throw new Error("heartbeat payloads are system-owned; jobs cannot be patched to them");
+  }
   await ensureLoaded(state, { skipRecompute: true });
   const snapshot = snapshotStoreForRollback(state);
   const job = findJobOrThrow(state, id);
+  // Existing monitors are config-driven: any patch (disable, reschedule,
+  // repurpose) would silently diverge from agents.*.heartbeat until the next
+  // reconcile, so updates are rejected outright. Removal stays allowed — a
+  // removed monitor self-heals at the next convergence.
+  if (job.payload.kind === "heartbeat") {
+    throw new Error(
+      "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
+    );
+  }
   const now = state.deps.nowMs();
   await precondition?.(structuredClone(job), now);
   const nextJob = structuredClone(job);
@@ -880,7 +907,11 @@ export async function updateWithPrecondition(
 }
 
 /** Removes a cron job by id and re-arms the timer when the in-memory store changes. */
-export async function remove(state: CronServiceState, id: string) {
+export async function remove(
+  state: CronServiceState,
+  id: string,
+  opts?: { systemOwned?: boolean },
+) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state, { skipRecompute: true });
@@ -890,6 +921,14 @@ export async function remove(state: CronServiceState, id: string) {
     }
     const snapshot = snapshotStoreForRollback(state);
     const removedJob = state.store.jobs.find((j) => j.id === id);
+    // Config is the monitor's source of truth: ad-hoc deletion would disable
+    // heartbeats until an unrelated reload, so only gateway reconciliation
+    // (stale-monitor cleanup) may remove one.
+    if (removedJob?.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
+      throw new Error(
+        "heartbeat monitor jobs are system-owned; edit agents.*.heartbeat config instead",
+      );
+    }
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
 

@@ -2,6 +2,7 @@
  * Applies final effective tool policy to embedded-agent runtime settings.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
 import type { ResolvedConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { buildDeclaredToolAllowlistContext } from "../tool-policy-declared-context.js";
@@ -30,6 +31,8 @@ type FinalEffectiveToolPolicyParams = {
   // metadata no longer survives core-tool wrapping/normalization.
   bundledTools: AnyAgentTool[];
   config?: OpenClawConfig;
+  workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
   conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
   warn: (message: string) => void;
   toolPolicyAuditLogLevel?: "info" | "debug";
@@ -113,6 +116,8 @@ export function applyFinalEffectiveToolPolicy(
     onFilter: params.onFilter,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: params.config,
+      workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
       toolDenylist: collectExplicitDenylist(pipelineSteps.map((step) => step.policy)),
     }),
   });

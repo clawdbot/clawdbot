@@ -396,8 +396,10 @@ describe("claws lifecycle cli e2e", () => {
     expect(result.code).toBe(1);
     expect(parseJson(result.stdout)).toMatchObject({
       schemaVersion: "openclaw.clawAddResult.v1",
-      status: "failed",
-      error: { code: "unsupported_components" },
+      status: "partial",
+      configCommitted: true,
+      error: { code: "cron_install_failed" },
+      installRecord: { status: "config_committed" },
     });
   });
 

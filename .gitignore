@@ -230,7 +230,10 @@ USER.md
 package-lock.json
 !.github/release/clawhub-cli/package-lock.json
 !src/commands/copilot-sdk-install-manifest/package-lock.json
-.claude/
+.claude/*
+# Track the shared Claude Code project config (worktree auto-install hook); keep
+# everything else under .claude/ (worktrees, skills, settings.local.json) ignored.
+!.claude/settings.json
 .agent/
 skills-lock.json
 

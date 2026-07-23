@@ -2,6 +2,7 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createMeetingSession,
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
@@ -14,7 +15,6 @@ import {
   testZoomMeetingSpeech,
   type ZoomMeetingsProbeContext,
 } from "./runtime-probes.js";
-import { createZoomMeetingsSession } from "./runtime-session.js";
 import { getZoomMeetingsSetupStatus } from "./runtime-setup.js";
 import {
   launchZoomMeetingInChrome,
@@ -146,7 +146,12 @@ export class ZoomMeetingsRuntime {
         agentId: normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       }),
       createSession: ({ request, resolved, createdAt }) => {
-        const session = createZoomMeetingsSession({ config: params.config, resolved, createdAt });
+        const session: ZoomMeetingsSession = createMeetingSession({
+          platform: ZOOM_MEETINGS_PLATFORM_ADAPTER,
+          config: params.config,
+          resolved,
+          createdAt,
+        });
         if (request.requesterSessionKey) {
           this.#requesterSessionKeys.set(session.id, request.requesterSessionKey);
         }

@@ -145,6 +145,10 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
   runHeartbeatOnce,
+  // Heartbeat monitor convergence enumerates agents at cron start; keep it
+  // inert so these tests exercise cron wiring, not heartbeat enrollment.
+  resolveHeartbeatAgents: () => [],
+  resolveHeartbeatSchedulerSeed: () => "test-seed",
 }));
 
 vi.mock("../infra/restart-coordinator.js", async () => {
@@ -219,6 +223,11 @@ vi.mock("../cron/trigger-script.js", () => ({
   createCronScriptRuntime: createCronScriptRuntimeMock,
 }));
 
+import {
+  registerActiveCronTaskRun,
+  trackActiveCronTaskRunSettlement,
+} from "../cron/service/active-run-cancellation.js";
+import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronJob } from "../cron/types.js";
 import {
   buildGatewayCronService as buildGatewayCronServiceRuntime,
@@ -324,6 +333,7 @@ function expectCleanupForSessionKeys(sessionKeys: string[]) {
 
 describe("buildGatewayCronService", () => {
   beforeEach(() => {
+    resetActiveCronTaskRunsForTests();
     enqueueSystemEventMock.mockClear();
     consumeSelectedSystemEventEntriesMock.mockClear();
     requestHeartbeatMock.mockClear();
@@ -440,6 +450,90 @@ describe("buildGatewayCronService", () => {
     } finally {
       state.cron.stop();
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("fires an on-exit payload after persisting its terminal disable", async () => {
+    let resolveWait!: (result: {
+      reason: "exit";
+      exitCode: number;
+      exitSignal: null;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+      timedOut: false;
+      noOutputTimedOut: false;
+    }) => void;
+    const wait = new Promise<Parameters<typeof resolveWait>[0]>((resolve) => {
+      resolveWait = resolve;
+    });
+    const spawn = vi.fn(async () => ({
+      runId: "run-on-exit-fire",
+      startedAtMs: Date.now(),
+      cancel: vi.fn(),
+      wait: () => wait,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-on-exit-fire");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      const job = await state.cron.add({
+        name: "watch and fire",
+        enabled: true,
+        schedule: { kind: "on-exit", command: "true" },
+        payload: { kind: "systemEvent", text: "done" },
+        sessionTarget: "main",
+        wakeMode: "now",
+      });
+      await state.reconcileExitWatchers?.();
+      resolveWait({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+
+      await vi.waitFor(() => expect(runHeartbeatOnceMock).toHaveBeenCalledOnce());
+      expect(state.cron.getJob(job.id)?.enabled).toBe(false);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("aborts and drains active cron runs during shutdown", async () => {
+    const controller = new AbortController();
+    const coreRun = new Promise<void>((resolve) => {
+      controller.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    const release = registerActiveCronTaskRun({ runId: "run-shutdown", controller });
+    const trackedRun = coreRun.finally(() => release?.());
+    trackActiveCronTaskRunSettlement(trackedRun);
+
+    const cfg = createCronConfig("server-cron-active-run-shutdown");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.stopAndDrain?.();
+      expect(controller.signal.aborted).toBe(true);
+      await expect(trackedRun).resolves.toBeUndefined();
+    } finally {
+      state.cron.stop();
+      resetActiveCronTaskRunsForTests();
     }
   });
 

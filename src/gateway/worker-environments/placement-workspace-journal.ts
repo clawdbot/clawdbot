@@ -24,13 +24,25 @@ type WorkerWorkspaceJournalOwner = {
   placementGeneration: number;
 };
 
-function assertJournalOwner(db: DatabaseSync, owner: WorkerWorkspaceJournalOwner) {
+function assertJournalOwner(
+  db: DatabaseSync,
+  owner: WorkerWorkspaceJournalOwner,
+  options: { allowFailedOwner?: boolean } = {},
+) {
   const placement = getRequired(db, owner.sessionId);
+  const isCurrentOwner =
+    (placement.state === "active" || placement.state === "draining") &&
+    placement.generation === owner.placementGeneration;
+  // Forced teardown advances the exact owner to failed before best-effort
+  // rollback. Admit that state without weakening the manifest checks below.
+  const isAllowedFailedOwner =
+    options.allowFailedOwner === true &&
+    placement.state === "failed" &&
+    placement.generation > owner.placementGeneration;
   if (
-    (placement.state !== "active" && placement.state !== "draining") ||
+    (!isCurrentOwner && !isAllowedFailedOwner) ||
     placement.environmentId !== owner.environmentId ||
-    placement.activeOwnerEpoch !== owner.ownerEpoch ||
-    placement.generation !== owner.placementGeneration
+    placement.activeOwnerEpoch !== owner.ownerEpoch
   ) {
     throw new Error(`Cannot reconcile stale worker workspace for session ${owner.sessionId}`);
   }
@@ -79,9 +91,10 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
 
     loadWorkspaceReconciliation(
       owner: WorkerWorkspaceJournalOwner,
+      options: { allowFailedOwner?: boolean } = {},
     ): WorkerWorkspaceReconciliationJournal | undefined {
       const db = read();
-      const placement = assertJournalOwner(db, owner);
+      const placement = assertJournalOwner(db, owner, options);
       const row = executeSqliteQuerySync(
         db,
         query(db)
@@ -154,10 +167,30 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
       });
     },
 
-    abortWorkspaceReconciliation(owner: WorkerWorkspaceJournalOwner): void {
+    abortWorkspaceReconciliation(
+      owner: WorkerWorkspaceJournalOwner,
+      options: { force?: boolean } = {},
+    ): void {
       write((db) => {
-        assertJournalOwner(db, owner);
-        clearWorkerWorkspaceReconciliation(db, owner.sessionId);
+        if (!options.force) {
+          assertJournalOwner(db, owner);
+          clearWorkerWorkspaceReconciliation(db, owner.sessionId);
+          return;
+        }
+        // Forced teardown owns this exact durable journal even when placement
+        // state advanced after a failed recovery sweep.
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .deleteFrom("worker_workspace_reconciliations")
+            .where("session_id", "=", owner.sessionId)
+            .where("environment_id", "=", owner.environmentId)
+            .where("owner_epoch", "=", owner.ownerEpoch)
+            .where("placement_generation", "=", owner.placementGeneration),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Worker workspace journal changed for ${owner.sessionId}`);
+        }
       });
     },
   };

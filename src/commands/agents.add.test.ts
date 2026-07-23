@@ -272,11 +272,11 @@ describe("agents add command", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
-  it("skips catalog validation when checking the interactive wizard model config", async () => {
+  it("uses the explicit agent target and skips catalog validation", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
-      config: { agents: { list: [] } },
-      sourceConfig: { agents: { list: [] } },
+      config: { agents: { entries: {} } },
+      sourceConfig: { agents: { entries: {} } },
     });
     wizardMocks.createClackPrompter.mockReturnValue({
       intro: vi.fn(),
@@ -296,6 +296,11 @@ describe("agents add command", () => {
         agentId: "jon",
         validateCatalog: false,
       }),
+    );
+    expect(onboardHelpersMocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+      "/tmp/openclaw-jon",
+      runtime,
+      expect.objectContaining({ agentId: "jon" }),
     );
   });
 

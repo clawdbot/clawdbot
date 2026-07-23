@@ -117,8 +117,8 @@ export class CronService implements CronServiceContract {
     return await ops.updateWithPrecondition(this.state, id, patch, precondition);
   }
 
-  async remove(id: string) {
-    return await ops.remove(this.state, id);
+  async remove(id: string, opts?: { systemOwned?: boolean }) {
+    return await ops.remove(this.state, id, opts);
   }
 
   async removeAgentJobsTransactional<T>(agentId: string, commit: () => Promise<T>): Promise<T> {

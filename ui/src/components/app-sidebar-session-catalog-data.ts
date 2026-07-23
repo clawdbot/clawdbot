@@ -214,7 +214,7 @@ export abstract class AppSidebarSessionCatalogDataElement extends AppSidebarBase
     });
   }
 
-  protected async loadMoreSessionCatalog(catalogId: string) {
+  async loadMoreSessionCatalog(catalogId: string) {
     if (this.loadingMoreSessionCatalogIds.has(catalogId)) {
       return;
     }

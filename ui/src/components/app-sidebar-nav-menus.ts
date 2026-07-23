@@ -129,26 +129,6 @@ export function renderSidebarPluginTab(params: {
   `;
 }
 
-/** Unpinned routes and the pin editor live in a popup behind this row. */
-export function renderSidebarMoreRow(params: {
-  open: boolean;
-  active: boolean;
-  onToggle: (trigger: HTMLElement) => void;
-}) {
-  return html`
-    <button
-      type="button"
-      class="nav-item nav-item--action ${params.active ? "nav-item--active" : ""}"
-      aria-haspopup="menu"
-      aria-expanded=${String(params.open)}
-      @click=${(event: MouseEvent) => params.onToggle(event.currentTarget as HTMLElement)}
-    >
-      <span class="nav-item__icon" aria-hidden="true">${icons.moreHorizontal}</span>
-      <span class="nav-item__text">${t("nav.more")}</span>
-    </button>
-  `;
-}
-
 type SidebarMenuNavigationHandlers = {
   onNavigateRoute: (routeId: SidebarNavRoute) => void;
   onPreloadRoute: (routeId: SidebarNavRoute, event: Event) => void;
@@ -336,19 +316,4 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
       </wa-dropdown>
     </openclaw-menu-surface>
   `;
-}
-
-/** More row carries the active highlight when the current route lives inside its menu. */
-export function sidebarMoreMenuHoldsActiveRoute(params: {
-  activeRouteId: NavigationRouteId | undefined;
-  activeWorkboardBoardId?: string;
-  sidebarEntries: readonly string[];
-  isRouteEnabled: (routeId: NavigationRouteId) => boolean;
-}): boolean {
-  return sidebarMoreRoutes(params.sidebarEntries).some(
-    (routeId) =>
-      params.isRouteEnabled(routeId) &&
-      isSidebarRouteActive(params.activeRouteId, routeId) &&
-      !(routeId === "workboard" && params.activeWorkboardBoardId),
-  );
 }

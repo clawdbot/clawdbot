@@ -35,17 +35,17 @@ import {
 
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
 export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMutationsElement {
-  @state() protected collapsedSessionSections = loadStoredCollapsedSessionSections();
-  @state() protected draggingSessionKey: string | null = null;
-  @state() protected draggingSessionGroup: string | null = null;
-  @state() protected sessionDropTarget: string | null = null;
-  @state() protected sessionGroupDropTarget: SidebarSessionGroupDropTarget | null = null;
+  @state() collapsedSessionSections = loadStoredCollapsedSessionSections();
+  @state() draggingSessionKey: string | null = null;
+  @state() draggingSessionGroup: string | null = null;
+  @state() sessionDropTarget: string | null = null;
+  @state() sessionGroupDropTarget: SidebarSessionGroupDropTarget | null = null;
   @state() protected draggingSidebarEntry: string | null = null;
   @state() protected sidebarZoneDropTarget: {
     entry: string;
     position: "before" | "after";
   } | null = null;
-  @state() protected sessionListRemovalDrop = false;
+  @state() sessionListRemovalDrop = false;
 
   protected startSidebarRouteDrag(event: DragEvent, route: SidebarNavRoute) {
     if (!event.dataTransfer) {
@@ -167,7 +167,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     this.onUpdateSidebarEntries?.(next);
   }
 
-  protected handleSessionListDragOver(event: DragEvent) {
+  handleSessionListDragOver(event: DragEvent) {
     const routeDrag = sidebarRouteDragActive(event.dataTransfer);
     const sessionKey = readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
@@ -181,14 +181,14 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     this.sessionListRemovalDrop = true;
   }
 
-  protected handleSessionListDragLeave(event: DragEvent) {
+  handleSessionListDragLeave(event: DragEvent) {
     const current = event.currentTarget as HTMLElement;
     if (!(event.relatedTarget instanceof Node && current.contains(event.relatedTarget))) {
       this.sessionListRemovalDrop = false;
     }
   }
 
-  protected handleSessionListDrop(event: DragEvent) {
+  handleSessionListDrop(event: DragEvent) {
     const draggedNavigation = readSidebarRouteDragData(event.dataTransfer);
     const dynamicEntry = parseSidebarEntry(draggedNavigation);
     const entry =
@@ -327,7 +327,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     }
   }
 
-  protected toggleSessionSection(sectionId: string) {
+  toggleSection(sectionId: string) {
     const collapsed = new Set(this.collapsedSessionSections);
     if (collapsed.has(sectionId)) {
       collapsed.delete(sectionId);
@@ -372,7 +372,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     })();
   }
 
-  protected handleSessionSectionDragOver(event: DragEvent, sectionId: string, category?: string) {
+  sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
     const dataTransfer = event.dataTransfer;
     if (
       category &&
@@ -401,7 +401,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     this.sessionGroupDropTarget = null;
   }
 
-  protected handleSessionSectionDragLeave(event: DragEvent, sectionId: string, category?: string) {
+  sectionDragLeave(event: DragEvent, sectionId: string, category?: string) {
     const current = event.currentTarget as HTMLElement;
     if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) {
       return;
@@ -431,7 +431,7 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     return undefined;
   }
 
-  protected handleSessionSectionDrop(event: DragEvent, sectionId: string, category?: string) {
+  sectionDrop(event: DragEvent, sectionId: string, category?: string) {
     const sourceGroup = readSessionGroupDragData(event.dataTransfer);
     const sessionKey = readSessionDragData(event.dataTransfer);
     if (!sourceGroup && !sessionKey) {

@@ -1,6 +1,7 @@
 // Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
@@ -30,6 +31,8 @@ import {
 import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import type { CronListPageResult } from "../cron/service/list-page-types.js";
+import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
@@ -37,6 +40,7 @@ import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
+import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
@@ -83,6 +87,7 @@ export type CoreHealthCheckDeps = {
   readonly collectGatewayDaemonFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
+  readonly listGatewayCronJobs: (ctx: HealthCheckContext) => Promise<readonly CronJob[]>;
 };
 
 async function detectUnavailableSkillsWithRuntime(
@@ -148,6 +153,75 @@ async function collectGatewayDaemonFindingsWithRuntime(
   return runtime.collectGatewayDaemonFindings(ctx);
 }
 
+async function listGatewayCronJobsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly CronJob[]> {
+  if (
+    (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
+    ctx.allowExecSecretRefs !== true
+  ) {
+    throw new Error(
+      "Gateway cron inventory skipped because credentials use an exec SecretRef; rerun doctor with --allow-exec.",
+    );
+  }
+  const { callGateway } = await import("../gateway/call.js");
+  const jobs: CronJob[] = [];
+  let offset = 0;
+  let snapshotRevision: string | undefined;
+  let total: number | undefined;
+
+  while (total === undefined || offset < total) {
+    const page = await callGateway<CronListPageResult>({
+      method: "cron.list",
+      params: { includeDisabled: true, limit: 200, offset },
+      timeoutMs: 3000,
+      config: ctx.cfg,
+      deviceIdentity: null,
+    });
+    const validPage =
+      Array.isArray(page.jobs) &&
+      typeof page.snapshotRevision === "string" &&
+      page.snapshotRevision.length > 0 &&
+      Number.isSafeInteger(page.total) &&
+      page.total >= 0 &&
+      page.offset === offset &&
+      Number.isSafeInteger(page.limit) &&
+      page.limit > 0 &&
+      typeof page.hasMore === "boolean" &&
+      (page.nextOffset === null || Number.isSafeInteger(page.nextOffset));
+    if (!validPage) {
+      throw new Error("Gateway returned an invalid cron inventory response.");
+    }
+    if (
+      (snapshotRevision !== undefined && page.snapshotRevision !== snapshotRevision) ||
+      (total !== undefined && page.total !== total)
+    ) {
+      throw new Error("Gateway cron inventory changed while doctor was reading it.");
+    }
+    snapshotRevision ??= page.snapshotRevision;
+    total ??= page.total;
+    jobs.push(...page.jobs);
+
+    if (!page.hasMore) {
+      if (page.nextOffset !== null || jobs.length !== total) {
+        throw new Error("Gateway returned an inconsistent cron inventory response.");
+      }
+      return jobs;
+    }
+    const expectedNextOffset = offset + page.jobs.length;
+    if (
+      page.nextOffset !== expectedNextOffset ||
+      expectedNextOffset <= offset ||
+      expectedNextOffset >= total
+    ) {
+      throw new Error("Gateway returned an invalid cron inventory cursor.");
+    }
+    offset = expectedNextOffset;
+  }
+
+  throw new Error("Gateway returned an incomplete cron inventory response.");
+}
+
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
@@ -157,6 +231,7 @@ const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   collectLocalAudioAccelerationFindings: collectLocalAudioAccelerationFindingsWithRuntime,
   collectGatewayHealthFindings: collectGatewayHealthFindingsWithRuntime,
   collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
+  listGatewayCronJobs: listGatewayCronJobsWithRuntime,
 };
 
 export function configValidationIssuesToHealthFindings(
@@ -1162,6 +1237,32 @@ function createConvertedWorkflowChecks(
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
     skillWorkshopToolPolicyCheck,
+    ...(isExperimentalClawsEnabled()
+      ? [
+          {
+            id: "core/doctor/claws-state",
+            kind: "core" as const,
+            description: "Claw lifecycle ownership and managed resources are consistent.",
+            defaultEnabled: false as const,
+            source: "doctor",
+            async detect(ctx: HealthCheckContext) {
+              const [{ collectClawStateHealthFindings }, { listConfiguredMcpServers }] =
+                await Promise.all([
+                  import("../claws/doctor.js"),
+                  import("../config/mcp-config.js"),
+                ]);
+              return await collectClawStateHealthFindings({
+                cfg: ctx.cfg,
+                env: process.env,
+                listMcpServers: listConfiguredMcpServers,
+                cronGateway: {
+                  list: async () => await deps.listGatewayCronJobs(ctx),
+                },
+              });
+            },
+          },
+        ]
+      : []),
   ];
 }
 

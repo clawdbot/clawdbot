@@ -1,4 +1,7 @@
-import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 // Slack plugin module implements setup core behavior.
 import {
@@ -6,10 +9,10 @@ import {
   createAccountScopedGroupAccessSection,
   createAllowlistSetupWizardProxy,
   createPatchedAccountSetupAdapter,
-  createLegacyCompatChannelDmPolicy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   defineTokenCredential,
+  mergeAllowFromEntries,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
@@ -277,6 +280,46 @@ export const slackSetupAdapter: ChannelSetupAdapter = {
   },
 };
 
+export const slackSetupContract = defineChannelSetupContract({
+  fields: {
+    botToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--bot-token <token>", description: "Slack bot token" },
+    },
+    appToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--app-token <token>", description: "Slack app token" },
+    },
+    userToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--user-token <token>", description: "Slack user token" },
+    },
+    signingSecret: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--signing-secret <secret>", description: "Slack signing secret" },
+    },
+    identity: {
+      kind: "choice",
+      choices: ["bot", "user"],
+      cli: { flags: "--identity <kind>", description: "Slack identity" },
+    },
+    mode: {
+      kind: "choice",
+      choices: ["socket", "http"],
+      cli: { flags: "--mode <mode>", description: "Slack connection mode" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use Slack environment credentials" },
+    },
+  },
+  legacyAdapter: slackSetupAdapter,
+});
+
 export function createSlackSetupWizardBase(handlers: {
   promptAllowFrom: NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>;
   resolveAllowFromEntries: NonNullable<
@@ -286,11 +329,44 @@ export function createSlackSetupWizardBase(handlers: {
     NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
   >;
 }) {
-  const slackDmPolicy: ChannelSetupDmPolicy = createLegacyCompatChannelDmPolicy({
+  const slackDmPolicy: ChannelSetupDmPolicy = {
     label: "Slack",
     channel,
+    policyKey: "channels.slack.dmPolicy",
+    allowFromKey: "channels.slack.allowFrom",
+    resolveConfigKeys: (_cfg, accountId) =>
+      accountId && accountId !== DEFAULT_ACCOUNT_ID
+        ? {
+            policyKey: `channels.slack.accounts.${accountId}.dmPolicy`,
+            allowFromKey: `channels.slack.accounts.${accountId}.allowFrom`,
+          }
+        : {
+            policyKey: "channels.slack.dmPolicy",
+            allowFromKey: "channels.slack.allowFrom",
+          },
+    getCurrent: (cfg, accountId) =>
+      inspectSlackAccount({ cfg, accountId }).config.dmPolicy ?? "pairing",
+    setPolicy: (cfg, policy, accountId) => {
+      const account = inspectSlackAccount({ cfg, accountId });
+      return patchChannelConfigForAccount({
+        cfg,
+        channel,
+        accountId: account.accountId,
+        patch: {
+          dmPolicy: policy,
+          ...(policy === "open"
+            ? { allowFrom: mergeAllowFromEntries(account.config.allowFrom ?? [], ["*"]) }
+            : {}),
+          dm: {
+            ...account.config.dm,
+            enabled:
+              typeof account.config.dm?.enabled === "boolean" ? account.config.dm.enabled : true,
+          },
+        },
+      });
+    },
     promptAllowFrom: handlers.promptAllowFrom,
-  });
+  };
 
   return {
     channel,

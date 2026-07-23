@@ -2,8 +2,7 @@
  * Resolves workspace, sandbox, provider runtime, and phase reporting for an embedded attempt.
  */
 import fs from "node:fs/promises";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { isPluginMetadataSnapshotCompatible } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
@@ -24,30 +23,10 @@ import {
 import { resolveAttemptFsWorkspaceOnly } from "./attempt.prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-function pluginMetadataSnapshotCoversProvider(
-  snapshot: PluginMetadataSnapshot | undefined,
-  provider: string,
-): snapshot is PluginMetadataSnapshot {
-  const normalizedProvider = normalizeProviderId(provider);
-  if (!snapshot || !normalizedProvider) {
-    return false;
-  }
-  return snapshot.manifestRegistry.plugins.some((plugin) => {
-    const ownsProvider = plugin.providers.some(
-      (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-    );
-    if (ownsProvider) {
-      return true;
-    }
-    const modelCatalogProviderIds = [
-      ...Object.keys(plugin.modelCatalog?.providers ?? {}),
-      ...Object.keys(plugin.modelCatalog?.aliases ?? {}),
-    ];
-    return modelCatalogProviderIds.some(
-      (providerId) => normalizeProviderId(providerId) === normalizedProvider,
-    );
-  });
-}
+type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
+  modelId: string;
+  prepared: true;
+};
 
 export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -117,40 +96,50 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await fs.mkdir(effectiveWorkspace, { recursive: true });
 
-  let currentPluginMetadataSnapshotResolved = false;
-  let currentPluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
-  const getCurrentAttemptPluginMetadataSnapshot = () => {
-    if (!currentPluginMetadataSnapshotResolved) {
-      currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
-        allowScopedSnapshot: true,
-        config: params.config,
-        env: process.env,
-        workspaceDir: effectiveWorkspace,
-      });
-      currentPluginMetadataSnapshotResolved = true;
-    }
-    return currentPluginMetadataSnapshot;
-  };
-  let providerRuntimeHandle: ProviderRuntimePluginHandle | undefined;
-  const getProviderRuntimeHandle = () => {
-    if (providerRuntimeHandle?.plugin) {
+  const getCurrentAttemptPluginMetadataSnapshot = (): PluginMetadataSnapshot | undefined =>
+    params.preparedModelRuntime?.metadataSnapshot;
+  let providerRuntimeHandle = params.runtimePlan?.providerRuntimeHandle as
+    | PreparedProviderRuntimePluginHandle
+    | undefined;
+  const getProviderRuntimeHandle = (): PreparedProviderRuntimePluginHandle => {
+    if (
+      providerRuntimeHandle &&
+      providerRuntimeHandle.prepared &&
+      providerRuntimeHandle.provider === params.provider &&
+      providerRuntimeHandle.modelId === params.modelId &&
+      providerRuntimeHandle.workspaceDir === effectiveWorkspace
+    ) {
       return providerRuntimeHandle;
     }
     const pluginMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
-    const resolvedHandle = resolveProviderRuntimePluginHandle({
+    const compatibleMetadataSnapshot =
+      pluginMetadataSnapshot &&
+      pluginMetadataSnapshot.pluginIds === undefined &&
+      isPluginMetadataSnapshotCompatible({
+        snapshot: pluginMetadataSnapshot,
+        config: params.config,
+        env: process.env,
+        workspaceDir: effectiveWorkspace,
+      })
+        ? pluginMetadataSnapshot
+        : undefined;
+    providerRuntimeHandle = {
+      ...resolveProviderRuntimePluginHandle({
+        provider: params.provider,
+        modelId: params.modelId,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        env: process.env,
+        ...(compatibleMetadataSnapshot
+          ? { pluginMetadataSnapshot: compatibleMetadataSnapshot }
+          : {}),
+      }),
       provider: params.provider,
       modelId: params.modelId,
-      config: params.config,
+      prepared: true,
       workspaceDir: effectiveWorkspace,
-      env: process.env,
-      ...(pluginMetadataSnapshotCoversProvider(pluginMetadataSnapshot, params.provider)
-        ? { pluginMetadataSnapshot }
-        : {}),
-    });
-    if (resolvedHandle.plugin) {
-      providerRuntimeHandle = resolvedHandle;
-    }
-    return resolvedHandle;
+    };
+    return providerRuntimeHandle;
   };
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,

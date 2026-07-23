@@ -18,7 +18,7 @@ Short guide to verify channel connectivity without guessing.
 - `openclaw health --verbose` (alias `--debug`) - forces a live health probe and prints gateway connection details.
 - `openclaw health --json` - machine-readable health snapshot output.
 - Send `/status` as a standalone chat command in any channel to get a status reply without invoking the agent.
-- Logs: tail `/tmp/openclaw/openclaw-*.log` and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.
+- Logs: run `openclaw logs --follow` (or `openclaw --profile <profile> logs --follow`) and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.
 
 For Discord and other chat providers, session rows are not socket liveness.
 `openclaw sessions`, Gateway `sessions.list`, and the agent `sessions_list` tool

@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import { defineChannelSetupContract } from "../channels/plugins/setup-contract.js";
 import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -374,9 +375,6 @@ type SignalAfterAccountConfigWritten = NonNullable<
 type ApplyAccountConfigParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["setup"]>["applyAccountConfig"]>
 >[0];
-type ResolveAccountIdParams = Parameters<
-  NonNullable<NonNullable<ChannelPlugin["setup"]>["resolveAccountId"]>
->[0];
 type PrepareAccountConfigInputParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["setup"]>["prepareAccountConfigInput"]>
 >[0];
@@ -616,18 +614,30 @@ describe("channelsAddCommand", () => {
   });
 
   it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
-    const applyAccountConfig = vi.fn(({ cfg, input }) => ({
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        "nextcloud-talk": {
-          enabled: true,
-          baseUrl: input.baseUrl,
-          botSecret: input.secret,
-          botSecretFile: (input as NextcloudTalkSetupInput).secretFile,
+    const prepareAccountConfigInput = vi.fn(({ input }: PrepareAccountConfigInputParams) => {
+      const setupInput = input as NextcloudTalkSetupInput;
+      return {
+        ...setupInput,
+        baseUrl: setupInput.baseUrl ?? setupInput.url,
+        secret: setupInput.secret ?? setupInput.token ?? setupInput.password,
+        secretFile: setupInput.secretFile ?? setupInput.tokenFile,
+      };
+    });
+    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => {
+      const setupInput = input as NextcloudTalkSetupInput;
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          "nextcloud-talk": {
+            enabled: true,
+            baseUrl: setupInput.baseUrl,
+            botSecret: setupInput.secret,
+            botSecretFile: setupInput.secretFile,
+          },
         },
-      },
-    }));
+      };
+    });
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -637,16 +647,7 @@ describe("channelsAddCommand", () => {
               id: "nextcloud-talk",
               label: "Nextcloud Talk",
             }),
-            setup: {
-              resolveAccountId: ({ accountId }: ResolveAccountIdParams) => accountId ?? "default",
-              prepareAccountConfigInput: ({ input }: PrepareAccountConfigInputParams) => ({
-                ...input,
-                baseUrl: input.baseUrl ?? input.url,
-                secret: input.secret ?? input.token ?? input.password,
-                secretFile: (input as NextcloudTalkSetupInput).secretFile ?? input.tokenFile,
-              }),
-              applyAccountConfig,
-            },
+            setup: { prepareAccountConfigInput, applyAccountConfig },
           },
           source: "test",
         },
@@ -754,6 +755,88 @@ describe("channelsAddCommand", () => {
         },
       },
     });
+  });
+
+  it("uses channel-owned setup parsing for bundled plugins", async () => {
+    const applyAccountConfig = vi.fn(({ cfg, input }) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        "typed-chat": {
+          token: input.token,
+          port: input.port,
+        },
+      },
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "typed-chat",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "typed-chat", label: "Typed Chat" }),
+            setupContract: defineChannelSetupContract({
+              fields: {
+                token: {
+                  kind: "string",
+                  cli: { flags: "--token <token>", description: "Bot token" },
+                },
+                port: {
+                  kind: "integer",
+                  cli: { flags: "--port <port>", description: "HTTP port" },
+                },
+              },
+              adapter: { applyAccountConfig },
+            }),
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "typed-chat", token: "secret", port: "8080" }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel("typed-chat")).toEqual({ token: "secret", port: 8080 });
+    expect(applyAccountConfig).toHaveBeenCalledWith({
+      cfg: baseConfigSnapshot.config,
+      accountId: "default",
+      input: { token: "secret", port: 8080 },
+    });
+  });
+
+  it("reports options that do not belong to the selected channel contract", async () => {
+    const applyAccountConfig = vi.fn(({ cfg }) => cfg);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "typed-chat",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "typed-chat", label: "Typed Chat" }),
+            setupContract: defineChannelSetupContract({
+              fields: {
+                token: {
+                  kind: "string",
+                  cli: { flags: "--token <token>", description: "Bot token" },
+                },
+              },
+              adapter: { applyAccountConfig },
+            }),
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "typed-chat", signalTransport: "container" }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith("Unsupported setup option: signalTransport");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(applyAccountConfig).not.toHaveBeenCalled();
   });
 
   it("prepares setup input before validation, config writes, and post-write hooks", async () => {
@@ -1086,11 +1169,11 @@ describe("channelsAddCommand", () => {
       },
     }));
     const plugin = {
-      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+      ...createChannelTestPluginBase({ id: "legacy-numeric", label: "Legacy Numeric" }),
       setup: { applyAccountConfig },
     };
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createSetupOptionCatalogEntry("matrix", "Matrix", [
+      createSetupOptionCatalogEntry("legacy-numeric", "Legacy Numeric", [
         {
           flags: "--initial-sync-limit <n>",
           description: "Matrix initial sync limit",
@@ -1099,12 +1182,14 @@ describe("channelsAddCommand", () => {
       ]),
     ]);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", plugin, source: "test" }]));
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "legacy-numeric", plugin, source: "test" }]),
+    );
 
     await expect(
       channelsAddCommand(
         {
-          channel: "matrix",
+          channel: "legacy-numeric",
           initialSyncLimit: "10x",
         },
         runtime,
@@ -1129,11 +1214,11 @@ describe("channelsAddCommand", () => {
       },
     }));
     const plugin = {
-      ...createChannelTestPluginBase({ id: "tlon", label: "Tlon" }),
+      ...createChannelTestPluginBase({ id: "legacy-lists", label: "Legacy Lists" }),
       setup: { applyAccountConfig },
     };
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createSetupOptionCatalogEntry("tlon", "Tlon", [
+      createSetupOptionCatalogEntry("legacy-lists", "Legacy Lists", [
         {
           flags: "--group-channels <list>",
           description: "Tlon group channels",
@@ -1147,11 +1232,13 @@ describe("channelsAddCommand", () => {
       ]),
     ]);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "tlon", plugin, source: "test" }]));
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "legacy-lists", plugin, source: "test" }]),
+    );
 
     await channelsAddCommand(
       {
-        channel: "tlon",
+        channel: "legacy-lists",
         groupChannels: "chat/~host/general, chat/~host/random",
         dmAllowlist: "~zod;~nec",
       },
@@ -1178,10 +1265,10 @@ describe("channelsAddCommand", () => {
       },
     }));
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createSetupOptionCatalogEntry("matrix", "Matrix", [
-        { flags: "--shared-value <value>", description: "Matrix shared value" },
+      createSetupOptionCatalogEntry("legacy-scalar", "Legacy Scalar", [
+        { flags: "--shared-value <value>", description: "Legacy scalar value" },
       ]),
-      createSetupOptionCatalogEntry("tlon", "Tlon", [
+      createSetupOptionCatalogEntry("legacy-list", "Legacy List", [
         {
           flags: "--shared-value <value>",
           description: "Tlon shared values",
@@ -1192,9 +1279,9 @@ describe("channelsAddCommand", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "matrix",
+          pluginId: "legacy-scalar",
           plugin: {
-            ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+            ...createChannelTestPluginBase({ id: "legacy-scalar", label: "Legacy Scalar" }),
             setup: { applyAccountConfig },
           },
           source: "test",
@@ -1203,7 +1290,7 @@ describe("channelsAddCommand", () => {
     );
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
 
-    await channelsAddCommand({ channel: "matrix", sharedValue: "one,two" }, runtime, {
+    await channelsAddCommand({ channel: "legacy-scalar", sharedValue: "one,two" }, runtime, {
       hasFlags: true,
     });
 

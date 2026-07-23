@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import {
+  clearSessionBoardAvailability,
+  recordSessionBoardAvailability,
+} from "../../lib/board/provider.ts";
+import {
   createGateway,
   createGatewayHarness,
   createSessions,
@@ -364,12 +368,14 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.connected = false;
     sidebar.offline = true;
+    sidebar.queuedOutboxCount = 3;
     sidebar.lastError = "gateway unavailable?token=sidebar-secret";
     await sidebar.updateComplete;
     const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.textContent).toContain("Offline");
     expect(button?.textContent).toContain("Reconnecting…");
-    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now");
+    expect(button?.textContent).toContain("3 queued");
+    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
     expect(button?.getAttribute("aria-live")).toBe("polite");
     // The redacted error detail moved from a native title to the shared
     // tooltip's accessible description.
@@ -411,6 +417,34 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle")?.textContent).toContain(
       "Working",
     );
+    const spinner = sidebar.querySelector(".nav-item--home .session-run-spinner");
+    expect(spinner?.hasAttribute("title")).toBe(false);
+    expect(
+      (spinner?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+        ?.content,
+    ).toBe("Active run");
+  });
+
+  it("uses the shared tooltip for the Home dashboard glyph", async () => {
+    const mainKey = "agent:main:main";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", [mainKey]));
+
+    try {
+      recordSessionBoardAvailability(mainKey, true);
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
+
+      const glyph = sidebar.querySelector(".nav-item--home .sidebar-board-glyph");
+      expect(glyph?.getAttribute("aria-label")).toBe("Dashboard available");
+      expect(glyph?.hasAttribute("title")).toBe(false);
+      expect(
+        (glyph?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+          ?.content,
+      ).toBe("Dashboard available");
+    } finally {
+      clearSessionBoardAvailability();
+    }
   });
 
   it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {

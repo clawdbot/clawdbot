@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   callMeetingBrowserProxyOnNode,
   createLocalMeetingRealtimeAudioTransport,
+  createMeetingRealtimeEngineBindings,
   createNodeMeetingRealtimeAudioTransport,
   leaveMeetingWithBrowser,
   openMeetingWithBrowser,
@@ -12,18 +13,10 @@ import {
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
   type MeetingBrowserRequestCaller,
-  type MeetingAgentConsultParams,
   type MeetingRealtimeAudioEngineHandle,
-  type MeetingRealtimeToolCallParams,
-  type MeetingRuntimePlatform,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import {
-  consultOpenClawAgentForTeamsMeeting,
-  handleTeamsMeetingsRealtimeConsultToolCall,
-  resolveTeamsMeetingsRealtimeTools,
-} from "../agent-consult.js";
 import type { TeamsMeetingsConfig, TeamsMeetingsMode } from "../config.js";
 import {
   TEAMS_MEETINGS_SYSTEM_PROFILER_COMMAND,
@@ -43,12 +36,6 @@ import type {
   TeamsMeetingsChromeHealth,
   TeamsMeetingsTranscriptSnapshot,
 } from "./types.js";
-
-const TEAMS_MEETINGS_RUNTIME_PLATFORM = {
-  displayName: TEAMS_MEETINGS_PLATFORM_ADAPTER.displayName,
-  logScope: TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope,
-  sessionIdPrefix: TEAMS_MEETINGS_PLATFORM_ADAPTER.id,
-} satisfies MeetingRuntimePlatform;
 
 type LocalAudioBridge = MeetingRealtimeAudioEngineHandle & {
   type: "command-pair";
@@ -126,37 +113,9 @@ async function rollbackTeamsBrowserJoin(params: {
   }));
   if (!result.left) {
     params.logger.warn(
-      `${TEAMS_MEETINGS_RUNTIME_PLATFORM.logScope} browser rollback after realtime startup failure did not complete: ${result.note}`,
+      `${TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope} browser rollback after realtime startup failure did not complete: ${result.note}`,
     );
   }
-}
-
-function realtimeBindings(params: {
-  config: TeamsMeetingsConfig;
-  fullConfig: OpenClawConfig;
-  runtime: PluginRuntime;
-  logger: RuntimeLogger;
-}) {
-  return {
-    platform: TEAMS_MEETINGS_RUNTIME_PLATFORM,
-    consultAgent: (consult: MeetingAgentConsultParams) =>
-      consultOpenClawAgentForTeamsMeeting({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        ...consult,
-      }),
-    tools: resolveTeamsMeetingsRealtimeTools(params.config.realtime.toolPolicy),
-    handleToolCall: (call: MeetingRealtimeToolCallParams) =>
-      handleTeamsMeetingsRealtimeConsultToolCall({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        ...call,
-      }),
-  };
 }
 
 export async function assertBlackHole2chAvailable(params: {
@@ -205,9 +164,12 @@ async function startLocalAudioBridge(params: {
     bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
     bargeInCooldownMs: params.config.chrome.bargeInCooldownMs,
     logger: params.logger,
-    logScope: TEAMS_MEETINGS_RUNTIME_PLATFORM.logScope,
+    logScope: TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope,
   });
-  const bindings = realtimeBindings(params);
+  const bindings = createMeetingRealtimeEngineBindings({
+    platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
+    ...params,
+  });
   try {
     const engine =
       params.mode === "agent"
@@ -364,7 +326,7 @@ export async function launchTeamsMeetingOnNode(params: {
     });
   } catch (error) {
     params.logger.debug?.(
-      `${TEAMS_MEETINGS_RUNTIME_PLATFORM.logScope} node bridge cleanup ignored: ${
+      `${TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope} node bridge cleanup ignored: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
@@ -429,10 +391,13 @@ export async function launchTeamsMeetingOnNode(params: {
       bridgeId: result.bridgeId,
       logger: params.logger,
       commandName: TEAMS_MEETINGS_NODE_COMMAND,
-      logScope: TEAMS_MEETINGS_RUNTIME_PLATFORM.logScope,
+      logScope: TEAMS_MEETINGS_PLATFORM_ADAPTER.logScope,
       logPrefix: params.mode === "agent" ? "node agent" : "node",
     });
-    const bindings = realtimeBindings(params);
+    const bindings = createMeetingRealtimeEngineBindings({
+      platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
+      ...params,
+    });
     let engine: MeetingRealtimeAudioEngineHandle;
     try {
       engine =

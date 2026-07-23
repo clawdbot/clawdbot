@@ -1153,6 +1153,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     auditLogLevel: options?.toolPolicyAuditLogLevel,
     declaredToolAllowlist: buildDeclaredToolAllowlistContext({
       config: options?.config,
+      metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
       workspaceDir: workspaceRoot,
       toolDenylist: pluginToolDenylist,
     }),

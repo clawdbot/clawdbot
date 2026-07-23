@@ -26,13 +26,16 @@ import {
   persistRequestedUpdateChannel,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
+import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
+  didCoreUpdateChangeInstall,
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   shouldResumePostCoreUpdateInFreshProcess,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-post-core.js";
+import { POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON } from "./update-command-post-plugin-validation.js";
 import {
   gatewayServiceCommandUsesRoot,
   maybeRestartService,
@@ -254,7 +257,7 @@ export async function finishUpdate(params: {
       process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
     }
     try {
-      postCorePluginUpdate = await updatePluginsAfterCoreUpdate({
+      const initialPluginUpdate = await updatePluginsAfterCoreUpdate({
         root: postUpdateRoot,
         channel: params.channel,
         configSnapshot: postUpdateConfigSnapshot,
@@ -264,6 +267,22 @@ export async function finishUpdate(params: {
         timeoutMs: params.updateStepTimeoutMs,
         pluginInstallRecords: params.preUpdatePluginInstallRecords,
       });
+      const completedPluginUpdate = await completePostCorePluginUpdate({
+        root: postUpdateRoot,
+        pluginUpdate: initialPluginUpdate,
+        // A plugin-only update can replace its migration owner without replacing core.
+        // Downgrades and resume fallbacks can also leave an updated core on disk in this process.
+        freshDoctorRequired:
+          didCoreUpdateChangeInstall(params.result) ||
+          initialPluginUpdate.sync.changed ||
+          initialPluginUpdate.npm.changed,
+        yes: params.opts.yes === true,
+        json: params.opts.json === true,
+        timeoutMs: params.updateStepTimeoutMs,
+        ...(params.packageUpdateNodeRunner ? { nodeRunner: params.packageUpdateNodeRunner } : {}),
+      });
+      postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
+      postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
     } finally {
       if (compatibilityDowngradeTarget) {
         if (previousCompatibilityHostVersion === undefined) {
@@ -296,6 +315,14 @@ export async function finishUpdate(params: {
       result: resultWithPostUpdate,
       jsonMode: Boolean(params.opts.json),
     });
+    // If strict config became valid despite a fresh-doctor process failure, restore the service
+    // stopped by this update. Invalid post-migration config intentionally remains stopped.
+    if (postCorePluginUpdate.reason === POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON) {
+      await maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop: params.preManagedServiceStop,
+        jsonMode: Boolean(params.opts.json),
+      });
+    }
     if (params.opts.json) {
       defaultRuntime.writeJson(resultWithPostUpdate);
     } else {

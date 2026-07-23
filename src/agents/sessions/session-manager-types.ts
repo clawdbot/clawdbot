@@ -125,22 +125,6 @@ export interface SessionContext {
   model: { provider: string; modelId: string } | null;
 }
 
-export interface SessionInfo {
-  path: string;
-  id: string;
-  /** Working directory where the session started. Empty for old sessions. */
-  cwd: string;
-  name?: string;
-  parentSessionPath?: string;
-  created: Date;
-  modified: Date;
-  messageCount: number;
-  firstMessage: string;
-  allMessagesText: string;
-}
-
-export type SessionListProgress = (loaded: number, total: number) => void;
-
 interface PromptReleasedOpaqueEntry {
   type: "prompt_released_opaque";
   record: unknown;

@@ -54,7 +54,8 @@
         "groupModel": "hybrid",
         "groupAllowFromFallbackToAllowFrom": false,
         "warnOnEmptyGroupSenderAllowlist": false
-      }
+      },
+      "setup": { "fields": [] }
     },
     "install": {
       "npmSpec": "@openclaw/zalouser",

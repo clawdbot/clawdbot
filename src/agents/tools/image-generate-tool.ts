@@ -1,8 +1,4 @@
-/**
- * image_generate built-in tool.
- *
- * Loads references, resolves providers/options, saves generated images, and supports detached background runs.
- */
+/** Runs image generation, persistence, and detached completion. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
@@ -53,6 +49,7 @@ import {
   buildMediaGenerationRequestKey,
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import {
   ToolInputError,
@@ -87,6 +84,7 @@ import {
   applyImageGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  createCapabilityProviderRuntimeDeps,
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
@@ -756,6 +754,7 @@ async function executeImageGenerationJob(params: {
   loadedReferenceImages: LoadedReferenceImage[];
   taskHandle?: ImageGenerationTaskHandle | null;
   autoProviderFallback?: boolean;
+  providers?: ImageGenerationProvider[];
 }) {
   if (params.taskHandle) {
     recordImageGenerationTaskProgress({
@@ -763,25 +762,28 @@ async function executeImageGenerationJob(params: {
       progressSummary: "Generating image",
     });
   }
-  const result = await generateImage({
-    cfg: params.effectiveCfg,
-    prompt: params.prompt,
-    agentDir: params.agentDir,
-    modelOverride: params.model,
-    autoProviderFallback: params.autoProviderFallback,
-    size: params.size,
-    aspectRatio: params.aspectRatio,
-    resolution: params.resolution,
-    inferredResolution: params.inferredResolution,
-    quality: params.quality,
-    outputFormat: params.outputFormat,
-    background: params.background,
-    count: params.count,
-    inputImages: params.inputImages,
-    timeoutMs: params.timeoutMs,
-    providerOptions: params.providerOptions,
-    ssrfPolicy: params.ssrfPolicy,
-  });
+  const result = await generateImage(
+    {
+      cfg: params.effectiveCfg,
+      prompt: params.prompt,
+      agentDir: params.agentDir,
+      modelOverride: params.model,
+      autoProviderFallback: params.autoProviderFallback,
+      size: params.size,
+      aspectRatio: params.aspectRatio,
+      resolution: params.resolution,
+      inferredResolution: params.inferredResolution,
+      quality: params.quality,
+      outputFormat: params.outputFormat,
+      background: params.background,
+      count: params.count,
+      inputImages: params.inputImages,
+      timeoutMs: params.timeoutMs,
+      providerOptions: params.providerOptions,
+      ssrfPolicy: params.ssrfPolicy,
+    },
+    createCapabilityProviderRuntimeDeps(params.providers),
+  );
   if (params.taskHandle) {
     recordImageGenerationTaskProgress({
       handle: params.taskHandle,
@@ -902,12 +904,17 @@ export function createImageGenerateTool(options?: {
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: ImageGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
 }): AnyAgentTool | null {
   const cfg = options?.config ?? getRuntimeConfig();
+  const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
+    ?.imageGenerationProviders
+    ? [...options.preparedModelRuntime.mediaCapabilityProviders.imageGenerationProviders]
+    : undefined;
   if (
     !hasGenerationToolAvailability({
       cfg,
@@ -916,6 +923,7 @@ export function createImageGenerateTool(options?: {
       authStore: options?.authProfileStore,
       modelConfig: cfg.agents?.defaults?.mediaModels?.image,
       providerKey: "imageGenerationProviders",
+      providers: preparedProviders,
     })
   ) {
     return null;
@@ -990,9 +998,8 @@ export function createImageGenerateTool(options?: {
       const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
       const background = normalizeBackground(readStringParam(params, "background"));
       const providerOptions = normalizeProviderOptions(params);
-      const imageGenerationProviders = listRuntimeImageGenerationProviders({
-        config: effectiveCfg,
-      });
+      const imageGenerationProviders =
+        preparedProviders ?? listRuntimeImageGenerationProviders({ config: effectiveCfg });
       const selectedProvider = resolveSelectedImageGenerationProvider({
         providers: imageGenerationProviders,
         imageGenerationModelConfig,
@@ -1146,6 +1153,7 @@ export function createImageGenerateTool(options?: {
               loadedReferenceImages,
               taskHandle,
               autoProviderFallback: explicitModelConfig ? false : undefined,
+              providers: imageGenerationProviders,
             }),
         });
 
@@ -1204,6 +1212,7 @@ export function createImageGenerateTool(options?: {
           loadedReferenceImages,
           taskHandle,
           autoProviderFallback: explicitModelConfig ? false : undefined,
+          providers: imageGenerationProviders,
         });
         completeImageGenerationTaskRun({
           handle: taskHandle,

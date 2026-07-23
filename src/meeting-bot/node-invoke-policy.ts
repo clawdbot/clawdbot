@@ -2,6 +2,7 @@ import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyResult,
 } from "../plugins/plugin-registration.types.js";
+import { isMeetingAudioBase64 } from "./audio-base64.js";
 
 export type MeetingBrowserNodeStartConfig = {
   launch: boolean;
@@ -193,6 +194,12 @@ function buildForwardParams(
       }
       if (!base64) {
         return denyMissing(options, action, "base64");
+      }
+      if (!isMeetingAudioBase64(base64)) {
+        return {
+          approved: false,
+          result: denied(options, "base64 must be a valid audio payload"),
+        };
       }
       forwarded.bridgeId = bridgeId;
       forwarded.base64 = base64;

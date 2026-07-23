@@ -119,6 +119,12 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
     return next;
   }
 
+  if (patch.kind === "heartbeat") {
+    // Unreachable through the service (system-owned boundary rejects it
+    // first); keep the merge total for the type union.
+    return { kind: "heartbeat" };
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
@@ -198,6 +204,10 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     };
     applyToolsAllowPatch(next, patch);
     return next;
+  }
+
+  if (patch.kind === "heartbeat") {
+    return { kind: "heartbeat" };
   }
 
   if (typeof patch.message !== "string" || patch.message.length === 0) {

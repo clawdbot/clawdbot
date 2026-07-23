@@ -42,6 +42,24 @@ function isFailedPlacement(
   return placement.state === "failed";
 }
 
+function blockingWorkspaceJournalSessions(
+  placements: PlacementRecoveryDeps["placements"],
+): Set<string> {
+  const sessions = new Set<string>();
+  for (const owner of placements.listWorkspaceReconciliationOwners()) {
+    const placement = placements.get(owner.sessionId);
+    if (
+      (placement?.state === "active" || placement?.state === "draining") &&
+      placement.environmentId === owner.environmentId &&
+      placement.activeOwnerEpoch === owner.ownerEpoch &&
+      placement.generation === owner.placementGeneration
+    ) {
+      sessions.add(owner.sessionId);
+    }
+  }
+  return sessions;
+}
+
 export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const { environments, failure, placements } = deps;
 
@@ -163,9 +181,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const reconcile = async (): Promise<void> => {
     await environments.reconcileOnce();
     const pendingResultOwners = await recoverPendingWorkspaceResults(deps, true);
-    const journalOwners = new Set(
-      placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
-    );
+    const journalOwners = blockingWorkspaceJournalSessions(placements);
     for (const placement of placements.listForReconcile()) {
       if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {
         continue;
@@ -204,9 +220,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const reconcileActive = async (environmentId?: string): Promise<void> => {
     await environments.reconcileOnce();
     const pendingResultOwners = await recoverPendingWorkspaceResults(deps, false);
-    const journalOwners = new Set(
-      placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
-    );
+    const journalOwners = blockingWorkspaceJournalSessions(placements);
     for (const placement of placements.listForReconcile()) {
       if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {
         continue;

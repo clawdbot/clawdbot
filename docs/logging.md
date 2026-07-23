@@ -17,9 +17,22 @@ logs live, how to read them, and how to configure log levels and formats.
 
 ## Where logs live
 
-By default, the Gateway writes a rolling log file per day:
+By default, the Gateway writes a rolling log file per day. The default profile
+keeps the historical path:
 
 `/tmp/openclaw/openclaw-YYYY-MM-DD.log`
+
+Named profiles use a profile-qualified filename in the same directory:
+
+`/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`
+
+The filename profile segment is lowercase and limited to letters, numbers, and
+dashes. Simple lowercase names stay readable, so the `--dev` shorthand writes
+`openclaw-dev-YYYY-MM-DD.log`. Case, underscores, and literal dashes use a
+reversible dash escape so distinct profile names never share a log file.
+Oversized values set directly through the environment use a bounded hash suffix
+to stay within filesystem filename limits. An explicit `logging.file` overrides
+these defaults.
 
 The date uses the gateway host's local timezone. When `/tmp/openclaw` is unsafe
 or unavailable (and always on Windows), OpenClaw uses a user-scoped
@@ -28,8 +41,9 @@ pruned after 24 hours.
 
 Each file rotates when the next write would exceed `logging.maxFileBytes`
 (default: 100 MB). OpenClaw keeps up to five numbered archives beside the
-active file, such as `openclaw-YYYY-MM-DD.1.log`, and keeps writing to a fresh
-active log instead of suppressing diagnostics.
+active file, such as `openclaw-YYYY-MM-DD.1.log` or
+`openclaw-dev-YYYY-MM-DD.1.log`, and keeps writing to a fresh active log instead
+of suppressing diagnostics.
 
 You can override the path in `~/.openclaw/openclaw.json`:
 
@@ -49,7 +63,12 @@ Tail the gateway log file via RPC:
 
 ```bash
 openclaw logs --follow
+openclaw --dev logs --follow
+openclaw --profile work logs --follow
 ```
+
+The root profile selector resolves the same profile-specific file used by the
+Gateway, including CLI fallback reads when local RPC is unavailable.
 
 Options:
 
@@ -174,7 +193,7 @@ All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
 {
   "logging": {
     "level": "info",
-    "file": "/tmp/openclaw/openclaw-YYYY-MM-DD.log",
+    "file": "/path/to/openclaw.log",
     "consoleLevel": "info",
     "consoleStyle": "pretty",
     "redactSensitive": "tools",

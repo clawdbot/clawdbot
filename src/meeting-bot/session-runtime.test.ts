@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createMeetingSession } from "./session-factory.js";
 import { MeetingSessionRuntime, type MeetingSessionRuntimeJoinContext } from "./session-runtime.js";
 import type {
   MeetingBrowserHealth,
@@ -24,6 +25,72 @@ type TestJoinContext = MeetingSessionRuntimeJoinContext<
   MeetingBrowserHealth,
   MeetingBrowserTab
 >;
+
+describe("createMeetingSession", () => {
+  it.each([
+    {
+      mode: "agent" as const,
+      provider: undefined,
+      transcriptionProvider: "deepgram",
+    },
+    {
+      mode: "bidi" as const,
+      provider: "openai-realtime",
+      transcriptionProvider: undefined,
+    },
+  ])("preserves $mode realtime session fields", ({ mode, provider, transcriptionProvider }) => {
+    const session = createMeetingSession({
+      platform: {
+        id: "test-meeting",
+        displayName: "Test Meeting",
+        logScope: "[test-meeting]",
+        agentConsult: {
+          surface: "a test meeting",
+          userLabel: "Participant",
+          assistantLabel: "Agent",
+          questionSourceLabel: "participant",
+          workingResponseLabel: "participant",
+          extraSystemPrompt: "Answer briefly.",
+        },
+        session: {
+          idPrefix: "test_meeting",
+          participantIdentity: (transport) => `Test participant via ${transport}`,
+        },
+      },
+      config: {
+        realtime: {
+          provider: "deepgram",
+          voiceProvider: "openai-realtime",
+          transcriptionProvider: "deepgram",
+          model: "realtime-model",
+          toolPolicy: "safe-read-only",
+        },
+      },
+      resolved: {
+        url: "https://meeting.example/room",
+        transport: "chrome",
+        mode,
+        agentId: "operator",
+      },
+      createdAt: "2026-07-22T00:00:00.000Z",
+    });
+
+    expect(session).toMatchObject({
+      id: expect.stringMatching(/^test_meeting_/),
+      state: "active",
+      participantIdentity: "Test participant via chrome",
+      realtime: {
+        enabled: true,
+        strategy: mode,
+        provider,
+        model: mode === "bidi" ? "realtime-model" : undefined,
+        transcriptionProvider,
+        toolPolicy: "safe-read-only",
+      },
+      notes: [],
+    });
+  });
+});
 
 function createTestRuntime(params: {
   talkBack?: boolean;

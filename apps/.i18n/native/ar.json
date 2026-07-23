@@ -13304,6 +13304,11 @@
       "translated": "Gateway"
     },
     {
+      "id": "native.apple.2d878afa870cd7cc",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.apple.b99af99847ac7823",
       "source": "Apple Watch",
       "translated": "Apple Watch"
@@ -13644,6 +13649,11 @@
       "translated": "الاتصال"
     },
     {
+      "id": "native.apple.fc49f9b63e160581",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.apple.2c2cdafd79f8ba5b",
       "source": "Permissions",
       "translated": "الأذونات"
@@ -13962,11 +13972,6 @@
       "id": "native.apple.a82dc4a746268028",
       "source": "OpenClaw appreciates its partners in the open-source community.",
       "translated": "تقدّر OpenClaw شركاءها في مجتمع المصادر المفتوحة."
-    },
-    {
-      "id": "native.apple.fc49f9b63e160581",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.eaa4fe72f3730f3f",
@@ -14872,6 +14877,121 @@
       "id": "native.apple.7a5a1b9342f01954",
       "source": "ClawHub did not report an installable version for this skill.",
       "translated": "لم يُبلغ ClawHub عن إصدار قابل للتثبيت لهذه المهارة."
+    },
+    {
+      "id": "native.apple.0706fbaf1d690c8c",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "سأبقي هذه المحادثة منفصلة عن دردشة الوكيل العادية."
+    },
+    {
+      "id": "native.apple.8904786f15a5e8c6",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "يمكنني التحقق من حالة Gateway، أو إصلاح الإعدادات، أو تغيير النماذج، أو ربط القنوات."
+    },
+    {
+      "id": "native.apple.3c75d45619e216db",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.apple.8aee90eb1e1061b9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "تغيّر اتصال Gateway. أعد تشغيل OpenClaw لإعادة الاتصال."
+    },
+    {
+      "id": "native.apple.47bc765cd8464c1e",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.a791a671fb60b5f7",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw يعمل…"
+    },
+    {
+      "id": "native.apple.bd0e286399723c42",
+      "source": "Gateway Required",
+      "translated": "Gateway مطلوب"
+    },
+    {
+      "id": "native.apple.7d707323fc24e456",
+      "source": "Full Access Required",
+      "translated": "الوصول الكامل مطلوب"
+    },
+    {
+      "id": "native.apple.d37a3b497fc2b746",
+      "source": "Checking Gateway",
+      "translated": "جارٍ التحقق من Gateway"
+    },
+    {
+      "id": "native.apple.55474e9051b8aabc",
+      "source": "Gateway Update Required",
+      "translated": "تحديث Gateway مطلوب"
+    },
+    {
+      "id": "native.apple.441f1770a487a055",
+      "source": "Connect this iPhone to a Gateway before opening the OpenClaw settings assistant.",
+      "translated": "اربط هذا الـ iPhone بـ Gateway قبل فتح مساعد إعدادات OpenClaw."
+    },
+    {
+      "id": "native.apple.8e0a20f39742ff98",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "أعد الاتصال بصلاحية operator.admin لمراجعة إعدادات Gateway وتغييرها."
+    },
+    {
+      "id": "native.apple.9115f5d67e36fd08",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "جارٍ التحقق مما إذا كان هذا Gateway يدعم مساعد إعدادات OpenClaw."
+    },
+    {
+      "id": "native.apple.3a7955c72e7ab728",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "حدّث هذا Gateway لاستخدام مساعد إعدادات OpenClaw."
+    },
+    {
+      "id": "native.apple.fd24248c00007ba3",
+      "source": "Restart",
+      "translated": "إعادة التشغيل"
+    },
+    {
+      "id": "native.apple.7ec6b261897ee62c",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw جاهز للمتابعة في دردشتك العادية."
+    },
+    {
+      "id": "native.apple.ad820dd76c74e3f8",
+      "source": "Open Chat",
+      "translated": "فتح الدردشة"
+    },
+    {
+      "id": "native.apple.1cfa800d32483cfd",
+      "source": "Enter secret",
+      "translated": "أدخل السر"
+    },
+    {
+      "id": "native.apple.7efa99fdc895022e",
+      "source": "Enter secret…",
+      "translated": "أدخل السر…"
+    },
+    {
+      "id": "native.apple.e40e721e131e606e",
+      "source": "Reply to OpenClaw…",
+      "translated": "الرد على OpenClaw…"
+    },
+    {
+      "id": "native.apple.5b0adbb8a28011ab",
+      "source": "Send reply",
+      "translated": "إرسال الرد"
+    },
+    {
+      "id": "native.apple.16be123afdcc66c1",
+      "source": "Skip for now",
+      "translated": "التخطي الآن"
+    },
+    {
+      "id": "native.apple.441673bf8bef63c3",
+      "source": "Recommended",
+      "translated": "موصى به"
     },
     {
       "id": "native.apple.dc57861a3ac5a08e",
@@ -25877,6 +25997,16 @@
       "id": "native.apple.b737f84578f558eb",
       "source": "This device does not trust the TLS certificate presented by %@.",
       "translated": "لا يثق هذا الجهاز بشهادة TLS المقدَّمة من %@."
+    },
+    {
+      "id": "native.apple.9a4c4bd6b41420ae",
+      "source": "Retry",
+      "translated": "إعادة المحاولة"
+    },
+    {
+      "id": "native.apple.2ace7dd34f4ca3a2",
+      "source": "Check certificate",
+      "translated": "التحقق من الشهادة"
     },
     {
       "id": "native.apple.a825441f646eb195",

@@ -5,6 +5,21 @@ import { executeBashWithOperations } from "./bash-executor.js";
 import type { BashOperations } from "./tools/bash-operations.js";
 import { DEFAULT_MAX_BYTES } from "./tools/truncate.js";
 
+type OutputChunk = readonly [data: Buffer, stream?: "stdout" | "stderr"];
+
+const ESC = String.fromCharCode(27);
+
+function operationsForChunks(chunks: readonly OutputChunk[]): BashOperations {
+  return {
+    exec: async (_command, _cwd, options) => {
+      for (const [data, stream] of chunks) {
+        options.onData(data, stream);
+      }
+      return { exitCode: 0 };
+    },
+  };
+}
+
 describe("executeBashWithOperations", () => {
   it("stores truncated full output in an owner-only temp file", async () => {
     const sanitizedOutput = "secret output\n".repeat(9000);
@@ -74,6 +89,66 @@ describe("executeBashWithOperations", () => {
 
     expect(chunks.join("")).toBe("ABCDEFGH");
     expect(result.output).toBe("ABCDEFGH");
+  });
+
+  it("preserves delivery order when tagged UTF-8 chunks interleave", async () => {
+    const chunks: string[] = [];
+    const operations = operationsForChunks([
+      [Buffer.from([0xe6, 0x97]), "stdout"], // leading bytes of 日
+      [Buffer.from("E"), "stderr"],
+      [Buffer.from([0xa5]), "stdout"],
+    ]);
+
+    const result = await executeBashWithOperations("printf output", "/tmp", operations, {
+      onChunk: (chunk) => chunks.push(chunk),
+    });
+
+    expect(chunks.join("")).toBe("E日");
+    expect(result.output).toBe("E日");
+  });
+
+  it.each([
+    {
+      name: "OSC on stdout",
+      pending: [Buffer.from(`${ESC}]0;unterminated`), "stdout"] as const,
+      visible: [Buffer.from("stderr visible\n"), "stderr"] as const,
+    },
+    {
+      name: "CSI on stderr",
+      pending: [Buffer.from(`${ESC}[31`), "stderr"] as const,
+      visible: [Buffer.from("stdout visible\n"), "stdout"] as const,
+    },
+  ])("does not let unterminated $name consume the other stream", async ({ pending, visible }) => {
+    const result = await executeBashWithOperations(
+      "printf output",
+      "/tmp",
+      operationsForChunks([pending, visible]),
+    );
+
+    expect(result.output).toBe(visible[0].toString("utf8"));
+  });
+
+  it("keeps one sanitizer lane for legacy untagged operations", async () => {
+    const operations = operationsForChunks([[Buffer.from(`${ESC}[`)], [Buffer.from("31mlegacy")]]);
+
+    const result = await executeBashWithOperations("printf output", "/tmp", operations);
+
+    expect(result.output).toBe("legacy");
+  });
+
+  it("flushes pending UTF-8 bytes from every tagged stream", async () => {
+    const chunks: string[] = [];
+    const operations = operationsForChunks([
+      [Buffer.from([0xe6, 0x97]), "stdout"],
+      [Buffer.from([0xe6, 0x97]), "stderr"],
+    ]);
+
+    const result = await executeBashWithOperations("printf output", "/tmp", operations, {
+      onChunk: (chunk) => chunks.push(chunk),
+    });
+
+    expect(chunks.join("")).toBe("��");
+    expect(result.output).toBe("��");
   });
 
   it("stores sanitized split ANSI output in spilled full output files", async () => {

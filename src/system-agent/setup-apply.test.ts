@@ -348,11 +348,18 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     });
   });
 
-  it("keeps an existing fleet workspace for unconfirmed setup apply", async () => {
+  it("keeps the fleet workspace and provisions the configured default agent", async () => {
     const config = {
       agents: {
         defaults: { workspace: "/tmp/current-workspace" },
-        entries: { main: {}, ops: {} },
+        entries: {
+          main: {},
+          ops: {
+            default: true,
+            agentDir: "/agents/ops",
+            workspace: "/tmp/ops-workspace",
+          },
+        },
       },
     } satisfies OpenClawConfig;
     mocks.state.initialSnapshot = snapshot("probe", config);
@@ -369,11 +376,11 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     );
 
     expect(mocks.state.persistedConfig?.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
-    expect(mocks.state.persistedConfig?.agents?.entries).toEqual({ main: {}, ops: {} });
+    expect(mocks.state.persistedConfig?.agents?.entries).toEqual(config.agents.entries);
     expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
-      "/tmp/current-workspace",
+      "/tmp/ops-workspace",
       runtime,
-      expect.any(Object),
+      expect.objectContaining({ agentId: "ops" }),
     );
   });
 

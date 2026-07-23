@@ -38,6 +38,7 @@ import { resolveDiscordPreflightChannelAccess } from "./message-handler.prefligh
 import { resolveDiscordPreflightChannelContext } from "./message-handler.preflight-channel-context.js";
 import { buildDiscordMessagePreflightContext } from "./message-handler.preflight-context.js";
 import {
+  hasRawDiscordUserMention,
   isBoundThreadBotSystemMessage,
   isDiscordThreadChannelMessage,
   resolveDiscordMentionState,
@@ -249,11 +250,12 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  message = await hydrateDiscordMessageIfNeeded({
+  const hydration = await hydrateDiscordMessageIfNeeded({
     client: params.client,
     message,
     messageChannelId,
   });
+  message = hydration.message;
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
@@ -459,7 +461,9 @@ export async function preflightDiscordMessage(
     providerPolicy: params.discordConfig?.mentionPatterns,
   });
   const explicitlyMentioned = Boolean(
-    botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+    botId &&
+    (message.mentionedUsers?.some((user: User) => user.id === botId) ||
+      (hydration.kind === "unavailable" && hasRawDiscordUserMention(baseText, botId))),
   );
   const hasAnyMention =
     !isDirectMessage &&

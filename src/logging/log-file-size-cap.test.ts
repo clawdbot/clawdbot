@@ -96,4 +96,22 @@ describe("log file size cap", () => {
     expect(fs.readFileSync(secondDay, "utf8")).toContain("second day");
     expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day");
   });
+
+  it("keeps an explicit profile-shaped log path stable across date changes", () => {
+    const logDir = path.dirname(logPath);
+    const configured = path.join(logDir, "openclaw-dev-2026-01-01.log");
+    const inferredNextDay = path.join(logDir, "openclaw-dev-2026-01-02.log");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T08:00:00Z"));
+    setLoggerOverride({ level: "info", file: configured });
+    const logger = getLogger();
+
+    logger.info({ message: "first day" });
+    vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
+    logger.info({ message: "second day" });
+
+    expect(fs.readFileSync(configured, "utf8")).toContain("first day");
+    expect(fs.readFileSync(configured, "utf8")).toContain("second day");
+    expect(fs.existsSync(inferredNextDay)).toBe(false);
+  });
 });

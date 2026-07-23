@@ -17,7 +17,7 @@ import {
 
 export type ZoomMeetingsMode = "agent" | "bidi" | "transcribe";
 export type ZoomMeetingsTransport = "chrome" | "chrome-node";
-export type ZoomMeetingsToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
+type ZoomMeetingsToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 type ZoomMeetingsRealtimeStrategy = "agent" | "bidi";
 type ZoomMeetingsAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
 

@@ -29,8 +29,6 @@ export {
   DiscordConfigSchema,
   IMessageConfigSchema,
   MSTeamsConfigSchema,
-  SignalConfigSchema,
-  SlackConfigSchema,
   TelegramConfigSchema,
 } from "../config/zod-schema.providers-core.js";
 export { GoogleChatConfigSchema } from "../config/zod-schema.providers-googlechat.js";

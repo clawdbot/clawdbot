@@ -334,7 +334,8 @@ export function assertSupportedJobSpec(
   if (
     job.sessionTarget === "main" &&
     job.payload.kind !== "systemEvent" &&
-    job.payload.kind !== "script"
+    job.payload.kind !== "script" &&
+    job.payload.kind !== "heartbeat"
   ) {
     throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
   }

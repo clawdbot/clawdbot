@@ -557,8 +557,11 @@ function assertCronSelfRemoveScope(
   if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
     return;
   }
-  if (action === "next_check" && params.jobId === undefined && params.id === undefined) {
-    return;
+  if (action === "next_check") {
+    const id = readCronJobIdParam(params);
+    if (!id || id === selfRemoveOnlyJobId) {
+      return;
+    }
   }
   if (action === "get" || action === "remove" || action === "runs") {
     const id = readCronJobIdParam(params);

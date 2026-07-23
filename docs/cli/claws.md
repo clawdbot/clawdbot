@@ -1,5 +1,5 @@
 ---
-summary: "Add, inspect, and remove experimental Claw agent packages"
+summary: "Add, inspect, update, and remove experimental Claw agent packages"
 read_when:
   - You want to validate a grouped Claw manifest
   - You want to preview or add one agent from a Claw
@@ -177,11 +177,14 @@ when owned content drifted. Later Claws stages add other declared resources.
 ```bash
 openclaw claws status
 openclaw claws status incident-triage --json
+openclaw doctor
 ```
 
 `status` compares the installed agent and its recorded workspace, package, MCP,
 and cron provenance with current state. It reports incomplete installs, missing
-resources, and drift without changing local state.
+resources, and drift without changing local state. `openclaw doctor` adds
+Claw-specific diagnostics for incomplete ownership records, unsafe managed
+files, and cron jobs that cannot be corroborated with live Gateway inventory.
 
 Claw provenance distinguishes two relationships:
 
@@ -193,6 +196,46 @@ Claw provenance distinguishes two relationships:
 This is not a reference count. Ordinary plugin, skill, and agent commands keep
 their existing behavior; Claws add provenance and guarded lifecycle operations
 on top.
+
+## Update an installed Claw
+
+By default, update uses the source recorded when the Claw was added. Use
+`--from` when that source moved or when testing another package directory:
+
+```bash
+openclaw claws update incident-triage --dry-run --json
+openclaw claws update incident-triage \
+  --from ./incident-triage-next \
+  --dry-run --json
+```
+
+The plan compares current provenance and live state with the target manifest.
+It reports agent, workspace, package, MCP, cron, and ownership changes,
+including capability escalations and blockers. Capability escalations have
+separate machine-readable records and `!` lines with exact redacted effects in
+human output. Resolved package integrity, install identity, and any trust
+warning are included. Removing a package declaration releases this Claw's edge
+without uninstalling the artifact during update. The eventual
+exact `planIntegrity` confirmation binds that disclosed set as well as ordinary
+content changes. Hosts may use the same records for a separate dialog or an
+aggregate multi-agent review. Apply the exact reviewed plan with explicit
+consent:
+
+```bash
+openclaw claws update incident-triage \
+  --yes \
+  --plan-integrity <SHA256_FROM_DRY_RUN>
+```
+
+OpenClaw rebuilds the plan and compare-and-swaps owned state before each
+mutation. Removed package declarations release dependency edges without
+uninstalling artifacts. Cron changes reread the live scheduler definition and
+stop on operator drift. Package installers, source-config writers, and the Gateway scheduler
+are not one transaction. If compensation cannot be proven after an external
+mutation, OpenClaw reports error code `update_partial` with structured
+`status: partial`, preserves uncertain provenance,
+and stops. Inspect `claws status`, the affected resource, and `openclaw doctor`;
+then preview again before retrying or removing anything.
 
 ## Remove an installed Claw
 
@@ -246,6 +289,7 @@ agents, credentials, sessions, and unowned local state are excluded.
 | `claws inspect <source>`            | Validate a package directory or JSON manifest.      |
 | `claws add <source>`                | Preview or create one new agent and workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
+| `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.  |
 | `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |
 | `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |
 

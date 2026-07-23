@@ -101,6 +101,7 @@ type ChatComposerProps = {
   currentAgentId: string;
   connected: boolean;
   offline?: boolean;
+  queuedOutboxCount?: number;
   canSend: boolean;
   disabledReason: string | null;
   disabledBanner?: { text: string; actionLabel: string; onAction: () => void };
@@ -2750,7 +2751,11 @@ export function renderChatComposer(props: ChatComposerProps) {
           >
             ${props.offline
               ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
-                  ${t("chat.composer.offlineHint")}
+                  ${props.queuedOutboxCount
+                    ? t("chat.composer.offlineQueuedHint", {
+                        count: String(props.queuedOutboxCount),
+                      })
+                    : t("chat.composer.offlineHint")}
                 </div>`
               : nothing}
             ${slashMenuVisible ? renderSlashMenu(requestUpdate, props, visibleDraft) : nothing}

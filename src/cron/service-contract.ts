@@ -47,7 +47,7 @@ export interface CronServiceContract {
     patch: CronUpdateInput,
     precondition: CronUpdatePrecondition,
   ): Promise<CronUpdateResult>;
-  remove(id: string): Promise<CronRemoveResult>;
+  remove(id: string, opts?: { systemOwned?: boolean }): Promise<CronRemoveResult>;
   run(id: string, mode?: CronRunMode, opts?: CronServiceRunOptions): Promise<CronServiceRunResult>;
   enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   getJob(id: string): CronJob | undefined;

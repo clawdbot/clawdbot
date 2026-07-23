@@ -13304,6 +13304,11 @@
       "translated": "Gateway"
     },
     {
+      "id": "native.apple.2d878afa870cd7cc",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.apple.b99af99847ac7823",
       "source": "Apple Watch",
       "translated": "Apple Watch"
@@ -13644,6 +13649,11 @@
       "translated": "연결"
     },
     {
+      "id": "native.apple.fc49f9b63e160581",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.apple.2c2cdafd79f8ba5b",
       "source": "Permissions",
       "translated": "권한"
@@ -13962,11 +13972,6 @@
       "id": "native.apple.a82dc4a746268028",
       "source": "OpenClaw appreciates its partners in the open-source community.",
       "translated": "OpenClaw는 오픈 소스 커뮤니티의 파트너 여러분께 감사드립니다."
-    },
-    {
-      "id": "native.apple.fc49f9b63e160581",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.eaa4fe72f3730f3f",
@@ -14872,6 +14877,121 @@
       "id": "native.apple.7a5a1b9342f01954",
       "source": "ClawHub did not report an installable version for this skill.",
       "translated": "ClawHub에서 이 Skill에 설치 가능한 버전을 제공하지 않았습니다."
+    },
+    {
+      "id": "native.apple.0706fbaf1d690c8c",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "이 대화는 일반 에이전트 채팅과 분리해서 유지합니다."
+    },
+    {
+      "id": "native.apple.8904786f15a5e8c6",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "Gateway 상태 확인, 구성 복구, 모델 변경 또는 채널 연결을 할 수 있습니다."
+    },
+    {
+      "id": "native.apple.3c75d45619e216db",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.apple.8aee90eb1e1061b9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Gateway 연결이 변경되었습니다. 다시 연결하려면 OpenClaw를 재시작하세요."
+    },
+    {
+      "id": "native.apple.47bc765cd8464c1e",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.a791a671fb60b5f7",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw가 작업 중…"
+    },
+    {
+      "id": "native.apple.bd0e286399723c42",
+      "source": "Gateway Required",
+      "translated": "Gateway 필요"
+    },
+    {
+      "id": "native.apple.7d707323fc24e456",
+      "source": "Full Access Required",
+      "translated": "전체 액세스 필요"
+    },
+    {
+      "id": "native.apple.d37a3b497fc2b746",
+      "source": "Checking Gateway",
+      "translated": "Gateway 확인 중"
+    },
+    {
+      "id": "native.apple.55474e9051b8aabc",
+      "source": "Gateway Update Required",
+      "translated": "Gateway 업데이트 필요"
+    },
+    {
+      "id": "native.apple.441f1770a487a055",
+      "source": "Connect this iPhone to a Gateway before opening the OpenClaw settings assistant.",
+      "translated": "OpenClaw 설정 도우미를 열기 전에 이 iPhone을 Gateway에 연결하세요."
+    },
+    {
+      "id": "native.apple.8e0a20f39742ff98",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "Gateway 설정을 검토하고 변경하려면 operator.admin 액세스로 다시 연결하세요."
+    },
+    {
+      "id": "native.apple.9115f5d67e36fd08",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "이 Gateway가 OpenClaw 설정 도우미를 지원하는지 확인 중입니다."
+    },
+    {
+      "id": "native.apple.3a7955c72e7ab728",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "OpenClaw 설정 도우미를 사용하려면 이 Gateway를 업데이트하세요."
+    },
+    {
+      "id": "native.apple.fd24248c00007ba3",
+      "source": "Restart",
+      "translated": "재시작"
+    },
+    {
+      "id": "native.apple.7ec6b261897ee62c",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw가 일반 채팅에서 계속할 준비가 되었습니다."
+    },
+    {
+      "id": "native.apple.ad820dd76c74e3f8",
+      "source": "Open Chat",
+      "translated": "채팅 열기"
+    },
+    {
+      "id": "native.apple.1cfa800d32483cfd",
+      "source": "Enter secret",
+      "translated": "시크릿 입력"
+    },
+    {
+      "id": "native.apple.7efa99fdc895022e",
+      "source": "Enter secret…",
+      "translated": "시크릿 입력…"
+    },
+    {
+      "id": "native.apple.e40e721e131e606e",
+      "source": "Reply to OpenClaw…",
+      "translated": "OpenClaw에 답장…"
+    },
+    {
+      "id": "native.apple.5b0adbb8a28011ab",
+      "source": "Send reply",
+      "translated": "답장 보내기"
+    },
+    {
+      "id": "native.apple.16be123afdcc66c1",
+      "source": "Skip for now",
+      "translated": "지금은 건너뛰기"
+    },
+    {
+      "id": "native.apple.441673bf8bef63c3",
+      "source": "Recommended",
+      "translated": "추천"
     },
     {
       "id": "native.apple.dc57861a3ac5a08e",
@@ -25877,6 +25997,16 @@
       "id": "native.apple.b737f84578f558eb",
       "source": "This device does not trust the TLS certificate presented by %@.",
       "translated": "이 기기는 %@에서 제공한 TLS 인증서를 신뢰하지 않습니다."
+    },
+    {
+      "id": "native.apple.9a4c4bd6b41420ae",
+      "source": "Retry",
+      "translated": "다시 시도"
+    },
+    {
+      "id": "native.apple.2ace7dd34f4ca3a2",
+      "source": "Check certificate",
+      "translated": "인증서 확인"
     },
     {
       "id": "native.apple.a825441f646eb195",

@@ -18,6 +18,7 @@ import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
+import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
 import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
@@ -26,6 +27,7 @@ type SettingsSidebarProps = {
   activeSearch?: string;
   activeHash?: string;
   offline: boolean;
+  queuedOutboxCount?: number;
   lastError: string | null;
   version: string;
   updateAvailable: UpdateAvailable | null;
@@ -298,18 +300,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
         ${props.offline
-          ? html`<button
-              type="button"
-              class="sidebar-footer-bar__status"
-              aria-live="polite"
-              aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}`}
-              title=${props.lastError ? redactLoginFailureError(props.lastError) : reconnecting}
-              @click=${props.onRetryConnect}
-            >
-              <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
-                "common.offline",
-              )}<span class="sidebar-footer-bar__status-detail">${reconnecting}</span>
-            </button>`
+          ? renderOfflineSidebarStatus({
+              queuedOutboxCount: props.queuedOutboxCount ?? 0,
+              reconnecting,
+              title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
+              onRetry: props.onRetryConnect,
+            })
           : nothing}
         ${props.version
           ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`

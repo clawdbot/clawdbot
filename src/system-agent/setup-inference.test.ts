@@ -173,6 +173,9 @@ function withSuiteTempDirs<
   if (deps.createTempDir === makeTempDir && !deps.removeTempDir) {
     deps.removeTempDir = deferSuiteTempDirCleanup;
   }
+  if (!deps.readCodexCliActiveApiKey) {
+    deps.readCodexCliActiveApiKey = () => null;
+  }
   return deps;
 }
 
@@ -3628,6 +3631,163 @@ describe("activateSetupInference", () => {
         expect(result.error).not.toContain("bad-groq-key");
       }
       expect(readAuthProfileStoreForTest(agentDir).profiles["groq:default"]).toBeUndefined();
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("registers an active Codex API key only after its isolated live test succeeds", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    const configHarness = createConfigTransformHarness(initialConfig);
+    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams & { agentDir?: string }) => {
+      const profileId = params.authProfileId;
+      expect(profileId).toMatch(/^openai:setup-/);
+      expect(readAuthProfileStoreForTest(params.agentDir!).profiles[profileId!]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "codex-api-key",
+      });
+      return successfulRun("openai", "gpt-5.6-sol", params);
+    });
+
+    try {
+      const result = await activateSetupInference({
+        kind: "codex-cli",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            path: "/tmp/openclaw.json",
+            issues: [],
+            config: initialConfig,
+            sourceConfig: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          readCodexCliActiveApiKey: () => ({
+            type: "api_key",
+            provider: "openai",
+            key: "codex-api-key",
+          }),
+          ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+            cfg,
+            required: true,
+            installed: true,
+            status: "installed" as const,
+          })) as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
+      const profileId = runEmbeddedAgent.mock.calls[0]?.[0].authProfileId;
+      expect(profileId).toMatch(/^openai:setup-/);
+      expect(readAuthProfileStoreForTest(agentDir).profiles[profileId!]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "codex-api-key",
+      });
+      expect(configHarness.current()).toMatchObject({
+        auth: {
+          profiles: {
+            [profileId!]: { provider: "openai", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: { model: `openai/gpt-5.6-sol@${profileId}` },
+        },
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("prefers usable Codex OAuth without registering a discovered API key", async () => {
+    const readCodexCliActiveApiKey = vi.fn(() => null);
+    const configHarness = createConfigTransformHarness();
+    const runEmbeddedAgent = vi.fn(successfulRunner("openai", "gpt-5.6-sol"));
+
+    const result = await activateSetupInference({
+      kind: "codex-cli",
+      surface: "gateway",
+      runtime,
+      deps: {
+        readCodexCliActiveApiKey,
+        ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+          cfg,
+          required: true,
+          installed: true,
+          status: "installed" as const,
+        })) as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(readCodexCliActiveApiKey).toHaveBeenCalledWith({ allowKeychainPrompt: true });
+    expect(runEmbeddedAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
+    expect(configHarness.current().auth).toBeUndefined();
+  });
+
+  it("redacts and does not register a Codex API key after a failed live test", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+
+    try {
+      const result = await activateSetupInference({
+        kind: "codex-cli",
+        surface: "gateway",
+        runtime,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            path: "/tmp/openclaw.json",
+            issues: [],
+            config: initialConfig,
+            sourceConfig: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          readCodexCliActiveApiKey: () => ({
+            type: "api_key",
+            provider: "openai",
+            key: "rejected-codex-key",
+          }),
+          ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+            cfg,
+            required: true,
+            installed: true,
+            status: "installed" as const,
+          })) as never,
+          runEmbeddedAgent: vi.fn(async () => {
+            throw new Error("401 rejected rejected-codex-key");
+          }) as never,
+          transformConfigWithPendingPluginInstalls: vi.fn() as never,
+          refreshPluginRegistryAfterConfigMutation: vi.fn(async () => {}) as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: false, status: "auth" });
+      if (!result.ok) {
+        expect(result.error).toContain("401 rejected [redacted]");
+        expect(result.error).not.toContain("rejected-codex-key");
+      }
+      expect(readAuthProfileStoreForTest(agentDir).profiles).toEqual({});
     } finally {
       await removeOAuthTestTempRoot(stateDir);
     }

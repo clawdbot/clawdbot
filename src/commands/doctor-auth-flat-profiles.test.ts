@@ -887,6 +887,53 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     expect(JSON.parse(fs.readFileSync(`${authPath}.legacy-flat.123.bak`, "utf8"))).toEqual(legacy);
   });
 
+  it("preserves existing SQLite auth profiles when migrating a legacy flat store", async () => {
+    const state = await makeTestState();
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "anthropic:default": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "sk-access-live",
+            refresh: "sk-refresh-live",
+            expires: 9999999999999,
+          },
+        },
+      },
+      state.agentDir(),
+    );
+    const legacy = { openai: { apiKey: "sk-openai-flat" } };
+    const authPath = await writeLegacyAuthProfilesJson(state, legacy);
+
+    const result = await maybeRepairLegacyFlatAuthProfileStores({
+      cfg: {},
+      prompter: makePrompter(true),
+      now: () => 123,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      `Migrated ${authPath} to the SQLite auth profile store (backup: ${authPath}.legacy-flat.123.bak).`,
+    ]);
+    expect(loadPersistedAuthProfileStore(state.agentDir())?.profiles).toEqual({
+      "anthropic:default": {
+        type: "oauth",
+        provider: "anthropic",
+        access: "sk-access-live",
+        refresh: "sk-refresh-live",
+        expires: 9999999999999,
+      },
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-flat",
+      },
+    });
+    expect(fs.existsSync(authPath)).toBe(false);
+  });
+
   it("reports legacy flat stores without rewriting when repair is declined", async () => {
     const state = await makeTestState();
     const legacy = {

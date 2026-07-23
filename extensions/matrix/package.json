@@ -70,33 +70,20 @@
         "groupAllowFromFallbackToAllowFrom": false,
         "warnOnEmptyGroupSenderAllowlist": true
       },
-      "cliAddOptions": [
-        {
-          "flags": "--homeserver <url>",
-          "description": "Matrix homeserver URL"
-        },
-        {
-          "flags": "--user-id <id>",
-          "description": "Matrix user ID"
-        },
-        {
-          "flags": "--access-token <token>",
-          "description": "Matrix access token"
-        },
-        {
-          "flags": "--password <password>",
-          "description": "Channel password or login secret"
-        },
-        {
-          "flags": "--device-name <name>",
-          "description": "Matrix device name"
-        },
-        {
-          "flags": "--initial-sync-limit <n>",
-          "description": "Matrix initial sync limit",
-          "valueType": "int"
-        }
-      ],
+      "setup": {
+        "fields": [
+          { "key": "homeserver", "kind": "string", "cli": { "flags": "--homeserver <url>", "description": "Matrix homeserver URL" } },
+          { "key": "userId", "kind": "string", "cli": { "flags": "--user-id <id>", "description": "Matrix user id" } },
+          { "key": "accessToken", "kind": "string", "sensitive": true, "cli": { "flags": "--access-token <token>", "description": "Matrix access token" } },
+          { "key": "password", "kind": "string", "sensitive": true, "cli": { "flags": "--password <password>", "description": "Matrix password" } },
+          { "key": "deviceName", "kind": "string", "cli": { "flags": "--device-name <name>", "description": "Matrix device name" } },
+          { "key": "avatarUrl", "kind": "string", "cli": { "flags": "--avatar-url <url>", "description": "Matrix avatar URL" } },
+          { "key": "initialSyncLimit", "kind": "integer", "cli": { "flags": "--initial-sync-limit <n>", "description": "Matrix initial sync room limit" } },
+          { "key": "proxy", "kind": "string", "cli": { "flags": "--proxy <url>", "description": "Matrix proxy URL" } },
+          { "key": "dangerouslyAllowPrivateNetwork", "kind": "boolean", "cli": { "flags": "--dangerously-allow-private-network", "description": "Allow private-network Matrix homeservers" } },
+          { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use Matrix environment credentials" } }
+        ]
+      },
       "persistedAuthState": {
         "specifier": "./auth-presence",
         "exportName": "hasAnyMatrixAuth"

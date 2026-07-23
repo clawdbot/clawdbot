@@ -980,6 +980,43 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("does not mix a prepared media family with a live Codex provider", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
+
+      expect(
+        resolveImageModelConfigForTool({
+          cfg: openAiPrimaryCfg,
+          agentDir,
+          preparedModelRuntime: {
+            mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
+          } as never,
+        }),
+      ).toBeNull();
+    });
+  });
+
+  it("resolves a Codex alias from the prepared media family", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
+
+      expect(
+        resolveImageModelConfigForTool({
+          cfg: openAiPrimaryCfg,
+          agentDir,
+          preparedModelRuntime: {
+            mediaCapabilityProviders: {
+              mediaUnderstandingProviders: [
+                { ...codexMediaProvider, id: "codex-owner", aliases: ["codex"] },
+              ],
+            },
+          } as never,
+        }),
+      ).toEqual(codexImageModel);
+    });
+  });
+
   it.each(implicitImageRoutingCases)(
     "$name",
     async ({ cfg, profiles, codexProvider, openAiApiKey, expected }) => {

@@ -227,7 +227,7 @@ Onboarding detects whether `signal-cli` is on `PATH` and, if missing, offers to 
 - Linux x86-64: downloads the official native GraalVM build from the `signal-cli` GitHub releases and stores it under `~/.openclaw/tools/signal-cli/<version>/`.
 - macOS and other architectures: installs via Homebrew instead.
 - Native Windows: not supported yet; run onboarding inside WSL2 to get the Linux install path.
-- Writes `channels.signal.cliPath` to your config either way.
+- Writes `channels.signal.transport.cliPath` with `kind: "managed-native"` either way.
 
 ## What the wizard writes
 

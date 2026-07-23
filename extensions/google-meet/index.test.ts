@@ -12,23 +12,17 @@ import {
 import {
   convertMeetingTtsAudioForBridge,
   createLocalMeetingRealtimeAudioTransport,
+  createMeetingRealtimeEngineBindings,
   createNodeMeetingRealtimeAudioTransport,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
-  type MeetingAgentConsultParams,
   type MeetingRealtimeAudioEngineHealth,
   type MeetingRealtimeAudioTransport,
-  type MeetingRealtimeToolCallParams,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { testing as googleMeetPluginTesting } from "./index.js";
-import {
-  consultOpenClawAgentForGoogleMeet,
-  handleGoogleMeetRealtimeConsultToolCall,
-  resolveGoogleMeetRealtimeTools,
-} from "./src/agent-consult.js";
 import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
 import { resolveGoogleMeetConfig, type GoogleMeetConfig } from "./src/config.js";
 import { normalizeMeetUrl } from "./src/meet-url.js";
@@ -115,23 +109,15 @@ function createEmptyMeetingRealtimeAudioEngineHealth(): MeetingRealtimeAudioEngi
 }
 
 function createGoogleMeetTestEngineBindings(params: {
-  config: GoogleMeetConfig;
-  fullConfig: Parameters<typeof consultOpenClawAgentForGoogleMeet>[0]["fullConfig"];
-  runtime: Parameters<typeof consultOpenClawAgentForGoogleMeet>[0]["runtime"];
-  logger: Parameters<typeof consultOpenClawAgentForGoogleMeet>[0]["logger"];
+  config: Parameters<typeof createMeetingRealtimeEngineBindings>[0]["config"];
+  fullConfig: Parameters<typeof createMeetingRealtimeEngineBindings>[0]["fullConfig"];
+  runtime: Parameters<typeof createMeetingRealtimeEngineBindings>[0]["runtime"];
+  logger: Parameters<typeof createMeetingRealtimeEngineBindings>[0]["logger"];
 }) {
-  return {
-    platform: {
-      displayName: "Google Meet",
-      logScope: "[google-meet]",
-      sessionIdPrefix: "google-meet",
-    },
-    consultAgent: (consult: MeetingAgentConsultParams) =>
-      consultOpenClawAgentForGoogleMeet({ ...params, ...consult }),
-    tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
-    handleToolCall: (call: MeetingRealtimeToolCallParams) =>
-      handleGoogleMeetRealtimeConsultToolCall({ ...params, ...call }),
-  };
+  return createMeetingRealtimeEngineBindings({
+    platform: GOOGLE_MEET_PLATFORM_ADAPTER,
+    ...params,
+  });
 }
 
 type TestLocalAgentEngineParams = Omit<

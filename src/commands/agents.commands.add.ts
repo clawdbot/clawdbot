@@ -36,8 +36,11 @@ import { requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
-import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
 type AgentsAddOptions = {
@@ -410,17 +413,17 @@ export async function agentsAddCommand(
     });
     nextConfig = committed.config;
     logConfigUpdated(runtime);
-    await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+    const target = resolveOnboardingAgentTarget(nextConfig, agentId);
+    await ensureOnboardingAgentWorkspace(target, runtime, {
       skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
       skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-      agentId,
     });
 
     const payload = {
-      agentId,
+      agentId: target.agentId,
       name: agentName,
-      workspace: workspaceDir,
-      agentDir,
+      workspace: target.workspaceDir,
+      agentDir: target.agentDir,
     };
     if (opts.json) {
       writeRuntimeJson(runtime, payload);

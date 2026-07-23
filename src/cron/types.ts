@@ -269,14 +269,20 @@ export type CronPayload =
   | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
   | (CronAgentTurnPayload & CronPayloadToolAllow)
   | (CronCommandPayload & CronPayloadToolAllow)
-  | (CronScriptPayload & CronPayloadToolAllow);
+  | (CronScriptPayload & CronPayloadToolAllow)
+  // System-owned heartbeat monitor: execution requests an interval heartbeat
+  // wake. Gateway-converged only; not accepted from client create/patch APIs.
+  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
   | ({ kind: "systemEvent"; text?: string } & CronPayloadToolAllowPatch)
   | (CronAgentTurnPayloadPatch & CronPayloadToolAllowPatch)
   | (CronCommandPayloadPatch & CronPayloadToolAllowPatch)
-  | (CronScriptPayloadPatch & CronPayloadToolAllowPatch);
+  | (CronScriptPayloadPatch & CronPayloadToolAllowPatch)
+  // Representable so the service can reject it with a typed boundary error;
+  // transports and tools never accept it.
+  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
 
 type CronPayloadToolAllow = {
   /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */

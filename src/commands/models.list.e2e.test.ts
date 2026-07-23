@@ -640,7 +640,7 @@ describe("models list/status", () => {
     );
 
     const payload = parseJsonLog(runtime);
-    expect(loadModelCatalog).toHaveBeenCalledOnce();
+    expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(payload.models).toHaveLength(1);
     const model = payload.models[0];
     expect(model.key).toBe("moonshot/kimi-k2.6");

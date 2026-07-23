@@ -17,6 +17,10 @@ import {
   updateAuthProfileStoreWithLock,
 } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
+import {
+  readCodexCliActiveApiKey,
+  type CodexCliApiKeyCredential,
+} from "../agents/cli-credentials.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
@@ -319,6 +323,7 @@ export type ActivateSetupInferenceDeps = {
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
   loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
   fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
   captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
@@ -1063,6 +1068,7 @@ async function buildTestPlan(params: {
   isCancelled?: () => boolean;
   isRemoteProviderAuth?: boolean;
   routeAgentId?: string;
+  codexCliApiKey?: CodexCliApiKeyCredential;
   deps: ActivateSetupInferenceDeps;
 }): Promise<SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }> {
   const { kind, cfg, workspaceDir } = params;
@@ -1289,6 +1295,40 @@ async function buildTestPlan(params: {
         return modelRef;
       }
       const ref = parseRef(modelRef);
+      if (params.codexCliApiKey) {
+        const preparedAuth = prepareManualAuthForActivation({
+          baseConfig: cfg,
+          preparedConfig: cfg,
+          profiles: [
+            {
+              profileId: "openai:codex-cli-api-key",
+              credential: params.codexCliApiKey,
+            },
+          ],
+          selectedProfileId: "openai:codex-cli-api-key",
+          modelRef,
+          providerId: ref.provider,
+        });
+        return {
+          runner: "embedded",
+          ...ref,
+          modelRef,
+          agentHarnessRuntimeOverride: "codex",
+          config: preparedAuth.config,
+          agentId: "openclaw",
+          routeAgentId: resolveDefaultAgentId(preparedAuth.config),
+          agentDir: params.agentDir,
+          cleanupBundleMcpOnRunEnd: true,
+          authProfileId: preparedAuth.selectedProfileId,
+          persistModelRef: modelRef,
+          manualAuth: {
+            profiles: preparedAuth.profiles,
+            runtimeConfigBase: cfg,
+            sourceConfigBase: params.sourceCfg,
+            configPatch: createMergePatch(cfg, preparedAuth.config),
+          },
+        };
+      }
       return {
         runner: "embedded",
         ...ref,
@@ -1609,23 +1649,26 @@ async function runProviderManualSecretMethod(params: {
 export async function activateSetupInference(
   params: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
+  const codexCliApiKey = resolveCodexCliSetupApiKey(params);
   try {
-    const result = await activateSetupInferenceUnredacted(params);
+    const result = await activateSetupInferenceUnredacted(params, codexCliApiKey ?? undefined);
     if (result.ok) {
       return {
         ...result,
         lines: await Promise.all(
-          result.lines.map((line) => redactSetupInferenceError(line, params.apiKey)),
+          result.lines.map((line) =>
+            redactSetupInferenceError(line, params.apiKey, codexCliApiKey?.key),
+          ),
         ),
       };
     }
     return {
       ...result,
-      error: await redactSetupInferenceError(result.error, params.apiKey),
+      error: await redactSetupInferenceError(result.error, params.apiKey, codexCliApiKey?.key),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const redacted = await redactSetupInferenceError(message, params.apiKey);
+    const redacted = await redactSetupInferenceError(message, params.apiKey, codexCliApiKey?.key);
     if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
       return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
     }
@@ -1645,6 +1688,7 @@ export async function activateSetupInference(
 
 async function activateSetupInferenceUnredacted(
   params: ActivateSetupInferenceParams,
+  codexCliApiKey?: CodexCliApiKeyCredential,
 ): Promise<ActivateSetupInferenceResult> {
   const deps = params.deps ?? {};
   const readSnapshot =
@@ -1692,6 +1736,7 @@ async function activateSetupInferenceUnredacted(
       ...(params.kind === "provider-auth"
         ? { isRemoteProviderAuth: params.surface === "gateway" }
         : {}),
+      ...(codexCliApiKey ? { codexCliApiKey } : {}),
       deps,
     });
     if ("error" in plan) {
@@ -2403,9 +2448,24 @@ async function activateSetupInferenceUnredacted(
   }
 }
 
-async function redactSetupInferenceError(message: string, apiKey?: string): Promise<string> {
+function resolveCodexCliSetupApiKey(
+  params: ActivateSetupInferenceParams,
+): CodexCliApiKeyCredential | null {
+  if (params.kind !== "codex-cli") {
+    return null;
+  }
+  const reader = params.deps?.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey;
+  return reader({ allowKeychainPrompt: true });
+}
+
+async function redactSetupInferenceError(
+  message: string,
+  ...apiKeys: Array<string | undefined>
+): Promise<string> {
   const secrets = new Set(
-    [apiKey, apiKey?.trim()].filter((value): value is string => Boolean(value)),
+    apiKeys
+      .flatMap((apiKey) => [apiKey, apiKey?.trim()])
+      .filter((value): value is string => Boolean(value)),
   );
   let redacted = message;
   for (const secret of Array.from(secrets).toSorted((a, b) => b.length - a.length)) {

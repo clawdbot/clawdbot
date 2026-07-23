@@ -50,7 +50,8 @@ vi.mock("./loader.js", () => ({
   resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
 }));
 
-vi.mock("./active-runtime-registry.js", () => ({
+vi.mock("./active-runtime-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./active-runtime-registry.js")>()),
   getLoadedRuntimePluginRegistry: (params?: { requiredPluginIds?: string[] }) => {
     if (params === undefined) {
       return mocks.resolveRuntimePluginRegistry();
@@ -124,10 +125,10 @@ vi.mock("./bundled-compat.js", () => ({
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
+let prepareMediaCapabilityProviders: typeof import("./capability-provider-runtime.js").prepareMediaCapabilityProviders;
 let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
 function expectResolvedCapabilityProviderIds(providers: Array<{ id: string }>, expected: string[]) {
   expect(providers.map((provider) => provider.id)).toEqual(expected);
@@ -282,16 +283,17 @@ function expectCompatChainApplied(params: {
 describe("resolvePluginCapabilityProviders", () => {
   beforeAll(async () => {
     vi.resetModules();
-    ({ resolvePluginCapabilityProvider, resolvePluginCapabilityProviders } =
-      await import("./capability-provider-runtime.js"));
+    ({
+      prepareMediaCapabilityProviders,
+      resolvePluginCapabilityProvider,
+      resolvePluginCapabilityProviders,
+    } = await import("./capability-provider-runtime.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata-snapshot.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
-    ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
   });
 
   beforeEach(() => {
-    clearLoadPluginMetadataSnapshotMemo();
     clearCurrentPluginMetadataSnapshot();
     clearPluginMetadataLifecycleCaches();
     mocks.resolveRuntimePluginRegistry.mockReset();
@@ -314,7 +316,6 @@ describe("resolvePluginCapabilityProviders", () => {
 
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
-    clearLoadPluginMetadataSnapshotMemo();
   });
 
   it("resolves bundled capability plugins from the current metadata snapshot", () => {
@@ -375,6 +376,127 @@ describe("resolvePluginCapabilityProviders", () => {
     );
     expectActiveRegistryLookup(["fal"]);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it("prepares media capability families from one supplied metadata snapshot", () => {
+    const loaded = createEmptyPluginRegistry();
+    for (const key of [
+      "mediaUnderstandingProviders",
+      "imageGenerationProviders",
+      "videoGenerationProviders",
+      "musicGenerationProviders",
+    ] as const) {
+      loaded[key].push({
+        pluginId: "media",
+        pluginName: "media",
+        source: "test",
+        provider: { id: key },
+      } as never);
+    }
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(loaded);
+    const pluginMetadataSnapshot = {
+      index: { plugins: [] },
+      plugins: [
+        {
+          id: "media",
+          origin: "bundled",
+          contracts: {
+            mediaUnderstandingProviders: ["mediaUnderstandingProviders"],
+            imageGenerationProviders: ["imageGenerationProviders"],
+            videoGenerationProviders: ["videoGenerationProviders"],
+            musicGenerationProviders: ["musicGenerationProviders"],
+          },
+        },
+      ],
+    } as never;
+    const prepared = prepareMediaCapabilityProviders({ pluginMetadataSnapshot, registry: loaded });
+
+    expect(prepared.mediaUnderstandingProviders?.map((provider) => provider.id)).toEqual([
+      "mediaUnderstandingProviders",
+    ]);
+    expect(prepared.imageGenerationProviders?.map((provider) => provider.id)).toEqual([
+      "imageGenerationProviders",
+    ]);
+    expect(prepared.videoGenerationProviders?.map((provider) => provider.id)).toEqual([
+      "videoGenerationProviders",
+    ]);
+    expect(prepared.musicGenerationProviders?.map((provider) => provider.id)).toEqual([
+      "musicGenerationProviders",
+    ]);
+    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it("leaves a media family unresolved for loaded providers without contracts", () => {
+    const loaded = createEmptyPluginRegistry();
+    loaded.imageGenerationProviders.push({
+      pluginId: "legacy-image",
+      pluginName: "legacy-image",
+      source: "test",
+      provider: { id: "legacy-image" },
+    } as never);
+
+    const prepared = prepareMediaCapabilityProviders({
+      registry: loaded,
+      pluginMetadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+    });
+
+    expect(prepared.imageGenerationProviders).toBeUndefined();
+  });
+
+  it("leaves a media family unresolved when an eligible owner is not loaded", () => {
+    const loaded = createEmptyPluginRegistry();
+    loaded.imageGenerationProviders.push({
+      pluginId: "loaded-image",
+      pluginName: "loaded-image",
+      source: "test",
+      provider: { id: "loaded-image" },
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params && (params as { onlyPluginIds?: string[] }).onlyPluginIds?.includes("lazy-image")
+        ? undefined
+        : loaded,
+    );
+
+    const prepared = prepareMediaCapabilityProviders({
+      cfg: { plugins: { allow: ["loaded-image"] } },
+      registry: loaded,
+      pluginMetadataSnapshot: {
+        index: { plugins: [] },
+        plugins: [
+          {
+            id: "loaded-image",
+            origin: "bundled",
+            contracts: { imageGenerationProviders: ["loaded-image"] },
+          },
+          {
+            id: "lazy-image",
+            origin: "bundled",
+            contracts: { imageGenerationProviders: ["lazy-image"] },
+          },
+        ],
+      } as never,
+    });
+
+    expect(prepared.imageGenerationProviders).toBeUndefined();
+  });
+
+  it("prepares disabled media families as authoritative empty arrays", () => {
+    const loaded = createEmptyPluginRegistry();
+    loaded.imageGenerationProviders.push({
+      pluginId: "loaded-image",
+      pluginName: "loaded-image",
+      source: "test",
+      provider: { id: "loaded-image" },
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(loaded);
+
+    const prepared = prepareMediaCapabilityProviders({
+      cfg: { plugins: { enabled: false } },
+      registry: loaded,
+      pluginMetadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+    });
+
+    expect(prepared.imageGenerationProviders).toEqual([]);
   });
 
   it("resolves enabled external capability plugins from the current metadata snapshot", () => {
@@ -1493,40 +1615,6 @@ describe("resolvePluginCapabilityProviders", () => {
     );
 
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
-  });
-
-  it("reuses capability snapshot loads for the same config object", () => {
-    const { cfg, enablementCompat } = createCompatChainConfig();
-    const loaded = createEmptyPluginRegistry();
-    loaded.mediaUnderstandingProviders.push({
-      pluginId: "openai",
-      pluginName: "openai",
-      source: "test",
-      provider: {
-        id: "openai",
-        capabilities: ["image"],
-      },
-    } as never);
-    setBundledCapabilityFixture("mediaUnderstandingProviders");
-    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
-    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
-      params === undefined ? undefined : loaded,
-    );
-
-    expectResolvedCapabilityProviderIds(
-      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
-      ["openai"],
-    );
-    expectResolvedCapabilityProviderIds(
-      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
-      ["openai"],
-    );
-
-    const snapshotLoads = mocks.resolveRuntimePluginRegistry.mock.calls.filter(
-      ([options]) => options !== undefined,
-    );
-    expect(snapshotLoads).toHaveLength(1);
   });
 
   it("reuses equivalent manifest metadata while applying bundled compat", () => {

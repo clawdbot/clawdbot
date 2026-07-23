@@ -53,7 +53,8 @@
         "lark"
       ],
       "order": 35,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "setup": { "fields": [] }
     },
     "install": {
       "npmSpec": "@openclaw/feishu",

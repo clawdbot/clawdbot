@@ -26,7 +26,8 @@
       "docsPath": "/channels/reef",
       "docsLabel": "reef",
       "blurb": "Guarded end-to-end encrypted claw messaging.",
-      "systemImage": "message.badge"
+      "systemImage": "message.badge",
+      "setup": { "fields": [] }
     }
   },
   "devDependencies": {

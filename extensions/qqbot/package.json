@@ -52,7 +52,12 @@
       "docsPath": "/channels/qqbot",
       "docsLabel": "qqbot",
       "blurb": "connect to QQ via official QQ Bot API with group chat and direct message support.",
-      "systemImage": "bubble.left.and.bubble.right"
+      "systemImage": "bubble.left.and.bubble.right",
+      "setup": { "fields": [
+        { "key": "token", "kind": "string", "sensitive": true, "cli": { "flags": "--token <appId:secret>", "description": "QQBot app id and client secret" } },
+        { "key": "tokenFile", "kind": "string", "sensitive": true, "cli": { "flags": "--token-file <path>", "description": "QQBot client secret file" } },
+        { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use QQBOT environment credentials" } }
+      ] }
     },
     "install": {
       "npmSpec": "@openclaw/qqbot",

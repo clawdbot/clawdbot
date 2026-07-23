@@ -234,20 +234,34 @@ function classifyMeetManualAction(
   };
 }
 
-export const GOOGLE_MEET_PLATFORM_ADAPTER: MeetingPlatformAdapter<
-  MeetingBrowserJoinSession<GoogleMeetMode>,
-  GoogleMeetMode,
-  GoogleMeetChromeHealth,
-  GoogleMeetTranscriptSnapshot,
-  { runtime: PluginRuntime; config: GoogleMeetConfig },
-  Awaited<ReturnType<typeof createMeetWithBrowserProxyOnNode>>,
-  GoogleMeetDialInParams,
-  GoogleMeetDialInPlan
-> = {
+export const GOOGLE_MEET_PLATFORM_ADAPTER = {
   id: "google-meet",
   displayName: "Google Meet",
   browserLabel: "Meet",
   logScope: "[google-meet]",
+  agentConsult: {
+    surface: "a private Google Meet",
+    userLabel: "Participant",
+    assistantLabel: "Agent",
+    questionSourceLabel: "participant",
+    workingResponseLabel: "participant",
+    extraSystemPrompt: [
+      "You are a behind-the-scenes consultant for a live meeting voice agent.",
+      "Prioritize a fast, speakable answer over exhaustive investigation.",
+      "For tool-backed status checks, prefer one or two bounded read-only queries before answering.",
+      "Do not print secret values or dump environment variables; only check whether required configuration is present.",
+      "Be accurate, brief, and speakable.",
+    ].join(" "),
+  },
+  session: {
+    idPrefix: "meet",
+    participantIdentity: (transport) =>
+      transport === "twilio"
+        ? "Twilio phone participant"
+        : transport === "chrome-node"
+          ? "signed-in Google Chrome profile on a paired node"
+          : "signed-in Google Chrome profile",
+  },
   // Paired nodes install this exact command name; core injects it, never renames it.
   nodeCommandName: GOOGLE_MEET_NODE_COMMAND,
   nodeConfigPath: "plugins.entries.google-meet.config.chromeNode.node",
@@ -336,4 +350,13 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER: MeetingPlatformAdapter<
       return { number, pin, dtmfSequence };
     },
   },
-};
+} satisfies MeetingPlatformAdapter<
+  MeetingBrowserJoinSession<GoogleMeetMode>,
+  GoogleMeetMode,
+  GoogleMeetChromeHealth,
+  GoogleMeetTranscriptSnapshot,
+  { runtime: PluginRuntime; config: GoogleMeetConfig },
+  Awaited<ReturnType<typeof createMeetWithBrowserProxyOnNode>>,
+  GoogleMeetDialInParams,
+  GoogleMeetDialInPlan
+>;

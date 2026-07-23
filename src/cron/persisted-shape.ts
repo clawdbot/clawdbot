@@ -118,7 +118,8 @@ export function getInvalidPersistedCronJobReason(
     payloadKind !== "systemEvent" &&
     payloadKind !== "agentTurn" &&
     payloadKind !== "command" &&
-    payloadKind !== "script"
+    payloadKind !== "script" &&
+    payloadKind !== "heartbeat"
   ) {
     return "invalid-payload";
   }

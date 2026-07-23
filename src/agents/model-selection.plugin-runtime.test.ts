@@ -242,7 +242,7 @@ describe("model-selection plugin runtime normalization", () => {
         },
       },
     ];
-    const { normalizeModelRef } = await import("./model-selection-normalize.js");
+    const { normalizeModelRef } = await import("./model-ref-shared.js");
     normalizeModelRef("custom", "my-model", { manifestPlugins: preparedPlugins });
     expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -254,7 +254,7 @@ describe("model-selection plugin runtime normalization", () => {
 
   it("omits plugins from the runtime call when no manifestPlugins are prepared (preserves current behavior)", async () => {
     normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
-    const { normalizeModelRef } = await import("./model-selection-normalize.js");
+    const { normalizeModelRef } = await import("./model-ref-shared.js");
     normalizeModelRef("custom", "my-model");
     const callArgs = normalizeProviderModelIdWithPluginMock.mock.calls[0]?.[0] as
       | { plugins?: unknown }

@@ -16,6 +16,7 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
+import { sessionHasBoard } from "../lib/board/provider.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
@@ -24,8 +25,8 @@ import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { sessionHasBoard } from "../lib/board/provider.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { createIdleImport } from "../lib/idle-import.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
@@ -46,44 +47,19 @@ import {
   type LobsterLogoVisitDetail,
 } from "./lobster-pet-contract.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
+import { renderOfflineSidebarStatus, renderSessionRowBadges } from "./session-row-badges.ts";
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
-let lobsterPetModuleLoad: Promise<unknown> | null = null;
-let viewerFacepileModuleLoad: Promise<unknown> | null = null;
-
-function scheduleSidebarChromeLoad() {
-  if (
-    (lobsterPetModuleLoad || customElements.get("openclaw-lobster-pet")) &&
-    (viewerFacepileModuleLoad || customElements.get("openclaw-viewer-facepile"))
-  ) {
-    return;
-  }
-  const start = () => {
-    // A failed chunk fetch must not pin a rejected promise forever: clear the
-    // cache and retry when connectivity returns. The sidebar mounts once per
-    // page, so without this a transient failure would disable the pet for the
-    // whole session; a deploy-pruned chunk stays off until reload, by design.
-    if (!customElements.get("openclaw-lobster-pet")) {
-      lobsterPetModuleLoad ??= import("./lobster-pet.ts").catch(() => {
-        lobsterPetModuleLoad = null;
-        window.addEventListener("online", () => start(), { once: true });
-      });
-    }
-    if (!customElements.get("openclaw-viewer-facepile")) {
-      viewerFacepileModuleLoad ??= import("./viewer-facepile.ts").catch(() => {
-        viewerFacepileModuleLoad = null;
-        window.addEventListener("online", () => start(), { once: true });
-      });
-    }
-  };
-  if ("requestIdleCallback" in window) {
-    requestIdleCallback(() => start(), { timeout: 3000 });
-  } else {
-    setTimeout(start, 1500);
-  }
-}
+// The shared loader retries transient chunk failures online; a deploy-pruned
+// chunk still stays off until reload when that retry fails, by design.
+const sidebarChromeImport = createIdleImport(() =>
+  Promise.all([
+    customElements.get("openclaw-lobster-pet") ? undefined : import("./lobster-pet.ts"),
+    customElements.get("openclaw-viewer-facepile") ? undefined : import("./viewer-facepile.ts"),
+  ]),
+);
 
 class AppSidebar extends AppSidebarSessionListElement {
   @state() private logoVisit: LobsterLogoVisitDetail | null = null;
@@ -129,7 +105,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     super.connectedCallback();
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
-    scheduleSidebarChromeLoad();
+    sidebarChromeImport.schedule();
   }
 
   protected override firstUpdated() {
@@ -209,16 +185,18 @@ class AppSidebar extends AppSidebarSessionListElement {
     const mainKey = this.selectedAgentMainSessionKey(agentId);
     const mainRow = this.mainSessionRow(agentId);
     const approvalNeeded = sessionHasPendingApproval(this.approvalBadgeSnapshot(), mainKey);
+    const outboxCount = this.outboxCountForSessionKey(mainKey);
     const active =
       this.activeRouteId === "chat" &&
       areUiSessionKeysEquivalent(this.getRouteSessionKey(), mainKey);
     const stateBadge = mainRow?.hasActiveRun
-      ? html`<span
-          class="session-run-spinner"
-          role="img"
-          aria-label=${t("sessionsView.activeRun")}
-          title=${t("sessionsView.activeRun")}
-        ></span>`
+      ? html`<openclaw-tooltip .content=${t("sessionsView.activeRun")}>
+          <span
+            class="session-run-spinner"
+            role="img"
+            aria-label=${t("sessionsView.activeRun")}
+          ></span>
+        </openclaw-tooltip>`
       : mainRow?.unread === true && !active
         ? html`<span
             class="session-unread-dot"
@@ -242,26 +220,29 @@ class AppSidebar extends AppSidebarSessionListElement {
         <span class="nav-item__icon" aria-hidden="true">${icons.home}</span>
         <span class="nav-item__text">${t("nav.home")}</span>
         ${sessionHasBoard(mainKey)
-          ? html`<span
-              class="sidebar-board-glyph"
-              role="img"
-              aria-label=${t("sessionsView.dashboardAvailable")}
-              title=${t("sessionsView.dashboardAvailable")}
-              >${icons.layoutDashboard}</span
-            >`
+          ? html`<openclaw-tooltip .content=${t("sessionsView.dashboardAvailable")}>
+              <span
+                class="sidebar-board-glyph"
+                role="img"
+                aria-label=${t("sessionsView.dashboardAvailable")}
+                >${icons.layoutDashboard}</span
+              >
+            </openclaw-tooltip>`
           : nothing}
-        ${stateBadge !== nothing || approvalNeeded
+        ${stateBadge !== nothing || approvalNeeded || outboxCount > 0
           ? html`<span class="nav-item__state sidebar-home-session-states">
               ${stateBadge}
               ${approvalNeeded
-                ? html`<span
-                    class="session-approval-badge"
-                    role="img"
-                    aria-label=${t("sessionsView.approvalNeeded")}
-                    title=${t("sessionsView.approvalNeeded")}
-                    >${icons.alertTriangle}</span
-                  >`
+                ? html`<openclaw-tooltip .content=${t("sessionsView.approvalNeeded")}>
+                    <span
+                      class="session-approval-badge"
+                      role="img"
+                      aria-label=${t("sessionsView.approvalNeeded")}
+                      >${icons.alertTriangle}</span
+                    >
+                  </openclaw-tooltip>`
                 : nothing}
+              ${renderSessionRowBadges({ hasAutomation: false, outboxCount })}
             </span>`
           : nothing}
       </a>
@@ -340,21 +321,12 @@ class AppSidebar extends AppSidebarSessionListElement {
           .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
         ></openclaw-sidebar-build-chip>
         ${this.offline
-          ? html`<openclaw-tooltip
-              .content=${this.lastError ? redactLoginFailureError(this.lastError) : reconnecting}
-            >
-              <button
-                type="button"
-                class="sidebar-footer-bar__status"
-                aria-live="polite"
-                aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}`}
-                @click=${() => this.onRetryConnect?.()}
-              >
-                <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
-                  "common.offline",
-                )}<span class="sidebar-footer-bar__status-detail">${reconnecting}</span>
-              </button>
-            </openclaw-tooltip>`
+          ? renderOfflineSidebarStatus({
+              queuedOutboxCount: this.queuedOutboxCount,
+              reconnecting,
+              title: this.lastError ? redactLoginFailureError(this.lastError) : reconnecting,
+              onRetry: () => this.onRetryConnect?.(),
+            })
           : nothing}
         <openclaw-tooltip .content=${t("nav.settings")}>
           <button

@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { readFileWindowFullySync } from "./file-read.js";
 import { resolveGitHeadPath } from "./git-root.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
@@ -59,7 +60,7 @@ const safeReadFilePrefix = (filePath: string, limit = 256) => {
   const fd = fs.openSync(filePath, "r");
   try {
     const buf = Buffer.alloc(limit);
-    const bytesRead = fs.readSync(fd, buf, 0, limit, 0);
+    const bytesRead = readFileWindowFullySync(fd, buf, 0);
     return buf.subarray(0, bytesRead).toString("utf-8");
   } finally {
     fs.closeSync(fd);

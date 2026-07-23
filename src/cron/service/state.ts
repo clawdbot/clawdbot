@@ -358,6 +358,8 @@ export type CronAddInput = CronJobCreate;
 export type CronAddOptions = {
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
+  /** Gateway-owned system payloads (heartbeat monitors) require this opt-in. */
+  systemOwned?: boolean;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;

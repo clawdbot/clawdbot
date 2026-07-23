@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Zalo plugin module implements setup core behavior.
 import {
   addWildcardAllowFrom,
@@ -46,6 +47,26 @@ export const zaloSetupAdapter = {
   }),
   singleAccountKeysToMove: ["webhookSecret", "tokenFile"],
 };
+
+export const zaloSetupContract = defineChannelSetupContract({
+  fields: {
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "Zalo bot token" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "Zalo bot token file" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use ZALO_BOT_TOKEN" },
+    },
+  },
+  legacyAdapter: zaloSetupAdapter,
+});
 
 export const zaloDmPolicy: ChannelSetupDmPolicy = {
   label: "Zalo",

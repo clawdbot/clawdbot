@@ -859,7 +859,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it is
   - H2: Setup path A: link existing Signal account (QR)
   - H2: Setup path B: register dedicated bot number (SMS, Linux)
-  - H2: External daemon mode (httpUrl)
+  - H2: External native daemon mode
   - H2: Container mode (bbernhard/signal-cli-rest-api)
   - H2: Access control (DMs + groups)
   - H2: How it works (behavior)
@@ -1375,6 +1375,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Create a grouped manifest
   - H2: Inspect and preview
   - H2: Inspect installed state
+  - H2: Update an installed Claw
   - H2: Remove an installed Claw
   - H2: Export an installed agent
   - H2: Command reference
@@ -3140,16 +3141,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /design/continuation-tools-infographics
 - Headings:
   - H1: Continuation tools infographics
-  - H2: continuework() — same-session successor turn
-  - H2: continuedelegate() — child worker shard and return routing
-  - H2: requestcompaction() — elective compaction seam
+  - H2: `continue_work()` — same-session successor turn
+  - H2: `continue_delegate()` — child worker shard and return routing
+  - H2: `request_compaction()` — elective compaction seam
   - H2: One-screen comparison
 
 ## design/continue-work-signal-v2.md
 
 - Route: /design/continue-work-signal-v2
 - Headings:
-  - H1: RFC: Agent Self-Elected Turn Continuation (CONTINUEWORK)
+  - H1: RFC: Agent Self-Elected Turn Continuation (`CONTINUE_WORK`)
   - H2: Table of Contents
   - H2: 1. Problem
   - H3: 1.1 Inter-turn inertia
@@ -3158,9 +3159,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: 2. Solution
   - H3: 2.1 Terminology and scope
   - H3: 2.2 Unified interface: tools first, response-token fallback
-  - H3: 2.3 continuework() semantics
-  - H3: 2.4 continuedelegate() semantics and return modes
-  - H3: 2.5 requestcompaction() semantics
+  - H3: 2.3 `continue_work()` semantics
+  - H3: 2.4 `continue_delegate()` semantics and return modes
+  - H3: 2.5 `request_compaction()` semantics
   - H3: 2.6 Response-token fallback and token interaction
   - H3: 2.7 Capability-tier hierarchy
   - H3: 2.8 Design rationale
@@ -3177,7 +3178,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: 4. Platform Integration
   - H3: 4.1 Two-layer compaction model and trigger taxonomy
   - H3: 4.2 Context-pressure awareness
-  - H3: 4.3 requestcompaction() in the compaction lifecycle
+  - H3: 4.3 `request_compaction()` in the compaction lifecycle
   - H3: 4.4 Continuation relay and post-compaction context rehydration
   - H3: 4.5 Lifecycle hooks and platform settings
   - H3: 4.6 Gateway as lifecycle broker
@@ -3221,12 +3222,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Appendix A. Proposed and unimplemented extensions
   - H3: A.1 Bounded pre-compaction evacuation window
   - H3: A.2 Compaction-triggered evacuation delegate
-  - H3: A.3 Proposed contextpressure lifecycle hook
+  - H3: A.3 Proposed `context_pressure` lifecycle hook
   - H3: A.4 Proposed configuration values not shipped in the current codebase
   - H2: Appendix B. Alternatives, prior art, and tool comparisons
   - H3: B.1 Alternatives considered
   - H3: B.2 Prior art
-  - H3: B.3 continuedelegate() compared with sessionsspawn
+  - H3: B.3 `continue_delegate()` compared with `sessions_spawn`
   - H3: B.4 Async-only volitional compaction: design decision
   - H2: Appendix C. Failure modes and behavioral limitations
   - H3: C.1 Operational failure modes
@@ -7668,6 +7669,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Why
   - H2: Compatibility policy
   - H3: Channel setup input field compatibility
+  - H4: Verifying readers
   - H2: How to migrate
   - H2: Import path reference
   - H2: Removed compatibility surfaces
@@ -7732,6 +7734,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Package metadata
   - H3: openclaw fields
   - H3: openclaw.channel
+  - H3: Channel-owned setup fields
   - H3: openclaw.install
   - H3: Deferred full load
   - H2: Plugin manifest

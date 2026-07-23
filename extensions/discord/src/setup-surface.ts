@@ -15,8 +15,11 @@ import {
 } from "./setup-account-state.js";
 import { createDiscordSetupWizardBase, parseDiscordAllowFromId } from "./setup-core.js";
 import {
-  promptLegacyChannelAllowFromForAccount,
+  patchChannelConfigForAccount,
+  promptResolvedAllowFrom,
   resolveEntriesWithOptionalToken,
+  resolveSetupAccountId,
+  splitSetupEntries,
 } from "./setup-runtime-helpers.js";
 import { resolveDiscordToken } from "./token.js";
 
@@ -52,15 +55,14 @@ async function promptDiscordAllowFrom(params: {
   prompter: WizardPrompter;
   accountId?: string;
 }): Promise<OpenClawConfig> {
-  return await promptLegacyChannelAllowFromForAccount({
-    cfg: params.cfg,
-    channel,
-    prompter: params.prompter,
+  const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: resolveDefaultDiscordSetupAccountId(params.cfg),
-    resolveAccount: (cfg, accountId) => resolveDiscordSetupAccountConfig({ cfg, accountId }),
-    noteTitle: t("wizard.discord.allowlistTitle"),
-    noteLines: [
+  });
+  const account = resolveDiscordSetupAccountConfig({ cfg: params.cfg, accountId });
+  const noteTitle = t("wizard.discord.allowlistTitle");
+  await params.prompter.note(
+    [
       t("wizard.discord.allowlistIntro"),
       t("wizard.discord.examples"),
       "- 123456789012345678",
@@ -68,15 +70,19 @@ async function promptDiscordAllowFrom(params: {
       "- alice#1234",
       t("wizard.discord.multipleEntries"),
       t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
-    ],
+    ].join("\n"),
+    noteTitle,
+  );
+  const allowFrom = await promptResolvedAllowFrom({
+    prompter: params.prompter,
+    existing: resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId }) ?? [],
+    token: resolveDiscordToken(params.cfg, { accountId }).token,
     message: t("wizard.discord.allowFromPrompt"),
     placeholder: "@alice, 123456789012345678",
+    label: noteTitle,
+    parseInputs: splitSetupEntries,
     parseId: parseDiscordAllowFromId,
     invalidWithoutTokenNote: t("wizard.discord.allowFromInvalidWithoutToken"),
-    resolveExisting: (account, cfg) =>
-      resolveDiscordAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
-    resolveToken: (account) =>
-      resolveDiscordToken(params.cfg, { accountId: account.accountId }).token,
     resolveEntries: async ({ token, entries }) =>
       (
         await resolveDiscordUserAllowlist({
@@ -88,6 +94,18 @@ async function promptDiscordAllowFrom(params: {
         resolved: entry.resolved,
         id: entry.id ?? null,
       })),
+  });
+  return patchChannelConfigForAccount({
+    cfg: params.cfg,
+    channel,
+    accountId: account.accountId,
+    patch: {
+      allowFrom,
+      dm: {
+        ...account.config.dm,
+        enabled: typeof account.config.dm?.enabled === "boolean" ? account.config.dm.enabled : true,
+      },
+    },
   });
 }
 

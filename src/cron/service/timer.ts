@@ -2600,6 +2600,19 @@ async function executeJobCore(
       payload: appendCronPayloadText(effectiveJob.payload, options.streamBatch),
     };
   }
+  if (effectiveJob.payload.kind === "heartbeat") {
+    // The monitor only pokes the wake queue: coalescing, busy-retry, and the
+    // quiet-hours guard all live in the heartbeat runner, exactly as they did
+    // for the dedicated interval timer this job replaces.
+    state.deps.requestHeartbeat({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: effectiveJob.agentId,
+    });
+    const result = { status: "ok" as const, summary: "heartbeat wake requested" };
+    return triggerEval ? { ...result, triggerEval } : result;
+  }
   if (effectiveJob.sessionTarget === "main") {
     const result = await executeMainSessionCronJob(
       state,

@@ -44,7 +44,7 @@ export abstract class AppSidebarSessionProjectionElement extends AppSidebarSessi
     this.requestUpdate();
   }
 
-  protected sessionPullRequestIndicatorState(sessionKey: string, worktreeId: string) {
+  sessionPullRequestIndicatorState(sessionKey: string, worktreeId: string) {
     return this.sessionPullRequestIndicators.state(sessionKey, worktreeId);
   }
 

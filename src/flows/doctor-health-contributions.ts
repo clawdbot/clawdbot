@@ -1,6 +1,7 @@
 // Doctor health contribution helpers collect health checks from plugin manifests.
 import fs from "node:fs";
 import nodePath from "node:path";
+import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import {
@@ -13,6 +14,7 @@ import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
@@ -1073,33 +1075,6 @@ async function detectSystemdLingerFindings(
   ];
 }
 
-async function hasActiveGatewayExecCredential(
-  ctx: Pick<DoctorHealthFlowContext, "cfg">,
-  mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
-): Promise<boolean> {
-  const { resolveSecretInputRef } = await loadSecretTypesModule();
-  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
-  const { ALL_GATEWAY_SECRET_INPUT_PATHS, readGatewaySecretInputValue } =
-    await import("../gateway/secret-input-paths.js");
-  return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
-    if (
-      !gatewaySecretInputPathCanWin({
-        config: ctx.cfg,
-        env: process.env,
-        modeOverride: mode,
-        path,
-      })
-    ) {
-      return false;
-    }
-    const ref = resolveSecretInputRef({
-      value: readGatewaySecretInputValue(ctx.cfg, path),
-      defaults: ctx.cfg.secrets?.defaults,
-    }).ref;
-    return ref?.source === "exec";
-  });
-}
-
 async function collectWorkspaceStatusPluginVersionDrift(params: {
   cfg: OpenClawConfig;
   options?: Pick<DoctorOptions, "allowExec" | "deep" | "nonInteractive">;
@@ -1541,6 +1516,7 @@ async function runCoreHealthFindingNote(
     cfg: ctx.cfg,
     cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
     configPath: ctx.configPath,
+    allowExecSecretRefs: ctx.options.allowExec === true,
   });
   if (findings.length === 0) {
     return;
@@ -1570,6 +1546,10 @@ async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promis
 
 async function runSkillWorkshopToolPolicyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy");
+}
+
+async function runClawStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/claws-state");
 }
 
 function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
@@ -2154,6 +2134,16 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       },
       run: runWorkspaceStatusHealth,
     }),
+    ...(isExperimentalClawsEnabled()
+      ? [
+          createDoctorHealthContribution({
+            id: "doctor:claws-state",
+            label: "Claws state",
+            healthCheckIds: ["core/doctor/claws-state"],
+            run: runClawStateHealth,
+          }),
+        ]
+      : []),
     createDoctorHealthContribution({
       id: "doctor:skill-curator",
       label: "Skill curator",
@@ -2309,8 +2299,8 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
 }
 
 export async function resolveDoctorContributionHealthChecks(): Promise<readonly HealthCheck[]> {
-  const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
-  const checksById = new Map(CORE_HEALTH_CHECKS.map((check) => [check.id, check]));
+  const { createCoreHealthChecks } = await import("./doctor-core-checks.js");
+  const checksById = new Map(createCoreHealthChecks().map((check) => [check.id, check]));
   const checks: HealthCheck[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {

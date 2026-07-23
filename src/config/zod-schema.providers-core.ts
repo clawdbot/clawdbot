@@ -9,7 +9,6 @@ import {
   normalizeSlashCommandName,
   resolveCustomCommands,
 } from "../shared/custom-command-config.js";
-import { hasConfiguredSecretInput } from "./types.secrets.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelBotLoopProtectionSchema,
@@ -19,19 +18,18 @@ import {
   buildChannelExecApprovalsSchema,
   buildChannelReactionShape,
   buildCommonChannelAccountShape,
+  ChannelPreviewStreamingConfigSchema,
+  ChannelStreamingProgressSchema,
+  ChannelStreamingPreviewSchema,
 } from "./zod-schema.channel-messaging-common.js";
 import {
-  BlockStreamingChunkSchema,
   ChannelDeliveryStreamingConfigSchema,
-  ChannelStreamingBlockSchema,
   DmPolicySchema,
   ExecutableTokenSchema,
   GroupPolicySchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
   SecretInputSchema,
-  ReplyToModeSchema,
-  TextChunkModeSchema,
   TtsConfigSchema,
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
@@ -43,11 +41,7 @@ import {
   DiscordPresenceEventsSchema,
   DiscordSnowflakeStringSchema,
 } from "./zod-schema.discord.js";
-import { ChannelImplicitMentionsSchema } from "./zod-schema.implicit-mentions.js";
-import {
-  validateSlackSigningSecretRequirements,
-  validateTelegramWebhookSecretRequirements,
-} from "./zod-schema.secret-input-validation.js";
+import { validateTelegramWebhookSecretRequirements } from "./zod-schema.secret-input-validation.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
@@ -61,59 +55,13 @@ const TelegramCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
-const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
-const ChannelStreamingPreviewSchema = z
-  .object({
-    chunk: BlockStreamingChunkSchema.optional(),
-    toolProgress: z.boolean().optional(),
-    commandText: z.enum(["raw", "status"]).optional(),
-  })
-  .strict();
-const ChannelStreamingProgressSchema = z
-  .object({
-    label: z.union([z.string(), z.literal(false)]).optional(),
-    labels: z.array(z.string()).optional(),
-    maxLines: z.number().int().positive().optional(),
-    maxLineChars: z.number().int().positive().optional(),
-    render: z.enum(["text", "rich"]).optional(),
-    toolProgress: z.boolean().optional(),
-    commandText: z.enum(["raw", "status"]).optional(),
-    commentary: z.boolean().optional(),
-    narration: z.boolean().optional(),
-  })
-  .strict();
 const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema;
-const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
-  nativeTaskCards: z.boolean().optional(),
-}).strict();
-
-const ChannelPreviewStreamingConfigSchema = z
-  .object({
-    mode: UnifiedStreamingModeSchema.optional(),
-    chunkMode: TextChunkModeSchema.optional(),
-    preview: ChannelStreamingPreviewSchema.optional(),
-    progress: ChannelStreamingProgressSchema.optional(),
-    block: ChannelStreamingBlockSchema.optional(),
-  })
-  .strict();
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: ChannelStreamingPreviewSchema.optional(),
 }).strict();
 const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   progress: DiscordStreamingProgressSchema.optional(),
 }).strict();
-const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  nativeTransport: z.boolean().optional(),
-  progress: SlackStreamingProgressSchema.optional(),
-}).strict();
-const SlackCapabilitiesSchema = z.union([
-  z.array(z.string()),
-  z
-    .object({
-      interactiveReplies: z.boolean().optional(),
-    })
-    .strict(),
-]);
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 const TelegramCommandNamePattern = /^[a-z0-9_]{1,32}$/;
 const TelegramCustomCommandConfig = {
@@ -753,331 +701,6 @@ export const DiscordConfigSchema = DiscordAccountSchema.extend({
   }
 });
 
-const SlackDmSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    groupEnabled: z.boolean().optional(),
-    groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
-  })
-  .strict();
-
-const SlackPresenceEventsSchema = z
-  .object({
-    mode: z.enum(["off", "auto", "on"]).optional(),
-  })
-  .strict();
-
-const SlackChannelSchema = buildGroupEntrySchema(
-  {
-    ignoreOtherMentions: z.boolean().optional(),
-    replyToMode: ReplyToModeSchema.optional(),
-    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
-    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
-    users: z.array(z.union([z.string(), z.number()])).optional(),
-    presenceEvents: SlackPresenceEventsSchema.optional(),
-  },
-  { omit: ["allowFrom"] },
-);
-
-const SlackThreadSchema = z
-  .object({
-    historyScope: z.enum(["thread", "channel"]).optional(),
-    inheritParent: z.boolean().optional(),
-    initialHistoryLimit: z.number().int().min(0).optional(),
-  })
-  .strict();
-
-const ReplyToModeByChatTypeSchema = z
-  .object({
-    direct: ReplyToModeSchema.optional(),
-    group: ReplyToModeSchema.optional(),
-    channel: ReplyToModeSchema.optional(),
-  })
-  .strict();
-
-const DirectGroupReplyToModeByChatTypeSchema = z
-  .object({
-    direct: ReplyToModeSchema.optional(),
-    group: ReplyToModeSchema.optional(),
-  })
-  .strict();
-
-const SlackRelaySchema = z
-  .object({
-    url: z.string().optional(),
-    authToken: SecretInputSchema.optional().register(sensitive),
-    gatewayId: z.string().optional(),
-  })
-  .strict();
-
-const SlackIdentitySchema = z.enum(["bot", "user"]);
-
-const SlackAccountSchema = z
-  .object({
-    ...buildCommonChannelAccountShape({
-      omit: ["groupAllowFrom"],
-      capabilities: SlackCapabilitiesSchema.optional(),
-      streaming: SlackStreamingConfigSchema.optional(),
-    }),
-    postAs: SlackIdentitySchema.default("bot"),
-    mode: z.enum(["socket", "http", "relay"]).optional(),
-    enterpriseOrgInstall: z.boolean().optional(),
-    relay: SlackRelaySchema.optional(),
-    signingSecret: SecretInputSchema.optional().register(sensitive),
-    webhookPath: z.string().optional(),
-    execApprovals: buildChannelExecApprovalsSchema(z.union([z.string(), z.number()])),
-    commands: ProviderCommandsSchema,
-    botToken: SecretInputSchema.optional().register(sensitive),
-    appToken: SecretInputSchema.optional().register(sensitive),
-    userToken: SecretInputSchema.optional().register(sensitive),
-    userTokenReadOnly: z.boolean().optional().default(true),
-    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
-    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
-    dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
-    requireMention: z.boolean().optional(),
-    implicitMentions: ChannelImplicitMentionsSchema.optional(),
-    unfurlLinks: z.boolean().optional(),
-    unfurlMedia: z.boolean().optional(),
-    ...buildChannelReactionShape({
-      notificationModes: ["off", "own", "all", "allowlist"],
-      reactionAllowlist: true,
-      ackReaction: z.string().optional(),
-    }),
-    replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
-    thread: SlackThreadSchema.optional(),
-    presenceEvents: SlackPresenceEventsSchema.optional(),
-    actions: z
-      .object({
-        reactions: z.boolean().optional(),
-        messages: z.boolean().optional(),
-        pins: z.boolean().optional(),
-        search: z.boolean().optional(),
-        permissions: z.boolean().optional(),
-        memberInfo: z.boolean().optional(),
-        channelInfo: z.boolean().optional(),
-        emojiList: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    slashCommand: z
-      .object({
-        enabled: z.boolean().optional(),
-        name: z.string().optional(),
-        sessionPrefix: z.string().optional(),
-        ephemeral: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    dm: SlackDmSchema.optional(),
-    channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
-    typingReaction: z.string().optional(),
-  })
-  .strict();
-
-// Account entries leave postAs unset to inherit the top-level default. DM allowlist
-// validation stays at SlackConfigSchema so entries can also inherit top-level allowFrom.
-const SlackAccountEntrySchema = SlackAccountSchema.extend({
-  postAs: SlackIdentitySchema.optional(),
-});
-
-export const SlackConfigSchema = SlackAccountSchema.safeExtend({
-  mode: z.enum(["socket", "http", "relay"]).optional().default("socket"),
-  signingSecret: SecretInputSchema.optional().register(sensitive),
-  webhookPath: z.string().optional().default("/slack/events"),
-  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
-  accounts: z.record(z.string(), SlackAccountEntrySchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
-  const dmPolicy = value.dmPolicy ?? "pairing";
-  const allowFrom = value.allowFrom;
-  requireOpenAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.slack.dmPolicy="open" requires channels.slack.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: dmPolicy,
-    allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.slack.dmPolicy="allowlist" requires channels.slack.allowFrom to contain at least one sender ID',
-  });
-
-  const requireRelayConfig = (
-    relay: { url?: unknown; authToken?: unknown; gatewayId?: unknown } | undefined,
-    path: (string | number)[],
-  ) => {
-    if (typeof relay?.url !== "string" || !relay.url.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'channels.slack.mode="relay" requires relay.url',
-        path: [...path, "url"],
-      });
-    }
-    if (!hasConfiguredSecretInput(relay?.authToken)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'channels.slack.mode="relay" requires relay.authToken',
-        path: [...path, "authToken"],
-      });
-    }
-    if (typeof relay?.gatewayId !== "string" || !relay.gatewayId.trim()) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'channels.slack.mode="relay" requires relay.gatewayId',
-        path: [...path, "gatewayId"],
-      });
-    }
-  };
-
-  const baseMode = value.mode ?? "socket";
-  const accountIds = value.accounts ? Object.keys(value.accounts) : [];
-  if (!value.accounts) {
-    if (baseMode === "relay") {
-      requireRelayConfig(value.relay, ["relay"]);
-    }
-    validateSlackSigningSecretRequirements(value, ctx);
-    return;
-  }
-  for (const accountId of accountIds) {
-    const account = value.accounts[accountId];
-    if (!account) {
-      continue;
-    }
-    if (account.enabled === false) {
-      continue;
-    }
-    const accountMode = account.mode ?? baseMode;
-    const effectiveRelay = {
-      ...value.relay,
-      ...account.relay,
-    };
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy ?? "pairing";
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.slack.accounts.*.dmPolicy="open" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.slack.accounts.*.dmPolicy="allowlist" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to contain at least one sender ID',
-    });
-    if (accountMode !== "http") {
-      if (accountMode === "relay") {
-        requireRelayConfig(effectiveRelay, ["accounts", accountId, "relay"]);
-      }
-      continue;
-    }
-  }
-  validateSlackSigningSecretRequirements(value, ctx);
-});
-
-const SignalGroupEntrySchema = buildGroupEntrySchema(
-  {
-    ingest: z.boolean().optional(),
-  },
-  { omit: ["skills", "enabled", "allowFrom", "systemPrompt"] },
-);
-
-const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional()).optional();
-
-const SignalAccountSchemaBase = z
-  .object({
-    ...buildCommonChannelAccountShape({
-      useDefaults: true,
-      omit: ["mentionPatterns"],
-      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-      mediaMaxMb: z.number().int().positive().optional(),
-    }),
-    account: z.string().optional(),
-    accountUuid: z.string().optional(),
-    configPath: z.string().optional(),
-    httpUrl: z.string().optional(),
-    cliPath: ExecutableTokenSchema.optional(),
-    autoStart: z.boolean().optional(),
-    startupTimeoutMs: z.number().int().min(1000).max(120000).optional(),
-    receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
-    ignoreAttachments: z.boolean().optional(),
-    ignoreStories: z.boolean().optional(),
-    sendReadReceipts: ChannelSendReadReceiptsSchema,
-    aliases: z.record(z.string(), z.string()).optional(),
-    groups: SignalGroupsSchema,
-    replyToModeByChatType: DirectGroupReplyToModeByChatTypeSchema.optional(),
-    ...buildChannelReactionShape({
-      notificationModes: ["off", "own", "all", "allowlist"],
-      reactionAllowlist: true,
-      reactionLevels: ["off", "ack", "minimal", "extensive"],
-    }),
-    actions: z
-      .object({
-        reactions: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
-
-export const SignalConfigSchema = SignalAccountSchemaBase.extend({
-  apiMode: z.enum(["auto", "native", "container"]).optional(),
-  // Account-level schemas skip allowFrom validation because accounts inherit
-  // allowFrom from the parent channel config at runtime.
-  accounts: z.record(z.string(), SignalAccountSchemaBase.optional()).optional(),
-  defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.signal.dmPolicy="allowlist" requires channels.signal.allowFrom to contain at least one sender ID',
-  });
-
-  if (!value.accounts) {
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    const effectivePolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.signal.accounts.*.dmPolicy="open" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectivePolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.signal.accounts.*.dmPolicy="allowlist" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to contain at least one sender ID',
-    });
-  }
-});
 const IMessageActionSchema = z
   .object({
     reactions: z.boolean().optional(),

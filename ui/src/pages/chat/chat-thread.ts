@@ -844,8 +844,26 @@ function annotateToolTurnOutcome(
   return items;
 }
 
-function isPendingSendMessage(message: unknown): boolean {
+export function isPendingSendMessage(message: unknown): boolean {
   return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
+}
+
+/** Every projection of one composer submit (pending queue row, locally
+ * materialized turn, authoritative history) shares this identity so the
+ * rendered bubble keeps one Lit key and never remounts mid-handoff. */
+function userTurnSendIdentity(message: unknown): string | null {
+  const record = asRecord(message);
+  if (typeof record?.role !== "string" || record.role.toLowerCase() !== "user") {
+    return null;
+  }
+  const idempotencyKey = asRecord(record["__openclaw"])?.idempotencyKey;
+  if (typeof idempotencyKey !== "string" || !idempotencyKey.trim()) {
+    return null;
+  }
+  const base = idempotencyKey.endsWith(":user")
+    ? idempotencyKey.slice(0, -":user".length)
+    : idempotencyKey;
+  return `send:${base}`;
 }
 
 function sourceMessageId(message: unknown): string | null {
@@ -873,6 +891,13 @@ function transcriptMessageSourceKey(message: unknown): string | null {
   const record = asRecord(message);
   if (!record) {
     return null;
+  }
+  // Send identity outranks transcript ids: the same submit is re-projected with
+  // different id/seq metadata across the pending -> history handoff, and a key
+  // change there remounts the bubble (visible flicker).
+  const sendIdentity = userTurnSendIdentity(message);
+  if (sendIdentity) {
+    return sendIdentity;
   }
   const id = sourceMessageId(message);
   if (id) {
@@ -1328,7 +1353,9 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     }
     items.push({
       kind: "message",
-      key: `pending-send:${queued.id}`,
+      // Mirror buildMessageKeys for a send-identity source key so the pending
+      // row and its history successor resolve to the same Lit key.
+      key: queued.sendRunId ? `msg:send:${queued.sendRunId}:0` : `pending-send:${queued.id}`,
       message,
     });
   };

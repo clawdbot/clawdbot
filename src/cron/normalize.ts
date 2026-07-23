@@ -488,7 +488,7 @@ export function normalizeCronJobInput(
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
       // Keep create-time defaults explicit: system events join main, while agent
       // turns isolate by default to avoid unbounded token accumulation.
-      if (kind === "systemEvent") {
+      if (kind === "systemEvent" || kind === "heartbeat") {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn" || kind === "command" || kind === "script") {
         next.sessionTarget = "isolated";

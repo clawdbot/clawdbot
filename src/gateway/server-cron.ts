@@ -27,6 +27,10 @@ import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { CronService, type CronEvent } from "../cron/service.js";
+import {
+  abortActiveCronTaskRuns,
+  waitForActiveCronTaskRuns,
+} from "../cron/service/active-run-cancellation.js";
 import { applyJobPatch } from "../cron/service/jobs.js";
 import {
   resolveCronDeliverySessionKey,
@@ -73,6 +77,7 @@ import {
   resolveStreamStopReason,
 } from "./cron-stream-watchers.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -94,6 +99,7 @@ export type GatewayCronState = {
   stopExitWatchers?: () => void;
   reconcileStreamWatchers?: () => Promise<void>;
   stopStreamWatchers?: () => Promise<void>;
+  reconcileHeartbeatJobs?: (cfg?: OpenClawConfig) => Promise<void>;
 };
 
 function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorClassification {
@@ -254,6 +260,8 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
 function isCommandCronJob(job: CronJob | null | undefined): boolean {
   return job?.payload?.kind === "command";
 }
+
+const CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS = 10_000;
 
 /** Build the cron service state used by Gateway startup and lazy cron loading. */
 export function buildGatewayCronService(params: {
@@ -438,6 +446,7 @@ export function buildGatewayCronService(params: {
   } = { current: undefined };
   let exitWatcherReconciliations = 0;
   let streamWatcherReconciliations = 0;
+  const terminalExitCompletionTokens = new Map<string, object>();
   let exitWatcherGeneration = 0;
   let streamWatcherGeneration = 0;
   // Bumped when a direct watcher route begins; fences reconcile's async list
@@ -456,10 +465,18 @@ export function buildGatewayCronService(params: {
         return;
       }
       const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
+      const watcherJobs: CronJob[] = [];
+      for (const job of jobs) {
+        watcherJobs.push(
+          terminalExitCompletionTokens.has(job.id) && job.schedule.kind === "on-exit"
+            ? { ...job, enabled: true }
+            : job,
+        );
+      }
       reconcileCronExitWatchers({
         cronEnabled,
         exitWatchers: exitWatchersRef.current,
-        jobs,
+        jobs: watcherJobs,
       });
     } catch (err) {
       cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
@@ -1050,16 +1067,38 @@ export function buildGatewayCronService(params: {
 
   exitWatchersRef.current = createCronExitWatchers({
     getProcessSupervisor,
-    persistCompletion: async (jobId) =>
-      await runWithGatewayIndependentRootWorkAdmission(async () => {
-        await cron.update(jobId, { enabled: false });
-      }),
-    fireOnExit: (job, exit) =>
-      runWithGatewayIndependentRootWorkAdmission(async () =>
+    persistCompletion: async (job) => {
+      const completionToken = {};
+      terminalExitCompletionTokens.set(job.id, completionToken);
+      const releaseCompletionToken = () => {
+        if (terminalExitCompletionTokens.get(job.id) === completionToken) {
+          terminalExitCompletionTokens.delete(job.id);
+        }
+      };
+      try {
+        await runWithGatewayIndependentRootWorkAdmission(async () => {
+          await cron.updateWithPrecondition(job.id, { enabled: false }, (current) => {
+            if (!current.enabled || current.updatedAtMs !== job.updatedAtMs) {
+              throw new Error("cron on-exit job changed before completion");
+            }
+          });
+        });
+        return () => {
+          releaseCompletionToken();
+          void reconcileExitWatchers();
+        };
+      } catch (err) {
+        releaseCompletionToken();
+        throw err;
+      }
+    },
+    fireOnExit: async (job, exit) => {
+      await runWithGatewayIndependentRootWorkAdmission(async () =>
         fireOnExitJob(job, exit, {
           run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
         }),
-      ),
+      );
+    },
     logger: cronLogger,
   });
   const updateCron = cron.update.bind(cron);
@@ -1273,6 +1312,7 @@ export function buildGatewayCronService(params: {
   cron.stop = () => {
     stopCron();
     stopExitWatchers();
+    stopHeartbeatReconcileRetry();
     void stopStreamWatchers().catch((err: unknown) => {
       cronLogger.warn(
         { err: formatErrorMessage(err) },
@@ -1286,8 +1326,66 @@ export function buildGatewayCronService(params: {
   cron.stopAndDrain = async () => {
     stopCron();
     stopExitWatchers();
-    await stopStreamWatchers();
+    stopHeartbeatReconcileRetry();
+    const streamWatchersStop = stopStreamWatchers().then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
+    const [activeRunDrain, streamWatchersResult] = await Promise.all([
+      waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
+      streamWatchersStop,
+    ]);
+    if (!activeRunDrain.drained) {
+      cronLogger.warn(
+        { abortedRuns, activeRuns: activeRunDrain.active },
+        "cron: active runs did not drain before shutdown timeout",
+      );
+    }
+    if (!streamWatchersResult.ok) {
+      throw streamWatchersResult.error;
+    }
     unregisterSessionAutomationSource(automationSource);
+  };
+  // Reconciliations serialize on one tail and only the latest requested epoch
+  // executes, so an older reload's convergence can never clobber a newer one.
+  // A failed pass schedules one bounded retry; a newer request supersedes it.
+  let heartbeatReconcileEpoch = 0;
+  let heartbeatReconcileTail: Promise<void> = Promise.resolve();
+  let heartbeatRetryTimer: NodeJS.Timeout | undefined;
+  const stopHeartbeatReconcileRetry = () => {
+    // Also invalidate any in-flight pass so a post-stop retry cannot fire.
+    heartbeatReconcileEpoch += 1;
+    if (heartbeatRetryTimer) {
+      clearTimeout(heartbeatRetryTimer);
+      heartbeatRetryTimer = undefined;
+    }
+  };
+  const reconcileHeartbeatJobs = (cfgOverride?: OpenClawConfig): Promise<void> => {
+    const epoch = ++heartbeatReconcileEpoch;
+    if (heartbeatRetryTimer) {
+      clearTimeout(heartbeatRetryTimer);
+      heartbeatRetryTimer = undefined;
+    }
+    const pass = async () => {
+      if (epoch !== heartbeatReconcileEpoch) {
+        return;
+      }
+      const { ok } = await reconcileHeartbeatMonitorJobs({
+        cron,
+        cfg: cfgOverride ?? getRuntimeConfig(),
+        logger: cronLogger,
+      });
+      if (!ok && epoch === heartbeatReconcileEpoch) {
+        heartbeatRetryTimer = setTimeout(() => {
+          heartbeatRetryTimer = undefined;
+          void reconcileHeartbeatJobs(cfgOverride);
+        }, 30_000);
+        heartbeatRetryTimer.unref?.();
+      }
+    };
+    heartbeatReconcileTail = heartbeatReconcileTail.then(pass, pass);
+    return heartbeatReconcileTail;
   };
   const startCron = cron.start.bind(cron);
   cron.start = async () => {
@@ -1304,6 +1402,10 @@ export function buildGatewayCronService(params: {
       return;
     }
     await reconcileStreamWatchers();
+    if (generation !== streamWatcherGeneration) {
+      return;
+    }
+    await reconcileHeartbeatJobs();
     if (generation !== streamWatcherGeneration) {
       return;
     }
@@ -1328,6 +1430,7 @@ export function buildGatewayCronService(params: {
     stopExitWatchers,
     reconcileStreamWatchers,
     stopStreamWatchers,
+    reconcileHeartbeatJobs,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
