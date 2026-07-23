@@ -154,7 +154,9 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
 
     await subscription.waitForPendingEvents();
     expect(
-      onAgentEvent.mock.calls.filter((call) => (call[0] as { stream?: string }).stream === "assistant"),
+      onAgentEvent.mock.calls.filter(
+        (call) => (call[0] as { stream?: string }).stream === "assistant",
+      ),
     ).toHaveLength(1);
     expect(onPartialReply).toHaveBeenCalled();
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
