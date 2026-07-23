@@ -265,7 +265,7 @@ function buildTrustedProxyCondition(facts: HostingRuntimeFacts): ReadinessCondit
     status: "True",
     requirement: "required",
     reason: "TrustedProxyReady",
-    message: `Trusted-proxy auth accepts ${facts.trustedProxyUserHeader} from ${validSources.length} configured source${validSources.length === 1 ? "" : "s"}.`,
+    message: `Trusted-proxy auth is configured with ${facts.trustedProxyUserHeader} and ${validSources.length} matching source range${validSources.length === 1 ? "" : "s"}; request-time source and header checks still apply.`,
   };
 }
 
