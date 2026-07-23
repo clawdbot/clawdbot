@@ -38,7 +38,7 @@ const MAX_DISABLED_RUNS = 512;
 export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
 type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
 type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
-export type PreparedModel = Awaited<ReturnType<PrepareModel>>;
+type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
 export type SessionObserverState = SessionActivityNoteState & {
   sessionKey: string;
