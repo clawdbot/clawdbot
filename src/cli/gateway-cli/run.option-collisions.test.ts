@@ -1476,6 +1476,7 @@ describe("gateway run option collisions", () => {
 
     expect(process.env.OPENCLAW_HOSTING_PROFILE).toBe("container");
     expect(startGatewayServer).toHaveBeenCalledOnce();
+    expect(gatewayStartOptions().hostingProfileOverride).toBe("container");
   });
 
   it("sets runtime activation identity before gateway startup", async () => {
