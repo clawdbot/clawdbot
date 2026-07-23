@@ -417,10 +417,7 @@ async function writeNewBytes(filePath: string, value: Buffer): Promise<void> {
   await syncDirectoryBestEffort(path.dirname(filePath));
 }
 
-async function readJsonIfPresent(
-  rootPath: string,
-  relativePath: string,
-): Promise<unknown> {
+async function readJsonIfPresent(rootPath: string, relativePath: string): Promise<unknown> {
   try {
     return await readJson(rootPath, relativePath);
   } catch (error) {
