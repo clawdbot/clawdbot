@@ -202,6 +202,21 @@ describe("resolveSessionStoreTargets", () => {
     });
   });
 
+  it("accepts case-insensitive legacy main paths but rejects aliases", () => {
+    const cfg: OpenClawConfig = { agents: { list: [{ id: "ops", default: true }] } };
+    const mainPath = path.resolve("/tmp/agents/Main/sessions/sessions.json");
+
+    expect(resolveSessionStoreTargets(cfg, { store: mainPath })).toEqual([
+      { agentId: "main", storePath: mainPath },
+    ]);
+    for (const alias of ["main!", "main "]) {
+      const storePath = path.resolve("/tmp/agents", alias, "sessions", "sessions.json");
+      expect(resolveSessionStoreTargets(cfg, { store: storePath })).toEqual([
+        { agentId: "ops", storePath },
+      ]);
+    }
+  });
+
   it("rejects unknown agent ids", () => {
     const cfg: OpenClawConfig = {
       agents: {

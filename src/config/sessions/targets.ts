@@ -74,7 +74,7 @@ function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boo
   return (
     !/[a-z0-9]/i.test(dirName) ||
     !isValidAgentId(agentId) ||
-    (agentId === LEGACY_IMPLICIT_AGENT_ID && dirName !== LEGACY_IMPLICIT_AGENT_ID)
+    (agentId === LEGACY_IMPLICIT_AGENT_ID && dirName.toLowerCase() !== LEGACY_IMPLICIT_AGENT_ID)
   );
 }
 
