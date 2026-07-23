@@ -1,36 +1,22 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import type { ReadinessCondition, ReadinessRequirement } from "./conditions.js";
+import {
+  WORKSPACE_WRITABLE_CRITERION_ID,
+  type ReadinessCondition,
+  type ReadinessRequirement,
+} from "./conditions.js";
 import { createPluginReadinessResolver } from "./plugin-readiness.js";
 import {
   buildWorkspaceReadinessCondition,
   createWorkspaceReadinessEvidenceResolver,
 } from "./workspace.js";
 
-export const WORKSPACE_WRITABLE_CRITERION_ID = "openclaw.workspace-writable";
-
-export type ReadinessProviderDescriptor = {
-  id: string;
-  description: string;
-  source: "core" | "plugin";
-};
-
-export function listCoreReadinessProviders(): ReadinessProviderDescriptor[] {
-  return [
-    {
-      id: WORKSPACE_WRITABLE_CRITERION_ID,
-      description: "Checks that the effective workspace accepts a write, flush, and cleanup probe.",
-      source: "core",
-    },
-  ];
-}
-
 type SelectedCriterion = {
   id: string;
   requirement: ReadinessRequirement;
 };
 
-export function resolveSelectedReadinessCriteria(config: OpenClawConfig): SelectedCriterion[] {
+function resolveSelectedReadinessCriteria(config: OpenClawConfig): SelectedCriterion[] {
   const required = config.gateway?.readiness?.requiredCriteria ?? [];
   const advisory = config.gateway?.readiness?.advisoryCriteria ?? [];
   const selected = new Map<string, ReadinessRequirement>();

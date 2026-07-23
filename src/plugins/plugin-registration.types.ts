@@ -272,7 +272,7 @@ export type OpenClawPluginService = {
   stop?: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
 };
 
-export type OpenClawPluginReadinessResult = {
+type OpenClawPluginReadinessResult = {
   status: "True" | "False" | "Unknown";
   reason: string;
   message: string;

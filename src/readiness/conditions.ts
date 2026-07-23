@@ -1,4 +1,6 @@
-export type BuiltInReadinessConditionType =
+export const WORKSPACE_WRITABLE_CRITERION_ID = "openclaw.workspace-writable";
+
+type BuiltInReadinessConditionType =
   | "GatewayStartupComplete"
   | "GatewayAcceptingWork"
   | "ChannelRuntimeReady"
@@ -10,9 +12,9 @@ export type BuiltInReadinessConditionType =
   | "GatewayResponding"
   | "PluginsLoaded";
 
-export type ReadinessConditionType = BuiltInReadinessConditionType | (string & {});
+type ReadinessConditionType = BuiltInReadinessConditionType | (string & {});
 
-export type ReadinessConditionStatus = "True" | "False" | "Unknown";
+type ReadinessConditionStatus = "True" | "False" | "Unknown";
 export type ReadinessRequirement = "required" | "advisory";
 
 export type ReadinessCondition = {
@@ -39,7 +41,7 @@ export type PluginReadinessInput = {
   }>;
 };
 
-export type RuntimeReadinessInput = {
+type RuntimeReadinessInput = {
   configLoaded: boolean;
   gateway: "responding" | "not-checked" | "unavailable";
   plugins?: PluginReadinessInput;
