@@ -2919,6 +2919,47 @@ describe("message tool schema scoping", () => {
     },
   );
 
+  it("does not merge current-channel schemas into an unscoped message tool", () => {
+    const telegramWithScopedLocation = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      actions: ["send"],
+      toolSchema: () => [
+        {
+          actions: ["send"],
+          properties: {
+            location: Type.Optional(
+              Type.Object({ latitude: Type.Number(), longitude: Type.Number() }),
+            ),
+          },
+          visibility: "current-channel",
+        },
+      ],
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: telegramWithScopedLocation },
+        { pluginId: "discord", source: "test", plugin: discordPlugin },
+      ]),
+    );
+
+    const unscopedProperties = getToolProperties(createMessageTool({ config: {} as never }));
+    const scopedProperties = getToolProperties(
+      createMessageTool({ config: {} as never, currentChannelProvider: "telegram" }),
+    );
+
+    expect(unscopedProperties.location).toMatchObject({ type: "string" });
+    expect(scopedProperties.location).toMatchObject({
+      type: "object",
+      properties: {
+        latitude: { type: "number" },
+        longitude: { type: "number" },
+      },
+    });
+  });
+
   it("includes poll in the action enum when the current channel supports poll actions", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),

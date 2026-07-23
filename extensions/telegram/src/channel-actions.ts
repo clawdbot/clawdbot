@@ -23,6 +23,7 @@ import {
 } from "./accounts.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import {
+  createTelegramLocationToolSchema,
   createTelegramPollExtraToolSchemas,
   createTelegramRichSendExtraToolSchemas,
 } from "./message-tool-schema.js";
@@ -207,6 +208,11 @@ function describeTelegramMessageTool({
     schema.push({
       properties: createTelegramRichSendExtraToolSchemas(),
       visibility: "all-configured",
+    });
+    schema.push({
+      properties: createTelegramLocationToolSchema(),
+      actions: ["send"],
+      visibility: "current-channel",
     });
   }
   return {

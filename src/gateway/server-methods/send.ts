@@ -54,6 +54,7 @@ import {
 } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
+import { normalizeTelegramMessageActionRequest } from "../../infra/outbound/telegram-message-action-normalization.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";

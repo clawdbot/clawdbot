@@ -1667,6 +1667,17 @@ describe("handleTelegramAction", () => {
       expectedContent: "",
       expectedOptions: { mediaUrl: "https://example.com/note.ogg" },
     },
+    {
+      name: "image alias",
+      params: {
+        action: "sendMessage",
+        to: "123456",
+        image: "https://example.com/photo.jpg",
+      },
+      expectedTo: "123456",
+      expectedContent: "",
+      expectedOptions: { mediaUrl: "https://example.com/photo.jpg" },
+    },
   ] as const)("maps sendMessage params for $name", async (testCase) => {
     await handleTelegramAction(testCase.params, telegramConfig());
     const call = mockCall(sendMessageTelegram, 0, `sendMessage params ${testCase.name}`);

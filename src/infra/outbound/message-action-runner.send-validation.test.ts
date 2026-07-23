@@ -3,9 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 import {
+  directOutbound,
   forumTestPlugin,
   runDrySend,
   workspaceConfig,
@@ -13,6 +17,32 @@ import {
 } from "./message-action-runner.test-helpers.js";
 
 const emptyConfig = {} as OpenClawConfig;
+const portableLocation = { latitude: 48.858844, longitude: 2.294351 };
+const normalizedSendPlugin = {
+  ...createChannelTestPluginBase({
+    id: "telegram",
+    label: "Telegram",
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ enabled: true }),
+      isConfigured: () => true,
+    },
+  }),
+  outbound: directOutbound,
+  messaging: {
+    normalizeTarget: (raw: string) => raw.trim() || undefined,
+    targetResolver: {
+      looksLikeId: (raw: string) => Boolean(raw.trim()),
+      hint: "<chat_id>",
+    },
+  },
+  actions: {
+    describeMessageTool: () => ({ actions: ["send"] as const }),
+  },
+};
+const normalizedSendConfig = {
+  channels: { telegram: { enabled: true } },
+} as OpenClawConfig;
 
 describe("runMessageAction send validation", () => {
   beforeEach(() => {
@@ -27,6 +57,11 @@ describe("runMessageAction send validation", () => {
           pluginId: "forum",
           source: "test",
           plugin: forumTestPlugin,
+        },
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: normalizedSendPlugin,
         },
       ]),
     );
@@ -126,6 +161,26 @@ describe("runMessageAction send validation", () => {
       ).rejects.toThrow(/cannot be combined/i);
     },
   );
+
+  it.each([
+    { name: "text", content: { message: "hello" } },
+    { name: "buffer media", content: { buffer: "aGVsbG8=", filename: "hello.txt" } },
+  ])("repairs incidental location for model-authored $name sends", async ({ content }) => {
+    const result = await runMessageAction({
+      cfg: normalizedSendConfig,
+      action: "send",
+      actionOrigin: "message-tool",
+      params: {
+        channel: "telegram",
+        target: "123",
+        ...content,
+        location: portableLocation,
+      },
+      dryRun: true,
+    });
+
+    expect(result).toMatchObject({ kind: "send", action: "send" });
+  });
 
   it("uses the current internal UI source as the message-tool-only send sink", async () => {
     const result = await runMessageAction({

@@ -191,6 +191,7 @@ function readTelegramSendMediaUrls(params: Record<string, unknown>) {
   const seen = new Set<string>();
   pushTelegramMediaUrl(mediaUrls, seen, params.mediaUrl);
   pushTelegramMediaUrl(mediaUrls, seen, params.media);
+  pushTelegramMediaUrl(mediaUrls, seen, params.image);
   pushTelegramMediaUrl(mediaUrls, seen, params.path);
   pushTelegramMediaUrl(mediaUrls, seen, params.filePath);
   pushTelegramMediaUrl(mediaUrls, seen, params.fileUrl);
