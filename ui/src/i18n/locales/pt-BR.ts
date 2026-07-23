@@ -4242,7 +4242,7 @@ export const pt_BR: TranslationMap = {
       offlineHint:
         "Offline — as mensagens serão enfileiradas e enviadas quando a conexão retornar.",
       offlineQueuedHint:
-        "Offline — {count} na fila; as mensagens são enviadas quando a conexão retornar.",
+        "Offline — {count} na fila; as mensagens serão enviadas quando a conexão for restabelecida.",
       preparingModel: "Preparando modelo...",
       responding: "{name} está respondendo...",
       sendingMessage: "Enviando mensagem...",
