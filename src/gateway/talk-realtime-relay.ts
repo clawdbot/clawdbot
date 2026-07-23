@@ -2,6 +2,7 @@
 // Bridges browser Talk audio sessions with realtime voice provider plugins.
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
@@ -186,6 +187,11 @@ function logRelayVoiceFailure(session: RelaySession, message: string, error: unk
   session.context.logGateway?.warn(`${message}: ${formatErrorMessage(error)}`);
 }
 
+function resolveRelayAgentId(session: RelaySession, sessionKey: string): string {
+  const config = session.voiceConfig ?? session.context.getRuntimeConfig();
+  return resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(config));
+}
+
 function ensureRelayVoiceSession(session: RelaySession): boolean {
   if (session.voiceSessionCreated) {
     return true;
@@ -195,7 +201,7 @@ function ensureRelayVoiceSession(session: RelaySession): boolean {
   }
   try {
     createOrResumeClientVoiceSession({
-      agentId: resolveAgentIdFromSessionKey(session.sessionKey),
+      agentId: resolveRelayAgentId(session, session.sessionKey),
       sessionKey: session.sessionKey,
       provider: session.provider,
       origin: "relay",
@@ -243,7 +249,7 @@ function enqueueRelayVoiceTranscript(
         }
         try {
           await appendRelayVoiceTranscript({
-            agentId: resolveAgentIdFromSessionKey(sessionKey),
+            agentId: resolveRelayAgentId(session, sessionKey),
             sessionKey,
             voiceSessionId: session.id,
             entryId,
@@ -272,7 +278,7 @@ function closeRelayVoiceSession(session: RelaySession): void {
     .then(async () => {
       const config = session.voiceConfig ?? session.context.getRuntimeConfig();
       await closeClientVoiceSession({
-        agentId: resolveAgentIdFromSessionKey(sessionKey),
+        agentId: resolveRelayAgentId(session, sessionKey),
         sessionKey,
         voiceSessionId: session.id,
         config,
@@ -1491,7 +1497,7 @@ export function registerTalkRealtimeRelayAgentRun(params: {
     throw new Error("Realtime relay voice session could not be created for agent consult");
   }
   registerClientVoiceConsultRun({
-    agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    agentId: resolveRelayAgentId(session, params.sessionKey),
     sessionKey: params.sessionKey,
     voiceSessionId: session.id,
     runId: params.runId,

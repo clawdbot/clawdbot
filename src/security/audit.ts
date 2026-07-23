@@ -1382,7 +1382,12 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         execIcacls: context.execIcacls,
       })),
     );
-    findings.push(...(await auditNonDeep.collectWorkspaceSkillSymlinkEscapeFindings({ cfg })));
+    findings.push(
+      ...(await auditNonDeep.collectWorkspaceSkillSymlinkEscapeFindings({
+        cfg,
+        workspaceDir: context.workspaceDir,
+      })),
+    );
     findings.push(
       ...(await auditNonDeep.collectSandboxBrowserHashLabelFindings({
         execDockerRawFn: context.execDockerRawFn,
@@ -1395,6 +1400,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
         cfg,
         stateDir,
         deep: context.deep,
+        workspaceDir: context.workspaceDir,
         summaryCache: context.codeSafetySummaryCache,
       })),
     );

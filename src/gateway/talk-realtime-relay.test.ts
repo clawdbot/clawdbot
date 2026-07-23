@@ -38,7 +38,10 @@ const activeRelaySessions = new Map<string, string>();
 function createTalkRealtimeRelaySession(
   params: Parameters<typeof createTalkRealtimeRelaySessionRaw>[0],
 ): ReturnType<typeof createTalkRealtimeRelaySessionRaw> {
-  const session = createTalkRealtimeRelaySessionRaw(params);
+  const session = createTalkRealtimeRelaySessionRaw({
+    cfg: { agents: { entries: { main: { default: true } } } },
+    ...params,
+  });
   activeRelaySessions.set(session.relaySessionId, params.connId);
   return session;
 }

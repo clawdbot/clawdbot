@@ -113,11 +113,20 @@ async function listWorkspaceSkillMarkdownFiles(
 
 export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   skillScanLimits?: WorkspaceSkillScanLimits;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
-  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
-  if (workspaceDirs.length === 0) {
+  const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
+  try {
+    for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  } catch {
+    // Raw audit input can precede roster migration or be malformed. Keep the
+    // explicit audit workspace scannable even when roster resolution is unavailable.
+  }
+  if (workspaceDirs.size === 0) {
     return findings;
   }
 
