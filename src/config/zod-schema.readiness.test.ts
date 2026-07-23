@@ -27,4 +27,16 @@ describe("OpenClawSchema gateway readiness validation", () => {
       }),
     ).toThrow(/both required and advisory/i);
   });
+
+  it("rejects selectors outside the reserved readiness namespaces", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        gateway: {
+          readiness: {
+            requiredCriteria: ["ConfigLoaded"],
+          },
+        },
+      }),
+    ).toThrow(/namespaced openclaw.* or plugin.*/i);
+  });
 });
