@@ -749,6 +749,8 @@ describe("createAgentSession tool defaults", () => {
 
   it("forwards the configured provider maxRetries through the SDK request options", async () => {
     streamSimpleCalls.length = 0;
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     const { session } = await createAgentSession({
       model: testModel,
       resourceLoader: createEmptyResourceLoader(),
@@ -756,7 +758,7 @@ describe("createAgentSession tool defaults", () => {
       settingsManager: SettingsManager.inMemory({
         retry: { provider: { maxRetries: 3 } },
       }),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+      modelRegistry: createTestModelRegistry(authStorage),
     });
 
     // No per-call maxRetries: the SDK seam falls back to the configured provider setting.
@@ -768,6 +770,8 @@ describe("createAgentSession tool defaults", () => {
 
   it("lets an explicit per-call maxRetries override the configured provider setting", async () => {
     streamSimpleCalls.length = 0;
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     const { session } = await createAgentSession({
       model: testModel,
       resourceLoader: createEmptyResourceLoader(),
@@ -775,7 +779,7 @@ describe("createAgentSession tool defaults", () => {
       settingsManager: SettingsManager.inMemory({
         retry: { provider: { maxRetries: 3 } },
       }),
-      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+      modelRegistry: createTestModelRegistry(authStorage),
     });
 
     await session.agent.streamFn(
