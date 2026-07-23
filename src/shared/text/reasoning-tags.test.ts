@@ -337,6 +337,75 @@ describe("stripReasoningTagsFromText", () => {
     });
   });
 
+  describe("self-closing reasoning tags (#113144)", () => {
+    it.each([
+      {
+        name: "keeps visible text after a self-closing tag",
+        input: "Before<thinking/>After",
+        expected: "BeforeAfter",
+      },
+      {
+        name: "keeps visible text after a self-closing short-form tag",
+        input: "Before<think/>After",
+        expected: "BeforeAfter",
+      },
+      {
+        name: "keeps visible text after a self-closing tag with a space",
+        input: "Before<thinking />After",
+        expected: "BeforeAfter",
+      },
+      {
+        name: "keeps visible text after a namespaced self-closing tag",
+        input: "Before<think/>After",
+        expected: "BeforeAfter",
+      },
+      {
+        name: "keeps visible text after a self-closing tag carrying attributes",
+        input: 'Before<think signature="abc"/>After',
+        expected: "BeforeAfter",
+      },
+      {
+        name: "handles a self-closing tag with no text around it",
+        input: "<thinking/>",
+        expected: "",
+      },
+      {
+        name: "handles repeated self-closing tags",
+        input: "A<thinking/>B<thinking/>C",
+        expected: "ABC",
+      },
+      {
+        name: "still hides a self-closing tag that sits inside a reasoning block",
+        input: "Keep<think>hidden<thinking/>still hidden</think>Tail",
+        expected: "KeepTail",
+      },
+      {
+        name: "still strips a real reasoning block that follows a self-closing tag",
+        input: "A<thinking/>B<think>hidden</think>C",
+        expected: "ABC",
+      },
+      {
+        name: "does not treat an attribute value ending in a slash as self-closing",
+        input: 'A<think path="a/">hidden</think>B',
+        expected: "AB",
+      },
+    ] as const)("$name", (testCase) => {
+      expectStrippedCase(testCase);
+    });
+
+    it("leaves a self-closing tag inside a code span alone", () => {
+      expectPreservedReasoningTagCodeExample("Use `<thinking/>` to mark a no-op.");
+    });
+
+    it("keeps text after a self-closing tag under scope=leading", () => {
+      expectStrippedCase({
+        input: "Before<thinking/>After",
+        expected: "BeforeAfter",
+        opts: { scope: "leading" },
+      });
+    });
+  });
+
   it.each([
     { input: "A <final>1</final> B", expected: "A 1 B" },
     { input: "C <final>2</final> D", expected: "C 2 D" },

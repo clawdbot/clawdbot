@@ -13,6 +13,16 @@ const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antt
 const THINKING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
+/**
+ * Detects a self-closing marker such as `<thinking/>`. THINKING_TAG_RE only
+ * captures a *leading* slash, and its `[^<>]*` attribute run swallows a trailing
+ * one, so without this a self-closing tag reads as an opening tag. Derived the
+ * same way as `parseFinalTag` in ./final-tags.ts.
+ */
+function isSelfClosingReasoningTag(tagText: string): boolean {
+  return tagText.slice(0, -1).trimEnd().endsWith("/");
+}
+
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
     return value;
@@ -110,6 +120,16 @@ export function stripReasoningTagsFromText(
     const isClose = match[1] === "/";
 
     if (isInsideCode(idx, codeRegions)) {
+      continue;
+    }
+
+    // A self-closing marker has no body, so it opens nothing: drop the marker and
+    // keep the visible text on both sides of it.
+    if (!isClose && isSelfClosingReasoningTag(match[0])) {
+      if (thinkingDepth === 0) {
+        result += cleaned.slice(lastIndex, idx);
+      }
+      lastIndex = idx + match[0].length;
       continue;
     }
 
