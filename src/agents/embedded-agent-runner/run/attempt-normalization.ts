@@ -1,4 +1,3 @@
-import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
@@ -154,14 +153,8 @@ export async function normalizeEmbeddedRunAttempt(input: {
     (sessionIdUsed && sessionIdUsed !== previousSessionId) ||
     (sessionFileUsed && sessionFileUsed !== previousSessionFile)
   ) {
-    const marker = parseSqliteSessionFileMarker(sessionPromptState.sessionFile);
-    sessionPromptState.sessionTarget = marker
-      ? {
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          sessionKey: runInput.resolvedSessionKey,
-          storePath: marker.storePath,
-        }
+    sessionPromptState.sessionTarget = sessionPromptState.sessionTarget
+      ? { ...sessionPromptState.sessionTarget, sessionId: sessionIdUsed }
       : undefined;
   }
   const bootstrapPromptWarningSignaturesSeen =

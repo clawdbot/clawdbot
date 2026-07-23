@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -6,7 +5,6 @@ import {
   resolveSessionTranscriptRuntimeReadTarget,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -155,12 +153,11 @@ export async function resolveAttemptTrajectorySessionFile(params: {
       sessionKey: params.sessionKey,
       storePath,
     })
-  ).sessionFile;
+  ).sessionKey;
 }
 
 type ExistingAttemptTranscriptState = {
   hasBootstrapTranscriptState: boolean;
-  hasFileTranscriptState: boolean;
 };
 
 function isTranscriptMessageEvent(event: unknown): boolean {
@@ -183,7 +180,6 @@ export async function resolveExistingAttemptTranscriptState(params: {
   const storePath =
     params.sessionTarget?.storePath ??
     resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
-  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
   let hasBootstrapTranscriptState = false;
   if (storePath && params.sessionKey) {
     try {
@@ -194,27 +190,9 @@ export async function resolveExistingAttemptTranscriptState(params: {
         storePath,
       });
       hasBootstrapTranscriptState = sqliteEvents.some(isTranscriptMessageEvent);
-      if (sqliteMarker) {
-        return {
-          hasBootstrapTranscriptState,
-          hasFileTranscriptState: false,
-        };
-      }
     } catch {
-      if (sqliteMarker) {
-        return {
-          hasBootstrapTranscriptState: false,
-          hasFileTranscriptState: false,
-        };
-      }
+      hasBootstrapTranscriptState = false;
     }
   }
-  const hasFileTranscriptState = await fs
-    .stat(params.sessionFile)
-    .then(() => true)
-    .catch(() => false);
-  return {
-    hasBootstrapTranscriptState: hasBootstrapTranscriptState || hasFileTranscriptState,
-    hasFileTranscriptState,
-  };
+  return { hasBootstrapTranscriptState };
 }

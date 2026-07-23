@@ -1,12 +1,11 @@
 /** Session update helpers for skill snapshots, compaction, and lifecycle hooks. */
 import crypto from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
-import { resolveCompactionSessionFile, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -85,7 +84,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       sessionKey: params.sessionKey,
       sessionId: params.nextEntry.sessionId,
       storePath: params.storePath,
-      sessionFile: params.nextEntry.sessionFile,
+      sessionFile: params.sessionKey,
       agentId: resolveAgentIdFromSessionKey(params.sessionKey),
     });
   }
@@ -98,7 +97,6 @@ function emitCompactionSessionLifecycleHooks(params: {
     const transcript = resolveStableSessionEndTranscript({
       sessionId: params.previousEntry.sessionId,
       storePath: params.storePath,
-      sessionFile: params.previousEntry.sessionFile,
       agentId: resolveAgentIdFromSessionKey(params.sessionKey),
     });
     const payload = buildSessionEndHookPayload({
@@ -297,10 +295,8 @@ export async function incrementCompactionCount(params: {
   amount?: number;
   /** Token count after compaction - if provided, updates session token counts */
   tokensAfter?: number;
-  /** Session id after compaction, when the runtime rotated transcripts. */
+  /** Session id after compaction when a context engine changed identity. */
   newSessionId?: string;
-  /** Session file after compaction, when the runtime rotated transcripts. */
-  newSessionFile?: string;
 }): Promise<number | undefined> {
   const {
     sessionEntry,
@@ -312,7 +308,6 @@ export async function incrementCompactionCount(params: {
     amount = 1,
     tokensAfter,
     newSessionId,
-    newSessionFile,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
@@ -328,28 +323,13 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
   };
-  const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
-  const sessionFileChanged = Boolean(
-    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
-  );
   if (sessionIdChanged && newSessionId) {
     updates.sessionId = newSessionId;
-    updates.sessionFile =
-      explicitNewSessionFile ??
-      resolveCompactionSessionFile({
-        entry,
-        sessionKey,
-        storePath,
-        ...(cfg ? { defaultAgentId: resolveDefaultAgentId(cfg) } : {}),
-        newSessionId,
-      });
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     updates.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
     );
-  } else if (sessionFileChanged && explicitNewSessionFile) {
-    updates.sessionFile = explicitNewSessionFile;
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   const tokensAfterCompaction = resolveNonNegativeTokenCount(tokensAfter);
@@ -377,7 +357,7 @@ export async function incrementCompactionCount(params: {
       sessionStore[sessionKey] = persistedEntry;
     }
   }
-  if ((sessionIdChanged || sessionFileChanged) && cfg) {
+  if (sessionIdChanged && cfg) {
     emitCompactionSessionLifecycleHooks({
       cfg,
       sessionKey,

@@ -60,7 +60,6 @@ describe("session accessor boundary guard", () => {
         "src/acp/runtime/session-meta.ts",
         "src/agents/acp-spawn.ts",
         "src/agents/auth-profiles/session-override.ts",
-        "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-runner/tool-result-truncation.ts",
         "src/agents/embedded-agent-runner/transcript-rewrite.ts",

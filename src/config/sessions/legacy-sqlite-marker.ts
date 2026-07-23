@@ -1,4 +1,4 @@
-/** SQLite transcript sessionFile marker helpers shared by session runtime readers. */
+/** Legacy marker codec retained only for artifacts, migration, and plugin SDK compatibility. */
 import path from "node:path";
 
 export type SqliteSessionFileMarker = {
@@ -9,12 +9,10 @@ export type SqliteSessionFileMarker = {
 
 const SQLITE_SESSION_FILE_MARKER_RE = /^sqlite:([^:]+):([^:]+):(.*)$/;
 
-/** Formats the canonical sessionFile marker for SQLite-backed transcripts. */
 export function formatSqliteSessionFileMarker(marker: SqliteSessionFileMarker): string {
   return `sqlite:${marker.agentId}:${marker.sessionId}:${path.resolve(marker.storePath)}`;
 }
 
-/** Parses a SQLite-backed transcript sessionFile marker. */
 export function parseSqliteSessionFileMarker(
   sessionFile: string | undefined,
 ): SqliteSessionFileMarker | undefined {
@@ -26,14 +24,9 @@ export function parseSqliteSessionFileMarker(
   if (!match?.[1] || !match[2] || !match[3]) {
     return undefined;
   }
-  return {
-    agentId: match[1],
-    sessionId: match[2],
-    storePath: match[3],
-  };
+  return { agentId: match[1], sessionId: match[2], storePath: match[3] };
 }
 
-/** Checks whether a sessionFile marker points at the expected session id. */
 export function sqliteSessionFileMarkerMatchesSession(
   sessionFile: string | undefined,
   sessionId: string,
@@ -41,7 +34,6 @@ export function sqliteSessionFileMarkerMatchesSession(
   return parseSqliteSessionFileMarker(sessionFile)?.sessionId === sessionId;
 }
 
-/** Checks whether a sessionFile marker points at the full expected transcript target. */
 export function sqliteSessionFileMarkerMatchesTarget(
   sessionFile: string | undefined,
   target: SqliteSessionFileMarker,

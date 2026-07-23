@@ -250,14 +250,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     senderUsername: params.ctx.SenderUsername,
     senderE164: params.ctx.SenderE164,
     inputProvenance: params.ctx.InputProvenance,
-    sessionFile: runtime.resolveSessionFilePath(
-      sessionId,
-      targetSessionEntry,
-      runtime.resolveSessionFilePathOptions({
-        agentId: sessionAgentId,
-        storePath: params.storePath,
-      }),
-    ),
+    sessionFile: params.sessionKey,
     workspaceDir: params.workspaceDir,
     agentDir: sessionAgentDir,
     config: params.cfg,
@@ -309,7 +302,6 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
-      newSessionFile: result.result?.sessionFile,
     });
   }
   // Use the post-compaction token count for context summary if available

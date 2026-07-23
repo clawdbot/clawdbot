@@ -1,6 +1,6 @@
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export async function appendSessionAudit(params: {
@@ -13,12 +13,16 @@ export async function appendSessionAudit(params: {
   text: string;
   now: number;
 }): Promise<void> {
-  const sessionFile = formatSqliteSessionFileMarker({
+  const identity = {
     agentId: params.target.agentId,
     sessionId: params.target.entry.sessionId,
     storePath: params.target.storePath,
-  });
-  SessionManager.open(sessionFile).appendMessage(
+  };
+  const sessionKey = resolveTranscriptSessionKeyBySessionId(identity);
+  if (!sessionKey) {
+    return;
+  }
+  SessionManager.open({ ...identity, sessionKey }).appendMessage(
     {
       role: "custom",
       customType: "openclaw.system-note",

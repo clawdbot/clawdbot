@@ -2,7 +2,6 @@ import {
   loadTranscriptEvents,
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 /**
  * Rewrites transcript entries in session managers, states, and files.
  */
@@ -15,20 +14,9 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
-import {
-  acquireSessionWriteLock,
-  type SessionWriteLockAcquireTimeoutConfig,
-  resolveSessionWriteLockOptions,
-} from "../session-write-lock.js";
-import { SessionManager } from "../sessions/index.js";
+import { SessionManager, type SessionEntry, type SessionLeafControl } from "../sessions/index.js";
 import { log } from "./logger.js";
 import {
-  readTranscriptFileState,
-  type TranscriptFileState,
-  type TranscriptPersistedEntry,
-} from "./transcript-file-state.js";
-import {
-  persistRuntimeTranscriptStateMutation,
   resolveRuntimeTranscriptReadTarget,
   type RuntimeTranscriptScope,
 } from "./transcript-runtime-state.js";
@@ -48,25 +36,16 @@ async function rewriteSqliteRuntimeTranscript(params: {
   target: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>>;
   request: TranscriptRewriteRequest;
 }): Promise<TranscriptRewriteResult> {
-  const marker = parseSqliteSessionFileMarker(params.target.sessionFile);
-  if (!marker) {
-    return {
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-      reason: "not a SQLite transcript target",
-    };
-  }
   const replacementsById = new Map(
     params.request.replacements.map((replacement) => [replacement.entryId, replacement.message]),
   );
   let bytesFreed = 0;
   let rewrittenEntries = 0;
   const events = await loadTranscriptEvents({
-    agentId: marker.agentId,
-    sessionId: marker.sessionId,
+    agentId: params.target.agentId,
+    sessionId: params.target.sessionId,
     sessionKey: params.target.sessionKey,
-    storePath: marker.storePath,
+    storePath: params.target.storePath,
   });
   const nextEvents = events.map((event) => {
     if (!isTranscriptEventRecord(event)) {
@@ -97,15 +76,14 @@ async function rewriteSqliteRuntimeTranscript(params: {
   }
   await replaceTranscriptEvents(
     {
-      agentId: marker.agentId,
-      sessionId: marker.sessionId,
+      agentId: params.target.agentId,
+      sessionId: params.target.sessionId,
       sessionKey: params.target.sessionKey,
-      storePath: marker.storePath,
+      storePath: params.target.storePath,
     },
     nextEvents,
   );
   emitSessionTranscriptUpdate({
-    sessionFile: params.target.sessionFile,
     sessionKey: params.target.sessionKey,
     agentId: params.target.agentId,
     target: {
@@ -224,13 +202,13 @@ function appendBranchEntry(params: {
 }
 
 function appendTranscriptStateBranchEntry(params: {
-  state: TranscriptFileState;
+  state: SessionManagerLike;
   entry: SessionBranchEntry;
   rewrittenEntryIds: ReadonlyMap<string, string>;
-}): SessionBranchEntry {
+}): string {
   const { state, entry, rewrittenEntryIds } = params;
   if (entry.type === "message") {
-    return state.appendMessage(entry.message);
+    return state.appendMessage(entry.message as Parameters<typeof state.appendMessage>[0]);
   }
   if (entry.type === "compaction") {
     return state.appendCompaction(
@@ -371,10 +349,10 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
 }
 
 export function rewriteTranscriptEntriesInState(params: {
-  state: TranscriptFileState;
+  state: SessionManagerLike;
   replacements: TranscriptRewriteReplacement[];
   allowedRewriteSuffixEntryIds?: string[];
-}): TranscriptRewriteResult & { appendedEntries: TranscriptPersistedEntry[] } {
+}): TranscriptRewriteResult & { appendedEntries: Array<SessionEntry | SessionLeafControl> } {
   const replacementsById = new Map(
     params.replacements
       .filter((replacement) => replacement.entryId.trim().length > 0)
@@ -499,20 +477,25 @@ export function rewriteTranscriptEntriesInState(params: {
     params.state.branch(firstMatchedEntry.parentId);
   }
 
-  const appendedEntries: TranscriptPersistedEntry[] = [];
+  const appendedEntries: Array<SessionEntry | SessionLeafControl> = [];
   const rewrittenEntryIds = new Map<string, string>();
   for (const entry of branch.slice(firstMatchedIndex)) {
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
-    const newEntry =
+    const newEntryId =
       replacement === undefined
         ? appendTranscriptStateBranchEntry({
             state: params.state,
             entry,
             rewrittenEntryIds,
           })
-        : params.state.appendMessage(replacement);
-    rewrittenEntryIds.set(entry.id, newEntry.id);
-    appendedEntries.push(newEntry);
+        : params.state.appendMessage(
+            replacement as Parameters<typeof params.state.appendMessage>[0],
+          );
+    rewrittenEntryIds.set(entry.id, newEntryId);
+    const newEntry = params.state.getEntry(newEntryId);
+    if (newEntry) {
+      appendedEntries.push(newEntry);
+    }
   }
   if (restoreOriginalNavigation) {
     appendedEntries.push(
@@ -539,53 +522,13 @@ export function rewriteTranscriptEntriesInState(params: {
 export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
   scope: RuntimeTranscriptScope;
   request: TranscriptRewriteRequest;
-  config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<TranscriptRewriteResult> {
-  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
   try {
     const target = await resolveRuntimeTranscriptReadTarget(params.scope);
-    if (parseSqliteSessionFileMarker(target.sessionFile)) {
-      return await rewriteSqliteRuntimeTranscript({
-        target,
-        request: params.request,
-      });
-    }
-    sessionLock = await acquireSessionWriteLock({
-      sessionFile: target.sessionFile,
-      ...resolveSessionWriteLockOptions(params.config),
+    return await rewriteSqliteRuntimeTranscript({
+      target,
+      request: params.request,
     });
-    const state = await readTranscriptFileState(target.sessionFile);
-    const result = rewriteTranscriptEntriesInState({
-      state,
-      replacements: params.request.replacements,
-      ...(params.request.allowedRewriteSuffixEntryIds
-        ? { allowedRewriteSuffixEntryIds: params.request.allowedRewriteSuffixEntryIds }
-        : {}),
-    });
-    if (result.changed) {
-      await persistRuntimeTranscriptStateMutation({
-        target,
-        state,
-        appendedEntries: result.appendedEntries,
-      });
-      emitSessionTranscriptUpdate({
-        sessionFile: target.sessionFile,
-        sessionKey: target.sessionKey,
-        agentId: target.agentId,
-        target: {
-          agentId: target.agentId,
-          sessionId: target.sessionId,
-          sessionKey: target.sessionKey,
-        },
-      });
-      log.info(
-        `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
-          `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +
-          `bytesFreed=${result.bytesFreed} ` +
-          `sessionKey=${target.sessionKey}`,
-      );
-    }
-    return result;
   } catch (err) {
     const reason = formatErrorMessage(err);
     log.warn(`[transcript-rewrite] failed: ${reason}`);
@@ -595,7 +538,5 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
       rewrittenEntries: 0,
       reason,
     };
-  } finally {
-    await sessionLock?.release();
   }
 }

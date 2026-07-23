@@ -6,12 +6,15 @@ import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "./legacy-sqlite-marker.js";
+import {
   forkSessionFromParentTranscript,
   loadTranscriptEvents,
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "./session-accessor.js";
-import { formatSqliteSessionFileMarker, parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 
 const roots: string[] = [];
 
@@ -276,7 +279,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = SessionManager.openFile(fork.sessionFile, sessionsDir);
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const records = (await loadTranscriptEvents({
       agentId: "main",
@@ -357,7 +360,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = SessionManager.openFile(fork.sessionFile, sessionsDir);
     expect(reopened.buildSessionContext().messages).toHaveLength(2);
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const records = (await loadTranscriptEvents({
@@ -433,7 +436,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = SessionManager.openFile(fork.sessionFile, sessionsDir);
     expect(reopened.buildSessionContext().messages).toEqual([]);
     const continuedId = reopened.appendMessage({
       role: "user",
@@ -567,7 +570,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = SessionManager.openFile(fork.sessionFile, sessionsDir);
     expect(reopened.buildSessionContext().messages).toHaveLength(1);
     reopened.appendMessage({ role: "user", content: "new root", timestamp: Date.now() });
     const records = (await loadTranscriptEvents({
@@ -647,7 +650,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = SessionManager.openFile(fork.sessionFile, sessionsDir);
     expect(reopened.buildSessionContext().messages).toHaveLength(2);
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const continuedRecords = (await loadTranscriptEvents({

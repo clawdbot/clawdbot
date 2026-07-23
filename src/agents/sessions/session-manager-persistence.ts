@@ -2,10 +2,6 @@ import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
 } from "../../config/sessions/session-accessor.js";
-import {
-  appendSerializedJsonlEntrySync,
-  serializeJsonlEntry,
-} from "../../config/sessions/transcript-jsonl.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import {
   isIndexedSessionEntry,
@@ -14,16 +10,6 @@ import {
   parseParentLinkedOpaqueEntry,
 } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
-import {
-  canPublishOwnedSessionAppend,
-  jsonSerializationCanRunUserCode,
-  publishRememberedSessionFileSnapshot,
-  readSessionFileSnapshotIfExists,
-  rememberAppendedSessionEntry,
-  rememberWrittenSessionEntries,
-  revalidateLoadedSessionFile,
-  sessionFileNeedsAppendSeparator,
-} from "./session-manager-file.js";
 import type {
   AppendPersistenceOptions,
   PromptReleasedSessionEntry,
@@ -142,70 +128,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return removedEntries.length;
   }
 
-  protected persistRecord(
-    entry: unknown,
-    options?: AppendPersistenceOptions,
-    publishSnapshot = true,
-  ): void {
-    if (this.sqlitePersistence) {
+  protected persistRecord(entry: unknown, options?: AppendPersistenceOptions): void {
+    if (this.persistenceTarget) {
       this.persistSqliteRecord(entry, options);
-      return;
-    }
-    if (!this.shouldPersist || !this.sessionFile) {
-      return;
-    }
-
-    const hasAssistant = this.fileEntries.some(
-      (fileEntry) => fileEntry.type === "message" && fileEntry.message.role === "assistant",
-    );
-    if (!hasAssistant) {
-      this.flushed = false;
-      return;
-    }
-
-    if (!this.flushed) {
-      const content = this.writeFullFile();
-      this.flushed = true;
-      const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
-      this.sessionFileSnapshot = rememberedWrite.snapshot;
-      if (rememberedWrite.verifiedWrite && publishSnapshot) {
-        publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
-      }
-      return;
-    }
-
-    const serializationCanRunUserCode = jsonSerializationCanRunUserCode(entry);
-    const serializedEntry = serializeJsonlEntry(entry);
-    const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
-    const invalidateSerializedPrefixCache =
-      options?.invalidateSerializedPrefixCache === true || serializationCanRunUserCode;
-    const canPublishOwnedAppend =
-      !serializationCanRunUserCode &&
-      canPublishOwnedSessionAppend(this.sessionFile, beforeAppendSnapshot);
-    const cacheOwnedAppend = canPublishOwnedAppend && !invalidateSerializedPrefixCache;
-    const serializedAppend = appendSerializedJsonlEntrySync(this.sessionFile, serializedEntry, {
-      prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
-    });
-    const rememberedAppend = rememberAppendedSessionEntry({
-      filePath: this.sessionFile,
-      previousSnapshot: this.sessionFileSnapshot,
-      beforeAppendSnapshot,
-      serializedAppend,
-      cacheOwnedAppend,
-      publishOwnedAppend: canPublishOwnedAppend,
-      invalidateSerializedPrefixCache,
-    });
-    this.sessionFileSnapshot = rememberedAppend.snapshot;
-    if (rememberedAppend.ownedAppendVerified && publishSnapshot) {
-      publishRememberedSessionFileSnapshot(this.sessionFile, rememberedAppend.snapshot);
-    } else if (cacheOwnedAppend) {
-      this.setLoadedSessionFile(
-        this.sessionFile,
-        revalidateLoadedSessionFile(this.sessionFile, {
-          entries: this.fileEntries,
-          snapshot: beforeAppendSnapshot,
-        }),
-      );
     }
   }
 
@@ -214,15 +139,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
   }
 
   private persistSqliteRecord(entry: unknown, options?: AppendPersistenceOptions): void {
-    if (!isIndexedSessionEntry(entry) || !this.sqlitePersistence) {
+    if (!isIndexedSessionEntry(entry) || !this.persistenceTarget) {
       return;
     }
-    const scope = {
-      agentId: this.sqlitePersistence.agentId,
-      sessionId: this.sqlitePersistence.sessionId,
-      sessionKey: this.sqlitePersistence.sessionKey,
-      storePath: this.sqlitePersistence.storePath,
-    };
+    const scope = this.persistenceTarget;
     if (entry.type !== "message") {
       appendTranscriptEventSync(scope, entry);
       return;
@@ -254,17 +174,6 @@ export class SessionManagerPersistence extends SessionManagerCore {
       (!result?.appended || result.messageId !== entry.id)
     ) {
       throw new Error(`Session transcript append was not persisted: ${entry.id}`);
-    }
-  }
-
-  syncSnapshotAfterHeaderRewrite(expectedContent?: string): void {
-    if (!this.sessionFile) {
-      return;
-    }
-    const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, expectedContent);
-    this.sessionFileSnapshot = rememberedWrite.snapshot;
-    if (rememberedWrite.verifiedWrite) {
-      publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
     }
   }
 
@@ -351,13 +260,9 @@ export class SessionManagerPersistence extends SessionManagerCore {
       }
     }
     this.promptReleasedSideBranchParentId = sideBranchParentId;
-    if (this.sessionFile) {
-      this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
-    }
     if (
       options?.persistLeaf !== true ||
-      !this.shouldPersist ||
-      !this.sessionFile ||
+      !this.persistenceTarget ||
       !sawPersistedStateUpdate ||
       (persistedLeafId === this.leafId &&
         persistedAppendParentId === sideBranchParentId &&
@@ -366,47 +271,10 @@ export class SessionManagerPersistence extends SessionManagerCore {
       return undefined;
     }
 
-    const hasAssistant = this.fileEntries.some(
-      (entry) => entry.type === "message" && entry.message.role === "assistant",
-    );
-    if (this.sqlitePersistence) {
-      const leafEntry = this.createLeafControl(rawTailId, sideBranchParentId, "side");
-      appendTranscriptEventSync(
-        {
-          agentId: this.sqlitePersistence.agentId,
-          sessionId: this.sqlitePersistence.sessionId,
-          sessionKey: this.sqlitePersistence.sessionKey,
-          storePath: this.sqlitePersistence.storePath,
-        },
-        leafEntry,
-      );
-      this.rememberLeafControl(leafEntry);
-      this.flushed = true;
-      return { publishedEntries: [{ kind: "id", id: leafEntry.id }] };
-    }
-    if (!this.flushed || !hasAssistant) {
-      this.replacePersistedTranscript({
-        publishSnapshot: false,
-        leafAppendParentId: sideBranchParentId,
-        leafAppendMode: "side",
-      });
-      this.flushed = true;
-      if (!this.sessionFileSnapshot) {
-        throw new Error(`Unable to snapshot restored session file: ${this.sessionFile}`);
-      }
-      return { sessionFileSnapshot: this.sessionFileSnapshot, requiresReload: true };
-    }
-
     const leafEntry = this.createLeafControl(rawTailId, sideBranchParentId, "side");
-    this.persistRecord(leafEntry, undefined, false);
+    appendTranscriptEventSync(this.persistenceTarget, leafEntry);
     this.rememberLeafControl(leafEntry);
-    if (!this.sessionFileSnapshot) {
-      throw new Error(`Unable to snapshot restored session file: ${this.sessionFile}`);
-    }
-    return {
-      sessionFileSnapshot: this.sessionFileSnapshot,
-      publishedEntries: [{ kind: "id", id: leafEntry.id }],
-    };
+    return { publishedEntries: [{ kind: "id", id: leafEntry.id }] };
   }
 
   private assertPromptReleasedEntriesPreserveActiveLeaf(

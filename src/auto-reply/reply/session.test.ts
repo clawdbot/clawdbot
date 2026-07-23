@@ -9,13 +9,13 @@ import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tool
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
   loadSessionEntry,
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
@@ -284,7 +284,7 @@ function expectEntryFields(
   label?: string,
 ): void {
   for (const [key, value] of Object.entries(expected)) {
-    expect((entry as Record<string, unknown>)[key], label ?? key).toEqual(value);
+    expect((entry as unknown as Record<string, unknown>)[key], label ?? key).toEqual(value);
   }
 }
 

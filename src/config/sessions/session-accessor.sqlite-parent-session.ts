@@ -224,7 +224,6 @@ export async function forkSqliteSessionEntryFromParentTarget(
           sessionId: freshParent.sessionId,
         },
         forkedFromParent: true,
-        sessionFile: fork.transcript.sessionFile,
         sessionId: fork.transcript.sessionId,
       });
       previousIdentity = readSqliteSessionIdentitySnapshot(writeDatabase, sessionTarget.storeKeys);

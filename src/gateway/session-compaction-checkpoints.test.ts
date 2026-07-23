@@ -9,6 +9,7 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/age
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test } from "vitest";
 import type { SessionCompactionCheckpoint, SessionEntry } from "../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -16,7 +17,6 @@ import {
   loadTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   createFileBackedCompactionCheckpointStore,
   readSessionLeafStateFromTranscriptAsync,
@@ -117,7 +117,7 @@ describe("session-compaction-checkpoints", () => {
       now: Date.parse("2026-06-26T12:00:02.000Z"),
     });
     const sourceLeafId = requireNonEmptyString(
-      SessionManager.open(marker).getLeafId(),
+      SessionManager.openFile(marker).getLeafId(),
       "SQLite source leaf id missing",
     );
     const checkpoint: SessionCompactionCheckpoint = {
@@ -223,7 +223,7 @@ describe("session-compaction-checkpoints", () => {
       now: Date.parse("2026-06-26T12:00:01.000Z"),
     });
     const leafBeforeEntryId = requireNonEmptyString(
-      SessionManager.open(marker).getLeafId(),
+      SessionManager.openFile(marker).getLeafId(),
       "SQLite stale-entry pre-entry leaf id missing",
     );
     await appendTranscriptMessage(scope, {
@@ -235,7 +235,7 @@ describe("session-compaction-checkpoints", () => {
       now: Date.parse("2026-06-26T12:00:02.000Z"),
     });
     const sourceEntryId = requireNonEmptyString(
-      SessionManager.open(marker).getLeafId(),
+      SessionManager.openFile(marker).getLeafId(),
       "SQLite stale-entry entry id missing",
     );
     const checkpoint: SessionCompactionCheckpoint = {
@@ -572,7 +572,8 @@ describe("session-compaction-checkpoints", () => {
       restored.entry.sessionFile,
       "restored session file missing",
     );
-    const messages = SessionManager.open(restoredSessionFile, dir).buildSessionContext().messages;
+    const messages = SessionManager.openFile(restoredSessionFile, dir).buildSessionContext()
+      .messages;
     expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
       "checkpoint source",
     ]);

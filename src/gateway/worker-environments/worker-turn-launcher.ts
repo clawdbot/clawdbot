@@ -236,7 +236,20 @@ async function executeWorkerTurn(params: {
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
-  const manager = SessionManager.open(turn.sessionFile);
+  if (
+    !turn.sessionTarget?.agentId ||
+    !turn.sessionTarget.sessionKey ||
+    !turn.sessionTarget.storePath
+  ) {
+    throw new Error("Cloud worker turn is missing its transcript identity");
+  }
+  const transcriptTarget = {
+    agentId: turn.sessionTarget.agentId,
+    sessionId: turn.sessionTarget.sessionId ?? turn.sessionId,
+    sessionKey: turn.sessionTarget.sessionKey,
+    storePath: turn.sessionTarget.storePath,
+  };
+  const manager = SessionManager.open(transcriptTarget);
   const userMessageAlreadyPersisted =
     turn.suppressNextUserMessagePersistence === true ||
     turn.userTurnTranscriptRecorder?.hasPersisted() === true;
@@ -257,7 +270,7 @@ async function executeWorkerTurn(params: {
       turn.userTurnTranscriptRecorder?.markRuntimePersisted(persisted.message);
       turn.onUserMessagePersisted?.(persisted.message);
     } else if (turn.userTurnTranscriptRecorder?.hasPersisted()) {
-      baseLeafId = SessionManager.open(turn.sessionFile).getLeafId();
+      baseLeafId = SessionManager.open(transcriptTarget).getLeafId();
     } else if (!turn.userTurnTranscriptRecorder) {
       const message = {
         role: "user" as const,
@@ -375,7 +388,7 @@ async function executeWorkerTurn(params: {
     throw new WorkerTurnExecutionError("Cloud worker turn failed");
   }
 
-  const completed = SessionManager.open(turn.sessionFile);
+  const completed = SessionManager.open(transcriptTarget);
   const currentPlacement = params.placements.get(placement.sessionId);
   if (
     runtimeResult.transcriptLeafId !== completed.getLeafId() ||
@@ -468,7 +481,7 @@ async function executeWorkerTurn(params: {
           root: params.localWorkspaceDir,
           report: async (report) => {
             if ("cleared" in report) {
-              SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+              SessionManager.open(transcriptTarget).appendCustomMessageEntry(
                 WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
                 "A later cloud workspace result superseded the previous conflict.",
                 false,
@@ -483,7 +496,7 @@ async function executeWorkerTurn(params: {
                 report.totalCount,
               ),
             };
-            SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
+            SessionManager.open(transcriptTarget).appendCustomMessageEntry(
               WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
               workspaceConflict.summary,
               true,

@@ -15,6 +15,7 @@ import type {
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   branchSessionFromCompactionCheckpoint,
   loadSessionEntry,
@@ -27,7 +28,6 @@ import {
   branchSqliteCompactionCheckpointSession,
   restoreSqliteCompactionCheckpointSession,
 } from "../config/sessions/session-accessor.sqlite.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -713,25 +713,7 @@ function shouldRouteCheckpointSessionMutationToSqlite(params: {
   if (!entry) {
     return false;
   }
-  if (parseSqliteSessionFileMarker(entry.sessionFile)) {
-    return true;
-  }
-  const checkpoint = entry.compactionCheckpoints?.find(
-    (candidate) => candidate.checkpointId === params.checkpointId,
-  );
-  const preCheckpointFile = checkpoint?.preCompaction.sessionFile?.trim();
-  const postCheckpointFile = checkpoint?.postCompaction.sessionFile?.trim();
-  if (
-    parseSqliteSessionFileMarker(preCheckpointFile) ||
-    parseSqliteSessionFileMarker(postCheckpointFile)
-  ) {
-    return true;
-  }
-  const hasCheckpointFile = Boolean(preCheckpointFile) || Boolean(postCheckpointFile);
-  const hasCheckpointRowBoundary =
-    Boolean(checkpoint?.preCompaction.entryId?.trim()) ||
-    Boolean(checkpoint?.postCompaction.entryId?.trim());
-  return hasCheckpointRowBoundary && !hasCheckpointFile;
+  return true;
 }
 
 /**

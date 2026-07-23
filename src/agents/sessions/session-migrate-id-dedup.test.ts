@@ -53,7 +53,7 @@ describe("v1 session migration id assignment", () => {
       "cafef00d-0000-4000-8000-000000000000",
     );
 
-    const sm = SessionManager.open(file, dir);
+    const sm = SessionManager.openFile(file, dir);
 
     const messages = sm
       .getEntries()
@@ -111,7 +111,7 @@ describe("v1 session migration id assignment", () => {
         .join("\n") + "\n",
     );
 
-    const sm = SessionManager.open(file, dir);
+    const sm = SessionManager.openFile(file, dir);
     const kept = sm
       .getEntries()
       .find(

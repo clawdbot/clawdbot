@@ -686,7 +686,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   const resolvedTranscriptPath = await resolveSessionHistoryTranscriptPathAsync(
     sessionId,
     storePath,
-    entry.sessionFile,
+    undefined,
     { allowResetArchiveFallback: true },
   );
   if (resolvedTranscriptPath) {

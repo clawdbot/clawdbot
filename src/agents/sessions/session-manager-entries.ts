@@ -5,7 +5,6 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
-import { messageSerializesOwnedValues } from "./session-manager-file.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionManagerPersistence } from "./session-manager-persistence.js";
 import type {
@@ -23,6 +22,7 @@ import type {
   SessionInfoEntry,
   SessionMessageEntry,
   SessionHeader,
+  SessionLeafControl,
   SessionTreeNode,
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
@@ -38,9 +38,15 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
-    this.leafId = entry.id;
     this.appendParentId = entry.id;
-    this.promptReleasedSideBranchParentId = undefined;
+    if (isSessionTranscriptSideAppendEntry(entry)) {
+      this.appendMode = "side";
+      this.promptReleasedSideBranchParentId = entry.id;
+    } else {
+      this.leafId = entry.id;
+      this.appendMode = undefined;
+      this.promptReleasedSideBranchParentId = undefined;
+    }
     this.persist(entry, options);
   }
 
@@ -48,8 +54,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): string {
-    const invalidateSerializedPrefixCache =
-      options?.invalidateSerializedPrefixCache === true || messageSerializesOwnedValues(message);
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateSessionEntryId(this.byId),
@@ -57,7 +61,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       timestamp: new Date().toISOString(),
       message,
     };
-    this.appendEntry(entry, { ...options, invalidateSerializedPrefixCache });
+    this.appendEntry(entry, options);
     return entry.id;
   }
 
@@ -181,6 +185,30 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     return this.leafId;
   }
 
+  appendLeafControl(params: {
+    targetId: string | null;
+    appendParentId: string | null;
+    appendMode?: "side";
+  }): SessionLeafControl {
+    if (params.targetId !== null && !this.byId.has(params.targetId)) {
+      throw new Error(`Entry ${params.targetId} not found`);
+    }
+    const previousLeafId = this.leafId;
+    this.leafId = params.targetId;
+    const entry = this.createLeafControl(
+      this.appendParentId,
+      params.appendParentId,
+      params.appendMode,
+    );
+    this.leafId = previousLeafId;
+    this.persistRecord(entry);
+    this.rememberLeafControl(entry);
+    this.leafId = params.targetId;
+    this.appendParentId = params.appendParentId;
+    this.appendMode = params.appendMode;
+    return entry;
+  }
+
   getLeafEntry(): SessionEntry | undefined {
     return this.leafId ? this.getEntry(this.leafId) : undefined;
   }
@@ -262,7 +290,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
 
   getEntries(): SessionEntry[] {
     return this.fileEntries
-      .filter((entry): entry is SessionEntry => entry.type !== "session")
+      .filter((entry): entry is SessionEntry => entry.type !== "session" && this.byId.has(entry.id))
       .map((entry) => this.normalizeEntryParent(entry));
   }
 
@@ -311,12 +339,14 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     this.leafId = branchTargetId;
     this.appendParentId = branchTargetId;
+    this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
   }
 
   resetLeaf(): void {
     this.leafId = null;
     this.appendParentId = null;
+    this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
   }
 
@@ -332,6 +362,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     }
     this.leafId = branchTargetId;
     this.appendParentId = branchTargetId;
+    this.appendMode = undefined;
     const entry: BranchSummaryEntry = {
       type: "branch_summary",
       id: generateSessionEntryId(this.byId),

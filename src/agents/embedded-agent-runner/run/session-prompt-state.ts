@@ -65,7 +65,7 @@ export function createEmbeddedRunSessionPromptState(input: {
       sessionTarget: nextSessionTarget,
     });
     activeSessionTarget = nextSessionTarget;
-    activeSessionFile = resolvedTarget.sessionFile;
+    activeSessionFile = resolvedTarget.sessionKey;
     adoptSessionId(resolvedTarget.sessionId);
   };
   const activateInternalPrompt = (prompt: string, persisted: boolean) => {

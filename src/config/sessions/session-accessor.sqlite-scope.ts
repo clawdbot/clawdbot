@@ -20,7 +20,6 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -288,9 +287,5 @@ export function cloneSessionEntry(entry: SessionEntry): SessionEntry {
 }
 
 export function formatSqliteSessionMarkerForScope(scope: ResolvedTranscriptScope): string {
-  return formatSqliteSessionFileMarker({
-    agentId: scope.agentId,
-    sessionId: scope.sessionId,
-    storePath: scope.path ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope)),
-  });
+  return scope.sessionKey;
 }

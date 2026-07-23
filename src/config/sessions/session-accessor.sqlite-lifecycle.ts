@@ -174,14 +174,12 @@ export async function resetSqliteSessionEntryLifecycle(
         !sqliteSessionEntriesEqual(current.entry, nextEntry)
           ? await buildSessionResetBoundaryPlan({
               events: loadSqliteTranscriptEventsFromDatabase(database, current.entry.sessionId),
-              legacySessionFile: current.entry.sessionFile,
               reason: params.resetBoundaryReason,
             })
           : undefined;
       const mutation: ResetSessionEntryLifecycleMutation = {
         nextEntry: cloneSessionEntry(nextEntry),
         ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
-        ...(current?.entry.sessionFile ? { previousSessionFile: current.entry.sessionFile } : {}),
         ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
       };
       runOpenClawAgentWriteTransaction((transactionDb) => {
@@ -455,7 +453,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         archivedTranscripts,
         deleted: true,
         deletedEntry: cloneSessionEntry(current.entry),
-        ...(current.entry.sessionFile ? { deletedSessionFile: current.entry.sessionFile } : {}),
         ...(current.entry.sessionId ? { deletedSessionId: current.entry.sessionId } : {}),
       };
     }, toDatabaseOptions(resolved));

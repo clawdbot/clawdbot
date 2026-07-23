@@ -227,7 +227,7 @@ const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string
   // Builds a session with an orphaned user message to exercise retry/resume
   // cleanup paths from persisted JSONL.
   const sessionFile = nextSessionFile();
-  const sessionManager = SessionManager.open(sessionFile);
+  const sessionManager = SessionManager.openFile(sessionFile);
   sessionManager.appendMessage({
     role: "user",
     content: [{ type: "text", text }],
@@ -1232,7 +1232,7 @@ describe("runEmbeddedAgent", () => {
       const sessionFile = nextSessionFile();
       const sessionKey = nextSessionKey();
 
-      const sessionManager = SessionManager.open(sessionFile);
+      const sessionManager = SessionManager.openFile(sessionFile);
       sessionManager.appendMessage({
         role: "user",
         content: [{ type: "text", text: "seed user" }],

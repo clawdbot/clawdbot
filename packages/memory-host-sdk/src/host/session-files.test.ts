@@ -224,9 +224,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     );
 
     const liveEntry = requireSessionEntry(
-      await buildSessionEntry(turn.sessionFile, { sessionKey, updatedAtMs: updatedAt }),
+      await buildSessionEntry(turn.sessionFile!, { sessionKey, updatedAtMs: updatedAt }),
     );
-    const liveState = statSessionEntrySync(turn.sessionFile, {
+    const liveState = statSessionEntrySync(turn.sessionFile!, {
       sessionKey,
       updatedAtMs: updatedAt,
     });

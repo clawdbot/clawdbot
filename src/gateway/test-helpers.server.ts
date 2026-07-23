@@ -15,7 +15,6 @@ import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
 } from "../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
@@ -257,11 +256,6 @@ export async function writeSessionStore(params: {
       sessionKey: storeKey,
       entry: {
         ...canonicalEntry,
-        sessionFile: formatSqliteSessionFileMarker({
-          agentId,
-          sessionId: entry.sessionId,
-          storePath,
-        }),
       },
     });
     upsertsByAgentId.set(agentId, upserts);

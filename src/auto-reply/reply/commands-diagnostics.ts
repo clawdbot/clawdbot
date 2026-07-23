@@ -444,7 +444,7 @@ async function executeCodexDiagnosticsAddon(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
-    sessionFile: targetSessionEntry?.sessionFile,
+    sessionFile: targetSessionEntry ? params.sessionKey : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
     config: params.cfg,
@@ -484,32 +484,30 @@ function buildCodexDiagnosticsSessions(
       sessions.set(sessionKey, entry);
     }
   }
-  return Array.from(sessions.entries())
-    .filter(([, entry]) => Boolean(entry.sessionFile))
-    .map(([sessionKey, entry]) => ({
-      sessionKey,
-      sessionId: entry.sessionId,
-      sessionFile: entry.sessionFile,
-      agentHarnessId: entry.agentHarnessId,
-      channel: resolveDiagnosticsSessionChannel(entry, params, sessionKey),
-      channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),
-      accountId:
-        normalizeOptionalString(deliveryContextFromSession(entry)?.accountId) ??
-        normalizeOptionalString(sessionDeliveryOrigin(entry)?.accountId) ??
-        (sessionKey === params.sessionKey ? (params.ctx.AccountId ?? undefined) : undefined),
-      messageThreadId:
-        deliveryContextFromSession(entry)?.threadId ??
-        sessionDeliveryOrigin(entry)?.threadId ??
-        (sessionKey === params.sessionKey &&
-        (typeof params.ctx.MessageThreadId === "string" ||
-          typeof params.ctx.MessageThreadId === "number")
-          ? params.ctx.MessageThreadId
-          : undefined),
-      threadParentId:
-        sessionKey === params.sessionKey
-          ? normalizeOptionalString(params.ctx.ThreadParentId)
-          : undefined,
-    }));
+  return Array.from(sessions.entries()).map(([sessionKey, entry]) => ({
+    sessionKey,
+    sessionId: entry.sessionId,
+    sessionFile: sessionKey,
+    agentHarnessId: entry.agentHarnessId,
+    channel: resolveDiagnosticsSessionChannel(entry, params, sessionKey),
+    channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),
+    accountId:
+      normalizeOptionalString(deliveryContextFromSession(entry)?.accountId) ??
+      normalizeOptionalString(sessionDeliveryOrigin(entry)?.accountId) ??
+      (sessionKey === params.sessionKey ? (params.ctx.AccountId ?? undefined) : undefined),
+    messageThreadId:
+      deliveryContextFromSession(entry)?.threadId ??
+      sessionDeliveryOrigin(entry)?.threadId ??
+      (sessionKey === params.sessionKey &&
+      (typeof params.ctx.MessageThreadId === "string" ||
+        typeof params.ctx.MessageThreadId === "number")
+        ? params.ctx.MessageThreadId
+        : undefined),
+    threadParentId:
+      sessionKey === params.sessionKey
+        ? normalizeOptionalString(params.ctx.ThreadParentId)
+        : undefined,
+  }));
 }
 
 function resolveDiagnosticsSessionChannel(

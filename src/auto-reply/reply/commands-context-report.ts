@@ -87,11 +87,7 @@ function resolveTranscriptCompactabilityReport(
     return { available: false, reason: "no active transcript session" };
   }
 
-  const messages = readSessionMessages(
-    sessionId,
-    params.storePath,
-    targetSessionEntry?.sessionFile,
-  ) as AgentMessage[];
+  const messages = readSessionMessages(sessionId, params.storePath, undefined) as AgentMessage[];
   if (!messages.length) {
     return { available: false, reason: "no transcript messages found" };
   }
@@ -188,11 +184,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     }
     const sessionId = targetSessionEntry?.sessionId?.trim();
     const messages = sessionId
-      ? (readSessionMessages(
-          sessionId,
-          params.storePath,
-          targetSessionEntry?.sessionFile,
-        ) as AgentMessage[])
+      ? (readSessionMessages(sessionId, params.storePath, undefined) as AgentMessage[])
       : [];
     const estimateCache = createMessageCharEstimateCache();
     const conversationTotals = messages.reduce(

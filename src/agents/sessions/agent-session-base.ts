@@ -704,7 +704,7 @@ export abstract class AgentSessionBase {
 
   /** Current session file path, or undefined if sessions are disabled */
   get sessionFile(): string | undefined {
-    return this.sessionManager.getSessionFile();
+    return this.sessionManager.getSessionTarget()?.sessionKey;
   }
 
   /** Current session ID */

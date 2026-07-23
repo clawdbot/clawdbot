@@ -490,7 +490,7 @@ describe("worker turn launcher", () => {
     });
     expect(initialized.code).toBe(0);
     seedActivePlacement();
-    const manager = SessionManager.open(sessionFile);
+    const manager = SessionManager.openFile(sessionFile);
     const earlierRequestId = manager.appendMessage(
       makeAgentUserMessage({ content: "Earlier request", timestamp: 10 }),
     );
@@ -565,7 +565,7 @@ describe("worker turn launcher", () => {
         expect(command.argv.join(" ")).not.toContain(credential().credential);
         await Promise.resolve();
         expect(acknowledgeCredentialDelivery).toHaveBeenCalledOnce();
-        const completed = SessionManager.open(sessionFile);
+        const completed = SessionManager.openFile(sessionFile);
         const leafId = completed.appendMessage(
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "Worker reply" }],
@@ -659,7 +659,7 @@ describe("worker turn launcher", () => {
       },
     });
     expect(
-      SessionManager.open(sessionFile)
+      SessionManager.openFile(sessionFile)
         .getBranch()
         .some(
           (entry) =>
@@ -709,7 +709,7 @@ describe("worker turn launcher", () => {
       },
     ]);
     expect(
-      SessionManager.open(sessionFile)
+      SessionManager.openFile(sessionFile)
         .getEntries()
         .flatMap((entry) =>
           entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
@@ -719,7 +719,7 @@ describe("worker turn launcher", () => {
 
   it("does not replay an already-persisted current user message into worker history", async () => {
     seedActivePlacement();
-    const manager = SessionManager.open(sessionFile);
+    const manager = SessionManager.openFile(sessionFile);
     manager.appendMessage(makeAgentUserMessage({ content: "Earlier request", timestamp: 18 }));
     manager.appendMessage(
       makeAgentAssistantMessage({
@@ -741,7 +741,7 @@ describe("worker turn launcher", () => {
       })),
       runWorkspaceCommand: vi.fn(async (command): Promise<SpawnResult> => {
         descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
-        const completed = SessionManager.open(sessionFile);
+        const completed = SessionManager.openFile(sessionFile);
         const leafId = completed.appendMessage(
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "Worker reply" }],
@@ -860,7 +860,7 @@ describe("worker turn launcher", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(async (): Promise<SpawnResult> => {
-          const completed = SessionManager.open(sessionFile);
+          const completed = SessionManager.openFile(sessionFile);
           completed.appendMessage(
             makeAgentAssistantMessage({
               content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
@@ -1545,7 +1545,7 @@ describe("worker turn launcher", () => {
     ).rejects.toThrow("already has an active turn claim");
     expect(runWorkspaceCommand).toHaveBeenCalledOnce();
 
-    const completed = SessionManager.open(sessionFile);
+    const completed = SessionManager.openFile(sessionFile);
     const leafId = completed.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Only worker reply" }],
@@ -1630,7 +1630,7 @@ describe("worker turn launcher", () => {
               termination: "exit",
             };
           }
-          const completed = SessionManager.open(sessionFile);
+          const completed = SessionManager.openFile(sessionFile);
           const leafId = completed.appendMessage(
             makeAgentAssistantMessage({
               content: [{ type: "text", text: "Recovered worker reply" }],
@@ -1732,7 +1732,7 @@ describe("worker turn launcher", () => {
         state: "active",
         turnClaim: { owner: "worker", runId },
       });
-      const completed = SessionManager.open(sessionFile);
+      const completed = SessionManager.openFile(sessionFile);
       const leafId = completed.appendMessage(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "Redispatched worker reply" }],

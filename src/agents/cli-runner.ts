@@ -889,7 +889,12 @@ export async function runPreparedCliAgent(
     }
 
     try {
-      const sessionManager = SessionManager.open(params.sessionFile);
+      const sessionManager =
+        params.sessionManager ??
+        (params.sessionTarget ? SessionManager.open(params.sessionTarget) : undefined);
+      if (!sessionManager) {
+        throw new Error("CLI transcript identity is unavailable");
+      }
       sessionManager.appendMessage(
         redactedUserMessage as Parameters<typeof sessionManager.appendMessage>[0],
       );

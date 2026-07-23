@@ -5,14 +5,11 @@
  * and can follow append-only trajectory files across rotation/truncation.
  */
 import fs from "node:fs";
-import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -21,11 +18,7 @@ import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  resolveTrajectoryFilePath,
-  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-} from "../trajectory/paths.js";
-import { resolveTrajectoryRuntimeFile } from "../trajectory/runtime-file.js";
+import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES } from "../trajectory/paths.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
@@ -409,22 +402,6 @@ function compareSelectionsByUpdatedAt(a: TailSelection, b: TailSelection): numbe
   return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
-async function resolveTailTrajectoryPath(params: {
-  sessionFile: string;
-  sessionId: string;
-}): Promise<string> {
-  return (
-    (await resolveTrajectoryRuntimeFile({
-      sessionFile: params.sessionFile,
-      sessionId: params.sessionId,
-    })) ??
-    resolveTrajectoryFilePath({
-      sessionFile: params.sessionFile,
-      sessionId: params.sessionId,
-    })
-  );
-}
-
 async function buildTailSelection(params: {
   agentId: string;
   entry: SessionEntry;
@@ -435,43 +412,15 @@ async function buildTailSelection(params: {
   if (!sessionId) {
     return null;
   }
-  const sessionsDir = path.dirname(params.storePath);
-  let sessionFile: string;
-  try {
-    const entrySessionFile = params.entry.sessionFile?.trim();
-    const marker = entrySessionFile ? parseSqliteSessionFileMarker(entrySessionFile) : null;
-    if (marker && marker.sessionId === sessionId) {
-      return {
-        agentId: params.agentId,
-        entry: params.entry,
-        key: params.key,
-        source: {
-          agentId: marker.agentId,
-          kind: "sqlite",
-          sessionId: marker.sessionId,
-          storePath: marker.storePath,
-        },
-        storePath: params.storePath,
-      };
-    }
-    sessionFile = resolveSessionFilePath(sessionId, params.entry, {
-      agentId: params.agentId,
-      sessionsDir,
-    });
-  } catch {
-    return null;
-  }
-  const trajectoryPath = await resolveTailTrajectoryPath({
-    sessionFile,
-    sessionId,
-  });
   return {
     agentId: params.agentId,
     entry: params.entry,
     key: params.key,
     source: {
-      kind: "file",
-      path: trajectoryPath,
+      agentId: params.agentId,
+      kind: "sqlite",
+      sessionId,
+      storePath: params.storePath,
     },
     storePath: params.storePath,
   };

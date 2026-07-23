@@ -1,3 +1,4 @@
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 /**
  * CLI turn compaction lifecycle.
  *
@@ -62,7 +63,7 @@ type SettingsManagerLike = {
   setCompactionEnabled?: (enabled: boolean) => void;
 };
 type CliCompactionDeps = {
-  openSessionManager: (sessionFile: string) => SessionManagerLike;
+  openSessionManager: (target: SessionTranscriptRuntimeTarget) => SessionManagerLike;
   ensureContextEnginesInitialized: () => void;
   resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
   createPreparedEmbeddedAgentSettingsManager: (params: {
@@ -125,7 +126,7 @@ type CliCompactionRuntimeContextParams = {
 const log = createSubsystemLogger("agents/cli-compaction");
 
 const cliCompactionDeps: CliCompactionDeps = {
-  openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
+  openSessionManager: (target) => SessionManager.open(target),
   ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
   resolveContextEngine: resolveContextEngineImpl,
   createPreparedEmbeddedAgentSettingsManager: createPreparedEmbeddedAgentSettingsManagerImpl,
@@ -148,7 +149,7 @@ export function setCliCompactionTestDeps(overrides: Partial<typeof cliCompaction
 /** Restores production CLI compaction dependencies after tests. */
 export function resetCliCompactionTestDeps(): void {
   Object.assign(cliCompactionDeps, {
-    openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
+    openSessionManager: (target: SessionTranscriptRuntimeTarget) => SessionManager.open(target),
     ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
     resolveContextEngine: resolveContextEngineImpl,
     createPreparedEmbeddedAgentSettingsManager: createPreparedEmbeddedAgentSettingsManagerImpl,
@@ -292,9 +293,9 @@ async function resolveCliContextCompactionSuccess(params: {
     ),
   });
   return {
-    maintenanceSessionFile: resolvedTarget.sessionFile,
+    maintenanceSessionFile: resolvedTarget.sessionKey,
     maintenanceSessionId: resolvedTarget.sessionId,
-    successorSessionFile: resolvedTarget.sessionFile,
+    successorSessionFile: resolvedTarget.sessionKey,
     successorSessionId: resolvedTarget.sessionId,
     ...(result?.tokensAfter !== undefined ? { tokensAfter: result.tokensAfter } : {}),
   };
@@ -606,13 +607,18 @@ export async function runCliTurnCompactionLifecycle(params: {
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }): Promise<SessionEntry | undefined> {
-  const sessionFile = params.sessionEntry?.sessionFile;
   const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
-  if (!sessionFile || !contextTokenBudget) {
+  if (!params.storePath || !contextTokenBudget) {
     return params.sessionEntry;
   }
 
-  const sessionManager = cliCompactionDeps.openSessionManager(sessionFile);
+  const sessionManager = cliCompactionDeps.openSessionManager({
+    agentId: params.sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  const sessionFile = params.sessionKey;
   const settingsManager = await cliCompactionDeps.createPreparedEmbeddedAgentSettingsManager({
     cwd: params.cwd ?? params.workspaceDir,
     agentDir: params.agentDir,
@@ -796,9 +802,6 @@ export async function runCliTurnCompactionLifecycle(params: {
         nativeCompactionResult?.result?.tokensAfter ?? contextCompactionOutcome?.tokensAfter,
       newSessionId:
         nativeCompactionResult?.result?.sessionId ?? contextCompactionOutcome?.successorSessionId,
-      newSessionFile:
-        nativeCompactionResult?.result?.sessionFile ??
-        contextCompactionOutcome?.successorSessionFile,
       expectedSessionId: params.sessionId,
     })) ?? params.sessionEntry
   );

@@ -1,5 +1,4 @@
 /** Mutates and persists isolated cron session state around one run. */
-import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
@@ -7,7 +6,6 @@ import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-p
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -63,11 +61,7 @@ export function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string):
 }
 
 function cronTranscriptExists(entry: SessionEntry): boolean {
-  const sessionFile = entry.sessionFile?.trim();
-  if (parseSqliteSessionFileMarker(sessionFile)) {
-    return true;
-  }
-  return Boolean(sessionFile && fs.existsSync(sessionFile));
+  return Boolean(entry.sessionId?.trim());
 }
 
 function normalizeSessionField(value: string | undefined): string | undefined {
@@ -87,7 +81,6 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   const next = { ...entry } as Partial<SessionEntry>;
   // If the transcript never materialized, do not persist stale resume handles
   // that would make the next cron run believe a resumable CLI session exists.
-  delete next.sessionFile;
   delete next.sessionStartedAt;
   delete next.lastInteractionAt;
   delete next.cliSessionIds;
@@ -323,10 +316,7 @@ export function adoptCronRunSessionMetadata(params: {
     changed = true;
   }
 
-  if (nextSessionFile !== params.entry.sessionFile) {
-    params.entry.sessionFile = nextSessionFile;
-    changed = true;
-  }
+  void nextSessionFile;
 
   return changed;
 }

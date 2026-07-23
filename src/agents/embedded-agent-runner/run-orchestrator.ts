@@ -119,7 +119,8 @@ async function runEmbeddedAgentInternal(
     agentId: paramsBase.agentId ?? runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
     sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
-    sessionFile: runSessionTarget.sessionFile,
+    sessionTarget: runSessionTarget,
+    sessionFile: runSessionTarget.sessionKey,
     skillWorkshopProposalMutationBudget,
   });
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);

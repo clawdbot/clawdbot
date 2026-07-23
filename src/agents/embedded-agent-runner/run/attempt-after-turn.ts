@@ -3,7 +3,6 @@
  */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -15,13 +14,8 @@ import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js"
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import type { NormalizedUsage } from "../../usage.js";
-import {
-  rotateTranscriptAfterCompaction,
-  shouldRotateCompactionTranscript,
-} from "../compaction-successor-transcript.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
-import { updateActiveEmbeddedRunSessionFile } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import {
   finalizeAttemptContextEngineTurn,
@@ -166,40 +160,6 @@ export async function completeEmbeddedAttemptAfterTurn(
           });
         } catch (entryErr) {
           log.warn(`failed to persist bootstrap completion entry: ${String(entryErr)}`);
-        }
-      }
-
-      if (
-        state.compactionOccurredThisAttempt &&
-        !state.promptError &&
-        !lifecycleState.aborted &&
-        !lifecycleState.timedOut &&
-        !lifecycleState.idleTimedOut &&
-        !lifecycleState.timedOutDuringCompaction &&
-        shouldRotateCompactionTranscript(attempt.config)
-      ) {
-        try {
-          const rotation = await rotateTranscriptAfterCompaction({
-            sessionManager,
-            sessionFile: attempt.sessionFile,
-          });
-          if (rotation.rotated) {
-            sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
-            sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
-            updateActiveEmbeddedRunSessionFile(
-              attempt.sessionId,
-              sessionFileUsed,
-              attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
-            );
-            log.info(
-              `[compaction] rotated active transcript after automatic compaction ` +
-                `(sessionKey=${attempt.sessionKey ?? attempt.sessionId})`,
-            );
-          }
-        } catch (err) {
-          log.warn("[compaction] automatic transcript rotation failed", {
-            errorMessage: formatErrorMessage(err),
-          });
         }
       }
     });

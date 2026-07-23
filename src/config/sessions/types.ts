@@ -22,7 +22,6 @@ import type {
   SessionCreatedVia,
   SessionEntryProvenance,
 } from "./session-entry-provenance.js";
-import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 
 export type SessionScope = "per-sender" | "global";
@@ -250,7 +249,10 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
-export type SessionEntry = SessionRestartRecoveryState &
+/** Empty in production; test-only declarations model retired fixture metadata. */
+export interface SessionEntryTestExtensions {}
+
+export type SessionEntryCore = SessionRestartRecoveryState &
   SessionEntryProvenance & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: SessionVisibility;
@@ -306,7 +308,6 @@ export type SessionEntry = SessionRestartRecoveryState &
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
     lastActivityAt?: number;
-    sessionFile?: string;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
     /** Immutable session key authorized to receive this child's completion handoff. */
@@ -558,10 +559,14 @@ export type SessionEntry = SessionRestartRecoveryState &
     acp?: SessionAcpMeta;
   };
 
+export type SessionEntry = SessionEntryCore & SessionEntryTestExtensions;
+
 /** Internal durable fields excluded from public/plugin session projections. */
-export type InternalSessionEntry = SessionEntry & {
+export type InternalSessionEntryCore = SessionEntryCore & {
   mainRestartRecovery?: MainRestartRecoveryState;
 };
+
+export type InternalSessionEntry = InternalSessionEntryCore & SessionEntryTestExtensions;
 
 export function isTerminalSessionStatus(
   status: unknown,
@@ -723,20 +728,6 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.forkSource !== undefined) {
     next.forkSource = existing.forkSource;
-  }
-
-  if (existing.sessionId !== sessionId) {
-    // Session id rotations should move transcript paths when they match known reset/fork shapes.
-    const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
-    const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
-    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-      sessionFile: candidateSessionFile,
-      previousSessionId: existing.sessionId,
-      nextSessionId: sessionId,
-    });
-    if (rewrittenSessionFile) {
-      next.sessionFile = rewrittenSessionFile;
-    }
   }
 
   // Guard against stale provider carry-over when callers patch runtime model

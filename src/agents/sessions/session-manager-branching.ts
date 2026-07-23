@@ -2,7 +2,6 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   isJsonRecord,
@@ -103,7 +102,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
   }
 
   createBranchedSession(leafId: string): string | undefined {
-    const previousSessionFile = this.sessionFile;
+    const previousSessionId = this.sessionId;
     const branchPath = this.collectBranchedSessionPath(leafId);
     if (branchPath.entries.length === 0) {
       throw new Error(`Entry ${leafId} not found`);
@@ -111,15 +110,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
 
     const newSessionId = createSessionId();
     const timestamp = new Date().toISOString();
-    const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-    const sqlitePersistence = this.sqlitePersistence;
-    const newSessionFile = sqlitePersistence
-      ? formatSqliteSessionFileMarker({
-          agentId: sqlitePersistence.agentId,
-          sessionId: newSessionId,
-          storePath: sqlitePersistence.storePath,
-        })
-      : join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
+    const persistenceTarget = this.persistenceTarget;
 
     const header: SessionHeader = {
       type: "session",
@@ -127,7 +118,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
       id: newSessionId,
       timestamp,
       cwd: this.cwd,
-      parentSession: this.shouldPersist ? previousSessionFile : undefined,
+      parentSession: persistenceTarget ? previousSessionId : undefined,
     };
     const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
     const labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }> = [];
@@ -160,46 +151,32 @@ export class SessionManagerBranching extends SessionManagerEntries {
     this.fileEntries = [header, ...branchPath.entries, ...labelEntries];
     this.opaqueFileEntries = branchPath.opaqueEntries;
     this.sessionId = newSessionId;
-    this.sessionFileSnapshot = undefined;
-    if (this.shouldPersist) {
-      this.sessionFile = newSessionFile;
-      if (sqlitePersistence) {
-        const updatedAt = Date.now();
-        const previousEntry = loadSessionEntry({
-          agentId: sqlitePersistence.agentId,
-          sessionKey: sqlitePersistence.sessionKey,
-          storePath: sqlitePersistence.storePath,
-        });
-        this.sqlitePersistence = { ...sqlitePersistence, sessionId: newSessionId };
-        replaceSessionEntrySync(
-          {
-            agentId: sqlitePersistence.agentId,
-            sessionKey: sqlitePersistence.sessionKey,
-            storePath: sqlitePersistence.storePath,
-          },
-          {
-            ...(previousEntry ?? { updatedAt }),
-            sessionFile: newSessionFile,
-            sessionId: newSessionId,
-            updatedAt,
-          },
-        );
-      }
-      this.buildIndex();
-      const hasAssistant = this.fileEntries.some(
-        (entry) => entry.type === "message" && entry.message.role === "assistant",
+    if (persistenceTarget) {
+      const updatedAt = Date.now();
+      const previousEntry = loadSessionEntry({
+        agentId: persistenceTarget.agentId,
+        sessionKey: persistenceTarget.sessionKey,
+        storePath: persistenceTarget.storePath,
+      });
+      this.persistenceTarget = { ...persistenceTarget, sessionId: newSessionId };
+      replaceSessionEntrySync(
+        {
+          agentId: persistenceTarget.agentId,
+          sessionKey: persistenceTarget.sessionKey,
+          storePath: persistenceTarget.storePath,
+        },
+        {
+          ...(previousEntry ?? { updatedAt }),
+          sessionId: newSessionId,
+          updatedAt,
+        },
       );
-      if (hasAssistant) {
-        this.replacePersistedTranscript();
-        this.flushed = true;
-      } else {
-        this.flushed = false;
-      }
-      return newSessionFile;
+      this.buildIndex();
+      this.replacePersistedTranscript();
+      return newSessionId;
     }
 
     this.buildIndex();
     return undefined;
   }
 }
-import { join } from "node:path";

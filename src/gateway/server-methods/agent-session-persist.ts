@@ -466,10 +466,8 @@ export async function persistAgentSessionPhase(params: {
       sessionKey: params.canonicalSessionKey,
       sessionId: resolvedSessionId,
       storePath: params.storePath,
-      sessionFile: sessionEntry?.sessionFile,
       agentId: params.sessionAgentId,
       previousSessionId,
-      previousSessionFile: previousSessionId ? params.entry?.sessionFile : undefined,
       previousEndReason: previousSessionId
         ? (freshness?.staleReason ??
           (usableRequestedSessionId && params.entry?.sessionId !== usableRequestedSessionId

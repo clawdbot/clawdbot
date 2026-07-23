@@ -1,23 +1,16 @@
 /**
- * Session tree manager backed by SQLite markers or explicit standalone files.
+ * Session tree manager backed by an explicit SQLite transcript identity.
  *
  * The public facade lives here; codec, storage, persistence, and branching
  * behavior are split into focused internal modules.
  */
-import { resolve } from "node:path";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
-import type { SqliteSessionManagerPersistence } from "./session-manager-core.js";
-import {
-  getDefaultSessionDir,
-  loadEntriesFromFileWithSnapshot,
-  loadSqliteMarkedSessionFile,
-  revalidateLoadedSessionFile,
-  type LoadedSessionFile,
-} from "./session-manager-file.js";
+import type { SessionManagerPersistenceTarget } from "./session-manager-core.js";
 import type {
   AppendPersistenceOptions,
   FileEntry,
@@ -28,6 +21,7 @@ import type {
   SessionContext,
   SessionEntry,
   SessionHeader,
+  SessionLeafControl,
   SessionTreeNode,
 } from "./session-manager-types.js";
 
@@ -39,7 +33,6 @@ export {
   normalizeLoadedFileEntry,
   parseSessionEntries,
 } from "./session-manager-codec.js";
-export { getDefaultSessionDir, loadEntriesFromFile } from "./session-manager-file.js";
 export type {
   BranchSummaryEntry,
   CompactionEntry,
@@ -49,6 +42,8 @@ export type {
   LabelEntry,
   ModelChangeEntry,
   NewSessionOptions,
+  PromptReleasedSessionEntry,
+  PromptReleasedSessionMergeResult,
   ResetEntry,
   ResetReason,
   SessionContext,
@@ -56,6 +51,7 @@ export type {
   SessionEntryBase,
   SessionHeader,
   SessionInfoEntry,
+  SessionLeafControl,
   SessionMessageEntry,
   SessionTreeNode,
   ThinkingLevelChangeEntry,
@@ -64,29 +60,26 @@ export type {
 export class SessionManager extends SessionManagerBranching {
   private constructor(
     cwd: string,
-    sessionDir: string,
-    sessionFile: string | undefined,
-    persist: boolean,
-    loadedSessionFile?: LoadedSessionFile,
-    sqlitePersistence?: SqliteSessionManagerPersistence,
+    persistenceTarget?: SessionManagerPersistenceTarget,
+    loadedEntries?: FileEntry[],
   ) {
-    super(cwd, sessionDir, sessionFile, persist, loadedSessionFile, sqlitePersistence);
+    super(cwd, persistenceTarget, loadedEntries);
   }
 
-  override setSessionFile(sessionFile: string): void {
-    super.setSessionFile(sessionFile);
+  override setSessionTarget(target: SessionManagerPersistenceTarget): void {
+    super.setSessionTarget(target);
   }
 
   override newSession(options?: NewSessionOptions): string | undefined {
     return super.newSession(options);
   }
 
-  override getSerializedFileLinesForRewrite(): string[] {
-    return super.getSerializedFileLinesForRewrite();
-  }
-
   override clearPreservedOpaqueFileEntries(): void {
     super.clearPreservedOpaqueFileEntries();
+  }
+
+  override getPersistedEntries(): unknown[] {
+    return super.getPersistedEntries();
   }
 
   /** Makes pending append-oriented persistence durable without rewriting committed entries. */
@@ -102,20 +95,12 @@ export class SessionManager extends SessionManagerBranching {
     return super.getCwd();
   }
 
-  override getSessionDir(): string {
-    return super.getSessionDir();
-  }
-
   override getSessionId(): string {
     return super.getSessionId();
   }
 
-  override wasRecoveredFromCorruptHeader(): boolean {
-    return super.wasRecoveredFromCorruptHeader();
-  }
-
-  override getSessionFile(): string | undefined {
-    return super.getSessionFile();
+  override getSessionTarget(): SessionManagerPersistenceTarget | undefined {
+    return super.getSessionTarget();
   }
 
   override removeTrailingEntries(
@@ -127,10 +112,6 @@ export class SessionManager extends SessionManagerBranching {
 
   override persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
     super.persist(entry, options);
-  }
-
-  override syncSnapshotAfterHeaderRewrite(expectedContent?: string): void {
-    super.syncSnapshotAfterHeaderRewrite(expectedContent);
   }
 
   override mergePromptReleasedSessionEntries(
@@ -192,6 +173,22 @@ export class SessionManager extends SessionManagerBranching {
 
   override getLeafId(): string | null {
     return super.getLeafId();
+  }
+
+  override getAppendParentId(): string | null {
+    return super.getAppendParentId();
+  }
+
+  override getAppendMode(): "side" | undefined {
+    return super.getAppendMode();
+  }
+
+  override appendLeafControl(params: {
+    targetId: string | null;
+    appendParentId: string | null;
+    appendMode?: "side";
+  }): SessionLeafControl {
+    return super.appendLeafControl(params);
   }
 
   override getLeafEntry(): SessionEntry | undefined {
@@ -259,47 +256,35 @@ export class SessionManager extends SessionManagerBranching {
     return super.createBranchedSession(leafId);
   }
 
-  static create(cwd: string, sessionDir?: string): SessionManager {
-    const directory = sessionDir ?? getDefaultSessionDir(cwd);
-    return new SessionManager(cwd, directory, undefined, true);
-  }
-
-  static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
-    const sqliteLoaded = loadSqliteMarkedSessionFile(
-      path,
-      (marker) => loadTranscriptEventsSync(marker) as FileEntry[],
-      { cwdOverride },
-    );
-    if (sqliteLoaded) {
-      return new SessionManager(
-        sqliteLoaded.cwd,
-        sessionDir ?? "",
-        path,
-        true,
-        { entries: sqliteLoaded.entries, snapshot: undefined },
-        { ...sqliteLoaded.sqliteMarker, sessionKey: sqliteLoaded.sessionKey },
-      );
-    }
-
-    const loaded = revalidateLoadedSessionFile(path, loadEntriesFromFileWithSnapshot(path));
-    const header = loaded.entries.find((entry) => entry.type === "session");
-    const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
-    const directory = sessionDir ?? resolve(path, "..");
-    return new SessionManager(cwd, directory, path, true, loaded);
+  static open(target: SessionTranscriptRuntimeTarget, cwdOverride?: string): SessionManager {
+    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const header = entries.find((entry) => entry.type === "session");
+    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
   }
 
   static inMemory(cwd: string = process.cwd()): SessionManager {
-    return new SessionManager(cwd, "", undefined, false);
+    return new SessionManager(cwd);
+  }
+
+  static fromEntries(entries: readonly unknown[], cwdOverride?: string): SessionManager {
+    const fileEntries = entries as readonly FileEntry[];
+    const header = fileEntries.find(
+      (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
+    );
+    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), undefined, [
+      ...fileEntries,
+    ]);
   }
 }
 
 export type ReadonlySessionManager = Pick<
   SessionManager,
   | "getCwd"
-  | "getSessionDir"
   | "getSessionId"
-  | "getSessionFile"
+  | "getSessionTarget"
   | "getLeafId"
+  | "getAppendParentId"
+  | "getAppendMode"
   | "getLeafEntry"
   | "getEntry"
   | "getLabel"

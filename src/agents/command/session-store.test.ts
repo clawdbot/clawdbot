@@ -2785,17 +2785,15 @@ describe("recordCliCompactionInStore", () => {
     });
   });
 
-  it("persists successor session handles from native CLI compaction", async () => {
-    await withTempSessionStore(async ({ dir, storePath }) => {
+  it("persists successor session ids from native CLI compaction", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-record-cli-compaction-rotate";
       const sessionId = "test-record-cli-compaction-rotate-session";
       const nextSessionId = "test-record-cli-compaction-rotate-next";
-      const nextSessionFile = path.join(dir, `${nextSessionId}.jsonl`);
       const sessionStore: Record<string, SessionEntry> = {
         [sessionKey]: {
           sessionId,
           updatedAt: 1,
-          sessionFile: path.join(dir, `${sessionId}.jsonl`),
         },
       };
       await seedSessionStore(storePath, sessionStore);
@@ -2806,17 +2804,14 @@ describe("recordCliCompactionInStore", () => {
         sessionStore,
         storePath,
         newSessionId: nextSessionId,
-        newSessionFile: nextSessionFile,
       });
 
       expect(sessionStore[sessionKey]?.sessionId).toBe(nextSessionId);
-      expect(sessionStore[sessionKey]?.sessionFile).toBe(nextSessionFile);
       expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
       expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual([sessionId, nextSessionId]);
 
       const persisted = loadPersistedSessionStore(storePath);
       expect(persisted[sessionKey]?.sessionId).toBe(nextSessionId);
-      expect(persisted[sessionKey]?.sessionFile).toBe(nextSessionFile);
     });
   });
 

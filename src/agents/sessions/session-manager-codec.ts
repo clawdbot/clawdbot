@@ -35,9 +35,9 @@ function migrateV1ToV2(
     if (entry.type === "compaction") {
       const compaction = entry as CompactionEntry & { firstKeptEntryIndex?: number };
       if (typeof compaction.firstKeptEntryIndex === "number") {
-        const targetEntry =
-          entriesByOriginalIndex?.[compaction.firstKeptEntryIndex] ??
-          entries[compaction.firstKeptEntryIndex];
+        const targetEntry = entriesByOriginalIndex
+          ? entriesByOriginalIndex[compaction.firstKeptEntryIndex]
+          : entries[compaction.firstKeptEntryIndex];
         if (targetEntry && targetEntry.type !== "session") {
           compaction.firstKeptEntryId = targetEntry.id;
         }
@@ -208,11 +208,103 @@ function isSessionEntryType(type: unknown): boolean {
 }
 
 export function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
+  if (
+    !isJsonRecord(entry) ||
+    !isSessionEntryType(entry.type) ||
+    typeof entry.id !== "string" ||
+    entry.id.length === 0 ||
+    (entry.parentId !== undefined &&
+      entry.parentId !== null &&
+      typeof entry.parentId !== "string") ||
+    (entry.timestamp !== undefined && typeof entry.timestamp !== "string")
+  ) {
+    return false;
+  }
+  switch (entry.type) {
+    case "message":
+      return isReadableMessage(entry.message);
+    case "thinking_level_change":
+      return typeof entry.thinkingLevel === "string" && entry.thinkingLevel.length > 0;
+    case "model_change":
+      return (
+        typeof entry.provider === "string" &&
+        entry.provider.length > 0 &&
+        typeof entry.modelId === "string" &&
+        entry.modelId.length > 0
+      );
+    case "compaction":
+      return (
+        typeof entry.summary === "string" &&
+        typeof entry.firstKeptEntryId === "string" &&
+        entry.firstKeptEntryId.length > 0 &&
+        typeof entry.tokensBefore === "number"
+      );
+    case "reset":
+      return (
+        ["new", "reset", "idle", "daily", "cron-stale"].includes(String(entry.reason)) &&
+        (entry.firstKeptEntryId === undefined || typeof entry.firstKeptEntryId === "string")
+      );
+    case "branch_summary":
+      return typeof entry.fromId === "string" && typeof entry.summary === "string";
+    case "custom":
+      return typeof entry.customType === "string" && entry.customType.length > 0;
+    case "custom_message":
+      return (
+        typeof entry.customType === "string" &&
+        entry.customType.length > 0 &&
+        isReadableContent(entry.content) &&
+        typeof entry.display === "boolean"
+      );
+    case "label":
+      return (
+        typeof entry.targetId === "string" &&
+        entry.targetId.length > 0 &&
+        (entry.label === undefined || typeof entry.label === "string")
+      );
+    case "session_info":
+      return entry.name === undefined || typeof entry.name === "string";
+    default:
+      return false;
+  }
+}
+
+function isReadableContent(value: unknown): boolean {
   return (
-    isJsonRecord(entry) &&
-    isSessionEntryType(entry.type) &&
-    typeof entry.id === "string" &&
-    entry.id.length > 0
+    typeof value === "string" ||
+    (Array.isArray(value) &&
+      value.every((part) => isJsonRecord(part) && typeof part.type === "string"))
+  );
+}
+
+function isReadableMessage(value: unknown): boolean {
+  if (!isJsonRecord(value) || typeof value.role !== "string") {
+    return false;
+  }
+  switch (value.role) {
+    case "user":
+    case "assistant":
+      return isReadableContent(value.content);
+    case "toolResult":
+      return (
+        typeof value.toolCallId === "string" &&
+        typeof value.toolName === "string" &&
+        typeof value.isError === "boolean" &&
+        Array.isArray(value.content)
+      );
+    case "custom":
+      return typeof value.customType === "string" && isReadableContent(value.content);
+    case "bashExecution":
+      return typeof value.command === "string" && typeof value.output === "string";
+    default:
+      return false;
+  }
+}
+
+function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
+  return (
+    isJsonRecord(value) &&
+    isSessionEntryType(value.type) &&
+    (value.type !== "message" || isReadableMessage(value.message))
   );
 }
 
@@ -291,7 +383,7 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
     }
     if (
       isIndexedSessionEntry(entry) ||
-      (acceptsLegacyEntries && isJsonRecord(entry) && isSessionEntryType(entry.type))
+      (acceptsLegacyEntries && isReadableLegacySessionEntry(entry))
     ) {
       fileEntries.push(entry);
       fileEntriesByOriginalIndex[originalIndex] = entry;

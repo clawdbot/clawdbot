@@ -9,8 +9,8 @@ import {
   testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,

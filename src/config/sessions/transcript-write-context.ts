@@ -1,7 +1,6 @@
 // Transcript write contexts let nested append paths reuse an already-owned session write lock.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 
 type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
@@ -39,7 +38,7 @@ const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscript
 // identity because they are storage references rather than lockable paths.
 function normalizeConcretePathForCompare(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  if (!trimmed || parseSqliteSessionFileMarker(trimmed)) {
+  if (!trimmed || !path.isAbsolute(trimmed) || !trimmed.endsWith(".jsonl")) {
     return undefined;
   }
   return path.resolve(trimmed);

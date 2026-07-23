@@ -332,7 +332,6 @@ function buildContextEngineMaintenanceRuntimeContext(params: {
             ...(params.agentId ? { agentId: params.agentId } : {}),
           },
           request,
-          config: params.config,
         });
       return await rewriteRuntimeTranscriptEntries();
     },

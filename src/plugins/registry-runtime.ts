@@ -310,10 +310,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         readOnly: true,
       });
       for (const { sessionKey, entry } of entries) {
-        if (
-          sessionIds.has(entry.sessionId) ||
-          (entry.sessionFile ? sessionFiles.has(entry.sessionFile) : false)
-        ) {
+        if (sessionIds.has(entry.sessionId)) {
           assertSessionEntryOwned({ action: params.action, entry, sessionKey });
         }
       }
@@ -351,7 +348,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           targetSessionId === entry?.sessionId &&
           directSessionId === entry?.sessionId &&
           targetAgentId === directAgentId &&
-          (!sessionFile || sessionFile === entry?.sessionFile);
+          (!sessionFile || sessionFile === sessionKey);
         if (!targetIdentityMatches) {
           throw new Error(
             `Plugin "${pluginId}" may execute a persisted session only with its exact session target identity.`,

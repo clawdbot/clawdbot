@@ -1080,7 +1080,7 @@ describe("session.message websocket events", () => {
       const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
         ws,
         sessionKey: "agent:main:main",
-        sessionFile: turn.sessionFile,
+        sessionFile: "agent:main:main",
         message: transcriptMessage,
         messageId: "msg-usage",
       });

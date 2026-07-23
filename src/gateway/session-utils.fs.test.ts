@@ -133,7 +133,10 @@ function appendBlockedUserMessageWithSessionManager(params: {
   pluginId: string;
   idempotencyKey?: string;
 }): string {
-  const sessionManager = SessionManager.open(params.sessionFile, path.dirname(params.sessionFile));
+  const sessionManager = SessionManager.openFile(
+    params.sessionFile,
+    path.dirname(params.sessionFile),
+  );
   return appendBlockedUserMessage(sessionManager, params);
 }
 

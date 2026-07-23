@@ -13,11 +13,8 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
-import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../../../config/sessions/sqlite-marker.js";
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
@@ -120,16 +117,14 @@ async function resolveAvailableMemoryFilename(params: {
 }
 
 async function getRecentSqliteSessionContent(
-  marker: SqliteSessionFileMarker,
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
   messageCount: number,
 ): Promise<string | null> {
   try {
     return getRecentSessionContentFromEvents(
       selectVisibleTranscriptEvents(
         await loadTranscriptEvents({
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          storePath: marker.storePath,
+          ...scope,
         }),
       ),
       messageCount,
@@ -246,13 +241,20 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (sessionFile) {
-      const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-      // SQLite-backed runtime sessions carry a marker in the legacy sessionFile
-      // slot; file artifact helpers only run for real transcript paths.
-      sessionContent = sqliteMarker
-        ? await getRecentSqliteSessionContent(sqliteMarker, messageCount)
-        : await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+    if (sessionFile || currentSessionId) {
+      sessionContent = currentSessionId
+        ? await getRecentSqliteSessionContent(
+            {
+              agentId,
+              sessionId: currentSessionId,
+              sessionKey: event.sessionKey,
+              storePath: resolveStorePath(cfg?.session?.store, { agentId }),
+            },
+            messageCount,
+          )
+        : sessionFile
+          ? await getRecentSessionContentWithResetFallback(sessionFile, messageCount)
+          : null;
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,

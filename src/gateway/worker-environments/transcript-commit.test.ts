@@ -143,7 +143,7 @@ describe("worker transcript commit application", () => {
   let root: string;
   let sessionsDir: string;
   let storePath: string;
-  let sessionFile: string;
+  let sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
   let cfg: OpenClawConfig;
   let committer: WorkerTranscriptCommitter;
   let ledgerStore: WorkerTranscriptCommitStore;
@@ -167,14 +167,12 @@ describe("worker transcript commit application", () => {
         updatedAt: 10,
       },
     );
-    sessionFile = (
-      await resolveSessionTranscriptRuntimeTarget({
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        storePath,
-      })
-    ).sessionFile;
+    sessionTarget = await resolveSessionTranscriptRuntimeTarget({
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      storePath,
+    });
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
@@ -206,7 +204,7 @@ describe("worker transcript commit application", () => {
     expect(new Set(entryIds).size).toBe(3);
     expect(newLeafId).toBe(entryIds[2]);
 
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getLeafId()).toBe(newLeafId);
     expect(reopened.getEntries()).toEqual([
       expect.objectContaining({
@@ -273,16 +271,6 @@ describe("worker transcript commit application", () => {
       storePath,
     });
     expect(persistedEntry).toMatchObject({ sessionId: SESSION_ID });
-    expect(persistedEntry?.sessionFile).toBe(
-      (
-        await resolveSessionTranscriptRuntimeTarget({
-          agentId: "main",
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          storePath,
-        })
-      ).sessionFile,
-    );
     expect(updates).toEqual(
       entryIds.map((entryId, index) =>
         expect.objectContaining({
@@ -320,7 +308,7 @@ describe("worker transcript commit application", () => {
     if (!outcome.ok) {
       throw new Error(`expected user-only transcript commit, received ${outcome.reason}`);
     }
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries()).toEqual([
       expect.objectContaining({
         id: outcome.result.newLeafId,
@@ -353,7 +341,7 @@ describe("worker transcript commit application", () => {
     });
 
     expect(stale).toEqual({ ok: false, reason: "stale-base-leaf" });
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries()).toHaveLength(3);
     expect(reopened.getLeafId()).toBe(first.result.newLeafId);
   });
@@ -373,7 +361,7 @@ describe("worker transcript commit application", () => {
     expect(first.ok).toBe(true);
     expect(replay).toEqual(first);
     expect(changed).toEqual({ ok: false, reason: "invalid-batch" });
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries()).toHaveLength(3);
     if (first.ok) {
       expect(reopened.getLeafId()).toBe(first.result.newLeafId);
@@ -401,7 +389,7 @@ describe("worker transcript commit application", () => {
     await expect(interruptedCommitter.commit({ identity: IDENTITY, request })).rejects.toThrow(
       "simulated commit-result interruption",
     );
-    const afterInterruption = SessionManager.open(sessionFile);
+    const afterInterruption = SessionManager.open(sessionTarget);
     const committedEntryIds = afterInterruption.getEntries().map((entry) => entry.id);
     expect(committedEntryIds).toHaveLength(request.messages.length);
     const laterLeafId = afterInterruption.appendMessage({
@@ -419,14 +407,14 @@ describe("worker transcript commit application", () => {
         newLeafId: committedEntryIds.at(-1),
       },
     });
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries()).toHaveLength(request.messages.length + 1);
     expect(reopened.getLeafId()).toBe(laterLeafId);
   });
 
   it("replays an interrupted terminal write after its branch is abandoned", async () => {
     cfg = { ...cfg };
-    const initialManager = SessionManager.open(sessionFile);
+    const initialManager = SessionManager.open(sessionTarget);
     const baseLeafId = initialManager.appendMessage({
       role: "user",
       content: [{ type: "text", text: "Local base" }],
@@ -455,7 +443,7 @@ describe("worker transcript commit application", () => {
     await expect(interruptedCommitter.commit({ identity: IDENTITY, request })).rejects.toThrow(
       "simulated off-branch terminal interruption",
     );
-    const afterInterruption = SessionManager.open(sessionFile);
+    const afterInterruption = SessionManager.open(sessionTarget);
     const committedEntries = afterInterruption
       .getEntries()
       .filter((entry) => entry.id !== baseLeafId);
@@ -496,7 +484,7 @@ describe("worker transcript commit application", () => {
         newLeafId: committedEntryIds.at(-1),
       },
     });
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getBranch().map((entry) => entry.id)).toEqual([baseLeafId, localLeafId]);
     if (!replay.ok) {
       throw new Error(`expected interrupted commit replay, received ${replay.reason}`);
@@ -506,7 +494,7 @@ describe("worker transcript commit application", () => {
   });
 
   it("rejects ambiguous persisted recovery without appending or publishing", async () => {
-    const initialManager = SessionManager.open(sessionFile);
+    const initialManager = SessionManager.open(sessionTarget);
     const baseLeafId = initialManager.appendMessage({
       role: "user",
       content: [{ type: "text", text: "Local base" }],
@@ -531,7 +519,7 @@ describe("worker transcript commit application", () => {
     await expect(interruptedCommitter.commit({ identity: IDENTITY, request })).rejects.toThrow(
       "simulated ambiguous terminal interruption",
     );
-    const manager = SessionManager.open(sessionFile);
+    const manager = SessionManager.open(sessionTarget);
     const originalEntries = manager.getEntries().filter((entry) => entry.id !== baseLeafId);
     expect(originalEntries).toHaveLength(request.messages.length);
     manager.branch(baseLeafId);
@@ -556,7 +544,7 @@ describe("worker transcript commit application", () => {
     const replay = await committer.commit({ identity: IDENTITY, request });
 
     expect(replay).toEqual({ ok: false, reason: "invalid-batch" });
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries()).toHaveLength(entryCountBeforeRetry);
     expect(reopened.getBranch().map((entry) => entry.id)).toEqual([baseLeafId, localLeafId]);
     expect(updates).toEqual([]);
@@ -597,7 +585,7 @@ describe("worker transcript commit application", () => {
     } finally {
       appendSpy.mockRestore();
     }
-    expect(SessionManager.open(sessionFile).getEntries()).toEqual([]);
+    expect(SessionManager.open(sessionTarget).getEntries()).toEqual([]);
     const entryAfterFailure = loadSessionEntry({
       agentId: "main",
       sessionKey: SESSION_KEY,
@@ -605,7 +593,7 @@ describe("worker transcript commit application", () => {
     });
     expect(entryAfterFailure).toEqual(entryBeforeFailure);
 
-    const manager = SessionManager.open(sessionFile);
+    const manager = SessionManager.open(sessionTarget);
     const localLeafId = manager.appendMessage({
       role: "user",
       content: [{ type: "text", text: "Local activity after interruption" }],
@@ -614,7 +602,7 @@ describe("worker transcript commit application", () => {
     const retry = await committer.commit({ identity: IDENTITY, request });
 
     expect(retry).toEqual({ ok: false, reason: "stale-base-leaf" });
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries()).toEqual([
       expect.objectContaining({
         id: localLeafId,
@@ -628,7 +616,7 @@ describe("worker transcript commit application", () => {
     if (!first.ok) {
       throw new Error(`expected initial transcript commit success, received ${first.reason}`);
     }
-    const manager = SessionManager.open(sessionFile);
+    const manager = SessionManager.open(sessionTarget);
     const abandonedMessage: Parameters<SessionManager["appendMessage"]>[0] & {
       idempotencyKey: string;
     } = {
@@ -665,7 +653,7 @@ describe("worker transcript commit application", () => {
       throw new Error(`expected branch-safe transcript commit, received ${outcome.reason}`);
     }
     expect(outcome.result.newLeafId).not.toBe(abandonedId);
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getLeafId()).toBe(outcome.result.newLeafId);
     expect(reopened.getEntry(outcome.result.newLeafId)).toMatchObject({
       parentId: activeLeafId,
@@ -705,7 +693,7 @@ describe("worker transcript commit application", () => {
     expect(second.result.entryIds).toHaveLength(1);
     expect(second.result.newLeafId).toBe(second.result.entryIds[0]);
     expect(second.result.newLeafId).not.toBe(first.result.newLeafId);
-    const reopened = SessionManager.open(sessionFile);
+    const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries().at(-1)).toMatchObject({
       id: second.result.newLeafId,
       parentId: first.result.newLeafId,

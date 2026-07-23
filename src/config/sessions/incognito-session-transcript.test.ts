@@ -43,7 +43,7 @@ describe("incognito transcript access", () => {
       ).toBe(true);
       expect(fs.existsSync(durableStorePath)).toBe(false);
 
-      const firstTurn = SessionManager.open(created.sessionFile, cwd, cwd);
+      const firstTurn = SessionManager.openFile(created.sessionFile, cwd, cwd);
       firstTurn.appendMessage({ role: "user", content: "first question", timestamp: 1 });
       firstTurn.appendMessage({
         role: "assistant",
@@ -63,7 +63,7 @@ describe("incognito transcript access", () => {
         timestamp: 2,
       });
 
-      const secondTurn = SessionManager.open(created.sessionFile, cwd, cwd);
+      const secondTurn = SessionManager.openFile(created.sessionFile, cwd, cwd);
       secondTurn.appendMessage({ role: "user", content: "second question", timestamp: 3 });
       const messages = secondTurn.buildSessionContext().messages;
 

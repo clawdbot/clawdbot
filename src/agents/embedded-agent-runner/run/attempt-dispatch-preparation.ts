@@ -114,7 +114,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
             agentId: workspaceResolution.agentId,
           }),
         })
-      ).sessionFile
+      ).sessionKey
     : sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);

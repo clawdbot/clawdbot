@@ -209,7 +209,6 @@ export async function projectSessionsPatchEntry(params: {
     : {
         ...existing,
         sessionId: randomUUID(),
-        sessionFile: undefined,
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       };
   if (existing && !existing.sessionId) {

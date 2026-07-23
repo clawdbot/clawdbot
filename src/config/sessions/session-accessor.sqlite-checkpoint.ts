@@ -175,7 +175,6 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   const nextEntry = cloneSqliteCheckpointSessionEntry({
     currentEntry,
     label,
-    nextSessionFile: forked.sessionFile,
     nextSessionId: forked.sessionId,
     parentSessionKey: params.parentSessionKey,
     totalTokens: forked.totalTokens,
@@ -216,7 +215,6 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
 
   const nextEntry = cloneSqliteCheckpointSessionEntry({
     currentEntry,
-    nextSessionFile: restored.sessionFile,
     nextSessionId: restored.sessionId,
     preserveCompactionCheckpoints: true,
     totalTokens: restored.totalTokens,
@@ -374,7 +372,6 @@ function readSessionCompactionCheckpoint(
 function cloneSqliteCheckpointSessionEntry(params: {
   currentEntry: SessionEntry;
   nextSessionId: string;
-  nextSessionFile: string;
   label?: string;
   parentSessionKey?: string;
   totalTokens?: number;
@@ -385,7 +382,6 @@ function cloneSqliteCheckpointSessionEntry(params: {
   return {
     ...params.currentEntry,
     sessionId: params.nextSessionId,
-    sessionFile: params.nextSessionFile,
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,

@@ -14,6 +14,7 @@ import {
   sessionDeliveryRoute,
 } from "../../utils/delivery-context.shared.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
+import { formatSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import {
   applySessionEntryReplacements,
   appendTranscriptMessage,
@@ -66,7 +67,6 @@ import {
   trimSqliteTranscriptForManualCompact,
 } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 

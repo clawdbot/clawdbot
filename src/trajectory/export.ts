@@ -7,8 +7,9 @@ import type { AgentMessage } from "../agents/runtime/index.js";
 import { parseSessionFileEntriesWithWarnings } from "../agents/sessions/session-file-parser.js";
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -47,7 +48,8 @@ import type {
 // support bundle for debugging agent behavior.
 type BuildTrajectoryBundleParams = {
   outputDir: string;
-  sessionFile: string;
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
@@ -182,7 +184,8 @@ function migrateLegacySessionEntries(entries: FileEntry[]): void {
 }
 
 async function readSessionEntries(params: {
-  sessionFile: string;
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionId: string;
   sessionKey?: string;
 }): Promise<{
@@ -190,6 +193,13 @@ async function readSessionEntries(params: {
   warnings: JsonlParseWarning[];
   rowByEntry: Map<FileEntry, number>;
 }> {
+  if (params.sessionTarget) {
+    const events = await loadTranscriptEvents(params.sessionTarget);
+    return collectSessionEntries(events.map((value, index) => ({ row: index + 1, value })));
+  }
+  if (!params.sessionFile) {
+    throw new Error("Trajectory export requires a transcript identity or artifact file");
+  }
   const marker = parseSqliteSessionFileMarker(params.sessionFile);
   if (!marker) {
     const { entries, warnings, rowByEntry } = parseSessionFileEntriesWithWarnings(
@@ -214,7 +224,8 @@ async function readSessionEntries(params: {
 }
 
 async function readSessionBranch(params: {
-  sessionFile: string;
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionId: string;
   sessionKey?: string;
 }): Promise<{
@@ -360,14 +371,15 @@ async function parseJsonlFile<T>(
 
 async function readRuntimeTrajectoryEvents(params: {
   runtimeFile?: string;
-  sessionFile: string;
+  sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   sessionId: string;
 }): Promise<{
   events: TrajectoryEvent[];
   runtimeFile?: string;
   warnings: JsonlParseWarning[];
 }> {
-  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  const marker = params.sessionTarget ?? parseSqliteSessionFileMarker(params.sessionFile);
   if (marker && marker.sessionId === params.sessionId) {
     const events = await loadSqliteTrajectoryRuntimeEvents({
       agentId: marker.agentId,
@@ -382,6 +394,9 @@ async function readRuntimeTrajectoryEvents(params: {
     return { events, warnings: [] };
   }
 
+  if (!params.sessionFile) {
+    return { events: [], warnings: [] };
+  }
   const runtimeFile = await resolveTrajectoryRuntimeFile({
     runtimeFile: params.runtimeFile,
     sessionFile: params.sessionFile,
@@ -1086,7 +1101,11 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
   });
-  if (!parseSqliteSessionFileMarker(params.sessionFile)) {
+  if (
+    params.sessionFile &&
+    !params.sessionTarget &&
+    !parseSqliteSessionFileMarker(params.sessionFile)
+  ) {
     const sessionStat = await fsp.stat(params.sessionFile);
     if (sessionStat.size > MAX_TRAJECTORY_SESSION_FILE_BYTES) {
       throw new Error(
@@ -1101,12 +1120,14 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     warnings: sessionWarnings,
   } = await readSessionBranch({
     sessionFile: params.sessionFile,
+    sessionTarget: params.sessionTarget,
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
   });
   const runtimeParse = await readRuntimeTrajectoryEvents({
     runtimeFile: params.runtimeFile,
     sessionFile: params.sessionFile,
+    sessionTarget: params.sessionTarget,
     sessionId: params.sessionId,
   });
   const runtimeFile = runtimeParse.runtimeFile;
@@ -1142,7 +1163,10 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     runtimeEventCount: runtimeEvents.length,
     transcriptEventCount: transcriptEvents.length,
     sourceFiles: {
-      session: maybeRedactPathString(params.sessionFile, redaction),
+      session: maybeRedactPathString(
+        params.sessionFile ?? params.sessionTarget?.sessionKey ?? params.sessionId,
+        redaction,
+      ),
       runtime:
         runtimeFile && (await isRegularNonSymlinkFile(runtimeFile))
           ? maybeRedactPathString(runtimeFile, redaction)

@@ -1,19 +1,13 @@
+import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 /**
  * Prepares the durable session manager before embedded-agent session creation.
  */
-import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import {
-  invalidateSessionFileRepairCache,
-  repairSessionFileIfNeeded,
-} from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../../sessions/index.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
-import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
-import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import {
   runAttemptContextEngineBootstrap,
@@ -37,13 +31,8 @@ function buildCompactionPersistenceGuard(params: {
   sessionFile: string;
   sessionLockController: Pick<EmbeddedAttemptSessionLockController, "withOwnedSessionFileWrite">;
 }): CompactionPersistenceGuard {
-  if (parseSqliteSessionFileMarker(params.sessionFile)) {
-    return {};
-  }
-  return {
-    withCompactionPersistence: (append, validateAppend) =>
-      params.sessionLockController.withOwnedSessionFileWrite(append, validateAppend),
-  };
+  void params;
+  return {};
 }
 
 export async function prepareEmbeddedAttemptSessionManager(input: {
@@ -60,20 +49,6 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   withOwnedSessionWriteLock: WithOwnedSessionWriteLock;
 }) {
   const { attempt } = input;
-  const trustedSessionFileSnapshot =
-    await input.sessionLockController.readTrustedCurrentSessionFileSnapshot();
-  const repairReport = await repairSessionFileIfNeeded({
-    sessionFile: attempt.sessionFile,
-    trustedSnapshot: trustedSessionFileSnapshot,
-    debug: (message) => log.debug(message),
-    warn: (message) => log.warn(message),
-  });
-  if (
-    repairReport.validatedSnapshot &&
-    !input.sessionLockController.publishValidatedSessionFileSnapshot(repairReport.validatedSnapshot)
-  ) {
-    invalidateSessionFileRepairCache(attempt.sessionFile);
-  }
   const transcriptState = await resolveExistingAttemptTranscriptState({
     agentId: input.sessionAgentId,
     config: attempt.config,
@@ -99,7 +74,6 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     attempt.model.api === "azure-openai-responses" ||
     attempt.model.api === "openai-chatgpt-responses";
 
-  await prewarmSessionFile(attempt.sessionFile);
   const preparedUserTurnMessage = attempt.skipPreparedUserTurnMessage
     ? undefined
     : await attempt.userTurnTranscriptRecorder?.resolveMessage();
@@ -107,56 +81,63 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   let latestRuntimeUserMessage: AgentMessage | undefined;
   let latestUserTurnTranscriptRecorder = attempt.userTurnTranscriptRecorder;
   const userTranscriptContextRegistry = createUserTranscriptContextRegistry();
-  const sessionManager = guardSessionManager(SessionManager.open(attempt.sessionFile), {
-    agentId: input.sessionAgentId,
-    sessionKey: attempt.sessionKey,
-    config: attempt.config,
-    contextWindowTokens: attempt.contextTokenBudget,
-    inputProvenance: attempt.inputProvenance,
-    preparedUserTurnMessage,
-    allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-    missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
-    allowedToolNames: input.replayAllowedToolNames,
-    trigger: attempt.trigger,
-    suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
-    suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
-    suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
-    skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
-    onMessagePersisted: () => {
-      input.sessionLockController.refreshAfterOwnedSessionWrite();
+  const sessionManager = guardSessionManager(
+    attempt.sessionManager ??
+      (attempt.sessionTarget
+        ? SessionManager.open(attempt.sessionTarget as SessionTranscriptRuntimeTarget)
+        : SessionManager.inMemory(input.effectiveCwd)),
+    {
+      agentId: input.sessionAgentId,
+      sessionKey: attempt.sessionKey,
+      config: attempt.config,
+      contextWindowTokens: attempt.contextTokenBudget,
+      inputProvenance: attempt.inputProvenance,
+      preparedUserTurnMessage,
+      allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+      missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
+      allowedToolNames: input.replayAllowedToolNames,
+      trigger: attempt.trigger,
+      suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
+      suppressTranscriptOnlyAssistantPersistence:
+        attempt.suppressTranscriptOnlyAssistantPersistence,
+      suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
+      skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
+      onMessagePersisted: () => {
+        input.sessionLockController.refreshAfterOwnedSessionWrite();
+      },
+      // SQLite owns compaction persistence and validation inside its transaction.
+      // This append validator is a JSONL file-ownership fence, not a storage shim.
+      ...buildCompactionPersistenceGuard({
+        sessionFile: attempt.sessionFile,
+        sessionLockController: input.sessionLockController,
+      }),
+      onUserMessagePreparingForPersistence: (_message, recorder, preparedMessage) => {
+        latestPersistedUserMessage = undefined;
+        latestUserTurnTranscriptRecorder =
+          recorder ??
+          (preparedMessage === preparedUserTurnMessage
+            ? attempt.userTurnTranscriptRecorder
+            : undefined);
+      },
+      onUserMessagePersisted: (message, runtimeMessage) => {
+        latestPersistedUserMessage = message;
+        latestRuntimeUserMessage = runtimeMessage;
+        if (runtimeMessage) {
+          userTranscriptContextRegistry.record(runtimeMessage, message);
+        }
+        attempt.onUserMessagePersisted?.(message);
+      },
+      onUserMessagePersistenceSuppressed: (_message, runtimeMessage) => {
+        latestRuntimeUserMessage = runtimeMessage;
+      },
+      onUserMessageBlocked: () => {
+        attempt.userTurnTranscriptRecorder?.markBlocked();
+      },
+      onAssistantErrorMessagePersisted: (message) => {
+        attempt.onAssistantErrorMessagePersisted?.(message);
+      },
     },
-    // SQLite owns compaction persistence and validation inside its transaction.
-    // This append validator is a JSONL file-ownership fence, not a storage shim.
-    ...buildCompactionPersistenceGuard({
-      sessionFile: attempt.sessionFile,
-      sessionLockController: input.sessionLockController,
-    }),
-    onUserMessagePreparingForPersistence: (_message, recorder, preparedMessage) => {
-      latestPersistedUserMessage = undefined;
-      latestUserTurnTranscriptRecorder =
-        recorder ??
-        (preparedMessage === preparedUserTurnMessage
-          ? attempt.userTurnTranscriptRecorder
-          : undefined);
-    },
-    onUserMessagePersisted: (message, runtimeMessage) => {
-      latestPersistedUserMessage = message;
-      latestRuntimeUserMessage = runtimeMessage;
-      if (runtimeMessage) {
-        userTranscriptContextRegistry.record(runtimeMessage, message);
-      }
-      attempt.onUserMessagePersisted?.(message);
-    },
-    onUserMessagePersistenceSuppressed: (_message, runtimeMessage) => {
-      latestRuntimeUserMessage = runtimeMessage;
-    },
-    onUserMessageBlocked: () => {
-      attempt.userTurnTranscriptRecorder?.markBlocked();
-    },
-    onAssistantErrorMessagePersisted: (message) => {
-      attempt.onAssistantErrorMessagePersisted?.(message);
-    },
-  });
+  );
   attempt.promptCacheKey = resolveSessionBoundaryPromptCacheKey({
     api: attempt.model.api,
     boundaryCount: sessionManager.getBoundaryCount(),
@@ -166,7 +147,6 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   // Publish ownership before async bootstrap. Outer cleanup must close this manager
   // even when a context-engine or transcript preparation step fails.
   input.onSessionManagerCreated(sessionManager);
-  trackSessionManagerAccess(attempt.sessionFile);
 
   await input.withOwnedSessionWriteLock(async () => {
     await runAttemptContextEngineBootstrap({
@@ -207,14 +187,6 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
           agentId: input.sessionAgentId,
         }),
       warn: (message) => log.warn(message),
-    });
-
-    await prepareSessionManagerForRun({
-      sessionManager,
-      sessionFile: attempt.sessionFile,
-      hadSessionFile: transcriptState.hasFileTranscriptState,
-      sessionId: attempt.sessionId,
-      cwd: input.effectiveCwd,
     });
   });
   // Bootstrap may repair or migrate transcript rows. Only user writes after

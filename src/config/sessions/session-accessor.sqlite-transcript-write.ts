@@ -55,6 +55,7 @@ import {
   redactTranscriptMessageForStorage,
   replaceSqliteTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
+import type { SessionTranscriptWriteTransactionContext } from "./session-accessor.types.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type {
   SessionTranscriptTurnExpectedState,
@@ -353,7 +354,6 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
     const messages = await selectAppendableSqliteTranscriptTurnMessages(
       {
         agentId: resolved.agentId,
-        sessionFile: options.sessionFile,
         sessionId: options.expectedSessionId,
         sessionKey: resolved.sessionKey,
         ...(scope.storePath ? { storePath: scope.storePath } : {}),
@@ -560,12 +560,18 @@ export async function withSqliteTranscriptWriteLock<T>(
 /** Runs synchronous transcript work under one writer queue and SQLite transaction. */
 export async function withSqliteTranscriptWriteTransaction<T>(
   scope: SessionTranscriptWriteScope,
-  run: (context: { sessionFile: string }) => T,
+  run: (context: SessionTranscriptWriteTransactionContext) => T,
 ): Promise<T> {
   const resolved = resolveSqliteTranscriptScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () =>
     runOpenClawAgentWriteTransaction(
-      () => run({ sessionFile: formatSqliteSessionMarkerForScope(resolved) }),
+      () =>
+        run({
+          agentId: resolved.agentId,
+          sessionId: resolved.sessionId,
+          sessionKey: resolved.sessionKey,
+          storePath: scope.storePath ?? resolved.path ?? "",
+        }),
       toDatabaseOptions(resolved),
       { operationLabel: "session.transcript.batch" },
     ),

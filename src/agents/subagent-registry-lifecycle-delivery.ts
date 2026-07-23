@@ -1,5 +1,4 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";
 import {
@@ -267,13 +266,7 @@ export function createSubagentRegistryLifecycleDelivery(
       const captured = await params.captureSubagentCompletionReply(entry.childSessionKey, {
         waitForReply: entry.expectsCompletionMessage === true,
         outcome,
-        sessionFile: entry.execution?.transcriptTarget?.storePath
-          ? formatSqliteSessionFileMarker({
-              agentId: entry.execution.transcriptTarget.agentId ?? "",
-              sessionId: entry.execution.transcriptTarget.sessionId ?? "",
-              storePath: entry.execution.transcriptTarget.storePath,
-            })
-          : undefined,
+        sessionFile: entry.childSessionKey,
       });
       resultText = captured?.trim() ? capFrozenResultText(captured) : null;
     } catch {

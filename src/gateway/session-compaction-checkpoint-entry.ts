@@ -10,7 +10,6 @@ export function buildCheckpointSessionResetPatch(params: {
   return {
     ...buildMainSessionRecoveryClearPatch(params.entry),
     sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,

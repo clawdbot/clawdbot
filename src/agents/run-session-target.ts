@@ -16,14 +16,13 @@ export type AgentRunSessionTarget = {
   threadId?: string | number;
 };
 
-/** File-backed target resolved from the storage-neutral run identity. */
+/** Canonical SQLite target resolved from the storage-neutral run identity. */
 type ResolvedAgentRunSessionTarget = SessionTranscriptRuntimeTarget;
 
 /** Resolves the active runtime target used by current run/session internals. */
 export async function resolveAgentRunSessionTarget(params: {
   agentId?: string;
   config?: OpenClawConfig;
-  sessionFile?: string;
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: AgentRunSessionTarget;
@@ -49,15 +48,6 @@ export async function resolveAgentRunSessionTarget(params: {
     });
   }
 
-  const sessionFile = normalizeOptionalString(params.sessionFile);
-  if (sessionFile) {
-    return {
-      agentId: effectiveAgentId ?? "",
-      sessionFile,
-      sessionId,
-      sessionKey: sessionKey ?? "",
-    };
-  }
   if (!sessionKey) {
     throw new Error(`Cannot resolve run session target without a session key: ${sessionId}`);
   }

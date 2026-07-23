@@ -8,7 +8,6 @@ import {
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
@@ -107,13 +106,10 @@ export async function readBtwTranscriptMessages(params: {
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
-    const marker = parseSqliteSessionFileMarker(params.sessionFile);
-    const entries = marker
+    const entries = params.sessionKey
       ? ((await loadTranscriptEvents({
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          storePath: marker.storePath,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
         })) as AgentSessionEntry[])
       : parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
     migrateSessionEntries(entries);

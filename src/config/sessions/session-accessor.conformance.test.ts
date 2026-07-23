@@ -18,6 +18,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
+import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -65,7 +66,6 @@ import {
   restoreSqliteCompactionCheckpointSession,
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
-import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.

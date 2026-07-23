@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -10,8 +9,6 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveChannelResetConfig,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionLifecycleTimestamps,
   resolveSessionResetPolicy,
   resolveSessionResetType,
@@ -22,7 +19,6 @@ import {
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -240,31 +236,16 @@ export function prepareAgentSession(params: {
     if (candidateEntry?.status !== "failed" || !candidateEntry.sessionId?.trim()) {
       return false;
     }
-    const sqliteMarker = parseSqliteSessionFileMarker(candidateEntry.sessionFile);
-    if (sqliteMarker) {
-      if (sqliteMarker.sessionId !== candidateEntry.sessionId) {
-        return true;
-      }
-      try {
-        return (
-          readTranscriptStatsSync({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            sessionKey: canonicalKey,
-            storePath: sqliteMarker.storePath,
-            sessionEntry: candidateEntry,
-          }).eventCount === 0
-        );
-      } catch {
-        return true;
-      }
-    }
     try {
-      const options = resolveSessionFilePathOptions({
-        storePath,
-        agentId: canonicalSessionAgentId,
-      });
-      return !existsSync(resolveSessionFilePath(candidateEntry.sessionId, candidateEntry, options));
+      return (
+        readTranscriptStatsSync({
+          agentId: canonicalSessionAgentId,
+          sessionId: candidateEntry.sessionId,
+          sessionKey: canonicalKey,
+          storePath,
+          sessionEntry: candidateEntry,
+        }).eventCount === 0
+      );
     } catch {
       return true;
     }

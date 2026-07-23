@@ -34,7 +34,7 @@ function sessionKeyMatchesTranscriptPath(params: {
   return resolveSessionTranscriptCandidates(
     entry.sessionId,
     target.storePath,
-    entry.sessionFile,
+    undefined,
     sessionAgentId,
   ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
 }

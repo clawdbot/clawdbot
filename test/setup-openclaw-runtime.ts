@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 // OpenClaw runtime test setup installs runtime mocks and cleanup.
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
+import { parseSessionEntries, SessionManager } from "../src/agents/sessions/session-manager.js";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
@@ -12,6 +15,35 @@ import type { PluginRegistry } from "../src/plugins/registry.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
 installSharedTestSetup();
+
+const TEST_SESSION_MANAGER_COMPAT = Symbol.for("openclaw.testSessionManagerCompat");
+const sessionManagerConstructor = SessionManager as typeof SessionManager & {
+  [TEST_SESSION_MANAGER_COMPAT]?: true;
+  create?: (cwd: string, sessionDir?: string) => SessionManager;
+};
+if (!sessionManagerConstructor[TEST_SESSION_MANAGER_COMPAT]) {
+  Object.assign(SessionManager, {
+    create(cwd: string, sessionDir?: string) {
+      const manager = SessionManager.inMemory(cwd);
+      Object.assign(manager, {
+        getSessionDir: () => sessionDir ?? cwd,
+        getSessionFile: () => path.join(sessionDir ?? cwd, `${manager.getSessionId()}.jsonl`),
+      });
+      return manager;
+    },
+    openFile(target: string, sessionDir?: string, cwd?: string) {
+      const manager = fs.existsSync(target)
+        ? SessionManager.fromEntries(parseSessionEntries(fs.readFileSync(target, "utf8")), cwd)
+        : SessionManager.inMemory(cwd ?? sessionDir ?? process.cwd());
+      Object.assign(manager, {
+        getSessionDir: () => sessionDir ?? path.dirname(target),
+        getSessionFile: () => target,
+      });
+      return manager;
+    },
+  });
+  sessionManagerConstructor[TEST_SESSION_MANAGER_COMPAT] = true;
+}
 
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
 const WORKER_PLUGIN_RUNTIME_HELPERS = Symbol.for("openclaw.testSetupPluginRuntimeHelpers");

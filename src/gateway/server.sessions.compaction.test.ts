@@ -330,7 +330,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   if (!branchedSessionFile) {
     throw new Error("expected branched compaction session file");
   }
-  const branchedSession = SessionManager.open(branchedSessionFile, dir);
+  const branchedSession = SessionManager.openFile(branchedSessionFile, dir);
   expect(branchedSession.getEntries()).toHaveLength(checkpointEntryCount);
   expect(
     branchedSession
@@ -394,7 +394,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   if (!restoredSessionFile) {
     throw new Error("expected restored compaction session file");
   }
-  const restoredSession = SessionManager.open(restoredSessionFile, dir);
+  const restoredSession = SessionManager.openFile(restoredSessionFile, dir);
   expect(restoredSession.getEntries()).toHaveLength(checkpointEntryCount);
   expect(
     restoredSession

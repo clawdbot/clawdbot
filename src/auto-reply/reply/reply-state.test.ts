@@ -36,7 +36,7 @@ afterEach(async () => {
 async function seedSessionStore(params: {
   storePath: string;
   sessionKey: string;
-  entry: Record<string, unknown>;
+  entry: SessionEntry | Record<string, unknown>;
 }) {
   await fs.mkdir(path.dirname(params.storePath), { recursive: true });
   await upsertSessionEntry(
@@ -775,10 +775,9 @@ describe("incrementCompactionCount", () => {
     ).toBe(4);
   });
 
-  it("updates sessionId and sessionFile when newSessionId is provided", async () => {
+  it("updates sessionId when newSessionId is provided", async () => {
     const entry = {
       sessionId: "old-session-id",
-      sessionFile: "old-session-id.jsonl",
       updatedAt: Date.now(),
       compactionCount: 1,
     } as SessionEntry;
@@ -793,22 +792,17 @@ describe("incrementCompactionCount", () => {
     });
 
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    const expectedSessionDir = await fs.realpath(path.dirname(storePath));
     expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
       "new-session-id",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
-      path.join(expectedSessionDir, "new-session-id.jsonl"),
     );
     expect(
       expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
     ).toBe(2);
   });
 
-  it("does not update sessionFile when newSessionId matches current sessionId", async () => {
+  it("keeps sessionId when newSessionId matches current sessionId", async () => {
     const entry = {
       sessionId: "same-id",
-      sessionFile: "same-id.jsonl",
       updatedAt: Date.now(),
       compactionCount: 0,
     } as SessionEntry;
@@ -825,40 +819,6 @@ describe("incrementCompactionCount", () => {
     const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
     expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
       "same-id",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
-      "same-id.jsonl",
-    );
-    expect(
-      expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,
-    ).toBe(1);
-  });
-
-  it("updates sessionFile when rotation keeps the same sessionId", async () => {
-    const entry = {
-      sessionId: "same-id",
-      sessionFile: "same-id.jsonl",
-      updatedAt: Date.now(),
-      compactionCount: 0,
-    } as SessionEntry;
-    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
-    const rotatedSessionFile = path.join(path.dirname(storePath), "rotated-same-id.jsonl");
-
-    await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      newSessionId: "same-id",
-      newSessionFile: rotatedSessionFile,
-    });
-
-    const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "same-id",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
-      rotatedSessionFile,
     );
     expect(
       expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").compactionCount,

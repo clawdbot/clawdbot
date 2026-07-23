@@ -153,7 +153,7 @@ describe("prepareEmbeddedAttemptSessionLock", () => {
       persistLeaf: true,
     });
     controllerInput?.reloadPromptReleasedSessionFile();
-    expect(fixture.sessionManager.setSessionFile).toHaveBeenCalledWith("/tmp/session.jsonl");
+    expect(fixture.sessionManager.setSessionFile).not.toHaveBeenCalled();
 
     await expect(result.withOwnedSessionWriteLock(async () => "done")).resolves.toBe("done");
     expect(fixture.sessionLockController.withSessionWriteLock).toHaveBeenCalledOnce();

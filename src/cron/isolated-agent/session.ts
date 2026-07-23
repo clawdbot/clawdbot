@@ -15,10 +15,6 @@ import {
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
 import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesTarget,
-} from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -207,11 +203,7 @@ export function resolveCronSession(params: {
       systemSent = false;
       if (!sourceSessionDiffers) {
         staleBoundaryReset = true;
-        const markerTarget = { agentId: params.agentId, sessionId, storePath };
-        const sessionFile = sqliteSessionFileMarkerMatchesTarget(entry.sessionFile, markerTarget)
-          ? entry.sessionFile!
-          : formatSqliteSessionFileMarker(markerTarget);
-        resetBoundaryPending = { reason: "cron-stale", sessionFile };
+        resetBoundaryPending = { reason: "cron-stale", sessionFile: params.sessionKey };
       }
     }
   } else {
@@ -259,7 +251,6 @@ export function resolveCronSession(params: {
     clearAllCliSessions(sessionEntry);
     sessionEntry.agentHarnessId = undefined;
     sessionEntry.compactionCount = 0;
-    sessionEntry.sessionFile = resetBoundaryPending.sessionFile;
   }
   return {
     storePath,

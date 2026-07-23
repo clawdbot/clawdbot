@@ -7,8 +7,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
@@ -119,12 +119,16 @@ async function seedFastPathSessionStore(
   entries: Record<string, Record<string, unknown>>,
 ): Promise<void> {
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry as SessionEntry);
+    await replaceSessionEntry({ storePath, sessionKey }, entry as unknown as SessionEntry);
   }
 }
 
 function readFastPathSessionEntry(storePath: string, sessionKey: string): Record<string, unknown> {
-  return (loadSessionEntry({ storePath, sessionKey }) as Record<string, unknown> | undefined) ?? {};
+  return (
+    (loadSessionEntry({ storePath, sessionKey }) as unknown as
+      | Record<string, unknown>
+      | undefined) ?? {}
+  );
 }
 
 describe("getReplyFromConfig fast test bootstrap", () => {
@@ -741,7 +745,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       ),
     );
     expect(
-      (readFastPathSessionEntry(storePath, targetSessionKey) as SessionEntry).goal?.objective,
+      (readFastPathSessionEntry(storePath, targetSessionKey) as unknown as SessionEntry).goal
+        ?.objective,
     ).toBe("/status");
     const preparedReplyParams = requirePreparedReplyParams();
     expect(preparedReplyParams.command.commandBodyNormalized).toBe(continuationPrompt);
