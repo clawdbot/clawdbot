@@ -1192,6 +1192,7 @@ export async function startGatewayPostAttachRuntime(
     stopRegisteredGatewayLifetimeSidecars: () => Promise<void>;
     unregisterGatewayLifetimeSidecar: (sidecar: GatewayPostReadySidecarHandle) => void;
     startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
+    beforeReady?: () => Awaitable<void>;
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
@@ -1580,6 +1581,7 @@ export async function startGatewayPostAttachRuntime(
             ...newGatewayLifetimeSidecars,
           ];
           params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
+          await params.beforeReady?.();
           params.onSidecarsReady?.();
           try {
             const activateSubagentRegistry = await runtimeDeps.loadSubagentRegistryActivation();

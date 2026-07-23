@@ -755,6 +755,22 @@ describe("startGatewayPostAttachRuntime", () => {
     ]);
   });
 
+  it("waits for restored admission completion before publishing sidecar readiness", async () => {
+    const events: string[] = [];
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      beforeReady: async () => {
+        events.push("restored-admission");
+      },
+      onSidecarsReady: () => {
+        events.push("sidecars-ready");
+      },
+    });
+
+    expect(events).toEqual(["restored-admission", "sidecars-ready"]);
+  });
+
   it("reports internal hook load failures without copying the error into the summary", async () => {
     const log = { info: vi.fn<(message: string) => void>(), warn: vi.fn() };
     const logHooks = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
