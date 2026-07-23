@@ -44,6 +44,8 @@ const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM 
 const describeConformance = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const authValue = "test";
 const sessionKey = "agent:main:mcp-app-conformance";
+const slowToolDelayMs = 31_000;
+const mcpRequestTimeoutMs = 45_000;
 
 let browser: Browser;
 let controlUiServer: ControlUiE2eServer;
@@ -66,8 +68,9 @@ async function waitForTextContaining(
   locator: Locator,
   expected: string,
   present = true,
+  timeoutMs?: number,
 ): Promise<void> {
-  const assertion = expect.poll(() => locator.textContent());
+  const assertion = expect.poll(() => locator.textContent(), { timeout: timeoutMs });
   if (present) {
     await assertion.toContain(expected);
   } else {
@@ -92,6 +95,7 @@ function appHtml(appModuleUrl: string): string {
 </style>
 <div id="theme-surface">Host-themed surface</div>
 <button id="call-app">Call app tool</button>
+<button id="call-slow-app">Call slow app tool</button>
 <button id="call-model">Call model tool</button>
 <button id="read-resource">Read resource</button>
 <button id="update-context">Update context</button>
@@ -103,6 +107,7 @@ function appHtml(appModuleUrl: string): string {
 <output id="input"></output>
 <output id="result"></output>
 <output id="app-tool"></output>
+<output id="slow-app-tool"></output>
 <output id="model-tool"></output>
 <output id="resource"></output>
 <output id="context-update"></output>
@@ -149,6 +154,12 @@ document.getElementById("call-app").onclick = async () => {
     const value = await app.callServerTool({ name: "app_companion", arguments: {} });
     write("app-tool", JSON.stringify(value.structuredContent ?? value));
   } catch (error) { write("app-tool", "denied:" + error); }
+};
+document.getElementById("call-slow-app").onclick = async () => {
+  try {
+    const value = await app.callServerTool({ name: "slow_app_companion", arguments: {} });
+    write("slow-app-tool", JSON.stringify(value.structuredContent ?? value));
+  } catch (error) { write("slow-app-tool", "denied:" + error); }
 };
 document.getElementById("call-model").onclick = async () => {
   try { await app.callServerTool({ name: "model_only", arguments: {} }); write("model-tool", "allowed"); }
@@ -211,6 +222,14 @@ const appOnly = server.tool("app_companion", "App-only companion", async () => (
   structuredContent: { value: "companion-called" },
 }));
 appOnly.update({ _meta: { ui: { visibility: ["app"] } } });
+const slowAppOnly = server.tool("slow_app_companion", "Slow app-only companion", async () => {
+  await new Promise((resolve) => setTimeout(resolve, ${slowToolDelayMs}));
+  return {
+    content: [{ type: "text", text: "slow-companion-called" }],
+    structuredContent: { value: "slow-companion-called" },
+  };
+});
+slowAppOnly.update({ _meta: { ui: { visibility: ["app"] } } });
 const modelOnly = server.tool("model_only", "Model-only tool", async () => ({
   content: [{ type: "text", text: "model-called" }],
 }));
@@ -457,7 +476,14 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
       },
       mcp: {
         apps: { enabled: true, sandboxPort },
-        servers: { conformance: { command: process.execPath, args: [fixturePath], cwd: tempRoot } },
+        servers: {
+          conformance: {
+            command: process.execPath,
+            args: [fixturePath],
+            cwd: tempRoot,
+            requestTimeoutMs: mcpRequestTimeoutMs,
+          },
+        },
       },
     };
     await fs.mkdir(stateDir, { recursive: true });
@@ -661,6 +687,23 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await waitForText(app.locator("#isolation"), "isolated");
     await app.locator("#call-app").click();
     await waitForTextContaining(app.locator("#app-tool"), "companion-called");
+    const slowCallStartedAt = Date.now();
+    await app.locator("#call-slow-app").click();
+    await waitForTextContaining(
+      app.locator("#slow-app-tool"),
+      "slow-companion-called",
+      true,
+      mcpRequestTimeoutMs,
+    );
+    const slowCallElapsedMs = Date.now() - slowCallStartedAt;
+    expect(slowCallElapsedMs).toBeGreaterThanOrEqual(slowToolDelayMs);
+    process.stdout.write(
+      `MCP_APP_SLOW_OPERATION_PROOF ${JSON.stringify({
+        elapsedMs: slowCallElapsedMs,
+        requestTimeoutMs: mcpRequestTimeoutMs,
+        slowToolDelayMs,
+      })}\n`,
+    );
     await app.locator("#call-model").click();
     await waitForTextContaining(app.locator("#model-tool"), "denied:");
     await app.locator("#read-resource").click();
@@ -695,5 +738,5 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     lease.expiresAtMs = Date.now() - 1;
     await app.locator("#call-app").click();
     await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
-  }, 90_000);
+  }, 180_000);
 });
