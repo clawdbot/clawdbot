@@ -26,7 +26,7 @@ describe("plugin install lifecycle", () => {
                 "SELECT COUNT(*) AS count FROM state_leases WHERE scope = 'core:plugin-lifecycle'",
               )
               .get() as { count: number };
-            activeLeaseCountAtExit = Number(row.count);
+            activeLeaseCountAtExit = row.count;
             throw new Error(`exit:${code}`);
           },
         };
