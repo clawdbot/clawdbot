@@ -26,6 +26,13 @@ const AGENT_ROSTER_PATHS = [
   ["agents", "list"],
 ] as const;
 
+export class DuplicateAgentRosterIdError extends Error {
+  constructor(agentId: string) {
+    super(`Config write cannot canonicalize duplicate normalized agent id "${agentId}".`);
+    this.name = "DuplicateAgentRosterIdError";
+  }
+}
+
 type ManifestModelIdNormalizationProvider = {
   aliases?: Record<string, string>;
   stripPrefixes?: string[];
@@ -925,10 +932,21 @@ function canCanonicalizeAgentRoster(value: unknown): boolean {
     return false;
   }
   if (roster.kind === "list") {
-    return (
-      Array.isArray(roster.value) &&
-      roster.value.every((entry) => isRecord(entry) && typeof entry.id === "string")
-    );
+    if (
+      !Array.isArray(roster.value) ||
+      !roster.value.every((entry) => isRecord(entry) && typeof entry.id === "string")
+    ) {
+      return false;
+    }
+    const normalizedIds = new Set<string>();
+    for (const entry of roster.value) {
+      const agentId = normalizeAgentId(String(entry.id));
+      if (normalizedIds.has(agentId)) {
+        throw new DuplicateAgentRosterIdError(agentId);
+      }
+      normalizedIds.add(agentId);
+    }
+    return true;
   }
   return isRecord(roster.value) && Object.values(roster.value).every(isRecord);
 }

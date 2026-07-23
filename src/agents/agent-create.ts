@@ -241,6 +241,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
               workspace: workspaceDir,
               agentDir,
               identity,
+              ...(list.length === 1 ? { default: true } : {}),
             };
             const { list: _legacyList, ...agentsConfig } = nextConfig.agents ?? {};
             nextConfig = {
@@ -277,10 +278,21 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
               nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
           });
           if (workspace.dir !== workspaceDir) {
-            nextConfig = applyAgentConfig(nextConfig, {
-              agentId,
-              workspace: workspace.dir,
-            });
+            const entries = listAgentEntries(nextConfig);
+            const entryIndex = findAgentEntryIndex(entries, agentId);
+            const currentEntry = entries[entryIndex];
+            if (entryIndex >= 0 && currentEntry) {
+              entries[entryIndex] = {
+                ...currentEntry,
+                id: agentId,
+                workspace: workspace.dir,
+              };
+              const { list: _legacyList, ...agentsConfig } = nextConfig.agents ?? {};
+              nextConfig = {
+                ...nextConfig,
+                agents: { ...agentsConfig, entries: toAgentEntriesRecord(entries) },
+              };
+            }
           }
           await fs.mkdir(resolveSessionTranscriptsDirForAgent(agentId), { recursive: true });
           // A creation-time name is config, not proof that the fresh workspace hatched.

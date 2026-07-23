@@ -166,6 +166,60 @@ describe("createAgent", () => {
     expect((mocks.persisted.agents as { list?: unknown }).list).toBeUndefined();
   });
 
+  it("keeps the first staged roster entry as the default", async () => {
+    mocks.config = { agents: { list: [] } };
+
+    await createAgent({
+      entry: { id: "researcher", name: "Researcher", default: false },
+    });
+
+    expect(mocks.persisted).toMatchObject({
+      agents: { entries: { researcher: expect.objectContaining({ default: true }) } },
+    });
+  });
+
+  it.each([
+    {
+      label: "staged model only",
+      entryModel: "openai/staged",
+      paramsModel: undefined,
+    },
+    {
+      label: "staged model over explicit parameter",
+      entryModel: "openai/staged",
+      paramsModel: "openai/parameter",
+    },
+  ])(
+    "preserves $label when workspace setup normalizes the path",
+    async ({ entryModel, paramsModel }) => {
+      mocks.ensureAgentWorkspace.mockResolvedValue({
+        dir: "/normalized/work",
+        bootstrapPending: true,
+      });
+
+      await createAgent({
+        entry: {
+          id: "researcher",
+          name: "Researcher",
+          workspace: "/staged/work",
+          model: entryModel,
+        },
+        model: paramsModel,
+      });
+
+      expect(mocks.persisted).toMatchObject({
+        agents: {
+          entries: {
+            researcher: expect.objectContaining({
+              model: entryModel,
+              workspace: "/normalized/work",
+            }),
+          },
+        },
+      });
+    },
+  );
+
   it("preserves every legacy-list agent when staging a new entry", async () => {
     mocks.config = {
       agents: {

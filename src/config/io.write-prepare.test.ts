@@ -8,6 +8,7 @@ import {
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
   resolveWriteEnvSnapshotForPath,
+  DuplicateAgentRosterIdError,
 } from "./io.write-prepare.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -564,6 +565,29 @@ describe("config io write prepare", () => {
         unsetPaths: [["agents", "list", "0"]],
       }),
     ).toThrow("cannot safely resolve duplicate agent ids");
+  });
+
+  it("rejects duplicate normalized ids before canonicalizing a legacy roster", () => {
+    const nextConfig = {
+      agents: {
+        list: [
+          { id: "Ops", workspace: "/first" },
+          { id: " ops ", workspace: "/second" },
+        ],
+      },
+    };
+    const before = structuredClone(nextConfig);
+
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {},
+        sourceConfig: {},
+        nextConfig,
+        explicitSetPaths: [["agents", "list"]],
+        explicitSetValueSource: nextConfig,
+      }),
+    ).toThrow(DuplicateAgentRosterIdError);
+    expect(nextConfig).toEqual(before);
   });
 
   it("keys legacy authored references by the pre-migration resolved agent id", () => {

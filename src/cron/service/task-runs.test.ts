@@ -158,6 +158,50 @@ describe("cron task run terminal records", () => {
     );
   });
 
+  it("uses the scoped owner for an isolated task run", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-cron-isolated-scoped-owner-" },
+      async () => {
+        resetTaskRegistryForTests();
+        const job = {
+          id: "isolated-scoped-owner",
+          name: "isolated scoped owner",
+          agentId: "   ",
+          sessionKey: "agent:ops:main",
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "work" },
+          schedule: { kind: "every", everyMs: 60_000 },
+          state: {},
+          createdAtMs: 100,
+          updatedAtMs: 100,
+          enabled: true,
+        } satisfies CronJob;
+        const state = createCronServiceState({
+          storePath: "/tmp/jobs.json",
+          cronEnabled: true,
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        });
+
+        expect(tryCreateCronTaskRun({ state, job, startedAt: 1_500 })).toBeTruthy();
+        expect(
+          listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+            runtime: "cron",
+            sourceId: job.id,
+          }),
+        ).toEqual([
+          expect.objectContaining({
+            agentId: "ops",
+            childSessionKey: "agent:ops:main",
+          }),
+        ]);
+      },
+    );
+  });
+
   it("persists canonical history directly when a detached runtime is registered", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-core-ledger-runtime-" },
