@@ -622,6 +622,10 @@ export async function finishGatewayStartup(params: {
     },
     commitTerminalConfig: (nextConfig) => {
       terminalLaunchPolicy.commitConfig();
+      pluginRuntime.readinessSnapshot = {
+        config: nextConfig,
+        registry: pluginRuntime.registry,
+      };
       workerLiveEvents?.rebindAll(nextConfig);
     },
     acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,

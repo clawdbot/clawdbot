@@ -673,6 +673,7 @@ describe("evaluateCanonicalGatewayReadiness", () => {
       reason: "ReadinessEvaluationTimedOut",
       message: "Readiness evaluation did not complete within its bounded deadline.",
     });
+    expect(result.conditions?.[0]?.type).toBe("ReadinessEvaluationComplete");
   });
 
   it("redacts unexpected extended evaluation failures", async () => {
@@ -702,6 +703,7 @@ describe("evaluateCanonicalGatewayReadiness", () => {
       failing: ["ReadinessEvaluationFailed"],
       failures: ["ReadinessEvaluationFailed"],
     });
+    expect(result.conditions?.[0]?.type).toBe("ReadinessEvaluationComplete");
     expect(JSON.stringify(result)).not.toContain("unexpected core failure");
   });
 });
