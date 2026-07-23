@@ -3869,6 +3869,20 @@ export const de: TranslationMap = {
     },
     outputTokens: "{count} Ausgabe-Tokens",
     archivedSessionDisabled: "Stellen Sie diese Sitzung wieder her, um Nachrichten zu senden.",
+    sessionSharing: {
+      menu: "Thread-Freigabe",
+      current: "Thread-Sichtbarkeit: {visibility}",
+      visibility: "Sichtbarkeit",
+      shared: "Geteilt",
+      readOnly: "Schreibgeschützt",
+      suggest: "Vorschlagen",
+      draft: "Entwurf",
+      members: "Mitglieder",
+      selected: "Mitglied",
+      noPeople: "Keine gekoppelten Personen gefunden.",
+      readOnlyNotice:
+        "Nur der Eigentümer des Threads und Mitglieder können in diesem Thread Aktionen ausführen.",
+    },
     loadOlder: "Ältere laden",
     sessionHeader: {
       renameTooltip: "Sitzung umbenennen",

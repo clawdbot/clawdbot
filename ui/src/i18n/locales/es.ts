@@ -3865,6 +3865,20 @@ export const es: TranslationMap = {
     },
     outputTokens: "{count} tokens de salida",
     archivedSessionDisabled: "Restaura esta sesión para enviar mensajes.",
+    sessionSharing: {
+      menu: "Compartir hilo",
+      current: "Visibilidad del hilo: {visibility}",
+      visibility: "Visibilidad",
+      shared: "Compartido",
+      readOnly: "Solo lectura",
+      suggest: "Sugerir",
+      draft: "Borrador",
+      members: "Miembros",
+      selected: "Miembro",
+      noPeople: "No se encontraron personas vinculadas.",
+      readOnlyNotice:
+        "Solo el propietario del hilo y los miembros pueden realizar acciones en este hilo.",
+    },
     loadOlder: "Cargar anteriores",
     sessionHeader: {
       renameTooltip: "Cambiar nombre de la sesión",

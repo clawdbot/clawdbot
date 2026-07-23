@@ -3863,6 +3863,20 @@ export const it: TranslationMap = {
     },
     outputTokens: "{count} token di output",
     archivedSessionDisabled: "Ripristina questa sessione per inviare messaggi.",
+    sessionSharing: {
+      menu: "Condivisione della conversazione",
+      current: "Visibilità della conversazione: {visibility}",
+      visibility: "Visibilità",
+      shared: "Condivisa",
+      readOnly: "Sola lettura",
+      suggest: "Suggerisci",
+      draft: "Bozza",
+      members: "Membri",
+      selected: "Membro",
+      noPeople: "Nessuna persona associata trovata.",
+      readOnlyNotice:
+        "Solo il proprietario della conversazione e i membri possono intervenire in questa conversazione.",
+    },
     loadOlder: "Carica precedenti",
     sessionHeader: {
       renameTooltip: "Rinomina sessione",
