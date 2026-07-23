@@ -163,6 +163,39 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
+  it("keeps slack healthy when transport keepalive is fresh even if app events are stale", () => {
+    const now = 100_000;
+    const evaluation = evaluateHealth(
+      connectedAccount({
+        lastStartAt: 0,
+        lastEventAt: 0,
+        lastInboundAt: 0,
+        lastTransportActivityAt: now - 5_000,
+      }),
+      { now, channelId: "slack" },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
+  it("flags slack stale-socket when transport activity ages past threshold", () => {
+    const evaluation = evaluateHealth(staleTransportAccount(), {
+      channelId: "slack",
+    });
+    expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+
+  it("does not treat null slack transport stamps as stale-socket", () => {
+    const evaluation = evaluateHealth(
+      connectedAccount({
+        lastStartAt: 0,
+        lastEventAt: 0,
+        lastTransportActivityAt: null,
+      }),
+      { channelId: "slack" },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
+
   it("flags stale sockets for telegram polling channels with transport activity", () => {
     const evaluation = evaluateHealth(staleTransportAccount({ mode: "polling" }), {
       channelId: "example",

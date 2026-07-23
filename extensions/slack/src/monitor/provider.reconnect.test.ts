@@ -10,6 +10,7 @@ import {
   formatSlackSocketModeSharedConnectionWarning,
   formatUnknownError,
   registerSlackSocketModeConnectionDiagnostics,
+  registerSlackSocketModeTransportActivity,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
 
@@ -51,10 +52,11 @@ function statusCallAt(setStatus: ReturnType<typeof vi.fn>, index: number): Recor
 
 describe("slack socket reconnect helpers", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("marks socket mode healthy without seeding event liveness on connect", () => {
+  it("marks socket mode healthy and seeds transport liveness without app event stamps", () => {
     const setStatus = vi.fn();
     vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_000);
 
@@ -64,9 +66,11 @@ describe("slack socket reconnect helpers", () => {
     const status = statusCallAt(setStatus, 0);
     expect(status?.connected).toBe(true);
     expect(status?.lastConnectedAt).toBe(1_711_406_400_000);
+    expect(status?.lastTransportActivityAt).toBe(1_711_406_400_000);
     expect(status?.healthState).toBe("healthy");
     expect(status?.lastError).toBeNull();
     expect(status).not.toHaveProperty("lastEventAt");
+    expect(status).not.toHaveProperty("lastInboundAt");
   });
 
   it("marks socket mode degraded when boot identity is unavailable", () => {
@@ -82,6 +86,7 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: 1_711_406_400_500,
+      lastTransportActivityAt: 1_711_406_400_500,
       healthState: "degraded",
       lastError: "auth.test returned no user_id",
     });
@@ -314,5 +319,103 @@ describe("slack socket reconnect helpers", () => {
 
     expect(app.stop).toHaveBeenCalledTimes(1);
     expect(app.receiver.client.shuttingDown).toBe(true);
+  });
+
+  it("publishes transport activity from connect/hello frames without app inbound stamps", () => {
+    const client = new FakeEmitter();
+    const onTransportActivity = vi.fn();
+    const unregister = registerSlackSocketModeTransportActivity({
+      app: { receiver: { client } },
+      onTransportActivity,
+    });
+
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_500_000);
+    client.emit("connected");
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 1 })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "events_api", payload: { event: { type: "message" } } })),
+      false,
+    );
+
+    expect(onTransportActivity).toHaveBeenCalledTimes(3);
+    expect(onTransportActivity).toHaveBeenCalledWith(1_711_406_500_000);
+
+    unregister();
+    client.emit("connected");
+    expect(onTransportActivity).toHaveBeenCalledTimes(3);
+    expect(client.listenerCount("ws_message")).toBe(0);
+    expect(client.listenerCount("connected")).toBe(0);
+  });
+
+  it("ignores binary websocket frames for transport activity", () => {
+    const client = new FakeEmitter();
+    const onTransportActivity = vi.fn();
+    const unregister = registerSlackSocketModeTransportActivity({
+      app: { receiver: { client } },
+      onTransportActivity,
+    });
+
+    client.emit("ws_message", Buffer.from("binary"), true);
+    expect(onTransportActivity).not.toHaveBeenCalled();
+    unregister();
+  });
+
+  it("resolves disconnect waiter on transport idle when no disconnect event fires", async () => {
+    vi.useFakeTimers();
+    const client = new FakeEmitter();
+    const app = { receiver: { client } };
+    const waiter = waitForSlackSocketDisconnect(app as never, undefined, {
+      idleTimeoutMs: 1_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(999);
+    await Promise.resolve();
+    let settled = false;
+    void waiter.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(waiter).resolves.toMatchObject({
+      event: "transport_idle",
+    });
+    expect(client.listenerCount("disconnected")).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it("keeps disconnect waiter open while keepalive transport frames continue", async () => {
+    vi.useFakeTimers();
+    const client = new FakeEmitter();
+    const app = { receiver: { client } };
+    const waiter = waitForSlackSocketDisconnect(app as never, undefined, {
+      idleTimeoutMs: 1_000,
+    });
+
+    let settled = false;
+    void waiter.then(() => {
+      settled = true;
+    });
+
+    for (let i = 0; i < 5; i += 1) {
+      await vi.advanceTimersByTimeAsync(900);
+      client.emit(
+        "ws_message",
+        Buffer.from(JSON.stringify({ type: "hello", num_connections: 1 })),
+        false,
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+    }
+
+    client.emit("disconnected");
+    await expect(waiter).resolves.toEqual({ event: "disconnect" });
+    vi.useRealTimers();
   });
 });

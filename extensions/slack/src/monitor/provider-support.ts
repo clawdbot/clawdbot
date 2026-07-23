@@ -1,9 +1,14 @@
 // Slack provider module implements model/runtime integration.
+import { createTransportActivityStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
 import type { SlackIdentityHealth } from "./enterprise-install.js";
-import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
+import {
+  formatUnknownError,
+  SLACK_SOCKET_DISCONNECT_IDLE_TIMEOUT_MS,
+  waitForSlackSocketDisconnect,
+} from "./reconnect-policy.js";
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
 type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
@@ -190,9 +195,12 @@ export function publishSlackConnectedStatus(
   if (!setStatus) {
     return;
   }
+  const at = Date.now();
   setStatus({
     connected: true,
-    lastConnectedAt: Date.now(),
+    lastConnectedAt: at,
+    // Seed transport liveness on connect. App inbound timestamps stay separate.
+    ...createTransportActivityStatusPatch(at),
     ...identityHealth,
   });
 }
@@ -362,12 +370,18 @@ export function createSlackBoltApp(params: {
   return { app, receiver, socketModeLogger };
 }
 
-function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
+function createSlackSocketDisconnectWaiter(
+  app: unknown,
+  abortSignal?: AbortSignal,
+  idleTimeoutMs: number = SLACK_SOCKET_DISCONNECT_IDLE_TIMEOUT_MS,
+) {
   const waiterAbortController = new AbortController();
   const relayAbort = () => waiterAbortController.abort();
   let latest: SlackSocketDisconnect | undefined;
   abortSignal?.addEventListener("abort", relayAbort, { once: true });
-  const promise = waitForSlackSocketDisconnect(app, waiterAbortController.signal).then((value) => {
+  const promise = waitForSlackSocketDisconnect(app, waiterAbortController.signal, {
+    idleTimeoutMs,
+  }).then((value) => {
     latest = value;
     return value;
   });
@@ -388,8 +402,13 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
   app: { start: () => unknown };
   abortSignal?: AbortSignal;
   onStarted?: () => void;
+  idleTimeoutMs?: number;
 }) {
-  const disconnectWaiter = createSlackSocketDisconnectWaiter(params.app, params.abortSignal);
+  const disconnectWaiter = createSlackSocketDisconnectWaiter(
+    params.app,
+    params.abortSignal,
+    params.idleTimeoutMs,
+  );
   try {
     await Promise.resolve(params.app.start());
     if (params.abortSignal?.aborted) {

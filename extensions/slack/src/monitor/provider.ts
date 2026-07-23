@@ -10,6 +10,7 @@ import {
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
+import { createTransportActivityStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
@@ -83,7 +84,9 @@ import {
   formatUnknownError,
   isNonRecoverableSlackAuthError,
   registerSlackSocketModeConnectionDiagnostics,
+  registerSlackSocketModeTransportActivity,
   SLACK_SOCKET_RECONNECT_POLICY,
+  SLACK_SOCKET_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS,
 } from "./reconnect-policy.js";
 import { setSlackDefaultSendIdentity } from "./send.runtime.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
@@ -403,6 +406,24 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           },
         })
       : () => {};
+  let lastTransportActivityStatusAt: number | undefined;
+  const unregisterSocketModeTransportActivity =
+    slackMode === "socket" && opts.setStatus
+      ? registerSlackSocketModeTransportActivity({
+          app,
+          onTransportActivity: (at) => {
+            if (
+              lastTransportActivityStatusAt !== undefined &&
+              at - lastTransportActivityStatusAt <
+                SLACK_SOCKET_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS
+            ) {
+              return;
+            }
+            lastTransportActivityStatusAt = at;
+            opts.setStatus?.(createTransportActivityStatusPatch(at));
+          },
+        })
+      : () => {};
 
   let botUserId = "";
   let botId = "";
@@ -509,8 +530,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     mediaMaxBytes,
   });
 
-  // Slack's socket-mode client keeps ping/pong health private and closes on
-  // missed pongs. App events are useful status activity, but not transport proof.
+  // App inbound activity only. Socket Mode transport/keepalive updates
+  // lastTransportActivityAt via registerSlackSocketModeTransportActivity.
   const trackEvent = opts.setStatus
     ? () => {
         opts.setStatus!({ lastEventAt: Date.now(), lastInboundAt: Date.now() });
@@ -852,6 +873,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterSocketModeConnectionDiagnostics();
+    unregisterSocketModeTransportActivity();
     unregisterHttpHandler?.();
     await durableIngress.stop();
     await gracefulStop();
