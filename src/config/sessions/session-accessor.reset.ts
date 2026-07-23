@@ -1,4 +1,4 @@
-import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   cloneSessionEntries,
@@ -66,13 +66,13 @@ export async function persistSessionResetLifecycle(params: {
 
 /** Loads the reply-session initialization rows without exposing a mutable store. */
 export function loadReplySessionInitializationSnapshot(params: {
+  agentId: string;
   storePath: string;
   sessionKey: string;
 }): ReplySessionInitializationSnapshot {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveSessionStorePathForScope(params);
   const store = Object.fromEntries(
-    listSessionEntriesReadOnly({ agentId, storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesReadOnly({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),

@@ -1206,7 +1206,7 @@ export function validateConfigObject(
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(raw, opts);
+  const result = validateConfigObjectRaw(migratePersistedImplicitMainRoster(raw).config, opts);
   if (!result.ok) {
     return result;
   }

@@ -1,5 +1,7 @@
 // Routing session key tests cover route-derived session key behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.unmock("./session-key.js");
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,

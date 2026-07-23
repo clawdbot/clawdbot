@@ -84,14 +84,10 @@ export function resolveSessionStorePathForAcp(params: {
   const cfg = params.cfg ?? getRuntimeConfig();
   const parsed = parseAgentSessionKey(params.sessionKey);
   const agentId = parsed?.agentId ?? resolveDefaultAgentId(cfg);
-  const storePath = resolveStorePath(cfg.session?.store, {
-    agentId,
-    env: params.env,
-  });
   return {
     cfg,
     agentId,
-    storePath,
+    storePath: resolveStorePath(cfg.session?.store, { agentId, env: params.env }),
   };
 }
 

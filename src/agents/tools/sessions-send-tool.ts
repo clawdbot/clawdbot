@@ -178,7 +178,10 @@ function isConfiguredAgentMainSessionKey(params: {
   sessionKey: string;
   mainKey: string;
 }): boolean {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = resolveAgentIdFromSessionKey(
+    params.sessionKey,
+    resolveDefaultAgentId(params.cfg),
+  );
   return (
     params.sessionKey ===
     resolveConfiguredAgentMainSessionKey({
@@ -218,7 +221,7 @@ async function ensureConfiguredAgentMainSession(params: {
     try {
       const createParams = {
         key: params.sessionKey,
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        agentId: resolveAgentIdFromSessionKey(params.sessionKey, resolveDefaultAgentId(params.cfg)),
       };
       if (
         params.useTrustedInProcessCreation &&
@@ -470,7 +473,10 @@ export function createSessionsSendTool(opts?: {
         sessionKey = agentMainKey;
       }
       if (!sessionKey && labelParam) {
-        const requesterAgentId = resolveAgentIdFromSessionKey(effectiveRequesterKey);
+        const requesterAgentId = resolveAgentIdFromSessionKey(
+          effectiveRequesterKey,
+          resolveDefaultAgentId(cfg),
+        );
         const requestedAgentId = labelAgentIdParam
           ? normalizeAgentId(labelAgentIdParam)
           : undefined;

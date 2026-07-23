@@ -348,6 +348,7 @@ export function resolveReplySessionPreprocessingState(
     ),
   });
   const sessionEntry = loadReplySessionInitializationSnapshot({
+    agentId: attemptContext.agentId,
     storePath: attemptContext.storePath,
     sessionKey,
   }).currentEntry;
@@ -577,6 +578,7 @@ async function initSessionStateAttemptLocked(
   // generation, leading to orphaned transcript files. See #17971.
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
   const initializationSnapshot = loadReplySessionInitializationSnapshot({
+    agentId,
     storePath,
     sessionKey,
   });
