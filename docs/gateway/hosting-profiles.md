@@ -17,12 +17,12 @@ does not add profile-only conditions.
 
 ## Standard profiles
 
-| Profile         | Use when                                         | Additional required evidence                                                                                                            |
-| --------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `local`         | Running a foreground or local Gateway            | The workspace is writable.                                                                                                              |
-| `container`     | Exposing the Gateway directly from a container   | The workspace is writable and the effective listener is not loopback-only.                                                              |
-| `reverse-proxy` | Running behind a trusted identity proxy          | The workspace is writable, trusted-proxy auth is active, an identity header is configured, and at least one proxy source is trusted.    |
-| `node-mode`     | Controlling one or more paired execution targets | The workspace is writable and at least one target is paired, connected, command-approved, and available through a live control channel. |
+| Profile         | Use when                                         | Additional required evidence                                                                                                                                                                                                       |
+| --------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `local`         | Running a foreground or local Gateway            | The workspace is writable.                                                                                                                                                                                                         |
+| `container`     | Exposing the Gateway directly from a container   | The workspace is writable and the effective listener is not loopback-only.                                                                                                                                                         |
+| `reverse-proxy` | Running behind a trusted identity proxy          | The workspace is writable, trusted-proxy auth is active, an identity header is configured, and at least one effective proxy source is trusted. Loopback proxy sources also require `gateway.auth.trustedProxy.allowLoopback=true`. |
+| `node-mode`     | Controlling one or more paired execution targets | The workspace is writable and at least one target is paired, connected, command-approved, and available through a live control channel.                                                                                            |
 
 Profiles add requirements to the universal Gateway lifecycle conditions. They do not generate or
 repair configuration, choose restart policy, or replace explicit `gateway.readiness` criteria.
@@ -68,7 +68,9 @@ openclaw gateway run \
 environment. OpenClaw defaults the logical runtime ID to `local` and generates an incarnation ID
 when they are omitted.
 
-Readiness, health, and status report the selected profile and activation identity. Use
+Readiness, health, and status report `profileContractVersion: 1`, the selected `profile`, its
+selection source (`argument`, `environment`, or `config`), and the activation identity. These
+fields are omitted when no profile is selected. Use
 [`openclaw ready`](/cli/ready) or `/readyz` for the serving decision; `/healthz` remains a shallow
 liveness check.
 
