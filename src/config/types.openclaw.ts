@@ -1,5 +1,5 @@
 // Defines the top-level OpenClaw configuration type.
-import type { HostingProfileId } from "../hosting/profiles.js";
+import type { HostingProfileId } from "../hosting/types.js";
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";

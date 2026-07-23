@@ -13,7 +13,7 @@ type JsonSchemaObject = Record<string, unknown> & {
 
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
-cloudWorkers commands cron diagnostics discovery env gateway hooks logging mcp memory messages
+cloudWorkers commands cron diagnostics discovery env gateway hooks hosting logging mcp memory messages
 meta models nodeHost plugins proxy secrets security session skills surfaces talk tools transcripts
 tts ui update wizard
 `

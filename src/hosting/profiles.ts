@@ -5,9 +5,9 @@ import {
   WORKSPACE_WRITABLE_CRITERION_ID,
   type ReadinessCondition,
 } from "../readiness/conditions.js";
+import type { HostingProfileId } from "./types.js";
 
 export const HOSTING_PROFILE_IDS = ["local", "container", "reverse-proxy", "node-mode"] as const;
-export type HostingProfileId = (typeof HOSTING_PROFILE_IDS)[number];
 
 export const HOSTING_PROFILE_ENV = "OPENCLAW_HOSTING_PROFILE";
 
