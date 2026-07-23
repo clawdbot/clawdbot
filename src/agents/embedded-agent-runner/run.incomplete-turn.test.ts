@@ -39,6 +39,7 @@ import {
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
+import { resolveAuthFailurePayloadText } from "./run/terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
@@ -4766,6 +4767,70 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toBeUndefined();
     expect(result.meta.livenessState).toBe("working");
     expectNoWarnMessageWith("planning");
+  });
+
+  describe("resolveAuthFailurePayloadText", () => {
+    it("returns specific auth-failure text when reason is auth", () => {
+      const text = resolveAuthFailurePayloadText({
+        assistantProfileFailureReason: "auth",
+        provider: "openai",
+        modelId: "gpt-4.1",
+      });
+      expect(text).toBe(
+        "Authentication failed for model openai/gpt-4.1. Please check your API key or switch to a different model.",
+      );
+    });
+
+    it("returns specific auth-failure text when reason is auth_permanent", () => {
+      const text = resolveAuthFailurePayloadText({
+        assistantProfileFailureReason: "auth_permanent",
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-5",
+      });
+      expect(text).toContain("Authentication failed for model");
+      expect(text).toContain("anthropic/claude-sonnet-4-5");
+    });
+
+    it("returns undefined for non-auth reasons", () => {
+      expect(
+        resolveAuthFailurePayloadText({
+          assistantProfileFailureReason: "rate_limit",
+          provider: "openai",
+          modelId: "gpt-4.1",
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveAuthFailurePayloadText({
+          assistantProfileFailureReason: "billing",
+          provider: "openai",
+          modelId: "gpt-4.1",
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveAuthFailurePayloadText({
+          assistantProfileFailureReason: "timeout",
+          provider: "openai",
+          modelId: "gpt-4.1",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("returns undefined when reason is null or undefined", () => {
+      expect(
+        resolveAuthFailurePayloadText({
+          assistantProfileFailureReason: null,
+          provider: "openai",
+          modelId: "gpt-4.1",
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveAuthFailurePayloadText({
+          assistantProfileFailureReason: undefined,
+          provider: "openai",
+          modelId: "gpt-4.1",
+        }),
+      ).toBeUndefined();
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

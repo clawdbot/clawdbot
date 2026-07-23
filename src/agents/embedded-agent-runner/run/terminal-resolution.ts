@@ -32,6 +32,20 @@ import {
   shouldTreatEmptyAssistantReplyAsSilent,
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn.js";
+
+export function resolveAuthFailurePayloadText(params: {
+  assistantProfileFailureReason?: AuthProfileFailureReason | null;
+  provider: string;
+  modelId: string;
+}): string | undefined {
+  if (
+    params.assistantProfileFailureReason !== "auth" &&
+    params.assistantProfileFailureReason !== "auth_permanent"
+  ) {
+    return undefined;
+  }
+  return `Authentication failed for model ${params.provider}/${params.modelId}. Please check your API key or switch to a different model.`;
+}
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
   MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
@@ -282,7 +296,12 @@ export async function resolveEmbeddedRunTerminal(input: {
   }
   const incompleteTurnText = emptyAssistantReplyIsSilent
     ? null
-    : resolveIncompleteTurnPayloadText({
+    : resolveAuthFailurePayloadText({
+        assistantProfileFailureReason: input.assistantProfileFailureReason,
+        provider: input.provider,
+        modelId: input.modelId,
+      }) ??
+      resolveIncompleteTurnPayloadText({
         payloadCount,
         aborted: input.terminalAborted,
         externalAbort: input.externalAbort || input.signalOwnedInterruption,
