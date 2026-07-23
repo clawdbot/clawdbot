@@ -4,6 +4,7 @@ import type {
   PluginRegistry,
 } from "../plugins/registry-types.js";
 import type { ReadinessCondition } from "./conditions.js";
+import { READINESS_REASON_PATTERN, sanitizeProviderReadinessMessage } from "./sanitize.js";
 
 const DEFAULT_TIMEOUT_MS = 1_000;
 const DEFAULT_CACHE_TTL_MS = 5_000;
@@ -36,11 +37,13 @@ async function evaluateRegistration(params: {
 }): Promise<ReadinessCondition> {
   const { registration } = params;
   let timeout: NodeJS.Timeout | undefined;
+  let timedOut = false;
   try {
     const result = await Promise.race([
       params.raw,
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
+          timedOut = true;
           params.controller.abort();
           reject(new Error("readiness criterion timed out"));
         }, params.timeoutMs);
@@ -51,10 +54,18 @@ async function evaluateRegistration(params: {
       !result ||
       !["True", "False", "Unknown"].includes(result.status) ||
       typeof result.reason !== "string" ||
-      !result.reason.trim() ||
+      !READINESS_REASON_PATTERN.test(result.reason) ||
       typeof result.message !== "string" ||
-      !result.message.trim()
+      !sanitizeProviderReadinessMessage(result.message)
     ) {
+      return unavailableCondition(
+        registration,
+        "CriterionInvalidResult",
+        `Readiness criterion ${registration.id} returned an invalid result.`,
+      );
+    }
+    const message = sanitizeProviderReadinessMessage(result.message);
+    if (!message) {
       return unavailableCondition(
         registration,
         "CriterionInvalidResult",
@@ -66,10 +77,9 @@ async function evaluateRegistration(params: {
       status: result.status,
       requirement: "advisory",
       reason: result.reason,
-      message: result.message,
+      message,
     };
   } catch {
-    const timedOut = params.controller.signal.aborted;
     return unavailableCondition(
       registration,
       timedOut ? "CriterionTimedOut" : "CriterionCheckFailed",
@@ -92,13 +102,25 @@ export function createPluginReadinessResolver(options?: {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const cacheTtlMs = options?.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   const now = options?.now ?? Date.now;
-  const cache = new WeakMap<PluginReadinessCriterionRegistration, CachedEvaluation>();
+  let cache = new WeakMap<PluginReadinessCriterionRegistration, CachedEvaluation>();
+  let activeRegistry: Pick<PluginRegistry, "readinessCriteria"> | undefined;
+  let activeConfig: OpenClawConfig | undefined;
+  const activeControllers = new Set<AbortController>();
 
   return async (params: {
     registry: Pick<PluginRegistry, "readinessCriteria">;
     config: OpenClawConfig;
     criterionIds?: ReadonlySet<string>;
   }): Promise<ReadinessCondition[]> => {
+    if (params.registry !== activeRegistry || params.config !== activeConfig) {
+      for (const controller of activeControllers) {
+        controller.abort();
+      }
+      activeControllers.clear();
+      cache = new WeakMap();
+      activeRegistry = params.registry;
+      activeConfig = params.config;
+    }
     const registrations = params.criterionIds
       ? params.registry.readinessCriteria.filter((registration) =>
           params.criterionIds?.has(registration.id),
@@ -114,6 +136,7 @@ export function createPluginReadinessResolver(options?: {
         return cached.value;
       }
       const controller = new AbortController();
+      activeControllers.add(controller);
       const raw = Promise.resolve().then(() =>
         registration.criterion.check({
           config: params.config,
@@ -128,9 +151,16 @@ export function createPluginReadinessResolver(options?: {
         rawPending: true,
       };
       cache.set(registration, entry);
-      void value.then(() => {
-        entry.rawPending = false;
-      });
+      void raw.then(
+        () => {
+          entry.rawPending = false;
+          activeControllers.delete(controller);
+        },
+        () => {
+          entry.rawPending = false;
+          activeControllers.delete(controller);
+        },
+      );
       return value;
     });
     return Promise.all(evaluated);

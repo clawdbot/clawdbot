@@ -26,9 +26,11 @@ describe("createPluginReadinessResolver", () => {
     }));
     const criterion = registration(check);
     const resolve = createPluginReadinessResolver();
+    const registry = { readinessCriteria: [criterion] };
+    const config = {};
 
-    const first = await resolve({ registry: { readinessCriteria: [criterion] }, config: {} });
-    const second = await resolve({ registry: { readinessCriteria: [criterion] }, config: {} });
+    const first = await resolve({ registry, config });
+    const second = await resolve({ registry, config });
 
     expect(first).toEqual([
       expect.objectContaining({
@@ -61,25 +63,79 @@ describe("createPluginReadinessResolver", () => {
     expect(failed).toMatchObject({ status: "Unknown", reason: "CriterionCheckFailed" });
   });
 
-  it("retries a timed-out callback after the cache expires", async () => {
+  it("does not overlap a timed-out callback that ignores cancellation", async () => {
     let currentTime = 0;
     const check = vi.fn(() => new Promise<never>(() => {}));
     const criterion = registration(check);
+    const registry = { readinessCriteria: [criterion] };
+    const config = {};
     const resolve = createPluginReadinessResolver({
       timeoutMs: 5,
       cacheTtlMs: 10,
       now: () => currentTime,
     });
 
-    const [first] = await resolve({ registry: { readinessCriteria: [criterion] }, config: {} });
+    const [first] = await resolve({ registry, config });
     currentTime = 20;
     const [afterCacheExpiry] = await resolve({
-      registry: { readinessCriteria: [criterion] },
-      config: {},
+      registry,
+      config,
     });
 
     expect(first).toMatchObject({ status: "Unknown", reason: "CriterionTimedOut" });
     expect(afterCacheExpiry).toEqual(first);
+    expect(check).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries after the timed-out callback settles and the cache expires", async () => {
+    let currentTime = 0;
+    let settle: (() => void) | undefined;
+    const check = vi.fn(
+      () =>
+        new Promise<{ status: "True"; reason: string; message: string }>((resolve) => {
+          settle = () => resolve({ status: "True", reason: "StorageReady", message: "Ready." });
+        }),
+    );
+    const criterion = registration(check);
+    const registry = { readinessCriteria: [criterion] };
+    const config = {};
+    const resolve = createPluginReadinessResolver({
+      timeoutMs: 5,
+      cacheTtlMs: 10,
+      now: () => currentTime,
+    });
+
+    await resolve({ registry, config });
+    settle?.();
+    await new Promise((resolveSettled) => setTimeout(resolveSettled, 0));
+    currentTime = 20;
+    await resolve({ registry, config });
+
     expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects malformed and oversized provider output", async () => {
+    const malformed = registration(() => ({
+      status: "False",
+      reason: "Bad\nReason",
+      message: "password=super-secret-value-that-must-not-escape",
+    }));
+    const oversized = registration(() => ({
+      status: "False",
+      reason: "StorageUnavailable",
+      message: "x".repeat(513),
+    }));
+    const resolve = createPluginReadinessResolver({ cacheTtlMs: 0 });
+
+    await expect(
+      resolve({ registry: { readinessCriteria: [malformed] }, config: {} }),
+    ).resolves.toEqual([
+      expect.objectContaining({ status: "Unknown", reason: "CriterionInvalidResult" }),
+    ]);
+    await expect(
+      resolve({ registry: { readinessCriteria: [oversized] }, config: {} }),
+    ).resolves.toEqual([
+      expect.objectContaining({ status: "Unknown", reason: "CriterionInvalidResult" }),
+    ]);
   });
 });

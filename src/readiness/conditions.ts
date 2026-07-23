@@ -1,3 +1,5 @@
+import { boundedCoreReadinessMessage } from "./sanitize.js";
+
 export const WORKSPACE_WRITABLE_CRITERION_ID = "openclaw.workspace-writable";
 
 type BuiltInReadinessConditionType =
@@ -86,7 +88,9 @@ function resolvePluginFailures(plugins: PluginReadinessInput): string[] {
   return plugins.errors
     .filter((entry) => entry.activated === true || entry.activationSource !== "disabled")
     .map((entry) =>
-      entry.error ? `${entry.id}: ${entry.error}` : `${entry.id}: plugin load failed`,
+      boundedCoreReadinessMessage(
+        entry.error ? `${entry.id}: ${entry.error}` : `${entry.id}: plugin load failed`,
+      ),
     );
 }
 
@@ -109,7 +113,7 @@ function buildPluginCondition(plugins: PluginReadinessInput | undefined): Readin
     message:
       failures.length === 0
         ? "Selected plugins loaded without activation errors."
-        : `Plugin load failures: ${failures.join("; ")}`,
+        : boundedCoreReadinessMessage(`Plugin load failures: ${failures.join("; ")}`),
   };
 }
 
@@ -142,6 +146,13 @@ function buildGatewayCondition(gateway: RuntimeReadinessInput["gateway"]): Readi
 }
 
 export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalReadinessResult {
+  const additionalConditions = input.additionalConditions ?? [];
+  const workspaceConditions = additionalConditions.filter(
+    (condition) => condition.type === "WorkspaceWritable",
+  );
+  const remainingConditions = additionalConditions
+    .filter((condition) => condition.type !== "WorkspaceWritable")
+    .toSorted((left, right) => left.type.localeCompare(right.type));
   const conditions: ReadinessCondition[] = [
     ...(input.coreConditions ?? []),
     {
@@ -153,9 +164,10 @@ export function buildRuntimeReadiness(input: RuntimeReadinessInput): CanonicalRe
         ? "Runtime configuration loaded."
         : "Runtime configuration was not loaded.",
     },
-    ...(input.additionalConditions ?? []),
+    ...workspaceConditions,
     buildGatewayCondition(input.gateway),
     buildPluginCondition(input.plugins),
+    ...remainingConditions,
   ];
   const failures = conditions
     .filter((entry) => entry.requirement === "required" && entry.status !== "True")
