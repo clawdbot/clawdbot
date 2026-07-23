@@ -9,7 +9,7 @@ import {
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
 
-export type FinalRecoveryPointCommandResult =
+type FinalRecoveryPointCommandResult =
   | FinalRecoveryPointResult
   | {
       version: "openclaw-final-recovery-point-result/v1";
@@ -43,7 +43,7 @@ export async function backupCaptureFinalCommand(
   }
 }
 
-export async function readFinalRecoveryPointRequestFromStdin(): Promise<string> {
+async function readFinalRecoveryPointRequestFromStdin(): Promise<string> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of process.stdin) {

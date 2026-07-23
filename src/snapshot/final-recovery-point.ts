@@ -20,7 +20,7 @@ import {
 } from "./recovery-point.js";
 
 export const FINAL_RECOVERY_POINT_REQUEST_VERSION = "openclaw-final-recovery-point-request/v1";
-export const FINAL_RECOVERY_POINT_RESULT_VERSION = "openclaw-final-recovery-point-result/v1";
+const FINAL_RECOVERY_POINT_RESULT_VERSION = "openclaw-final-recovery-point-result/v1";
 
 const MAX_RECORD_BYTES = 1024 * 1024;
 const PRIVATE_DIRECTORY_MODE = 0o700;
