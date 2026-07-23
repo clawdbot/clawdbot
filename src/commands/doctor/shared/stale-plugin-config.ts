@@ -11,6 +11,7 @@ import {
   resolveOfficialExternalPluginId,
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
+import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { asObjectRecord } from "./object.js";
 import {
   filterRepairableStalePluginHits,
@@ -255,15 +256,15 @@ function collectDependentChannelConfigHits(
       surface: "heartbeat",
     });
   }
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const [index, agent] of agents.entries()) {
-    const target = agent?.heartbeat?.target;
+  for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
+    const heartbeat = asObjectRecord(agent.heartbeat);
+    const target = heartbeat?.target;
     if (typeof target !== "string" || !staleChannelIds.has(normalizePluginId(target))) {
       continue;
     }
     hits.push({
       pluginId: target,
-      pathLabel: `agents.list.${index}.heartbeat.target`,
+      pathLabel: `${path}.heartbeat.target`,
       surface: "heartbeat",
     });
   }
@@ -510,9 +511,8 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
   ) {
     delete defaultsHeartbeat.target;
   }
-  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
-  for (const agent of agents) {
-    const heartbeat = agent.heartbeat;
+  for (const { agent } of listMutableCodexRouteAgentEntries(config)) {
+    const heartbeat = asObjectRecord(agent.heartbeat);
     if (
       heartbeat &&
       typeof heartbeat.target === "string" &&

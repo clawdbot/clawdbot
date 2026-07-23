@@ -1,12 +1,8 @@
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
-import {
-  hasAgentRosterProperty,
-  listAgentEntries,
-  toAgentEntriesRecord,
-} from "../agents/agent-scope-config.js";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
-import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -383,13 +379,13 @@ export async function applySystemAgentSetup(
   const { configureGatewayForSetup } = await import("../wizard/setup.gateway-config.js");
   const buildSetupCandidate = async (
     currentBaseConfig: OpenClawConfig,
-    hasAuthoredRoster: boolean,
+    hasAuthoredRosterEntries: boolean,
   ) => {
     const roster = listAgentEntries(currentBaseConfig);
     // Pre-roster configs materialize this minimal main entry in memory. Only an
     // authored roster establishes fleet workspace ownership.
     const isBootstrapMain =
-      !hasAuthoredRoster &&
+      !hasAuthoredRosterEntries &&
       roster.length === 1 &&
       normalizeAgentId(roster[0]?.id) === "main" &&
       roster[0]?.default === true &&
@@ -397,7 +393,7 @@ export async function applySystemAgentSetup(
     const workspaceConflict = isBootstrapMain
       ? undefined
       : resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
-    const currentHasRoster = hasAuthoredRoster && roster.length > 0 && !isBootstrapMain;
+    const currentHasRoster = hasAuthoredRosterEntries && roster.length > 0 && !isBootstrapMain;
     const allowWorkspaceWrite =
       params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
     let setupBaseConfig = currentBaseConfig;
@@ -487,8 +483,7 @@ export async function applySystemAgentSetup(
           // stale settings from the losing attempt into service setup or probes.
           const setupCandidate = await buildSetupCandidate(
             currentConfig,
-            hasAgentRosterProperty(context.snapshot.parsed) ||
-              configIncludeOwnsAgentRoster(context.snapshot),
+            hasResolvedRosterBeforeMigrations(context.snapshot),
           );
           const finalizedConfig = finalizeConfig
             ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)

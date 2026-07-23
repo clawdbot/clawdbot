@@ -136,6 +136,7 @@ function snapshot(hash: string | null, config: OpenClawConfig): ConfigSnapshot {
     path: "/tmp/openclaw.json",
     hash,
     parsed: structuredClone(config),
+    sourceConfigBeforeMigrations: structuredClone(config),
     config: canonicalConfig,
     sourceConfig: canonicalConfig,
     runtimeConfig: canonicalConfig,
@@ -436,6 +437,32 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     mocks.state.initialSnapshot = preRosterSnapshot;
     mocks.state.commitConfig = structuredClone(authoredConfig);
     mocks.state.commitSnapshot = preRosterSnapshot;
+
+    await applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" }));
+
+    expect(mocks.state.persistedConfig?.agents).toMatchObject({
+      defaults: {
+        model: { primary: "openai/gpt-5.5" },
+        workspace: "/tmp/requested-workspace",
+      },
+      entries: { main: { default: true } },
+    });
+  });
+
+  it.each([
+    { label: "entries", agents: { entries: {} } },
+    { label: "list", agents: { list: [] } },
+  ])("treats an authored empty $label roster as bootstrap", async ({ agents }) => {
+    const authoredConfig: OpenClawConfig = {
+      agents: {
+        ...agents,
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+      },
+    };
+    const emptyRosterSnapshot = snapshot("probe", authoredConfig);
+    mocks.state.initialSnapshot = emptyRosterSnapshot;
+    mocks.state.commitConfig = structuredClone(authoredConfig);
+    mocks.state.commitSnapshot = emptyRosterSnapshot;
 
     await applySystemAgentSetup(baseParams({ workspace: "/tmp/requested-workspace" }));
 
