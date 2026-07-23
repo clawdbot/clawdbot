@@ -243,6 +243,7 @@ async function buildVerifiedComponent(
   if (
     !isDeepStrictEqual(firstVerification.manifest, secondVerification.manifest) ||
     !isDeepStrictEqual(firstManifestRead.parsed, secondVerification.manifest) ||
+    !isDeepStrictEqual(secondManifestRead.parsed, secondVerification.manifest) ||
     firstManifestRead.sha256 !== secondManifestRead.sha256
   ) {
     throw new Error(
