@@ -2,6 +2,7 @@
 import path from "node:path";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
   createParams,
@@ -128,7 +129,7 @@ describe("runCodexAppServerAttempt steering", () => {
     handle?.abort();
     expect(handle?.isAborted?.()).toBe(true);
     expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).not.toHaveBeenCalled();
-    await expect(run).resolves.toMatchObject({ aborted: true });
+    expect(readAttemptTerminal(await run).aborted).toBe(true);
     expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
       params.sessionId,
       handle,
