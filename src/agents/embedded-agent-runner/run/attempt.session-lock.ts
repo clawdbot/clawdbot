@@ -86,7 +86,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     releaseHeldLockForAbort: async () => {},
     refreshAfterOwnedSessionWrite: () => {},
     withOwnedSessionFileWrite: (run) => run(),
-    reacquireAfterPrompt: async () => {},
+    reacquireAfterPrompt: async () => {
+      await params.reloadPromptReleasedSessionFile?.();
+    },
     waitForSessionEvents: async () => {},
     withSessionWriteLock: async (run) => await run(),
     acquireForCleanup: async () => noOpLock,

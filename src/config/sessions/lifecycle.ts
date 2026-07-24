@@ -1,7 +1,8 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
-import { readTranscriptStatsSync } from "./session-accessor.js";
+import { loadTranscriptHeaderSync, readTranscriptStatsSync } from "./session-accessor.js";
 import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
 
 type SessionLifecycleEntry = Pick<
@@ -89,9 +90,50 @@ function resolvePositiveTimestamp(value: number | undefined): number | undefined
   return timestampMs !== undefined && timestampMs > 0 ? timestampMs : undefined;
 }
 
+function parseTimestampMs(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return resolveTimestamp(value);
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  return resolveTimestamp(Date.parse(value));
+}
+
+function readSessionHeaderStartedAtMs(params: {
+  entry: SessionLifecycleEntry;
+  agentId?: string;
+  sessionKey?: string;
+  storePath?: string;
+}): number | undefined {
+  const sessionId = params.entry.sessionId?.trim();
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionId || !sessionKey || !params.storePath) {
+    return undefined;
+  }
+  try {
+    const header = loadTranscriptHeaderSync({
+      agentId: params.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
+      sessionId,
+      sessionKey,
+      storePath: params.storePath,
+    }) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
+    if (
+      header?.type !== "session" ||
+      (typeof header.id === "string" && header.id.trim() && header.id !== sessionId)
+    ) {
+      return undefined;
+    }
+    return parseTimestampMs(header.timestamp);
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveSessionLifecycleTimestamps(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
+  sessionKey?: string;
   storePath?: string;
 }): { sessionStartedAt?: number; lastInteractionAt?: number } {
   const entry = params.entry;
@@ -99,7 +141,9 @@ export function resolveSessionLifecycleTimestamps(params: {
     return {};
   }
   return {
-    sessionStartedAt: resolveTimestamp(entry.sessionStartedAt),
+    sessionStartedAt:
+      resolveTimestamp(entry.sessionStartedAt) ??
+      readSessionHeaderStartedAtMs({ ...params, entry }),
     lastInteractionAt: resolveTimestamp(entry.lastInteractionAt),
   };
 }

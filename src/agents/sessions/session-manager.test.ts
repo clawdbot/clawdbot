@@ -260,6 +260,29 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("reloads prompt-time SQLite appends before the attempt resumes", async () => {
+    const dir = await makeTempDir();
+    const target = {
+      agentId: "main",
+      sessionId: "prompt-reload",
+      sessionKey: "agent:main:prompt-reload",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = SessionManager.open(target, dir);
+    const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    const external = await appendTranscriptMessage(target, {
+      message: { role: "user", content: "prompt-time", timestamp: 2 },
+      now: 2,
+      parentId: firstId,
+    });
+
+    expect(manager.getLeafId()).toBe(firstId);
+    manager.reloadPersistedTranscript();
+
+    expect(manager.getLeafId()).toBe(external.messageId);
+  });
+
   it("clears side-append mode when switching to a header-only target", async () => {
     const dir = await makeTempDir();
     const storePath = path.join(dir, "sessions.json");

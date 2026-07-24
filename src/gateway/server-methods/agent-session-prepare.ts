@@ -211,6 +211,7 @@ export function prepareAgentSession(params: {
         entry,
         storePath,
         agentId: canonicalSessionAgentId,
+        sessionKey: canonicalKey,
       })
     : undefined;
   const skipImplicitExpiry =

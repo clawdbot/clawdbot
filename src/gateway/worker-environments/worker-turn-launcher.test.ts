@@ -31,7 +31,10 @@ import {
 } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import { createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider } from "./worker-turn-launcher.js";
+import {
+  createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider,
+  resolveWorkerTurnTranscriptTarget,
+} from "./worker-turn-launcher.js";
 
 type WorkerTurnLauncherOptions = Parameters<typeof createRawWorkerSessionTurnPlacementProvider>[0];
 type WorkerTurnEnvironmentService = WorkerTurnLauncherOptions["environments"];
@@ -53,6 +56,20 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("worker turn launcher", () => {
+  it("rejects a transcript target from another session incarnation", () => {
+    expect(() =>
+      resolveWorkerTurnTranscriptTarget({
+        sessionId: "current-session",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "stale-session",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/sessions.json",
+        },
+      }),
+    ).toThrow("transcript identity does not match the active turn");
+  });
+
   let root: string;
   let database: OpenClawStateDatabase;
   let placements: WorkerSessionPlacementStore;

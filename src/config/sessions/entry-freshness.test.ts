@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
-import { upsertSessionEntry } from "./session-accessor.js";
+import { appendTranscriptEvent, upsertSessionEntry } from "./session-accessor.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -250,5 +250,33 @@ describe("resolveSessionEntryResetFreshness", () => {
       fresh: false,
       staleReason: "idle",
     });
+  });
+
+  it("uses the SQLite transcript header when lifecycle metadata is missing", async () => {
+    const sessionKey = "agent:main:main:thread:header";
+    const sessionId = "session-header-fallback";
+    const now = new Date("2026-01-02T12:00:00Z").getTime();
+    const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
+    const target = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(target, { sessionId, updatedAt: now });
+    await appendTranscriptEvent(target, {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: headerTimestamp,
+      cwd: tempDir,
+    });
+
+    const result = resolveSessionEntryResetFreshness({
+      sessionKey,
+      storePath,
+      sessionCfg: { reset: { mode: "daily" } },
+      resetType: "thread",
+      now,
+    });
+
+    expect(result.state).toBe("stale");
+    expect(result.lifecycleTimestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
+    expect(result.freshness).toMatchObject({ fresh: false, staleReason: "daily" });
   });
 });

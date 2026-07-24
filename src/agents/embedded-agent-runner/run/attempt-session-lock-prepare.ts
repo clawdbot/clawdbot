@@ -67,7 +67,9 @@ export async function prepareEmbeddedAttemptSessionLock(input: {
       getSessionManager("entry merge").mergePromptReleasedSessionEntries(entries, {
         persistLeaf: true,
       }),
-    reloadPromptReleasedSessionFile: () => {},
+    reloadPromptReleasedSessionFile: () => {
+      getSessionManager("file reload").reloadPersistedTranscript();
+    },
   });
   input.onSessionLockReleaseReady(() => sessionLockController.dispose());
 

@@ -70,6 +70,7 @@ export {
   loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  loadSqliteTranscriptHeaderSync,
   loadSqliteTranscriptTailEventsSync,
   readSqliteTranscriptEventAtSeqSync,
   readSqliteTranscriptStatsSync,

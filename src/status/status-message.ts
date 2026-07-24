@@ -944,6 +944,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const sessionStartedAt = resolveSessionLifecycleTimestamps({
     entry,
     agentId: args.agentId,
+    sessionKey: args.sessionKey,
     storePath: args.sessionStorePath,
   }).sessionStartedAt;
   const sessionDuration =

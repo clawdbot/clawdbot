@@ -47,7 +47,7 @@ function createFixture(options?: { rejectPostArmFence?: Error }) {
   const sessionFileOwner = { release: vi.fn() };
   const sessionManager = {
     mergePromptReleasedSessionEntries: vi.fn(() => "merged"),
-    setSessionFile: vi.fn(),
+    reloadPersistedTranscript: vi.fn(),
   };
   const sessionLockController = {
     canAdvanceSessionEntryCache: vi.fn(() => true),
@@ -153,7 +153,7 @@ describe("prepareEmbeddedAttemptSessionLock", () => {
       persistLeaf: true,
     });
     controllerInput?.reloadPromptReleasedSessionFile();
-    expect(fixture.sessionManager.setSessionFile).not.toHaveBeenCalled();
+    expect(fixture.sessionManager.reloadPersistedTranscript).toHaveBeenCalledOnce();
 
     await expect(result.withOwnedSessionWriteLock(async () => "done")).resolves.toBe("done");
     expect(fixture.sessionLockController.withSessionWriteLock).toHaveBeenCalledOnce();

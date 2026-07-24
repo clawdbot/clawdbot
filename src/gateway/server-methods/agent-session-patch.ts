@@ -136,6 +136,7 @@ export function buildAgentSessionPatch(params: {
         entry: params.freshEntry,
         storePath: params.storePath,
         agentId: params.sessionAgentId,
+        sessionKey: params.canonicalSessionKey,
       })
     : undefined;
   const freshSkipImplicitExpiry =

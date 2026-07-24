@@ -83,7 +83,15 @@ export class SessionManagerCore {
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
     );
+    // Runtime migration is an in-memory projection. Doctor/import owns durable
+    // legacy-shape migration before canonical SQLite runtime access.
     this.buildIndex();
+  }
+
+  reloadPersistedTranscript(): void {
+    if (this.persistenceTarget) {
+      this.setSessionTarget(this.persistenceTarget);
+    }
   }
 
   newSession(options?: NewSessionOptions): string | undefined {

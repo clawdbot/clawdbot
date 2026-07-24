@@ -105,6 +105,27 @@ function recoveryError(error: unknown): string {
   return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
 }
 
+export function resolveWorkerTurnTranscriptTarget(
+  turn: Pick<SessionPlacementTurnParams, "sessionId" | "sessionTarget">,
+): { agentId: string; sessionId: string; sessionKey: string; storePath: string } {
+  if (
+    !turn.sessionTarget?.agentId ||
+    !turn.sessionTarget.sessionKey ||
+    !turn.sessionTarget.storePath
+  ) {
+    throw new Error("Cloud worker turn is missing its transcript identity");
+  }
+  if (turn.sessionTarget.sessionId && turn.sessionTarget.sessionId !== turn.sessionId) {
+    throw new Error("Cloud worker transcript identity does not match the active turn");
+  }
+  return {
+    agentId: turn.sessionTarget.agentId,
+    sessionId: turn.sessionId,
+    sessionKey: turn.sessionTarget.sessionKey,
+    storePath: turn.sessionTarget.storePath,
+  };
+}
+
 async function failHandedOffTurn(params: {
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
@@ -236,19 +257,7 @@ async function executeWorkerTurn(params: {
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
-  if (
-    !turn.sessionTarget?.agentId ||
-    !turn.sessionTarget.sessionKey ||
-    !turn.sessionTarget.storePath
-  ) {
-    throw new Error("Cloud worker turn is missing its transcript identity");
-  }
-  const transcriptTarget = {
-    agentId: turn.sessionTarget.agentId,
-    sessionId: turn.sessionTarget.sessionId ?? turn.sessionId,
-    sessionKey: turn.sessionTarget.sessionKey,
-    storePath: turn.sessionTarget.storePath,
-  };
+  const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const manager = SessionManager.open(transcriptTarget);
   const userMessageAlreadyPersisted =
     turn.suppressNextUserMessagePersistence === true ||

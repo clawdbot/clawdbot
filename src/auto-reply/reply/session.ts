@@ -678,6 +678,7 @@ async function initSessionStateAttemptLocked(
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
+    sessionKey,
     storePath,
   });
   const entryFreshness = entry

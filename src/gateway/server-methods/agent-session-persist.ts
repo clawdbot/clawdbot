@@ -132,6 +132,7 @@ export async function persistAgentSessionPhase(params: {
           entry: params.entry,
           storePath: params.storePath,
           agentId: params.sessionAgentId,
+          sessionKey: params.canonicalSessionKey,
         }).sessionStartedAt
       : undefined;
 

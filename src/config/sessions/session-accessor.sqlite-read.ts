@@ -46,6 +46,23 @@ export function loadSqliteTranscriptEventsSync(
   return loadSqliteTranscriptEventsFromDatabase(database, resolved.sessionId);
 }
 
+/** Loads only the first transcript row for header metadata hot paths. */
+export function loadSqliteTranscriptHeaderSync(scope: SessionTranscriptReadScope): unknown {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("event_json")
+      .where("session_id", "=", resolved.sessionId)
+      .orderBy("seq", "asc")
+      .limit(1),
+  );
+  return row ? (JSON.parse(row.event_json) as TranscriptEvent) : undefined;
+}
+
 /** Loads a bounded newest tail in storage order for hot-path accounting. */
 export function loadSqliteTranscriptTailEventsSync(
   scope: SessionTranscriptReadScope,
