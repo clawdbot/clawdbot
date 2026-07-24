@@ -168,6 +168,23 @@ describe("chat pane pull request refresh", () => {
     expect(pane.sessionPullRequests).toEqual([]);
   });
 
+  it("keeps a session-specific assistant identity across ordinary gateway snapshots", () => {
+    const client = {} as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client });
+    const state = (pane as unknown as { state: ChatPageHost }).state;
+    state.client = client;
+    state.connected = true;
+    state.assistantName = "Session Agent";
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      connected: true,
+    });
+
+    expect(state.assistantName).toBe("Session Agent");
+  });
+
   it("preserves shared PR state for an empty rate-limited snapshot", async () => {
     const request = vi.fn().mockResolvedValue({ pullRequests: [], rateLimited: true });
     const setPullRequestSummary = vi.fn();

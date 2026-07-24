@@ -3315,7 +3315,13 @@ class ChatPane extends OpenClawLightDomElement {
         return;
       }
     }
-    state.assistantName = this.context.config.current.assistantIdentity.name;
+    // Keep the session-specific identity loaded by agent.identity.get across
+    // ordinary gateway snapshots. Reset to the configured fallback only when
+    // the logical connection changes; the startup path refreshes the identity
+    // for the active session afterward.
+    if (sourceChanged) {
+      state.assistantName = this.context.config.current.assistantIdentity.name;
+    }
     if (snapshot.phase !== "connected") {
       if (wasConnected) {
         const currentSessionId =
