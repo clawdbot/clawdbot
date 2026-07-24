@@ -69,6 +69,23 @@ describe("createExecutionCapabilityReadinessResolver", () => {
     expect(mcpConfig).toHaveBeenNthCalledWith(2, config, "/workspaces/support");
   });
 
+  it("captures MCP discovery selected by a hosting profile", () => {
+    const mcpConfig = vi.fn(() => ({ serverCount: 0, diagnosticCount: 0 }));
+
+    expect(
+      captureExecutionCapabilityReadinessSnapshot(
+        {},
+        {
+          agentIds: () => ["main"],
+          workspaceDir: () => "/workspaces/main",
+          mcpConfig,
+        },
+        [MCP_RUNTIME_READY_CRITERION_ID],
+      ).mcp,
+    ).toEqual({ status: "captured", serverCount: 0, diagnosticCount: 0 });
+    expect(mcpConfig).toHaveBeenCalledOnce();
+  });
+
   it("does no owner work when no capability criteria are selected", () => {
     const deps = createDeps();
     const resolve = createExecutionCapabilityReadinessResolver(deps);

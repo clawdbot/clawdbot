@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  advisoryCriteriaForHostingProfile,
   buildHostingProfileConditions,
+  isReadinessCriterionSelectedByHostingProfile,
   requiredCriteriaForHostingProfile,
   resolveHostingProfileSelection,
 } from "./profiles.js";
@@ -39,10 +41,46 @@ describe("resolveHostingProfile", () => {
 
 describe("buildHostingProfileConditions", () => {
   it("composes local from the shared readiness criteria", () => {
-    expect(requiredCriteriaForHostingProfile("local")).toEqual(["openclaw.workspace-writable"]);
+    expect(requiredCriteriaForHostingProfile("local")).toEqual([
+      "openclaw.config-current",
+      "openclaw.model-route-ready",
+      "openclaw.secrets-ready",
+      "openclaw.workspace-writable",
+      "openclaw.session-storage-ready",
+      "openclaw.context-engine-ready",
+      "openclaw.tool-catalog-ready",
+      "openclaw.mcp-runtime-ready",
+      "openclaw.sandbox-ready",
+      "openclaw.harness-ready",
+    ]);
+    expect(advisoryCriteriaForHostingProfile("local")).toEqual([
+      "openclaw.state-ready",
+      "openclaw.delivery-runtime-ready",
+      "openclaw.scheduler-ready",
+    ]);
     expect(buildHostingProfileConditions("local", facts)).toEqual([
       expect.objectContaining({ type: "ProfileSelected", status: "True" }),
     ]);
+  });
+
+  it("uses the same serving baseline for every standard profile", () => {
+    for (const profile of ["container", "reverse-proxy", "node-mode"] as const) {
+      expect(requiredCriteriaForHostingProfile(profile)).toEqual(
+        requiredCriteriaForHostingProfile("local"),
+      );
+      expect(advisoryCriteriaForHostingProfile(profile)).toEqual(
+        advisoryCriteriaForHostingProfile("local"),
+      );
+    }
+  });
+
+  it("reports whether a profile selects a readiness criterion", () => {
+    expect(
+      isReadinessCriterionSelectedByHostingProfile("container", "openclaw.model-route-ready"),
+    ).toBe(true);
+    expect(isReadinessCriterionSelectedByHostingProfile("container", "plugin.optional.check")).toBe(
+      false,
+    );
   });
 
   it("rejects a loopback listener for the container profile", () => {

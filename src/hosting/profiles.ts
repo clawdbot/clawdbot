@@ -22,28 +22,52 @@ type HostingProfileDescriptor = {
   id: HostingProfileId;
   description: string;
   requiredCriteria: readonly string[];
+  advisoryCriteria: readonly string[];
 };
+
+const STANDARD_REQUIRED_CRITERIA = [
+  "openclaw.config-current",
+  "openclaw.model-route-ready",
+  "openclaw.secrets-ready",
+  WORKSPACE_WRITABLE_CRITERION_ID,
+  "openclaw.session-storage-ready",
+  "openclaw.context-engine-ready",
+  "openclaw.tool-catalog-ready",
+  "openclaw.mcp-runtime-ready",
+  "openclaw.sandbox-ready",
+  "openclaw.harness-ready",
+] as const;
+
+const STANDARD_ADVISORY_CRITERIA = [
+  "openclaw.state-ready",
+  "openclaw.delivery-runtime-ready",
+  "openclaw.scheduler-ready",
+] as const;
 
 const STANDARD_HOSTING_PROFILES: Record<HostingProfileId, HostingProfileDescriptor> = {
   local: {
     id: "local",
     description: "Local or foreground Gateway.",
-    requiredCriteria: [WORKSPACE_WRITABLE_CRITERION_ID],
+    requiredCriteria: STANDARD_REQUIRED_CRITERIA,
+    advisoryCriteria: STANDARD_ADVISORY_CRITERIA,
   },
   container: {
     id: "container",
     description: "Gateway directly reachable through a container listener.",
-    requiredCriteria: [WORKSPACE_WRITABLE_CRITERION_ID],
+    requiredCriteria: STANDARD_REQUIRED_CRITERIA,
+    advisoryCriteria: STANDARD_ADVISORY_CRITERIA,
   },
   "reverse-proxy": {
     id: "reverse-proxy",
     description: "Gateway behind a trusted identity proxy.",
-    requiredCriteria: [WORKSPACE_WRITABLE_CRITERION_ID],
+    requiredCriteria: STANDARD_REQUIRED_CRITERIA,
+    advisoryCriteria: STANDARD_ADVISORY_CRITERIA,
   },
   "node-mode": {
     id: "node-mode",
     description: "Gateway controlling one or more paired execution targets.",
-    requiredCriteria: [WORKSPACE_WRITABLE_CRITERION_ID],
+    requiredCriteria: STANDARD_REQUIRED_CRITERIA,
+    advisoryCriteria: STANDARD_ADVISORY_CRITERIA,
   },
 };
 
@@ -297,4 +321,19 @@ export function buildHostingProfileConditions(
 
 export function requiredCriteriaForHostingProfile(profile: HostingProfileId): readonly string[] {
   return STANDARD_HOSTING_PROFILES[profile].requiredCriteria;
+}
+
+export function advisoryCriteriaForHostingProfile(profile: HostingProfileId): readonly string[] {
+  return STANDARD_HOSTING_PROFILES[profile].advisoryCriteria;
+}
+
+export function isReadinessCriterionSelectedByHostingProfile(
+  profile: HostingProfileId,
+  criterionId: string,
+): boolean {
+  const descriptor = STANDARD_HOSTING_PROFILES[profile];
+  return (
+    descriptor.requiredCriteria.includes(criterionId) ||
+    descriptor.advisoryCriteria.includes(criterionId)
+  );
 }

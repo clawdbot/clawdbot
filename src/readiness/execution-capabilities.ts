@@ -135,8 +135,12 @@ export function captureExecutionCapabilityReadinessSnapshot(
       };
     },
   },
+  additionalCriterionIds: readonly string[] = [],
 ): ExecutionCapabilityReadinessSnapshot {
-  if (!isCriterionSelected(config, MCP_RUNTIME_READY_CRITERION_ID)) {
+  if (
+    !isCriterionSelected(config, MCP_RUNTIME_READY_CRITERION_ID) &&
+    !additionalCriterionIds.includes(MCP_RUNTIME_READY_CRITERION_ID)
+  ) {
     return {};
   }
   try {

@@ -8,7 +8,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createNodeModeReadinessEvidenceResolver } from "../hosting/node-mode.js";
 import {
+  advisoryCriteriaForHostingProfile,
   buildHostingProfileConditions,
+  isReadinessCriterionSelectedByHostingProfile,
   requiredCriteriaForHostingProfile,
   resolveHostingProfile,
 } from "../hosting/profiles.js";
@@ -150,20 +152,51 @@ export async function prepareGatewayRuntimeState(params: {
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
   } = bootstrap;
-  const makeState = (config: OpenClawConfig, registry: typeof pluginBootstrap.pluginRegistry) => ({
-    config,
-    registry,
-    auth: getResolvedAuth(),
-    executionCapabilities: captureExecutionCapabilityReadinessSnapshot(config),
-  });
+  const makeState = (
+    config: OpenClawConfig,
+    registry: typeof pluginBootstrap.pluginRegistry,
+  ) => {
+    const profile = resolveHostingProfileSelection({
+      config,
+      env: process.env,
+      override: opts.hostingProfileOverride,
+    })?.profile;
+    const profileCriteria = profile
+      ? [
+          ...requiredCriteriaForHostingProfile(profile),
+          ...advisoryCriteriaForHostingProfile(profile),
+        ]
+      : [];
+    return {
+      config,
+      registry,
+      auth: getResolvedAuth(),
+      executionCapabilities: captureExecutionCapabilityReadinessSnapshot(
+        config,
+        undefined,
+        profileCriteria,
+      ),
+    };
+  };
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
     baseGatewayMethods: pluginBootstrap.baseGatewayMethods,
     makeState,
-    modelRouteReadinessStartupOptions: (config: OpenClawConfig) =>
-      isReadinessCriterionSelected(config, MODEL_ROUTE_READY_CRITERION_ID)
+    modelRouteReadinessStartupOptions: (config: OpenClawConfig) => {
+      const profile = resolveHostingProfileSelection({
+        config,
+        env: process.env,
+        override: opts.hostingProfileOverride,
+      })?.profile;
+      return isReadinessCriterionSelected(config, MODEL_ROUTE_READY_CRITERION_ID) ||
+        (profile &&
+          isReadinessCriterionSelectedByHostingProfile(
+            profile,
+            MODEL_ROUTE_READY_CRITERION_ID,
+          ))
         ? { enabled: true as const }
-        : {},
+        : {};
+    },
     readinessSnapshot: makeState(cfgAtStart, pluginBootstrap.pluginRegistry),
   };
   // Unconfigured clean installs get no service; durable rows still need list/status projection.
@@ -433,6 +466,7 @@ export async function prepareGatewayRuntimeState(params: {
           stateServices: {
             scheduler: runtimeStateRef.current?.cronState.cron.getReadinessSnapshot(),
           },
+          additionalAdvisoryCriteria: profile ? advisoryCriteriaForHostingProfile(profile) : [],
           additionalRequiredCriteria: profile ? requiredCriteriaForHostingProfile(profile) : [],
         }),
       ]);

@@ -149,11 +149,17 @@ export function createSelectedReadinessResolver() {
     executionCapabilities?: ExecutionCapabilityReadinessSnapshot;
     env?: NodeJS.ProcessEnv;
     stateServices?: StateServiceReadinessSnapshot;
+    additionalAdvisoryCriteria?: readonly string[];
     additionalRequiredCriteria?: readonly string[];
   }): Promise<ReadinessContribution> => {
     const selectedById = new Map(
       resolveSelectedReadinessCriteria(params.config).map((entry) => [entry.id, entry]),
     );
+    for (const id of params.additionalAdvisoryCriteria ?? []) {
+      if (!selectedById.has(id)) {
+        selectedById.set(id, { id, requirement: "advisory" });
+      }
+    }
     for (const id of params.additionalRequiredCriteria ?? []) {
       selectedById.set(id, { id, requirement: "required" });
     }
