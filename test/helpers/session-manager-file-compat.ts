@@ -25,6 +25,8 @@ function installFileSessionManagerCompat(params: {
     getSessionDir: () => params.sessionDir,
     getSessionFile: () => params.target(),
     newSession(options?: Parameters<SessionManager["newSession"]>[0]) {
+      // The wrapped manager is in-memory, so identity changes cannot write the old target.
+      // Rotate only after the new id is minted, then serialize the new session once.
       const result = originalNewSession(options);
       params.rotateTarget?.(manager.getSessionId());
       writeFullFile();

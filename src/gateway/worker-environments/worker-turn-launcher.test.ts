@@ -70,6 +70,24 @@ describe("worker turn launcher", () => {
     ).toThrow("transcript identity does not match the active turn");
   });
 
+  it.each([
+    ["agent", { agentId: "other", sessionKey: "agent:main:main" }],
+    ["session key", { agentId: "main", sessionKey: "agent:main:other" }],
+  ])("rejects a transcript target with a different %s", (_label, identity) => {
+    expect(() =>
+      resolveWorkerTurnTranscriptTarget({
+        agentId: "main",
+        sessionId: "current-session",
+        sessionKey: "agent:main:main",
+        sessionTarget: {
+          ...identity,
+          sessionId: "current-session",
+          storePath: "/tmp/sessions.json",
+        },
+      }),
+    ).toThrow("transcript identity does not match the active turn");
+  });
+
   let root: string;
   let database: OpenClawStateDatabase;
   let placements: WorkerSessionPlacementStore;

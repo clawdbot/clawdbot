@@ -857,6 +857,22 @@ describe("SessionManager.openFile test compatibility", () => {
       expect.objectContaining({ content: "appended", role: "user" }),
     ]);
   });
+
+  it("rotates new-session fixtures without rewriting the previous file", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "original.jsonl");
+    const manager = SessionManager.openFile(sessionFile, dir);
+    manager.appendMessage({ role: "user", content: "original", timestamp: 1 });
+    const original = await fs.readFile(sessionFile, "utf8");
+
+    manager.newSession({ id: "replacement" });
+
+    expect(await fs.readFile(sessionFile, "utf8")).toBe(original);
+    expect(manager.getSessionFile()).toBe(path.join(dir, "replacement.jsonl"));
+    expect(await fs.readFile(path.join(dir, "replacement.jsonl"), "utf8")).toContain(
+      '"id":"replacement"',
+    );
+  });
 });
 describe("parseSessionEntries", () => {
   afterEach(() => {

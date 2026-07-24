@@ -551,6 +551,17 @@ export function sessionStoreEntry(sessionId: string, overrides: Partial<SessionE
   };
 }
 
+function writeSessionFixture(
+  sessionFile: string,
+  session: { getPersistedEntries(): unknown[] },
+): void {
+  const contents = session
+    .getPersistedEntries()
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
+  fsSync.writeFileSync(sessionFile, `${contents}\n`, "utf8");
+}
+
 export async function createCheckpointFixture(
   dir: string,
   options: { legacyPreCompactionSnapshot?: boolean } = { legacyPreCompactionSnapshot: true },
@@ -592,14 +603,7 @@ export async function createCheckpointFixture(
     throw new Error("expected persisted session leaf before compaction");
   }
   const sessionFile = path.join(dir, `${session.getSessionId()}.jsonl`);
-  fsSync.writeFileSync(
-    sessionFile,
-    `${session
-      .getPersistedEntries()
-      .map((entry) => JSON.stringify(entry))
-      .join("\n")}\n`,
-    "utf8",
-  );
+  writeSessionFixture(sessionFile, session);
   const legacyPreCompactionSnapshot = options.legacyPreCompactionSnapshot ?? true;
   const preCompactionSessionFile = legacyPreCompactionSnapshot
     ? path.join(dir, `${path.parse(sessionFile).name}.checkpoint-test.jsonl`)
@@ -615,6 +619,7 @@ export async function createCheckpointFixture(
   if (!postCompactionLeafId) {
     throw new Error("expected post-compaction leaf");
   }
+  writeSessionFixture(sessionFile, session);
   return {
     session,
     sessionId: session.getSessionId(),
