@@ -14,6 +14,7 @@ import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   parseRawSessionConversationRef,
@@ -21,7 +22,6 @@ import {
 } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
@@ -142,7 +142,10 @@ export function resolveInheritedToolPolicyForSession(
 }
 
 /** Filter runtime tools by sandbox allow/deny policy. */
-export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
+export function filterToolsByPolicy<TTool extends { name: string }>(
+  tools: TTool[],
+  policy?: SandboxToolPolicy,
+): TTool[] {
   if (!policy) {
     return tools;
   }
@@ -464,6 +467,9 @@ export function resolveGroupToolPolicy(params: {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  /** Scheduled authority must not fall back from a removed named account. */
+  requireConfiguredAccount?: boolean;
+  senderPolicyMode?: "always" | "never";
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -486,13 +492,13 @@ export function resolveGroupToolPolicy(params: {
     ...(spawnedContext.groupIds ?? []),
     ...buildScopedGroupIdCandidates(trustedGroup.groupId),
   ]);
-  if (groupIds.length === 0) {
-    return undefined;
-  }
   const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
   const channel = normalizeMessageChannel(channelRaw);
+  const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
-    return undefined;
+    return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID
+      ? { allow: [] }
+      : undefined;
   }
   let plugin;
   try {
@@ -500,13 +506,33 @@ export function resolveGroupToolPolicy(params: {
   } catch {
     plugin = undefined;
   }
+  if (params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID) {
+    let configured: boolean;
+    try {
+      configured =
+        plugin?.config
+          .listAccountIds(params.config)
+          .some((candidate) => normalizeAccountId(candidate) === accountId) === true;
+    } catch {
+      configured = false;
+    }
+    if (!configured) {
+      // A named creator account is an authority boundary, not a fallback hint.
+      // If it disappears, deny the scheduled surface instead of selecting default config.
+      return { allow: [] };
+    }
+  }
+  if (groupIds.length === 0) {
+    return undefined;
+  }
   for (const groupId of groupIds) {
     const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
       groupChannel: trustedGroup.dropped ? null : params.groupChannel,
       groupSpace: trustedGroup.dropped ? null : params.groupSpace,
-      accountId: params.accountId,
+      accountId,
+      senderPolicyMode: params.senderPolicyMode,
       senderId: params.senderId,
       senderName: params.senderName,
       senderUsername: params.senderUsername,
@@ -523,7 +549,8 @@ export function resolveGroupToolPolicy(params: {
     messageProvider: channel,
     groupId: groupIds[0],
     groupIdCandidates: groupIds.slice(1),
-    accountId: params.accountId,
+    accountId,
+    senderPolicyMode: params.senderPolicyMode,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

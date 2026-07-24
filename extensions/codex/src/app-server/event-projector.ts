@@ -78,6 +78,7 @@ type CodexAppServerToolTelemetry = {
 type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
+  prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
   readRecentRateLimits?: () => JsonValue | undefined;
   runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
@@ -134,6 +135,7 @@ export class CodexAppServerEventProjector {
       () => this.nextTranscriptTimestamp(),
       {
         nativePostToolUseRelayEnabled: options.nativePostToolUseRelayEnabled,
+        prepareNativeMcpAppResultDetails: options.prepareNativeMcpAppResultDetails,
         trajectoryRecorder: options.trajectoryRecorder,
       },
     );
@@ -467,6 +469,7 @@ export class CodexAppServerEventProjector {
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
+    details?: unknown;
   }): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
     this.toolTranscriptProjection.recordDynamicToolResult(params);
@@ -582,7 +585,7 @@ export class CodexAppServerEventProjector {
     this.eventProjection.emitStandardItemEvent({ phase: "end", item });
     await this.eventProjection.emitNormalizedToolItemEvent({ phase: "result", item });
     this.toolTranscriptProjection.recordNativeToolCall(item);
-    this.toolTranscriptProjection.recordNativeToolResult(item);
+    await this.toolTranscriptProjection.recordNativeToolResultWithDetails(item);
     this.toolProgressProjection.emitToolResultSummary(item);
     this.toolProgressProjection.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -643,7 +646,7 @@ export class CodexAppServerEventProjector {
       this.toolProgressProjection.rememberCommandAggregateOutputEcho(item);
       await this.emitSnapshotOnlyNativeToolProgress(item);
       this.toolTranscriptProjection.recordNativeToolCall(item);
-      this.toolTranscriptProjection.recordNativeToolResult(item);
+      await this.toolTranscriptProjection.recordNativeToolResultWithDetails(item);
       this.toolTranscriptProjection.emitAfterToolCallObservation(item);
       this.toolProgressProjection.emitToolResultSummary(item);
       this.toolProgressProjection.emitToolResultOutput(item);

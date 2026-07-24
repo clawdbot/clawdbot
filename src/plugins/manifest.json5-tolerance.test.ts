@@ -163,6 +163,39 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("retains static MCP server declarations", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "mcp-app-plugin",
+        configSchema: { type: "object" },
+        mcpServers: {
+          app: {
+            transport: "stdio",
+            command: "node",
+            args: ["./mcp-server.js"],
+          },
+          invalid: "./not-a-server.json",
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.mcpServers).toEqual({
+        app: {
+          transport: "stdio",
+          command: "node",
+          args: ["./mcp-server.js"],
+        },
+      });
+    }
+  });
+
   it("normalizes activation and setup descriptor metadata from the manifest", () => {
     const dir = makeTempDir();
     const json5Content = `{

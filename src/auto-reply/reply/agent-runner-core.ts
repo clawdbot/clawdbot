@@ -18,6 +18,7 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
@@ -133,7 +134,7 @@ export function resolveSourceReplyPolicy(params: {
       params.sessionCtx.OriginatingChannel ??
       params.sessionCtx.Surface ??
       params.sessionCtx.Provider ??
-      params.sessionEntry?.channel,
+      sessionDeliveryChannel(params.sessionEntry),
     chatType: params.sessionEntry?.chatType,
   });
   return resolveSourceReplyVisibilityPolicy({

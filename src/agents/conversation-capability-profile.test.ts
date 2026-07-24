@@ -168,6 +168,50 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.explicitToolAllowlist).toEqual(["read", "exec"]);
   });
 
+  it("uses a scheduled owner group without reapplying sender wildcard policy", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        deny: ["exec"],
+        toolsBySender: { "*": { deny: ["write"] } },
+      },
+      channels: {
+        whatsapp: {
+          groups: {
+            team: {
+              tools: { allow: ["read", "write"] },
+              toolsBySender: { "*": { deny: ["write"] } },
+            },
+          },
+        },
+      },
+    };
+    const baseParams = {
+      config: cfg,
+      sessionKey: "agent:main:cron:job:run:session",
+      agentId: "main",
+      messageProvider: "whatsapp",
+      runtimeToolAllowlist: ["write"],
+    };
+
+    const legacy = resolveConversationCapabilityProfile(baseParams);
+    const scheduled = resolveConversationCapabilityProfile({
+      ...baseParams,
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:whatsapp:group:team",
+        ownerAccountId: "default",
+      },
+    });
+
+    expect(legacy.policy.senderPolicy).toEqual({ deny: ["write"] });
+    expect(legacy.policy.groupPolicy).toBeUndefined();
+    expect(scheduled.policy.senderPolicy).toBeUndefined();
+    expect(scheduled.policy.groupPolicy).toEqual({ allow: ["read", "write"] });
+    expect(scheduled.policy.explicitToolDenylist).toEqual(["exec"]);
+    expect(scheduled.policy.explicitToolAllowlist).toContain("write");
+  });
+
   it("keeps built-in profile grants out of explicit overrides", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {

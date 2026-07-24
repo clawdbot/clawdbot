@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
@@ -44,6 +45,8 @@ import {
 } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
+type SessionEntryFixture = Partial<SessionEntry> & { channel?: string };
+
 describe("appendAssistantMessageToSessionTranscript", () => {
   beforeAll(async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-warm-"));
@@ -83,26 +86,26 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     };
   };
 
-  async function writeTranscriptStore(entry: Partial<SessionEntry> = {}) {
+  async function writeTranscriptStore(entry: SessionEntryFixture = {}) {
     await replaceSessionEntry(
       { agentId: "main", sessionKey, storePath: fixture.storePath() },
-      {
+      normalizeLegacySessionEntryDelivery({
         sessionId,
         chatType: "direct",
-        channel: "discord",
         updatedAt: 1,
+        channel: "discord",
         ...entry,
-      },
+      } as SessionEntry),
     );
   }
 
   async function writeTranscriptSessionEntry(params: {
-    entry: Partial<SessionEntry> & Pick<SessionEntry, "sessionId">;
+    entry: SessionEntryFixture & Pick<SessionEntry, "sessionId">;
     sessionKey: string;
   }) {
     await replaceSessionEntry(
       { agentId: "main", sessionKey: params.sessionKey, storePath: fixture.storePath() },
-      { updatedAt: 1, ...params.entry },
+      normalizeLegacySessionEntryDelivery({ updatedAt: 1, ...params.entry } as SessionEntry),
     );
   }
 

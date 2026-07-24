@@ -15,6 +15,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionEntry,
   SessionGoal,
+  SessionOrigin,
 } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type { FastModeSource } from "../shared/fast-mode.js";
@@ -90,7 +91,7 @@ export type GatewaySessionRow = {
   groupChannel?: string;
   space?: string;
   chatType?: ChatType;
-  origin?: SessionEntry["origin"];
+  origin?: SessionOrigin;
   updatedAt: number | null;
   archived?: boolean;
   archivedAt?: number;
@@ -161,10 +162,10 @@ export type GatewaySessionRow = {
   contextTokens?: number;
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   deliveryContext?: DeliveryContext;
-  lastChannel?: SessionEntry["lastChannel"];
+  lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
-  lastThreadId?: SessionEntry["lastThreadId"];
+  lastThreadId?: string | number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];

@@ -9,7 +9,7 @@ import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -40,6 +40,17 @@ export type SessionOrigin = {
   accountId?: string;
   threadId?: string | number;
 };
+
+/** Canonical persisted delivery ownership for one session. */
+export type SessionDeliveryState =
+  | { kind: "none" }
+  | { kind: "internal" }
+  | {
+      kind: "external";
+      route: ChannelRouteRef;
+      context: DeliveryContext;
+      origin: SessionOrigin;
+    };
 
 export type { AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpMeta };
 
@@ -386,6 +397,8 @@ export type SessionEntry = SessionRestartRecoveryState &
       cliExecutionProvider?: string;
       toolsAllow?: string[];
       toolsAllowIsDefault?: boolean;
+      /** Exact server-stamped authority provenance copied from the owning cron job. */
+      scheduledToolPolicy?: CronScheduledToolPolicy;
       cliSessionBindingFacts?: {
         extraSystemPromptStatic?: string;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -512,20 +525,14 @@ export type SessionEntry = SessionRestartRecoveryState &
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
     displayName?: string;
-    channel?: string;
+    /** Canonical delivery state. Legacy delivery fields are migrated by `openclaw doctor --fix`. */
+    delivery?: SessionDeliveryState;
     groupId?: string;
     subject?: string;
     groupChannel?: string;
     space?: string;
-    origin?: SessionOrigin;
-    route?: ChannelRouteRef;
-    deliveryContext?: DeliveryContext;
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
-    lastChannel?: ChannelId;
-    lastTo?: string;
-    lastAccountId?: string;
-    lastThreadId?: string | number;
     skillsSnapshot?: SessionSkillSnapshot;
     systemPromptReport?: SessionSystemPromptReport;
     /**

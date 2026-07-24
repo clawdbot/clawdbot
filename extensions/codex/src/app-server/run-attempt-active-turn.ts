@@ -11,6 +11,7 @@ import {
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
+import { createCodexNativeMcpAppResultDetailsPreparer } from "./native-mcp-app.js";
 import type { CodexTurnStartResponse, JsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -57,6 +58,11 @@ export async function activateCodexAttemptTurn(
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
+  const prepareNativeMcpAppResultDetails = createCodexNativeMcpAppResultDetailsPreparer({
+    client: resourceState.client,
+    threadId: resourceState.thread.threadId,
+    attempt: dynamicToolParams,
+  });
   const streamState = { eventEmitted: false, needsTerminalSnapshot: false };
   emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridgeRef.current = createCodexUserInputBridge({
@@ -92,6 +98,7 @@ export async function activateCodexAttemptTurn(
       runAbortSignal: runAbortController.signal,
       trajectoryRecorder,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText: turnState.codexTurnPromptText,
       onContextCompacted: () => {
         computerContextEpoch.value += 1;

@@ -6024,6 +6024,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Minimal example
   - H2: Rich example
   - H2: Top-level field reference
+  - H2: MCP server reference
   - H2: dashboard reference
   - H2: catalog reference
   - H2: Generation provider metadata reference
@@ -9714,6 +9715,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works (internal)
   - H2: CLI quick reference
   - H2: Snapshots and refs
+  - H2: Browser batch CLI
   - H2: Wait power-ups
   - H2: Debug workflows
   - H2: JSON output

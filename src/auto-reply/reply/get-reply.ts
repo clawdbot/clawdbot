@@ -30,6 +30,10 @@ import {
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
@@ -612,8 +616,7 @@ export async function getReplyFromConfig(
         cfg,
         channel:
           groupResolution?.channel ??
-          sessionEntry.channel ??
-          sessionEntry.origin?.provider ??
+          sessionDeliveryChannel(sessionEntry) ??
           (typeof finalized.OriginatingChannel === "string"
             ? finalized.OriginatingChannel
             : undefined) ??
@@ -625,9 +628,9 @@ export async function getReplyFromConfig(
         groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
         directUserIds: [
-          sessionEntry.origin?.nativeDirectUserId,
-          sessionEntry.origin?.from,
-          sessionEntry.origin?.to,
+          sessionDeliveryOrigin(sessionEntry)?.nativeDirectUserId,
+          sessionDeliveryOrigin(sessionEntry)?.from,
+          sessionDeliveryOrigin(sessionEntry)?.to,
           finalized.OriginatingTo,
           finalized.From,
           finalized.SenderId,

@@ -4925,6 +4925,16 @@ describe("scripts/test-projects full-suite sharding", () => {
     ]);
   });
 
+  it("rejects unmatched extensionless test prefixes with the attempted pattern", () => {
+    const target = "extensions/telegram/src/no-such-prefix";
+    const [unmatched] = findUnmatchedExplicitTestTargets([target]);
+    expect(unmatched).toEqual({
+      target,
+      reason: "path-does-not-exist",
+      includePattern: `${target}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`,
+    });
+  });
+
   it("rejects watch mode with multiple explicit leaf project config targets", () => {
     expect(() =>
       buildVitestRunPlans(

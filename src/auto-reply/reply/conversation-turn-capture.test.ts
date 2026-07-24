@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { registerPendingConversationTurn } from "../../sessions/conversation-turns.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 
@@ -33,12 +34,14 @@ async function setupReefConversation() {
       sessionId,
       updatedAt: 100,
       chatType: "direct",
-      deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-      origin: {
-        provider: "reef",
-        accountId: "default",
-        nativeDirectUserId: "peer-agent",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+        origin: {
+          provider: "reef",
+          accountId: "default",
+          nativeDirectUserId: "peer-agent",
+        },
+      }),
     },
   );
   return {
@@ -480,13 +483,15 @@ describe("conversation turn capture", () => {
         updatedAt: 100,
         chatType: "channel",
         groupId: "ops-room",
-        deliveryContext: {
-          channel: "discord",
-          accountId: "default",
-          to: "channel:ops-room",
-          threadId: "user-context",
-        },
-        origin: { provider: "discord", accountId: "default", nativeChannelId: "ops-room" },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "discord",
+            accountId: "default",
+            to: "channel:ops-room",
+            threadId: "user-context",
+          },
+          origin: { provider: "discord", accountId: "default", nativeChannelId: "ops-room" },
+        }),
       },
     );
     const conversationRef = buildConversationRef({

@@ -6,6 +6,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -340,7 +341,7 @@ export async function completeReplyAgentRun(input: {
           sessionCtx.OriginatingChannel ??
           sessionCtx.Surface ??
           sessionCtx.Provider ??
-          activeSessionEntry?.channel,
+          sessionDeliveryChannel(activeSessionEntry),
         finalTextLength: assistantFinalText.trim().length,
       });
     }

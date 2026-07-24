@@ -45,12 +45,10 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "queueDebounceMs",
   "queueCap",
   "queueDrop",
-  "channel",
   "groupId",
   "subject",
   "groupChannel",
   "space",
-  "origin",
   "acp",
 ] as const satisfies readonly (keyof SessionEntry)[];
 

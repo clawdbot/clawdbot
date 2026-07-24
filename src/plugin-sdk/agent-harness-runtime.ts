@@ -307,6 +307,50 @@ export async function loadCodexBundleMcpThreadConfig(
   return load(params);
 }
 
+export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+
+/**
+ * Materialize an MCP App view for a tool executed by a harness-native MCP client.
+ * The harness supplies a runtime adapter so the view keeps using that exact connection.
+ */
+export async function prepareHarnessNativeMcpAppPreview(params: {
+  runtime: import("../agents/agent-bundle-mcp-types.js").SessionMcpRuntime;
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  toolCallId: string;
+  toolInput: unknown;
+  toolResult: import("@modelcontextprotocol/sdk/types.js").CallToolResult;
+  allowedAppToolNames: ReadonlySet<string>;
+  resultMetaState?: "unavailable";
+}): Promise<{ mcpAppPreview: unknown } | undefined> {
+  if (params.runtime.mcpAppsEnabled !== true) {
+    return undefined;
+  }
+  const { buildMcpAppCanvasPayload, fetchMcpAppView } =
+    await import("../agents/mcp-ui-resource.js");
+  const view = await fetchMcpAppView({
+    runtime: params.runtime,
+    serverName: params.serverName,
+    toolName: params.toolName,
+    uiResourceUri: params.uiResourceUri,
+    toolCallId: params.toolCallId,
+    toolInput: params.toolInput,
+    toolResult: params.toolResult,
+    allowedAppToolNames: params.allowedAppToolNames,
+  });
+  if (!view) {
+    return undefined;
+  }
+  return {
+    mcpAppPreview: buildMcpAppCanvasPayload({
+      ...view,
+      ...(params.runtime.sessionKey ? { originSessionKey: params.runtime.sessionKey } : {}),
+      ...(params.resultMetaState ? { resultMetaState: params.resultMetaState } : {}),
+    }),
+  };
+}
+
 /**
  * Materialize requester-scoped MCP tools for a harness run (dynamic tools, not
  * harness-native MCP config). Lazy-loaded so harness plugins avoid the MCP manager graph.

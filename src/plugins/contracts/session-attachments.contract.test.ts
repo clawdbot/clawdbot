@@ -12,6 +12,7 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
@@ -45,7 +46,7 @@ type SessionAttachmentRequest = Parameters<typeof sendPluginSessionAttachment>[0
 type TestSessionEntry = {
   sessionId?: string;
   updatedAt?: number;
-  deliveryContext?: Record<string, unknown>;
+  delivery?: SessionEntry["delivery"];
 };
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -93,7 +94,9 @@ async function withSessionStore(
 
 async function writeSessionEntry(
   storePath: string,
-  entry: TestSessionEntry = { deliveryContext: DEFAULT_TELEGRAM_ROUTE },
+  entry: TestSessionEntry = {
+    delivery: normalizeSessionDeliveryState({ context: DEFAULT_TELEGRAM_ROUTE }),
+  },
   key = MAIN_SESSION_KEY,
 ) {
   await replaceSessionEntry({ storePath, sessionKey: key }, {
@@ -157,11 +160,9 @@ describe("plugin session attachments", () => {
   it("sends validated files through the session delivery route with portable hints", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath, {
-        deliveryContext: {
-          ...DEFAULT_TELEGRAM_ROUTE,
-          accountId: "default",
-          threadId: 42,
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { ...DEFAULT_TELEGRAM_ROUTE, accountId: "default", threadId: 42 },
+        }),
       });
       mockSuccessfulAttachmentDelivery();
 
@@ -229,7 +230,7 @@ describe("plugin session attachments", () => {
   it("keeps shipped Slack thread hints compatible", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath, {
-        deliveryContext: { channel: "slack", to: "C123" },
+        delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "C123" } }),
       });
       mockSuccessfulAttachmentDelivery();
 
@@ -444,10 +445,9 @@ describe("plugin session attachments", () => {
   it("rejects unloaded bundled gateway-mode channels before attachment delivery", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath, {
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15551234567",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "whatsapp", to: "+15551234567" },
+        }),
       });
       setActivePluginRegistry(createEmptyPluginRegistry());
       workflowMocks.getChannelPlugin.mockReturnValue(

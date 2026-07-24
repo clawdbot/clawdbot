@@ -16,6 +16,10 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import {
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+} from "../utils/delivery-context.shared.js";
 import { buildGatewaySessionRow } from "./session-utils.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -804,16 +808,15 @@ test("sessions.changed mutation events include live usage metadata", async () =>
 });
 
 test("sessions.changed mutation events include live session setting metadata", async () => {
+  const delivery = normalizeSessionDeliveryState({
+    context: { channel: "telegram", to: "-100123", accountId: "acct-1", threadId: 42 },
+  });
   const sessionSettings = {
     verboseLevel: "on",
     responseUsage: "full",
     fastMode: true,
-    lastChannel: "telegram",
-    lastTo: "-100123",
-    lastAccountId: "acct-1",
-    lastThreadId: 42,
   } satisfies SessionStoreEntryOptions;
-  await writeMainSessionStore(sessionSettings);
+  await writeMainSessionStore({ ...sessionSettings, delivery });
 
   const result = await invokeSessionsPatch({
     key: "main",
@@ -822,6 +825,11 @@ test("sessions.changed mutation events include live session setting metadata", a
 
   expectMainPatchBroadcast(result, {
     ...sessionSettings,
+    deliveryContext: projectSessionDeliveryFields(delivery).deliveryContext,
+    lastChannel: projectSessionDeliveryFields(delivery).lastChannel,
+    lastTo: projectSessionDeliveryFields(delivery).lastTo,
+    lastAccountId: projectSessionDeliveryFields(delivery).lastAccountId,
+    lastThreadId: projectSessionDeliveryFields(delivery).lastThreadId,
     // An explicit session override resolves to the same effective mode and the
     // sessions.changed builder carries the row-built channel-aware value.
     effectiveResponseUsage: "full",

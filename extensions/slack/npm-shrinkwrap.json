@@ -8,11 +8,13 @@
       "name": "@openclaw/slack",
       "version": "2026.7.2",
       "dependencies": {
-        "@slack/bolt": "4.7.3",
-        "@slack/types": "2.21.1",
-        "@slack/web-api": "7.18.0",
+        "@slack/bolt": "5.0.0",
+        "@slack/socket-mode": "3.0.0",
+        "@slack/types": "3.0.0",
+        "@slack/web-api": "8.0.0",
         "p-map": "7.0.5",
         "typebox": "1.3.6",
+        "undici": "7.28.0",
         "ws": "8.21.1",
         "zod": "4.4.3"
       },
@@ -26,110 +28,106 @@
       }
     },
     "node_modules/@slack/bolt": {
-      "version": "4.7.3",
-      "resolved": "https://registry.npmjs.org/@slack/bolt/-/bolt-4.7.3.tgz",
-      "integrity": "sha512-bODs8q/yNDWUPoxmQhFrRqLMA5vhB/PDizYWqb6CkQhLWEUo5JFtfJcmeU4ElGl6qSt++OKjSYNa4MPc77CleQ==",
+      "version": "5.0.0",
+      "resolved": "https://registry.npmjs.org/@slack/bolt/-/bolt-5.0.0.tgz",
+      "integrity": "sha512-L0FTzidrDKTu4Ph8sdv0bB3acafBTAC02TBcD+hojPTTNSMX3hSK+rkpkUKkqbbc0vGpSjd6A/g71Rjy7EbBhw==",
       "license": "MIT",
       "dependencies": {
-        "@slack/logger": "^4.0.1",
-        "@slack/oauth": "^3.0.5",
-        "@slack/socket-mode": "^2.0.7",
-        "@slack/types": "^2.21.1",
-        "@slack/web-api": "^7.16.0",
-        "axios": "^1.12.0",
+        "@slack/logger": "^5.0.0",
+        "@slack/oauth": "^4.0.0",
+        "@slack/socket-mode": "^3.0.0",
+        "@slack/types": "^3.0.0",
+        "@slack/web-api": "^8.0.0",
         "express": "^5.0.0",
         "path-to-regexp": "^8.1.0",
         "raw-body": "^3",
         "tsscmp": "^1.0.6"
       },
       "engines": {
-        "node": ">=18",
-        "npm": ">=8.6.0"
+        "node": ">=20",
+        "npm": ">=9.6.4"
       },
       "peerDependencies": {
         "@types/express": "^5.0.0"
       }
     },
     "node_modules/@slack/logger": {
-      "version": "4.0.1",
-      "resolved": "https://registry.npmjs.org/@slack/logger/-/logger-4.0.1.tgz",
-      "integrity": "sha512-6cmdPrV/RYfd2U0mDGiMK8S7OJqpCTm7enMLRR3edccsPX8j7zXTLnaEF4fhxxJJTAIOil6+qZrnUPTuaLvwrQ==",
+      "version": "5.0.0",
+      "resolved": "https://registry.npmjs.org/@slack/logger/-/logger-5.0.0.tgz",
+      "integrity": "sha512-VGXhmmgsAo9shdQYh4tFDndd+7nsgp0Y5h0UPDaUp8K359pBasI6YdkMqFW3mCOxLQkq09qj7o7cq6f3DuXcJQ==",
       "license": "MIT",
       "dependencies": {
-        "@types/node": ">=18"
+        "@types/node": ">=20"
       },
       "engines": {
-        "node": ">= 18",
-        "npm": ">= 8.6.0"
+        "node": ">= 20",
+        "npm": ">=9.6.4"
       }
     },
     "node_modules/@slack/oauth": {
-      "version": "3.0.5",
-      "resolved": "https://registry.npmjs.org/@slack/oauth/-/oauth-3.0.5.tgz",
-      "integrity": "sha512-exqFQySKhNDptWYSWhvRUJ4/+ndu2gayIy7vg/JfmJq3wGtGdHk531P96fAZyBm5c1Le3yaPYqv92rL4COlU3A==",
+      "version": "4.0.0",
+      "resolved": "https://registry.npmjs.org/@slack/oauth/-/oauth-4.0.0.tgz",
+      "integrity": "sha512-Aqs5bGghT+VtNcdwVOQy7CcyCfDNd9YYnZsCRukIF9p1Mxuq4uL+BjqlWQB0SeS4wzrLzePPgvj8JDuQil+ezA==",
       "license": "MIT",
       "dependencies": {
-        "@slack/logger": "^4.0.1",
-        "@slack/web-api": "^7.15.0",
+        "@slack/logger": "^5.0.0",
+        "@slack/web-api": "^8.0.0",
         "@types/jsonwebtoken": "^9",
-        "@types/node": ">=18",
+        "@types/node": ">=20",
         "jsonwebtoken": "^9"
       },
       "engines": {
-        "node": ">=18",
-        "npm": ">=8.6.0"
+        "node": ">=20",
+        "npm": ">=9.6.4"
       }
     },
     "node_modules/@slack/socket-mode": {
-      "version": "2.0.7",
-      "resolved": "https://registry.npmjs.org/@slack/socket-mode/-/socket-mode-2.0.7.tgz",
-      "integrity": "sha512-qYy07je71WnEHgRwmw12DlAnZLi5HXmdlI2WUzUK2LH/rYXQpP6uEg462S5CwfE8FoCKUdIigHtYnOOfzZH1lQ==",
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/@slack/socket-mode/-/socket-mode-3.0.0.tgz",
+      "integrity": "sha512-QShO60SB0E+HH+TbcKj3CBEQbodToRyiXnxuSB4t1kvUlqEmuGA1nOOjrRDkDJbOECAZ13PLe4ek9SrntpfoYg==",
       "license": "MIT",
       "dependencies": {
-        "@slack/logger": "^4.0.1",
-        "@slack/web-api": "^7.15.0",
-        "@types/node": ">=18",
-        "@types/ws": "^8",
-        "eventemitter3": "^5",
-        "ws": "^8"
+        "@slack/logger": "^5.0.0",
+        "@slack/web-api": "^8.0.0",
+        "@types/node": ">=20",
+        "eventemitter3": "^5"
       },
       "engines": {
-        "node": ">= 18",
-        "npm": ">= 8.6.0"
+        "node": ">=20",
+        "npm": ">=9.6.4"
+      },
+      "peerDependencies": {
+        "undici": "^7.0.0"
       }
     },
     "node_modules/@slack/types": {
-      "version": "2.21.1",
-      "resolved": "https://registry.npmjs.org/@slack/types/-/types-2.21.1.tgz",
-      "integrity": "sha512-I8vmSjNYWsaxuWPx6dz4yeh0h7vRBWbgAMK14LEmblbZ404BtrPbXs6jDPx4cYgGf8msDGF4A9opLZBu21FViQ==",
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/@slack/types/-/types-3.0.0.tgz",
+      "integrity": "sha512-KNOqpnNAlsFt5Jk9XBclslQ0lobRIg/0tnhpmvZJAglHJx9E8oceN8hC3gaBzkR6UzQ9Wzq4rLsJ98wUcxWPfw==",
       "license": "MIT",
       "engines": {
-        "node": ">= 12.13.0",
-        "npm": ">= 6.12.0"
+        "node": ">= 20",
+        "npm": ">=9.6.4"
       }
     },
     "node_modules/@slack/web-api": {
-      "version": "7.18.0",
-      "resolved": "https://registry.npmjs.org/@slack/web-api/-/web-api-7.18.0.tgz",
-      "integrity": "sha512-EWBsKUhOFFp87beQg/ToSC+asWB7BrGHuh7uPC1ZI9vr41GjS+3WmmyWIMqs+mF6U+mh4d6HhtFlv67TrJFsvw==",
+      "version": "8.0.0",
+      "resolved": "https://registry.npmjs.org/@slack/web-api/-/web-api-8.0.0.tgz",
+      "integrity": "sha512-ORx3XQryQPq2Jnxv5giSKXVoQRUeylrrymIR2S9fPzLjPcCts8RayMeBSZMcpfpAqp6fnBRuPW2UB6dUPUTEZA==",
       "license": "MIT",
       "dependencies": {
-        "@slack/logger": "^4.0.1",
-        "@slack/types": "^2.21.0",
-        "@types/node": ">=18",
+        "@slack/logger": "^5.0.0",
+        "@slack/types": "^3.0.0",
+        "@types/node": ">=20",
         "@types/retry": "0.12.0",
-        "axios": "^1.16.0",
         "eventemitter3": "^5.0.1",
-        "form-data": "^4.0.4",
-        "is-electron": "2.2.2",
-        "is-stream": "^2",
         "p-queue": "^6",
         "p-retry": "^4",
         "retry": "^0.13.1"
       },
       "engines": {
-        "node": ">= 18",
-        "npm": ">= 8.6.0"
+        "node": ">= 20",
+        "npm": ">=9.6.4"
       }
     },
     "node_modules/@types/jsonwebtoken": {
@@ -163,15 +161,6 @@
       "integrity": "sha512-3xSjTp3v03X/lSQLkczaN9UIEwJMoMCA1+Nb5HfbJEQWogdeQIyVtTvxPXDQjZ5zws8rFQfVfRdz03ARihPJgw==",
       "license": "MIT"
     },
-    "node_modules/@types/ws": {
-      "version": "8.18.1",
-      "resolved": "https://registry.npmjs.org/@types/ws/-/ws-8.18.1.tgz",
-      "integrity": "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==",
-      "license": "MIT",
-      "dependencies": {
-        "@types/node": "*"
-      }
-    },
     "node_modules/accepts": {
       "version": "2.0.0",
       "resolved": "https://registry.npmjs.org/accepts/-/accepts-2.0.0.tgz",
@@ -183,36 +172,6 @@
       },
       "engines": {
         "node": ">= 0.6"
-      }
-    },
-    "node_modules/agent-base": {
-      "version": "6.0.2",
-      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-6.0.2.tgz",
-      "integrity": "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==",
-      "license": "MIT",
-      "dependencies": {
-        "debug": "4"
-      },
-      "engines": {
-        "node": ">= 6.0.0"
-      }
-    },
-    "node_modules/asynckit": {
-      "version": "0.4.0",
-      "resolved": "https://registry.npmjs.org/asynckit/-/asynckit-0.4.0.tgz",
-      "integrity": "sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==",
-      "license": "MIT"
-    },
-    "node_modules/axios": {
-      "version": "1.18.1",
-      "resolved": "https://registry.npmjs.org/axios/-/axios-1.18.1.tgz",
-      "integrity": "sha512-3nTvFlvpn9Zu/RkHUqtc7/+al4UpRW5az71ap5zccp6e8RAYEzhMTecX8Dz1wWDYrPpUoB1HAQEGEAEvUr7S9g==",
-      "license": "MIT",
-      "dependencies": {
-        "follow-redirects": "^1.16.0",
-        "form-data": "^4.0.5",
-        "https-proxy-agent": "^5.0.1",
-        "proxy-from-env": "^2.1.0"
       }
     },
     "node_modules/body-parser": {
@@ -296,18 +255,6 @@
         "url": "https://github.com/sponsors/ljharb"
       }
     },
-    "node_modules/combined-stream": {
-      "version": "1.0.8",
-      "resolved": "https://registry.npmjs.org/combined-stream/-/combined-stream-1.0.8.tgz",
-      "integrity": "sha512-FQN4MRfuJeHf7cBbBMJFXhKSDq+2kAArBlmRBvcvFE5BB1HZKXtSFASDhdlz9zOYwxh8lDdnvmMOe/+5cdoEdg==",
-      "license": "MIT",
-      "dependencies": {
-        "delayed-stream": "~1.0.0"
-      },
-      "engines": {
-        "node": ">= 0.8"
-      }
-    },
     "node_modules/content-disposition": {
       "version": "1.1.0",
       "resolved": "https://registry.npmjs.org/content-disposition/-/content-disposition-1.1.0.tgz",
@@ -363,15 +310,6 @@
         "supports-color": {
           "optional": true
         }
-      }
-    },
-    "node_modules/delayed-stream": {
-      "version": "1.0.0",
-      "resolved": "https://registry.npmjs.org/delayed-stream/-/delayed-stream-1.0.0.tgz",
-      "integrity": "sha512-ZySD7Nf91aLB0RxL4KGrKHBXl7Eds1DAmEdcoVawXnLD7SDhpNgtuII2aAkg7a7QS41jxPSZ17p4VdGnMHk3MQ==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=0.4.0"
       }
     },
     "node_modules/depd": {
@@ -446,21 +384,6 @@
       "license": "MIT",
       "dependencies": {
         "es-errors": "^1.3.0"
-      },
-      "engines": {
-        "node": ">= 0.4"
-      }
-    },
-    "node_modules/es-set-tostringtag": {
-      "version": "2.1.0",
-      "resolved": "https://registry.npmjs.org/es-set-tostringtag/-/es-set-tostringtag-2.1.0.tgz",
-      "integrity": "sha512-j6vWzfrGVfyXxge+O0x5sh6cvxAog0a/4Rdd2K36zCMV5eJ+/+tOAngRO8cODMNWbVRdVlmGZQL2YS3yR8bIUA==",
-      "license": "MIT",
-      "dependencies": {
-        "es-errors": "^1.3.0",
-        "get-intrinsic": "^1.2.6",
-        "has-tostringtag": "^1.0.2",
-        "hasown": "^2.0.2"
       },
       "engines": {
         "node": ">= 0.4"
@@ -551,64 +474,6 @@
         "url": "https://opencollective.com/express"
       }
     },
-    "node_modules/follow-redirects": {
-      "version": "1.16.0",
-      "resolved": "https://registry.npmjs.org/follow-redirects/-/follow-redirects-1.16.0.tgz",
-      "integrity": "sha512-y5rN/uOsadFT/JfYwhxRS5R7Qce+g3zG97+JrtFZlC9klX/W5hD7iiLzScI4nZqUS7DNUdhPgw4xI8W2LuXlUw==",
-      "funding": [
-        {
-          "type": "individual",
-          "url": "https://github.com/sponsors/RubenVerborgh"
-        }
-      ],
-      "license": "MIT",
-      "engines": {
-        "node": ">=4.0"
-      },
-      "peerDependenciesMeta": {
-        "debug": {
-          "optional": true
-        }
-      }
-    },
-    "node_modules/form-data": {
-      "version": "2.5.6",
-      "resolved": "https://registry.npmjs.org/form-data/-/form-data-2.5.6.tgz",
-      "integrity": "sha512-Ogz/E85h9tlfJzpI6TuFpGcHZFhLrb9Gw8wq9v40CxSCPnv7ahKr6Xgtkn0KYCDQJ8DNn5VoMO8EXr9V5PadyA==",
-      "license": "MIT",
-      "dependencies": {
-        "asynckit": "^0.4.0",
-        "combined-stream": "^1.0.8",
-        "es-set-tostringtag": "^2.1.0",
-        "hasown": "^2.0.4",
-        "mime-types": "^2.1.35",
-        "safe-buffer": "^5.2.1"
-      },
-      "engines": {
-        "node": ">= 0.12"
-      }
-    },
-    "node_modules/form-data/node_modules/mime-db": {
-      "version": "1.52.0",
-      "resolved": "https://registry.npmjs.org/mime-db/-/mime-db-1.52.0.tgz",
-      "integrity": "sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==",
-      "license": "MIT",
-      "engines": {
-        "node": ">= 0.6"
-      }
-    },
-    "node_modules/form-data/node_modules/mime-types": {
-      "version": "2.1.35",
-      "resolved": "https://registry.npmjs.org/mime-types/-/mime-types-2.1.35.tgz",
-      "integrity": "sha512-ZDY+bPm5zTTF+YpCrAU9nK0UgICYPT0QtT1NZWFv4s++TNkcgVaT0g6+4R2uI4MjQjzysHB1zxuWL50hzaeXiw==",
-      "license": "MIT",
-      "dependencies": {
-        "mime-db": "1.52.0"
-      },
-      "engines": {
-        "node": ">= 0.6"
-      }
-    },
     "node_modules/forwarded": {
       "version": "0.2.0",
       "resolved": "https://registry.npmjs.org/forwarded/-/forwarded-0.2.0.tgz",
@@ -697,21 +562,6 @@
         "url": "https://github.com/sponsors/ljharb"
       }
     },
-    "node_modules/has-tostringtag": {
-      "version": "1.0.2",
-      "resolved": "https://registry.npmjs.org/has-tostringtag/-/has-tostringtag-1.0.2.tgz",
-      "integrity": "sha512-NqADB8VjPFLM2V0VvHUewwwsw0ZWBaIdgo+ieHtK3hasLz4qeCRjYcqfB6AQrBggRKppKF8L52/VqdVsO47Dlw==",
-      "license": "MIT",
-      "dependencies": {
-        "has-symbols": "^1.0.3"
-      },
-      "engines": {
-        "node": ">= 0.4"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/ljharb"
-      }
-    },
     "node_modules/hasown": {
       "version": "2.0.4",
       "resolved": "https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz",
@@ -742,19 +592,6 @@
       "funding": {
         "type": "opencollective",
         "url": "https://opencollective.com/express"
-      }
-    },
-    "node_modules/https-proxy-agent": {
-      "version": "5.0.1",
-      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-5.0.1.tgz",
-      "integrity": "sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==",
-      "license": "MIT",
-      "dependencies": {
-        "agent-base": "6",
-        "debug": "4"
-      },
-      "engines": {
-        "node": ">= 6"
       }
     },
     "node_modules/iconv-lite": {
@@ -788,29 +625,11 @@
         "node": ">= 0.10"
       }
     },
-    "node_modules/is-electron": {
-      "version": "2.2.2",
-      "resolved": "https://registry.npmjs.org/is-electron/-/is-electron-2.2.2.tgz",
-      "integrity": "sha512-FO/Rhvz5tuw4MCWkpMzHFKWD2LsfHzIb7i6MdPYZ/KW7AlxawyLkqdy+jPZP1WubqEADE3O4FUENlJHDfQASRg==",
-      "license": "MIT"
-    },
     "node_modules/is-promise": {
       "version": "4.0.0",
       "resolved": "https://registry.npmjs.org/is-promise/-/is-promise-4.0.0.tgz",
       "integrity": "sha512-hvpoI6korhJMnej285dSg6nu1+e6uxs7zG3BYAm5byqDsgJNWwxzM6z6iZiAgQR4TJ30JmBTOwqZUw3WlyH3AQ==",
       "license": "MIT"
-    },
-    "node_modules/is-stream": {
-      "version": "2.0.1",
-      "resolved": "https://registry.npmjs.org/is-stream/-/is-stream-2.0.1.tgz",
-      "integrity": "sha512-hFoiJiTl63nn+kstHGBtewWSKnQLpyb155KHheA1l39uvtO9nWIop1p3udqPcUd/xbF1VLMO4n7OI6p7RbngDg==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=8"
-      },
-      "funding": {
-        "url": "https://github.com/sponsors/sindresorhus"
-      }
     },
     "node_modules/jsonwebtoken": {
       "version": "9.0.3",
@@ -1098,15 +917,6 @@
       },
       "engines": {
         "node": ">= 0.10"
-      }
-    },
-    "node_modules/proxy-from-env": {
-      "version": "2.1.0",
-      "resolved": "https://registry.npmjs.org/proxy-from-env/-/proxy-from-env-2.1.0.tgz",
-      "integrity": "sha512-cJ+oHTW1VAEa8cJslgmUZrc+sjRKgAKl3Zyse6+PV38hZe/V6Z14TbCuXcan9F9ghlz4QrFr2c92TNF82UkYHA==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=10"
       }
     },
     "node_modules/qs": {
@@ -1402,6 +1212,15 @@
       "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.3.6.tgz",
       "integrity": "sha512-Sc8RA0NCMEFmApHNU9ZMzqcpQj46She44J8ffpLM/bdhLNUZKq7DJumcLcsFx1gRmDfQPgCgOmFFJ7rcnfWNyA==",
       "license": "MIT"
+    },
+    "node_modules/undici": {
+      "version": "7.28.0",
+      "resolved": "https://registry.npmjs.org/undici/-/undici-7.28.0.tgz",
+      "integrity": "sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20.18.1"
+      }
     },
     "node_modules/undici-types": {
       "version": "8.3.0",

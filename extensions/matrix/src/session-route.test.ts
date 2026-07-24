@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -75,20 +78,16 @@ function createStoredDirectDmSession(
     sessionId: "sess-1",
     updatedAt: Date.now(),
     chatType: "direct",
-    origin: {
-      chatType: "direct",
-      from: params.from ?? "matrix:@alice:example.org",
-      to,
-      ...nativeMetadata,
-      ...accountMetadata,
-    },
-    deliveryContext: {
-      channel: "matrix",
-      to,
-      ...accountMetadata,
-    },
-    ...(params.lastTo ? { lastTo: params.lastTo } : {}),
-    ...(params.lastAccountId ? { lastAccountId: params.lastAccountId } : {}),
+    delivery: normalizeSessionDeliveryState({
+      origin: {
+        chatType: "direct",
+        from: params.from ?? "matrix:@alice:example.org",
+        to,
+        ...nativeMetadata,
+        ...accountMetadata,
+      },
+      context: { channel: "matrix", to, ...accountMetadata },
+    }),
   };
 }
 
@@ -97,21 +96,21 @@ function createStoredChannelSession(): SessionEntry {
     sessionId: "sess-1",
     updatedAt: Date.now(),
     chatType: "channel",
-    origin: {
-      chatType: "channel",
-      from: "matrix:channel:!ops:example.org",
-      to: "room:!ops:example.org",
-      nativeChannelId: "!ops:example.org",
-      nativeDirectUserId: "@alice:example.org",
-      accountId: "ops",
-    },
-    deliveryContext: {
-      channel: "matrix",
-      to: "room:!ops:example.org",
-      accountId: "ops",
-    },
-    lastTo: "room:!ops:example.org",
-    lastAccountId: "ops",
+    delivery: normalizeSessionDeliveryState({
+      origin: {
+        chatType: "channel",
+        from: "matrix:channel:!ops:example.org",
+        to: "room:!ops:example.org",
+        nativeChannelId: "!ops:example.org",
+        nativeDirectUserId: "@alice:example.org",
+        accountId: "ops",
+      },
+      context: {
+        channel: "matrix",
+        to: "room:!ops:example.org",
+        accountId: "ops",
+      },
+    }),
   };
 }
 

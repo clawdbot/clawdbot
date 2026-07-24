@@ -6,7 +6,7 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   type MarkdownIR,
   markdownToIRWithMeta,
   renderMarkdownIRChunksWithinLimit,
@@ -15,29 +15,20 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { CONFIG_DIR, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
-const WHATSAPP_FORMAT_CAPABILITIES = {
+const WHATSAPP_FORMAT_CAPABILITIES = FormatCapabilityProfile.define({
   mechanism: "markdown",
   constructs: {
-    bold: "native",
-    italic: "native",
     underline: "strip",
-    strikethrough: "native",
     spoiler: "fallback",
-    codeInline: "native",
-    codeBlock: "native",
     codeLanguage: "fallback",
     linkLabel: "fallback",
     heading: "fallback",
-    bulletList: "native",
-    orderedList: "native",
     taskList: "fallback",
     table: "fallback",
-    blockquote: "native",
     image: "fallback",
-    mention: "native",
   },
   chunk: { limit: 4_096, unit: "chars" },
-} satisfies FormatCapabilityProfile;
+});
 
 const WHATSAPP_STYLE_MARKERS = {
   bold: { open: "*", close: "*" },

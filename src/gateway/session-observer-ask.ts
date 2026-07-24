@@ -176,7 +176,6 @@ export function createSessionObserverAskRuntime(params: SessionObserverAskRuntim
           agentId: snapshot.agentId,
           modelRef: utilityModelRef,
           useUtilityModel: true,
-          useAsyncModelResolution: true,
           allowMissingApiKeyModes: ["aws-sdk"],
         });
         if (controller.signal.aborted || params.isDisposed()) {

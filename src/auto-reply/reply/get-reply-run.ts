@@ -59,6 +59,10 @@ import {
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -346,8 +350,10 @@ function resolvePromptSessionContextForSystemEvent(params: {
     return sessionCtx;
   }
 
+  const origin = sessionDeliveryOrigin(sessionEntry);
+  const deliveryContext = deliveryContextFromSession(sessionEntry);
   const persistedChatType =
-    normalizeChatType(sessionEntry.chatType) ?? normalizeChatType(sessionEntry.origin?.chatType);
+    normalizeChatType(sessionEntry.chatType) ?? normalizeChatType(origin?.chatType);
   const liveChatType = normalizeChatType(sessionCtx.ChatType);
   const effectiveChatType = liveChatType ?? persistedChatType;
   const persistedProvider = resolvePersistedPromptProvider(sessionEntry);
@@ -392,26 +398,12 @@ function resolvePromptSessionContextForSystemEvent(params: {
     setIfMissing("GroupSpace", normalizeOptionalString(sessionEntry.space));
   }
   setIfMissing("OriginatingChannel", persistedProvider);
-  setIfMissing(
-    "OriginatingTo",
-    normalizeOptionalString(
-      sessionEntry.lastTo ?? sessionEntry.deliveryContext?.to ?? sessionEntry.origin?.to,
-    ),
-  );
+  setIfMissing("OriginatingTo", normalizeOptionalString(deliveryContext?.to ?? origin?.to));
   setIfMissing(
     "AccountId",
-    normalizeOptionalString(
-      sessionEntry.lastAccountId ??
-        sessionEntry.deliveryContext?.accountId ??
-        sessionEntry.origin?.accountId,
-    ),
+    normalizeOptionalString(deliveryContext?.accountId ?? origin?.accountId),
   );
-  setIfMissing(
-    "MessageThreadId",
-    sessionEntry.lastThreadId ??
-      sessionEntry.deliveryContext?.threadId ??
-      sessionEntry.origin?.threadId,
-  );
+  setIfMissing("MessageThreadId", deliveryContext?.threadId ?? origin?.threadId);
 
   return changed ? next : sessionCtx;
 }

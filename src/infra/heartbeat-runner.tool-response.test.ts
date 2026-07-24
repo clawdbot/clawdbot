@@ -15,8 +15,12 @@ import {
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
-import { readCronJobScratchState } from "../cron/scratch-store.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
+import {
+  deleteCronJobScratch,
+  readCronJobScratchState,
+  readHeartbeatMonitorScratch,
+} from "../cron/scratch-store.js";
+import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { stripTrailingHeartbeatNotifyFalse } from "./heartbeat-delivery-normalization.js";
@@ -318,6 +322,44 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       expect(readCronJobScratchState(resolveCronJobsStorePath(), jobId).scratch?.content).toBe(
         "new private scratch",
       );
+    });
+  });
+
+  it("does not recreate scratch when its monitor is deleted while the heartbeat runs", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      const cronStorePath = resolveCronJobsStorePath();
+      const monitor = readHeartbeatMonitorScratch(cronStorePath, "main");
+      expect(monitor).toBeDefined();
+      if (!monitor) {
+        throw new Error("Expected seeded heartbeat monitor");
+      }
+      deleteCronJobScratch(cronStorePath, monitor.jobId);
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockImplementation(async () => {
+        await saveCronJobsStore(cronStorePath, { version: 1, jobs: [] });
+        return createHeartbeatToolResponsePayload({
+          outcome: "progress",
+          notify: false,
+          summary: "Updated monitor context.",
+          scratch: "late scratch write",
+        });
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        source: "manual",
+        deps: createDeps({ sendTelegram: vi.fn(), getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(readCronJobScratchState(cronStorePath, monitor.jobId)).toEqual({
+        currentRevision: 0,
+      });
     });
   });
 

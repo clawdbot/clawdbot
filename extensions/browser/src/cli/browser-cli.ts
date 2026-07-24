@@ -108,6 +108,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       command("fill", "Fill a form with JSON field descriptors"),
       command("wait", "Wait for time, selector, URL, load state, or JS conditions"),
       command("evaluate", "Evaluate a function against the page or a ref"),
+      command("batch", "Run a batch of browser actions in one call"),
     ],
     register: async (args) => {
       const module = await import("./browser-cli-actions-input.js");

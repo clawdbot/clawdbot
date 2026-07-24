@@ -540,7 +540,10 @@ function isExplicitProjectRouterTargetArg(arg, cwd = process.cwd(), fsImpl = fs)
     return true;
   }
   const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
-  return fsImpl.existsSync(filePath) && isDelegableBroadProjectRouterTarget(arg, cwd);
+  return fsImpl.existsSync(filePath)
+    ? isDelegableBroadProjectRouterTarget(arg, cwd)
+    : path.extname(arg) === "" &&
+        /^(?:src|test|extensions|ui|packages|apps)\//u.test(toRepoRelativeArg(arg, cwd));
 }
 
 function collectExplicitFileTargetArgs(argv, predicate = isExplicitFileTargetArg) {

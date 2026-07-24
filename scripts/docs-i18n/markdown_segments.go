@@ -203,6 +203,29 @@ func extractMarkdownInlineCodeValues(body string) []string {
 	return values
 }
 
+func unwrapUnexpectedInlineCodeSpans(source, translated string) string {
+	if len(extractMarkdownInlineCodeValues(source)) != 0 || len(extractMarkdownInlineCodeValues(translated)) == 0 {
+		return translated
+	}
+	fenced := append(markdownFencedCodeRanges(translated), markdownClosedLiteralFenceByteRanges(translated)...)
+	ranges := markdownBlockBacktickRanges(translated)
+	for index := len(ranges) - 1; index >= 0; index-- {
+		span := ranges[index]
+		if rangeOverlapsAny(span, fenced) {
+			continue
+		}
+		runLength := 0
+		for span[0]+runLength < span[1] && translated[span[0]+runLength] == '`' {
+			runLength++
+		}
+		if runLength == 0 || span[1]-runLength < span[0]+runLength {
+			continue
+		}
+		translated = translated[:span[0]] + translated[span[0]+runLength:span[1]-runLength] + translated[span[1]:]
+	}
+	return translated
+}
+
 func extractMarkdownFencedLiteralValues(body string) ([]string, []string, []string) {
 	placeholders := []string{}
 	directiveTokens := []string{}

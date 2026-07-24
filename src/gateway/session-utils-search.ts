@@ -10,6 +10,7 @@ import { getSessionDisplaySubagentRunByChildSessionKey } from "../agents/subagen
 import { buildGroupDisplayName, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
 import type {
   SessionListRowContext,
   SessionListRowContextProvider,
@@ -35,7 +36,7 @@ export function resolveSessionListSearchDisplayName(
     return entry.displayName;
   }
   const parsed = parseGroupKey(key);
-  const channel = entry?.channel ?? parsed?.channel;
+  const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
   if (isGroupOrChannelDisplaySession(entry, parsed) && channel) {
     return buildGroupDisplayName({
       provider: channel,
@@ -46,7 +47,7 @@ export function resolveSessionListSearchDisplayName(
       key,
     });
   }
-  return entry?.label ?? entry?.origin?.label;
+  return entry?.label ?? sessionDeliveryOrigin(entry)?.label;
 }
 
 function addSessionListSearchModelFields(

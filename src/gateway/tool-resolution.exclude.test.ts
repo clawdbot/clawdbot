@@ -19,6 +19,21 @@ type CreateOpenClawToolsArg = {
   requesterAgentIdOverride?: string;
 };
 
+type CreateOpenClawCodingToolsArg = {
+  runtimeToolAllowlist?: string[];
+  sessionKey?: string;
+  runSessionKey?: string;
+  workspaceDir?: string;
+  cwd?: string;
+  wrapBeforeToolCallHook?: boolean;
+  scheduledToolPolicy?: {
+    version: 1;
+    mode: "account";
+    ownerSessionKey: string;
+    ownerAccountId: string;
+  };
+};
+
 type LazyExecToolDefaults = {
   host?: string;
   allowBackground?: boolean;
@@ -57,6 +72,9 @@ const hoisted = vi.hoisted(() => {
     makeTool,
     createLazyExecToolMock,
     getLoadedChannelPluginMock: vi.fn(),
+    createOpenClawCodingToolsMock: vi.fn(
+      (_args: CreateOpenClawCodingToolsArg): ReturnType<typeof makeTool>[] => [],
+    ),
     createOpenClawToolsMock: vi.fn((_args: CreateOpenClawToolsArg) => [
       makeTool("read"),
       makeTool("sessions_spawn"),
@@ -69,6 +87,11 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../agents/openclaw-tools.js", () => ({
   createOpenClawTools: (args: CreateOpenClawToolsArg) => hoisted.createOpenClawToolsMock(args),
+}));
+
+vi.mock("../agents/agent-tools.js", () => ({
+  createOpenClawCodingTools: (args: CreateOpenClawCodingToolsArg) =>
+    hoisted.createOpenClawCodingToolsMock(args),
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -87,6 +110,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
   beforeEach(() => {
     hoisted.createOpenClawToolsMock.mockClear();
     hoisted.createLazyExecToolMock.mockClear();
+    hoisted.createOpenClawCodingToolsMock.mockReset();
+    hoisted.createOpenClawCodingToolsMock.mockReturnValue([]);
     hoisted.getLoadedChannelPluginMock.mockReset();
   });
 
@@ -126,6 +151,64 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const args = readCreateToolsArgs();
     expect(args.pluginToolDenylist).toEqual([]);
     expect(args.inheritedToolDenylist).toEqual([]);
+  });
+
+  it("constructs exact coding tools for a server-minted mediated grant", () => {
+    hoisted.createOpenClawCodingToolsMock.mockReturnValueOnce([hoisted.makeTool("write")]);
+
+    const result = resolveGatewayScopedTools({
+      cfg: { tools: { exec: { host: "node" } } } as OpenClawConfig,
+      sessionKey: "agent:main:cron:run-1",
+      runtimePolicySessionKey: "agent:main:qa-channel:group:ops",
+      runId: "run-1",
+      workspaceDir: "/workspace",
+      cwd: "/workspace/task",
+      surface: "loopback",
+      excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
+      mediatedToolNames: ["write"],
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:qa-channel:group:ops",
+        ownerAccountId: "default",
+      },
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toContain("write");
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeToolAllowlist: ["write"],
+        sessionKey: "agent:main:qa-channel:group:ops",
+        runSessionKey: "agent:main:cron:run-1",
+        workspaceDir: "/workspace",
+        cwd: "/workspace/task",
+        wrapBeforeToolCallHook: false,
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:qa-channel:group:ops",
+          ownerAccountId: "default",
+        },
+      }),
+    );
+    expect(hoisted.createLazyExecToolMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back when policy removes a mediated coding tool", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("write"),
+      hoisted.makeTool("cron"),
+    ]);
+
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:cron:run-1",
+      surface: "loopback",
+      mediatedToolNames: ["write"],
+      excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["cron"]);
   });
 
   it("keeps owner-only core tools visible only for owner loopback callers", () => {

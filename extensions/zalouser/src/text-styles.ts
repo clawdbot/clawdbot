@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   markdownToIR,
   renderMarkdownWithAttributedRanges,
 } from "openclaw/plugin-sdk/text-chunking";
@@ -49,29 +49,21 @@ type TokenRegistry = {
 
 type OrderedStyle = Style & { rawStart: number; rawEnd: number };
 
-const ZALOUSER_FORMAT_PROFILE = {
+const ZALOUSER_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "ranges",
   constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
     spoiler: "strip",
     codeInline: "fallback",
     codeBlock: "fallback",
     codeLanguage: "strip",
     linkLabel: "fallback",
-    heading: "native",
-    bulletList: "native",
-    orderedList: "native",
     taskList: "fallback",
     table: "fallback",
-    blockquote: "native",
     image: "strip",
     mention: "strip",
   },
   chunk: { limit: 2_000, unit: "utf16" },
-} satisfies FormatCapabilityProfile;
+});
 
 const ZALOUSER_STYLE_MAP = {
   bold: TextStyle.Bold,

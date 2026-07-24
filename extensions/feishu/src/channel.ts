@@ -344,30 +344,6 @@ function describeFeishuMessageTool({
   };
 }
 
-function setFeishuNamedAccountEnabled(
-  cfg: ClawdbotConfig,
-  accountId: string,
-  enabled: boolean,
-): ClawdbotConfig {
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      feishu: {
-        ...feishuCfg,
-        accounts: {
-          ...feishuCfg?.accounts,
-          [accountId]: {
-            ...feishuCfg?.accounts?.[accountId],
-            enabled,
-          },
-        },
-      },
-    },
-  };
-}
-
 const feishuConfigAdapter = createHybridChannelConfigAdapter<
   ResolvedFeishuAccount,
   ResolvedFeishuAccount
@@ -989,22 +965,6 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       configSchema: FeishuChannelConfigSchema,
       config: {
         ...feishuConfigAdapter,
-        setAccountEnabled: ({ cfg, accountId, enabled }) => {
-          const isDefault = accountId === DEFAULT_ACCOUNT_ID;
-          if (isDefault) {
-            return {
-              ...cfg,
-              channels: {
-                ...cfg.channels,
-                feishu: {
-                  ...cfg.channels?.feishu,
-                  enabled,
-                },
-              },
-            };
-          }
-          return setFeishuNamedAccountEnabled(cfg, accountId, enabled);
-        },
         deleteAccount: ({ cfg, accountId }) => {
           const isDefault = accountId === DEFAULT_ACCOUNT_ID;
 

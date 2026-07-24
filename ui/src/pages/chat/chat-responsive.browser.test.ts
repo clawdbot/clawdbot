@@ -716,6 +716,43 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
+
+  it("gives inline MCP Apps the full assistant message column", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <div class="chat-thread chat-thread--direct" role="log">
+          <div class="chat-thread-inner">
+            <div class="chat-group assistant chat-group--with-footer">
+              <div class="chat-group-messages">
+                <div class="chat-bubble">
+                  <div class="chat-tool-card__preview" data-content-kind="mcp-app">
+                    <div class="chat-tool-card__preview-panel">
+                      <mcp-app-view style="display:block;width:100%;height:320px"></mcp-app-view>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </body></html>`);
+
+      await expectNoHorizontalOverflow(page);
+      const widths = await page.evaluate(() => ({
+        app: document.querySelector("mcp-app-view")!.getBoundingClientRect().width,
+        bubble: document.querySelector<HTMLElement>(".chat-bubble")!.getBoundingClientRect().width,
+        messages: document
+          .querySelector<HTMLElement>(".chat-group-messages")!
+          .getBoundingClientRect().width,
+      }));
+      expect(widths.bubble).toBeCloseTo(widths.messages, 0);
+      expect(widths.app).toBeGreaterThan(600);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps wrapped message footers inside measured virtual rows", async () => {
     const page = await openBrowserPage(1366, 900);
     try {

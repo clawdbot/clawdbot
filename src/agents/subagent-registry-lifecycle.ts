@@ -75,6 +75,7 @@ import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-reque
 import type {
   PendingFinalDeliveryPayload,
   RequesterSettleWakeState,
+  SubagentCompletionRequest,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
@@ -1740,21 +1741,7 @@ export function createSubagentRegistryLifecycleController(params: {
     return true;
   };
 
-  type CompleteSubagentRunParams = {
-    runId: string;
-    endedAt?: number;
-    outcome: SubagentRunOutcome;
-    reason: SubagentLifecycleEndedReason;
-    sendFarewell?: boolean;
-    accountId?: string;
-    triggerCleanup: boolean;
-    startedAt?: number;
-    suppressSessionEffects?: boolean;
-    completionSnapshot?: { resultText: string | null; capturedAt: number };
-    recoverInterrupted?: true;
-  };
-
-  const completeSubagentRunAttempt = async (completeParams: CompleteSubagentRunParams) => {
+  const completeSubagentRunAttempt = async (completeParams: SubagentCompletionRequest) => {
     const releaseCompletionLock = await acquireTerminalCompletionLock(completeParams.runId);
     let entry: SubagentRunRecord | undefined;
     let terminalGeneration = 0;
@@ -2381,7 +2368,7 @@ export function createSubagentRegistryLifecycleController(params: {
     startSubagentAnnounceCleanupFlow(completeParams.runId, entry);
   };
 
-  const completeSubagentRun = async (completeParams: CompleteSubagentRunParams) => {
+  const completeSubagentRun = async (completeParams: SubagentCompletionRequest) => {
     // Task finalization can make the run disappear from suspension blockers
     // before browser/MCP retirement and cleanup delivery hand off. Own this
     // entire transition as an independent root so that boundary stays atomic.

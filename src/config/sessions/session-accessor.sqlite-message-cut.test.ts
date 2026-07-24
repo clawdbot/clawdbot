@@ -3,6 +3,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+} from "../../utils/delivery-context.shared.js";
+import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   forkSessionAtMessage,
@@ -40,10 +44,10 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     createdVia: "operator",
     createdActor: { type: "human", id: "profile-1" },
     createdAt: 1_000,
-    deliveryContext: { channel: "telegram", to: "chat-123" },
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "telegram", to: "chat-123" },
+    }),
     forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
-    lastChannel: "telegram",
-    lastTo: "chat-123",
     lifecycleRevision: "source-lifecycle-revision",
     modelOverride: "gpt-5",
     modelOverrideSource: "user",
@@ -220,7 +224,11 @@ describe("SQLite session message cuts", () => {
       forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
       previousSessionId: "message-cut-source",
     });
-    expect(result.entry.deliveryContext).toEqual({ channel: "telegram", to: "chat-123" });
+    expect(deliveryContextFromSession(result.entry)).toEqual({
+      channel: "telegram",
+      to: "chat-123",
+      accountId: undefined,
+    });
   });
 
   it("rewinds the stored row when its canonical key differs", async () => {
@@ -279,9 +287,7 @@ describe("SQLite session message cuts", () => {
     expect(loadSessionEntry(scope)?.sessionId).toBe(scope.sessionId);
     expect(result.entry.lifecycleRevision).not.toBe("source-lifecycle-revision");
     expect(result.entry.cliSessionBindings).toBeUndefined();
-    expect(result.entry.deliveryContext).toBeUndefined();
-    expect(result.entry.lastChannel).toBeUndefined();
-    expect(result.entry.lastTo).toBeUndefined();
+    expect(deliveryContextFromSession(result.entry)).toBeUndefined();
     expect(result.entry.parentSessionKey).toBe(canonicalSourceKey);
     expect(result.entry.previousSessionId).toBeUndefined();
     expect(result.entry.forkedFromParent).toBeUndefined();

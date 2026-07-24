@@ -111,6 +111,7 @@ describe("internal session effects", () => {
         sessionId: target.sessionId,
         createdVia: "internal",
         createdActor: { type: "system" },
+        delivery: { kind: "internal" },
         createdAt: expect.any(Number),
       });
       expect(listSessionEntries({ storePath })).toEqual([]);

@@ -42,6 +42,8 @@ import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import {
@@ -331,10 +333,10 @@ function buildSessionStatusRouteDetails(params: {
 }): SessionStatusRouteDetails {
   const origin = compactOriginDetails({
     provider:
-      readStringValue(params.entry.origin?.provider) ??
+      readStringValue(sessionDeliveryOrigin(params.entry)?.provider) ??
       inferOriginProviderFromSessionKey(params.sessionKey),
-    accountId: readStringValue(params.entry.origin?.accountId),
-    threadId: params.entry.origin?.threadId,
+    accountId: readStringValue(sessionDeliveryOrigin(params.entry)?.accountId),
+    threadId: sessionDeliveryOrigin(params.entry)?.threadId,
   });
   const deliveryContext = normalizeStatusDeliveryContext(deliveryContextFromSession(params.entry));
   const active = params.isLiveRunSession
@@ -1009,11 +1011,7 @@ export function createSessionStatusTool(opts?: {
             parentSessionKey: statusSessionEntry.parentSessionKey,
             sessionScope: cfg.session?.scope,
             storePath,
-            statusChannel:
-              statusSessionEntry.channel ??
-              statusSessionEntry.lastChannel ??
-              statusSessionEntry.origin?.provider ??
-              "unknown",
+            statusChannel: sessionDeliveryChannel(statusSessionEntry) ?? "unknown",
             workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
             provider: providerForCard,
             model: defaultModelForCard,

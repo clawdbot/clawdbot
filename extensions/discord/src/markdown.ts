@@ -3,33 +3,15 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   convertMarkdownTables,
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
 
-const DISCORD_FORMAT_PROFILE = {
+const DISCORD_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "markdown",
-  constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
-    spoiler: "native",
-    codeInline: "native",
-    codeBlock: "native",
-    codeLanguage: "native",
-    linkLabel: "native",
-    heading: "native",
-    bulletList: "native",
-    orderedList: "native",
-    taskList: "native",
-    table: "fallback",
-    blockquote: "native",
-    image: "native",
-    mention: "native",
-  },
+  constructs: { table: "fallback" },
   chunk: { limit: 2_000, unit: "utf16" },
-} satisfies FormatCapabilityProfile;
+});
 
 const DISCORD_BOLD_PROBE_TEXT = "openclaw-discord-bold";
 const DISCORD_BOLD_PROBE = renderMarkdownWithMarkers(

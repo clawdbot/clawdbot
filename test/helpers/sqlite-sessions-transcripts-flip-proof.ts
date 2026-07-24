@@ -36,6 +36,7 @@ import {
   resolveSessionTranscriptIdentity,
 } from "../../src/plugin-sdk/session-transcript-runtime.js";
 import { sleep } from "../../src/utils.js";
+import { normalizeSessionDeliveryState } from "../../src/utils/delivery-context.shared.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
 type DoctorMode = "import" | "inspect" | "validate" | "restore";
@@ -1388,7 +1389,7 @@ async function runGatewayCleanupPruningProof(
   await importSqliteSessionRows({
     agentId: context.agentId,
     entry: {
-      channel: "cli",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "cli" } }),
       chatType: "direct",
       sessionFile: formatSqliteSessionFileMarker({
         agentId: context.agentId,

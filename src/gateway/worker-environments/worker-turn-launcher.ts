@@ -18,6 +18,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 import {
   claimWorkerTurn,
   latestDurableWorkspaceConflict,
@@ -70,6 +71,7 @@ type WorkerTurnLauncherOptions = {
   admitNewPlacements?: boolean;
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
+  resolveWorkspacePath: (identity: ReturnType<typeof resolvePlacementIdentity>) => Promise<string>;
   workspaceOperations?: WorkerWorkspaceOperationCoordinator;
   redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
@@ -172,6 +174,7 @@ async function executeWorkerTurn(params: {
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   turn: SessionPlacementTurnParams;
   turnClaim: WorkerSessionTurnClaim;
+  localWorkspaceDir: string;
 }) {
   const { placement, turn } = params;
   const modelRef = assertSupportedTurn(turn);
@@ -216,7 +219,10 @@ async function executeWorkerTurn(params: {
       }
       const pending = journal.load();
       if (pending) {
-        await recoverWorkerWorkspaceReconciliation({ root: turn.workspaceDir, journal: pending });
+        await recoverWorkerWorkspaceReconciliation({
+          root: params.localWorkspaceDir,
+          journal: pending,
+        });
         journal.abort();
       }
     });
@@ -244,7 +250,7 @@ async function executeWorkerTurn(params: {
   let baseLeafId = manager.getLeafId();
   if (!userMessageAlreadyPersisted) {
     const persisted = turn.userTurnTranscriptRecorder
-      ? await turn.userTurnTranscriptRecorder.persistApproved({ cwd: turn.workspaceDir })
+      ? await turn.userTurnTranscriptRecorder.persistApproved({ cwd: params.localWorkspaceDir })
       : undefined;
     if (persisted) {
       baseLeafId = persisted.messageId;
@@ -285,10 +291,11 @@ async function executeWorkerTurn(params: {
     timeoutMs: turn.timeoutMs,
   });
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
+  const toolAuthority = resolveWorkerToolAuthority({ modelRef, turn });
   const descriptor = fitLaunchDescriptor(
     (windowedMessages) =>
       parseWorkerLaunchDescriptor({
-        version: 1,
+        version: 2,
         socketPath: tunnel.remoteSocketPath,
         admission: {
           environmentId: placement.environmentId,
@@ -316,6 +323,7 @@ async function executeWorkerTurn(params: {
             ackedSeq: placement.lastLiveEventAckCursor ?? 0,
             nextSeq: (placement.lastLiveEventAckCursor ?? 0) + 1,
           },
+          toolAuthority,
         },
       }),
     initialMessages,
@@ -426,7 +434,7 @@ async function executeWorkerTurn(params: {
       try {
         const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
         const reconciliation = await tunnel.reconcileWorkspace({
-          localPath: turn.workspaceDir,
+          localPath: params.localWorkspaceDir,
           remoteWorkspaceDir: currentPlacement.remoteWorkspaceDir,
           baseManifestRef: currentPlacement.workspaceBaseManifestRef,
           journal,
@@ -457,7 +465,7 @@ async function executeWorkerTurn(params: {
           conflictPaths: applied?.conflictPaths ?? [],
           priorConflict: priorWorkspaceConflict,
           stagedResultRef: recordedStagedResultRef,
-          root: turn.workspaceDir,
+          root: params.localWorkspaceDir,
           report: async (report) => {
             if ("cleared" in report) {
               SessionManager.open(turn.sessionFile).appendCustomMessageEntry(
@@ -490,7 +498,7 @@ async function executeWorkerTurn(params: {
         await settleStagedWorkspaceResult({
           placements: params.placements,
           turnClaim: params.turnClaim,
-          root: turn.workspaceDir,
+          root: params.localWorkspaceDir,
           stagedResultRef: recordedStagedResultRef,
           conflictRetained: finalized.conflictRetained,
           reclaim: false,
@@ -585,6 +593,9 @@ export function createWorkerSessionTurnPlacementProvider(
       }
       const identity = resolvePlacementIdentity(claim, routablePlacement);
       let placement = requireActivePlacement(routablePlacement);
+      // The placement owns the managed worktree. Callers can carry a default or stale
+      // workspace path, but remote results must only reconcile into that canonical root.
+      const localWorkspaceDir = await options.resolveWorkspacePath(identity);
       const admitted = await claimWorkerTurn({
         placements: options.placements,
         identity,
@@ -603,6 +614,7 @@ export function createWorkerSessionTurnPlacementProvider(
           },
           placement,
           placements: options.placements,
+          localWorkspaceDir,
           workspaceOperations,
           turn,
           turnClaim,
