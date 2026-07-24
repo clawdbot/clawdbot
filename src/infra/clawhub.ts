@@ -15,6 +15,7 @@ import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
 import { fetchWithSsrFGuard } from "./net/fetch-guard.js";
+import { SsrFBlockedError } from "./net/ssrf.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import {
   parseStrictNonNegativeInteger,
@@ -1625,12 +1626,23 @@ async function downloadUntrustedClawHubSkillArchiveUrl(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubDownloadResult> {
-  const { response, finalUrl, release } = await fetchWithSsrFGuard({
-    url: params.url,
-    timeoutMs: resolveClawHubRequestTimeoutMs(params.timeoutMs),
-    ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
-    auditContext: "clawhub-skill-archive-download",
-  });
+  const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
+  const { response, finalUrl, release } = await retryClawHubRead(
+    async () =>
+      await fetchWithSsrFGuard({
+        url: params.url,
+        timeoutMs,
+        ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
+        auditContext: "clawhub-skill-archive-download",
+      }),
+    {
+      isRetryableError: (error) => !(error instanceof SsrFBlockedError),
+      disposeRetry: async (result) => {
+        await result.response.body?.cancel().catch(() => undefined);
+        await result.release();
+      },
+    },
+  );
   try {
     const finalRequestUrl = new URL(finalUrl);
     if (!response.ok) {

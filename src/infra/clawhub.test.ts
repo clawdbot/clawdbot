@@ -1720,5 +1720,40 @@ describe("clawhub helpers", () => {
       });
     }
   });
+
+  it("retries transient 5xx responses when downloading off-registry archive URLs", async () => {
+    const payload = Buffer.from([4, 4, 2]);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(new Uint8Array(), { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(payload, { status: 200, headers: { "content-type": "application/zip" } }),
+      );
+    const archive = await downloadClawHubSkillArchiveUrl({
+      baseUrl: "https://clawhub.ai",
+      url: "https://downloads.example.com/skill.zip",
+      fetchImpl,
+    });
+    try {
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(payload);
+    } finally {
+      await archive.cleanup();
+    }
+  });
+
+  it("does not retry off-registry archive URLs rejected by the SSRF guard", async () => {
+    vi.useFakeTimers();
+    try {
+      await expect(
+        downloadClawHubSkillArchiveUrl({
+          baseUrl: "https://clawhub.ai",
+          url: "http://127.0.0.1:1/skill.zip",
+        }),
+      ).rejects.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

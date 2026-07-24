@@ -12,6 +12,7 @@ type ClawHubResponseHandle = {
 type ClawHubRetryOptions<T extends ClawHubResponseHandle> = {
   disposeRetry: (result: T) => Promise<void>;
   retryRateLimit?: boolean;
+  isRetryableError?: (error: unknown) => boolean;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -62,6 +63,8 @@ export async function retryClawHubRead<T extends ClawHubResponseHandle>(
         minDelayMs: 0,
         maxDelayMs: CLAWHUB_MAX_RETRY_AFTER_MS,
         delayMs: ({ attempt }) => CLAWHUB_RETRY_DELAYS_MS[attempt - 1] ?? 0,
+        shouldRetry: (error) =>
+          error instanceof RetryableClawHubResponse || (options.isRetryableError?.(error) ?? true),
         retryAfterMs: (error) =>
           error instanceof RetryableClawHubResponse
             ? parseRetryAfterMs(error.result.response.headers)
