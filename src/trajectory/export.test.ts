@@ -203,6 +203,25 @@ afterAll(() => {
 });
 
 describe("exportTrajectoryBundle", () => {
+  it("rejects a structured transcript target for a different session", async () => {
+    const outputDir = makeTempDir();
+
+    await expect(
+      exportTrajectoryBundle({
+        outputDir,
+        sessionId: "requested-session",
+        sessionKey: "agent:main:requested",
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "other-session",
+          sessionKey: "agent:main:other",
+          storePath: path.join(outputDir, "sessions.json"),
+        },
+        workspaceDir: outputDir,
+      }),
+    ).rejects.toThrow("transcript target does not match the requested session");
+  });
+
   it("sanitizes session ids in default export directory names", () => {
     const outputDir = resolveDefaultTrajectoryExportDir({
       workspaceDir: "/tmp/workspace",

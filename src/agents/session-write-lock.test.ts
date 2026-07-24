@@ -248,6 +248,16 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("skips file locking for explicit session-key targets", async () => {
+    const lock = await acquireSessionWriteLock({
+      sessionFile: "agent:main:main",
+      targetKind: "session-key",
+    });
+
+    await lock.release();
+    await expectPathMissing(path.resolve("agent:main:main.lock"));
+  });
+
   it("does not reenter locks by default in the same process", async () => {
     await withTempSessionLockFile(async ({ sessionFile }) => {
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });

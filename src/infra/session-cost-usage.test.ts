@@ -11,6 +11,11 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import {
+  clearGatewayModelPricingFailures,
+  replaceGatewayModelPricingCache,
+} from "../gateway/model-pricing-cache-state.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
@@ -28,6 +33,7 @@ import {
   loadSessionCostSummariesFromCache as loadSessionCostSummariesFromCacheForAgent,
   loadSessionLogs as loadSessionLogsForAgent,
   loadSessionUsageTimeSeries as loadSessionUsageTimeSeriesForAgent,
+  resolveExistingUsageSessionFile as resolveExistingUsageSessionFileForAgent,
 } from "./session-cost-usage.js";
 import { testing as sessionCostUsageTestApi } from "./session-cost-usage.test-support.js";
 
@@ -102,6 +108,67 @@ describe("session cost usage", () => {
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
+  });
+
+  it("prefers a legacy entry marker over a stale JSONL usage artifact", async () => {
+    const root = await makeSessionCostRoot("sqlite-cost-empty");
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionId = "empty-sqlite-cost-session";
+    const sqliteMarker = `sqlite:main:${sessionId}:${storePath}`;
+    const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+
+    await withStateDir(root, async () => {
+      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
+      await fs.writeFile(
+        legacyJsonl,
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-06-25T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: { input: 100, output: 100, totalTokens: 200, cost: { total: 0.2 } },
+          },
+        }),
+        "utf-8",
+      );
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: { sessionFile: sqliteMarker, sessionId, updatedAt: 1 } as SessionEntry & {
+            sessionFile: string;
+          },
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).toBe(sqliteMarker);
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: {
+            sessionFile: `sqlite:main:stale-session:${storePath}`,
+            sessionId,
+            updatedAt: 1,
+          } as SessionEntry & { sessionFile: string },
+          sessionFile: sqliteMarker,
+          sessionId,
+        }),
+      ).toBe(sqliteMarker);
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: {
+            sessionFile: `sqlite:main:stale-session:${storePath}`,
+            sessionId,
+            updatedAt: 1,
+          } as SessionEntry & { sessionFile: string },
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).toBe(legacyJsonl);
+    });
   });
 
   afterAll(async () => {

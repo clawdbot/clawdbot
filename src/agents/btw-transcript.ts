@@ -15,6 +15,7 @@ import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   buildSessionContext,
   migrateSessionEntries,
+  type FileEntry,
   type SessionEntry as AgentSessionEntry,
 } from "./sessions/session-manager.js";
 
@@ -109,13 +110,16 @@ export async function readBtwTranscriptMessages(params: {
     if (!params.sessionKey || !params.storePath) {
       return [];
     }
-    const sessionEntries = (await loadTranscriptEvents({
+    const entries = (await loadTranscriptEvents({
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
-    })) as AgentSessionEntry[];
-    migrateSessionEntries(sessionEntries);
+    })) as FileEntry[];
+    migrateSessionEntries(entries);
+    const sessionEntries = entries.filter(
+      (entry): entry is AgentSessionEntry => entry.type !== "session",
+    );
     const tree = scanSessionTranscriptTree(sessionEntries);
     if (!tree.hasLeafUpdate) {
       return buildSessionContext(sessionEntries).messages;

@@ -10,7 +10,11 @@ import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { loadTranscriptEvents, upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -3430,10 +3434,10 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          storePath,
           workspaceDir: dir,
           prompt: "runtime prompt",
           persistAssistantTranscript: true,
-          storePath,
           userTurnTranscriptRecorder: recorder,
           onUserMessagePersisted,
         },
@@ -4413,6 +4417,7 @@ describe("runCliAgent reliability", () => {
     const { dir, sessionFile } = createSessionFile({
       history: [{ role: "user", content: "earlier context" }],
     });
+    const storePath = path.join(dir, "sessions.json");
 
     try {
       let resolved = false;
@@ -4429,6 +4434,7 @@ describe("runCliAgent reliability", () => {
           ...context.params,
           agentId: "main",
           sessionFile,
+          storePath,
           workspaceDir: dir,
           prompt: "secret prompt",
         },
@@ -4457,6 +4463,27 @@ describe("runCliAgent reliability", () => {
       expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
+      const transcriptEvents = await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: context.params.sessionId,
+        sessionKey: "agent:main:main",
+        storePath,
+      });
+      expect(transcriptEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: expect.arrayContaining([
+                expect.objectContaining({
+                  text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+                }),
+              ]),
+            }),
+          }),
+        ]),
+      );
       const beforeRunEvent = requireRecord(
         callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
         "before_agent_run event",
@@ -4499,9 +4526,9 @@ describe("runCliAgent reliability", () => {
       expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
       expect(JSON.stringify(hookRunner.runAgentEnd.mock.calls)).not.toContain("secret prompt");
 
-      const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
-      const blockedLine = JSON.parse(
-        expectDefined(lines[lines.length - 1], "lines[lines.length - 1] test invariant"),
+      const blockedLine = expectDefined(
+        transcriptEvents.find((entry) => entry.type === "message"),
+        "blocked transcript message",
       );
       expect(blockedLine.message.content[0].text).toBe(
         "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
@@ -4513,6 +4540,58 @@ describe("runCliAgent reliability", () => {
       );
       expect(blockedLine.message["__openclaw"].beforeAgentRunBlocked).not.toHaveProperty("reason");
       expect(Object.hasOwn(blockedLine.message["__openclaw"], "beforeAgentRunBlocked")).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not rebind a reset session when a stale before_agent_run hook blocks", async () => {
+    supervisorSpawnMock.mockClear();
+    const { dir, sessionFile, storePath } = createSessionFile();
+    const sessionKey = "agent:main:main";
+    const context = buildPreparedContext({
+      sessionKey,
+      runId: "run-blocked-cli-rebound",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.params.sessionEntry = { sessionId: "s1", updatedAt: 1 };
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_agent_run"),
+      runBeforeAgentRun: vi.fn(async () => {
+        await upsertSessionEntry(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId: "replacement-session", updatedAt: 2 },
+        );
+        return {
+          pluginId: "policy-plugin",
+          decision: {
+            outcome: "block" as const,
+            message: "Blocked after reset.",
+          },
+        };
+      }),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            agentId: "main",
+            sessionFile,
+            storePath,
+            workspaceDir: dir,
+            prompt: "secret prompt",
+          },
+        }),
+      ).resolves.toMatchObject({ meta: { livenessState: "blocked" } });
+
+      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.sessionId).toBe(
+        "replacement-session",
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

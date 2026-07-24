@@ -886,6 +886,7 @@ export async function acquireSessionWriteLock(params: {
   maxHoldMs?: number;
   allowReentrant?: boolean;
   signal?: AbortSignal;
+  targetKind?: "file" | "session-key";
 }): Promise<{
   release: () => Promise<void>;
 }> {
@@ -901,13 +902,7 @@ export async function acquireSessionWriteLock(params: {
     throw error;
   };
   throwIfAborted();
-  const hasFilePathShape =
-    path.isAbsolute(params.sessionFile) ||
-    params.sessionFile.endsWith(".jsonl") ||
-    params.sessionFile.endsWith(".json") ||
-    params.sessionFile.includes("/") ||
-    params.sessionFile.includes("\\");
-  if (!hasFilePathShape) {
+  if (params.targetKind === "session-key") {
     return { release: async () => {} };
   }
   registerCleanupHandlers();

@@ -2373,6 +2373,13 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("reads SQLite marker transcripts through the accessor when no active snapshot exists", async () => {
+    const header = {
+      type: "session",
+      version: 3,
+      id: "session-1",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      cwd: "/tmp",
+    };
     const userEntry = createTranscriptEntry({
       id: "user-seed",
       message: createUserTranscriptMessage(),
@@ -2382,7 +2389,7 @@ describe("runBtwSideQuestion", () => {
       parentId: "user-seed",
       message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
     });
-    loadTranscriptEventsMock.mockResolvedValue([userEntry, assistantEntry]);
+    loadTranscriptEventsMock.mockResolvedValue([header, userEntry, assistantEntry]);
     readFileMock.mockRejectedValue(new Error("sqlite marker must not be read as a file"));
     mockDoneAnswer(MATH_ANSWER);
 

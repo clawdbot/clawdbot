@@ -194,6 +194,12 @@ async function readSessionEntries(params: {
   rowByEntry: Map<FileEntry, number>;
 }> {
   if (params.sessionTarget) {
+    if (
+      params.sessionTarget.sessionId !== params.sessionId ||
+      (params.sessionKey !== undefined && params.sessionTarget.sessionKey !== params.sessionKey)
+    ) {
+      throw new Error("Trajectory export transcript target does not match the requested session");
+    }
     const events = await loadTranscriptEvents(params.sessionTarget);
     return collectSessionEntries(events.map((value, index) => ({ row: index + 1, value })));
   }
