@@ -54,7 +54,6 @@ export {
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-export { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";

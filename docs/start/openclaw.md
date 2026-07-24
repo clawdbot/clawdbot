@@ -191,9 +191,15 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable. Heartbeat checklists liv
 
 Inbound attachments (images/audio/docs) can be surfaced to your command via templates:
 
-- `{{MediaPath}}` (local temp file path)
-- `{{MediaUrl}}` (pseudo-URL)
+- `{{AttachmentPath}}` (local temp file path)
+- `{{AttachmentUrl}}` (original URL or provider reference)
+- `{{AttachmentContentType}}` (MIME content type)
+- `{{AttachmentDir}}` (directory containing the local path)
+- `{{AttachmentIndex}}` (zero-based source fact index)
 - `{{Transcript}}` (if audio transcription is enabled)
+
+The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}`
+names remain available as deprecated compatibility aliases.
 
 Outbound attachments from the agent use structured media fields on the message tool or reply payload, such as `media`, `mediaUrl`, `mediaUrls`, `path`, or `filePath`. Example message-tool arguments:
 

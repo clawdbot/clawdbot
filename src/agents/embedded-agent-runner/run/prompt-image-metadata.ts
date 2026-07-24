@@ -1,4 +1,4 @@
-import { normalizeMediaFacts, type MediaFact } from "../../../media/media-facts.js";
+import { readPersistedMediaFacts, type MediaFact } from "../../../media/media-facts.js";
 import type { AgentMessage } from "../../runtime/index.js";
 
 export type ImageFactIndex = number | null;
@@ -67,12 +67,7 @@ export function readPersistedImageBlockFactIndexes(
 }
 
 export function readPersistedPromptMediaFacts(message: AgentMessage): MediaFact[] | undefined {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
-  const media =
-    meta && typeof meta === "object" && !Array.isArray(meta)
-      ? (meta as Record<string, unknown>).media
-      : undefined;
-  return Array.isArray(media) ? normalizeMediaFacts(media as MediaFact[]) : undefined;
+  return readPersistedMediaFacts(message);
 }
 
 export function readPersistedMediaImageLayout(message: AgentMessage): MediaImageLayout | undefined {

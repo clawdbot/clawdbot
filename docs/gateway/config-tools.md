@@ -278,7 +278,7 @@ Configures inbound media understanding (image/audio/video):
         {
           type: "cli",
           command: "whisper",
-          args: ["--model", "base", "{{MediaPath}}"],
+          args: ["--model", "base", "{{AttachmentPath}}"],
           capabilities: ["audio"],
         },
         { provider: "ollama", model: "gemma4:26b", capabilities: ["image"] },
@@ -305,7 +305,7 @@ Configures inbound media understanding (image/audio/video):
     **CLI entry** (`type: "cli"`):
 
     - `command`: executable to run
-    - `args`: templated args (supports `{{MediaPath}}`, `{{Prompt}}`, `{{MaxChars}}`, etc.; `openclaw doctor --fix` migrates deprecated `{input}` placeholders to `{{MediaPath}}`)
+    - `args`: templated args (supports `{{AttachmentPath}}`, `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{Prompt}}`, `{{MaxChars}}`, etc.; `openclaw doctor --fix` migrates deprecated `{input}` placeholders to `{{AttachmentPath}}`). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` aliases remain available during their compatibility window but are deprecated.
 
     **Common fields:**
 
