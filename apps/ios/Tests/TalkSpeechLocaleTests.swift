@@ -38,4 +38,36 @@ import Testing
         #expect(deviceLocale == "fr-FR")
         #expect(english == "en-US")
     }
+
+    @Test func speechSynthesisPrefersDirectiveLocale() {
+        let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
+            directiveLanguage: " tr_TR ",
+            localSelection: "de-DE",
+            gatewaySelection: "ru-RU")
+
+        #expect(locale == "tr-TR")
+    }
+
+    @Test func speechSynthesisUsesLocalThenGatewayLocale() {
+        let local = TalkSpeechLocale.resolvedSynthesisLocaleID(
+            directiveLanguage: nil,
+            localSelection: "de_DE",
+            gatewaySelection: "ru-RU")
+        let gateway = TalkSpeechLocale.resolvedSynthesisLocaleID(
+            directiveLanguage: nil,
+            localSelection: TalkSpeechLocale.automaticID,
+            gatewaySelection: "ru_RU")
+
+        #expect(local == "de-DE")
+        #expect(gateway == "ru-RU")
+    }
+
+    @Test func automaticSpeechSynthesisUsesSystemDefaultWithoutGatewayLocale() {
+        let locale = TalkSpeechLocale.resolvedSynthesisLocaleID(
+            directiveLanguage: nil,
+            localSelection: TalkSpeechLocale.automaticID,
+            gatewaySelection: nil)
+
+        #expect(locale == nil)
+    }
 }

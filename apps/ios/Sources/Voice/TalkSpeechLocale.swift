@@ -45,6 +45,16 @@ enum TalkSpeechLocale {
             supportedLocaleIDs: supportedLocaleIDs)
     }
 
+    static func resolvedSynthesisLocaleID(
+        directiveLanguage: String?,
+        localSelection: String?,
+        gatewaySelection: String?) -> String?
+    {
+        [directiveLanguage, localSelection, gatewaySelection]
+            .compactMap { TalkConfigParsing.normalizedExplicitSpeechLocaleID($0) }
+            .first
+    }
+
     static func makeRecognizer(
         localSelection: String?,
         gatewaySelection: String?,
