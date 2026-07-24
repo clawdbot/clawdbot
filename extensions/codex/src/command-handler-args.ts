@@ -8,7 +8,7 @@ import {
   type CodexCommandPickerButton,
 } from "./command-presentation.js";
 
-export type ParsedBindArgs = {
+type ParsedBindArgs = {
   threadId?: string;
   cwd?: string;
   model?: string;
@@ -16,7 +16,7 @@ export type ParsedBindArgs = {
   help?: boolean;
 };
 
-export type ParsedComputerUseArgs = {
+type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
   hasOverrides: boolean;
@@ -24,7 +24,7 @@ export type ParsedComputerUseArgs = {
   help?: boolean;
 };
 
-export type ParsedCodexCliSessionsArgs = {
+type ParsedCodexCliSessionsArgs = {
   host?: string;
   filter: string;
   limit?: number;

@@ -26,14 +26,14 @@ import {
   resolveCodexCliSessionForBindingOnNode,
 } from "./node-cli-sessions.js";
 
-export type CodexControlRequestFn = (
+type CodexControlRequestFn = (
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams: JsonValue | undefined,
   options?: CodexControlRequestOptions,
 ) => Promise<JsonValue | undefined>;
 
-export type SafeCodexControlRequestFn = (
+type SafeCodexControlRequestFn = (
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams: JsonValue | undefined,

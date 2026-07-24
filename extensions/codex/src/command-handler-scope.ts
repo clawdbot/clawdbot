@@ -10,7 +10,7 @@ import type { CodexCommandDeps } from "./command-handler-deps.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
 
-export type CodexConversationControlTarget = {
+type CodexConversationControlTarget = {
   identity: CodexAppServerBindingIdentity;
   agentId: string;
   agentDir: string;

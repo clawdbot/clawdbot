@@ -10,7 +10,7 @@ import {
 } from "./command-diagnostics-state.js";
 import { splitArgs } from "./command-handler-args.js";
 
-export type ParsedDiagnosticsArgs =
+type ParsedDiagnosticsArgs =
   | { action: "request"; note: string }
   | { action: "confirm"; token: string }
   | { action: "cancel"; token: string }
