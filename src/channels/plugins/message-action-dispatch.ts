@@ -43,6 +43,14 @@ type ChannelMessageActionDispatchContext = Omit<ChannelMessageActionContext, "ac
   action: unknown;
 };
 
+type PreparedMessageActionReadContext = {
+  actionContext: ChannelMessageActionContext;
+  plugin: ChannelPlugin;
+  origin: ServerOwnedConversationReadOrigin;
+  actionPolicy: ChannelMessageActionReadPolicy;
+  enforcement: MessageActionReadEnforcement;
+};
+
 type ChannelMessageActionReadPolicy =
   | { readonly kind: "none" }
   | {
@@ -535,6 +543,54 @@ function canonicalizeExternalExactCurrentTarget(ctx: ChannelMessageActionContext
   }
 }
 
+function prepareMessageActionReadContext(
+  ctx: ChannelMessageActionDispatchContext,
+): PreparedMessageActionReadContext | undefined {
+  const actionPolicy = resolveChannelMessageActionReadPolicy(ctx.action);
+  if (!actionPolicy) {
+    return undefined;
+  }
+  const registration = resolveChannelPluginRegistration(ctx.channel);
+  if (!registration) {
+    return undefined;
+  }
+  const action = ctx.action as ChannelMessageActionName;
+  const origin = resolveServerOwnedConversationReadOrigin(ctx.conversationReadOrigin);
+  const actionContext: ChannelMessageActionContext = {
+    ...ctx,
+    action,
+    conversationReadOrigin: origin,
+  };
+  return {
+    actionContext,
+    plugin: registration.plugin,
+    origin,
+    actionPolicy,
+    enforcement: resolveMessageActionReadEnforcement({
+      action,
+      channel: actionContext.channel,
+      pluginOrigin: registration.origin,
+    }),
+  };
+}
+
+function isExternalDelegatedMessageActionRead(
+  prepared: PreparedMessageActionReadContext | undefined,
+): prepared is PreparedMessageActionReadContext & {
+  actionPolicy: Extract<ChannelMessageActionReadPolicy, { kind: "conversation-read" }>;
+  enforcement: Extract<MessageActionReadEnforcement, { kind: "host-exact-current" }> & {
+    pluginTrust: "external";
+  };
+} {
+  return Boolean(
+    prepared &&
+    prepared.origin !== "direct-operator" &&
+    prepared.actionPolicy.kind === "conversation-read" &&
+    prepared.enforcement.kind === "host-exact-current" &&
+    prepared.enforcement.pluginTrust === "external",
+  );
+}
+
 /** The sole host chokepoint before any read-capable plugin callback runs. */
 function enforceMessageActionConversationReadGate(params: {
   ctx: ChannelMessageActionContext;
@@ -573,6 +629,40 @@ function enforceMessageActionConversationReadGate(params: {
   }
 }
 
+/** Authorizes and canonicalizes external exact-current targets before target resolution. */
+export function prepareExternalMessageActionTargetForResolution(
+  ctx: ChannelMessageActionDispatchContext,
+): Record<string, unknown> {
+  const prepared = prepareMessageActionReadContext(ctx);
+  if (!isExternalDelegatedMessageActionRead(prepared)) {
+    return ctx.params;
+  }
+  // External target resolution can execute plugin directory/provider lookups.
+  // Establish exact-current authority before that boundary, then recheck at dispatch.
+  const authorizedActionContext = attachExternalCurrentTargetSibling({
+    ctx: prepared.actionContext,
+    plugin: prepared.plugin,
+    origin: prepared.origin,
+    actionPolicy: prepared.actionPolicy,
+    enforcement: prepared.enforcement,
+  });
+  enforceMessageActionConversationReadGate({
+    ctx: authorizedActionContext,
+    plugin: prepared.plugin,
+    origin: prepared.origin,
+    actionPolicy: prepared.actionPolicy,
+    enforcement: prepared.enforcement,
+  });
+  return authorizedActionContext.params;
+}
+
+/** Defers delegated external target interpretation to the attested Gateway boundary. */
+export function shouldDeferExternalMessageActionTargetResolution(
+  ctx: ChannelMessageActionDispatchContext,
+): boolean {
+  return isExternalDelegatedMessageActionRead(prepareMessageActionReadContext(ctx));
+}
+
 function requiresTrustedRequesterSender(
   ctx: ChannelMessageActionContext,
   plugin: ChannelPlugin,
@@ -591,33 +681,15 @@ function requiresTrustedRequesterSender(
 export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionDispatchContext,
 ): Promise<AgentToolResult<unknown> | null> {
-  const actionPolicy = resolveChannelMessageActionReadPolicy(ctx.action);
-  if (!actionPolicy) {
+  const prepared = prepareMessageActionReadContext(ctx);
+  if (!prepared) {
     return null;
   }
-  // The policy lookup is the runtime proof that this is a core-owned action.
-  const action = ctx.action as ChannelMessageActionName;
-  const registration = resolveChannelPluginRegistration(ctx.channel);
-  if (!registration) {
-    return null;
-  }
-  const { plugin } = registration;
+  const { actionContext, plugin, origin, actionPolicy, enforcement } = prepared;
   const actions = plugin.actions;
   if (!actions?.handleAction) {
     return null;
   }
-  const origin = resolveServerOwnedConversationReadOrigin(ctx.conversationReadOrigin);
-  const actionContext: ChannelMessageActionContext = {
-    ...ctx,
-    action,
-    // Plugins receive only the closed server-normalized classification.
-    conversationReadOrigin: origin,
-  };
-  const enforcement = resolveMessageActionReadEnforcement({
-    action: actionContext.action,
-    channel: actionContext.channel,
-    pluginOrigin: registration.origin,
-  });
   const authorizedActionContext = attachExternalCurrentTargetSibling({
     ctx: actionContext,
     plugin,

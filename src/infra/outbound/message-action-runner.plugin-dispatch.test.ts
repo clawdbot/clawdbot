@@ -776,6 +776,120 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("canonicalizes an external exact-current alias before legacy target resolution", async () => {
+      const looksLikeId = vi.fn((raw: string) => !/^room:/i.test(raw));
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "actionhub",
+            source: "test",
+            origin: "config",
+            plugin: {
+              ...actionHubPlugin,
+              messaging: {
+                targetPrefixes: ["actionhub"],
+                normalizeTarget: (raw: string) =>
+                  raw.replace(/^room:/i, "actionhub:").replace(/^actionhub:/i, "actionhub:"),
+                targetResolver: {
+                  looksLikeId,
+                },
+              },
+            },
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            actionhub: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "actionhub",
+          target: "room:current",
+          messageId: "om_123",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "actionhub:current",
+          currentChannelProvider: "actionhub",
+          currentChatType: "group",
+        },
+        dryRun: false,
+      });
+
+      expect(looksLikeId).toHaveBeenCalledWith("actionhub:current", "actionhub:current");
+      const call = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(call, "params", "normalized plugin params"),
+        {
+          target: "actionhub:current",
+          to: "actionhub:current",
+        },
+        "normalized plugin params",
+      );
+    });
+
+    it.each([false, true])(
+      "rejects an external exact-current alias with the wrong account before target resolution (dryRun=%s)",
+      async (dryRun) => {
+        const looksLikeId = vi.fn(() => true);
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "actionhub",
+              source: "test",
+              origin: "config",
+              plugin: {
+                ...actionHubPlugin,
+                messaging: {
+                  ...actionHubPlugin.messaging,
+                  targetResolver: {
+                    looksLikeId,
+                  },
+                },
+              },
+            },
+          ]),
+        );
+
+        await expect(
+          runMessageAction({
+            cfg: {
+              channels: {
+                actionhub: {
+                  enabled: true,
+                },
+              },
+            } as OpenClawConfig,
+            action: "pin",
+            params: {
+              channel: "actionhub",
+              target: "room:current",
+              messageId: "om_123",
+            },
+            defaultAccountId: "other",
+            requesterAccountId: "default",
+            conversationReadOrigin: "delegated",
+            toolContext: {
+              currentChannelId: "actionhub:current",
+              currentChannelProvider: "actionhub",
+              currentChatType: "group",
+            },
+            dryRun,
+          }),
+        ).rejects.toThrow("requires the exact current conversation and account");
+        expect(looksLikeId).not.toHaveBeenCalled();
+        expect(handleAction).not.toHaveBeenCalled();
+      },
+    );
+
     it("preserves no-context owner Discord admin actions through the shared runner", async () => {
       const handleDiscordAction = vi.fn(async (ctx: ChannelMessageActionContext) => {
         const currentProvider = ctx.toolContext?.currentChannelProvider?.trim().toLowerCase();
@@ -892,12 +1006,18 @@ describe("runMessageAction plugin dispatch", () => {
           local: true,
         }),
       );
+      const looksLikeId = vi.fn(() => true);
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
         label: "Gateway Chat",
         blurb: "Gateway Chat reaction test plugin.",
         actions: ["react"],
         capabilities: { chatTypes: ["direct"], reactions: true },
+        messaging: {
+          targetResolver: {
+            looksLikeId,
+          },
+        },
         handleAction: handleActionEntry,
       });
       setTestPlugin(gatewayPlugin, "gatewaychat");
@@ -965,6 +1085,7 @@ describe("runMessageAction plugin dispatch", () => {
       expect(gatewayParams).not.toHaveProperty("requesterAccountId");
       expect(gatewayParams).not.toHaveProperty("requesterSenderId");
       expect(gatewayParams).not.toHaveProperty("toolContext");
+      expect(looksLikeId).not.toHaveBeenCalled();
       expect(handleActionEntry).not.toHaveBeenCalled();
       expectRecordFields(
         result,
