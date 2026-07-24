@@ -140,6 +140,161 @@ describe("continue_delegate tool", () => {
     expect(JSON.stringify(tool.parameters)).not.toContain("traceparent");
   });
 
+  it("accepts typed input attachments without echoing content in the tool result", async () => {
+    setRuntimeConfigSnapshot({
+      tools: { sessions_spawn: { attachments: { enabled: true } } },
+    });
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+    const attachmentContent = "CONTINUATION_INPUT_MUST_NOT_ECHO";
+
+    expect(JSON.stringify(tool.parameters)).toContain('"attachments"');
+    expect(JSON.stringify(tool.parameters)).toContain('"attachAs"');
+    expect(JSON.stringify(tool.parameters)).not.toContain('"minItems":1');
+
+    const result = await executeTool(tool, 0, {
+      task: "read the attached handoff",
+      attachments: [
+        {
+          name: "handoff.txt",
+          content: attachmentContent,
+          encoding: "utf8",
+          mimeType: "text/plain",
+        },
+      ],
+      attachAs: { mountPath: "  handoff/path  " },
+    });
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+      attachmentCount: 1,
+      attachAs: { mountPath: "handoff/path" },
+    });
+    expect(JSON.stringify(result)).not.toContain(attachmentContent);
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "read the attached handoff",
+        attachments: [
+          {
+            name: "handoff.txt",
+            content: attachmentContent,
+            encoding: "utf8",
+            mimeType: "text/plain",
+          },
+        ],
+        attachAs: { mountPath: "handoff/path" },
+      }),
+    ]);
+  });
+
+  it("canonicalizes empty attachAs away while accepting the snake-case mount hint", async () => {
+    setRuntimeConfigSnapshot({
+      tools: { sessions_spawn: { attachments: { enabled: true } } },
+    });
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const emptyResult = await executeTool(tool, 0, {
+      task: "carry a scoped handoff",
+      attachments: [{ name: "handoff.txt", content: "snapshot" }],
+      attachAs: {},
+    });
+    expect(emptyResult).toMatchObject({ status: "scheduled", attachmentCount: 1 });
+    expect(emptyResult).not.toHaveProperty("attachAs");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        attachments: [{ name: "handoff.txt", content: "snapshot" }],
+      }),
+    ]);
+    expect(consumePendingDelegates("test-session")).toEqual([]);
+
+    const snakeResult = await executeTool(tool, 1, {
+      task: "carry the mounted handoff",
+      attachments: [{ name: "handoff.txt", content: "snapshot" }],
+      attach_as: { mount_path: "handoff" },
+    });
+    expect(snakeResult).toMatchObject({
+      status: "scheduled",
+      attachmentCount: 1,
+      attachAs: { mountPath: "handoff" },
+    });
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({ attachAs: { mountPath: "handoff" } }),
+    ]);
+  });
+
+  it("rejects malformed typed attachment fields before enqueue", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const emptyResult = await executeTool(tool, 0, {
+      task: "empty attachments mean no snapshot",
+      attachments: [],
+    });
+    expect(emptyResult).toMatchObject({ status: "scheduled" });
+    expect(emptyResult).not.toHaveProperty("attachmentCount");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.not.objectContaining({ attachments: expect.anything() }),
+    ]);
+    await expect(
+      tool.execute("call-invalid-attachments", {
+        task: "invalid attachment shape",
+        attachments: [{ name: "handoff.txt", content: "data", encoding: "hex" }],
+      }),
+    ).rejects.toThrow('attachments[0].encoding must be "utf8" or "base64"');
+    await expect(
+      tool.execute("call-invalid-attach-as", {
+        task: "invalid mount shape",
+        attachAs: "handoff",
+      }),
+    ).rejects.toThrow("attachAs must be an object");
+    await expect(
+      tool.execute("call-invalid-mount", {
+        task: "invalid mount hint",
+        attachAs: { mountPath: "unsafe\npath" },
+      }),
+    ).rejects.toThrow("attachAs.mountPath contains unsupported characters");
+    expect(consumePendingDelegates("test-session")).toEqual([]);
+  });
+
+  it("applies shared attachment safety validation before durable enqueue", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    await expect(
+      tool.execute("call-disabled-attachments", {
+        task: "disabled attachment",
+        attachments: [{ name: "handoff.txt", content: "data" }],
+      }),
+    ).rejects.toThrow(
+      "attachments are disabled for sessions_spawn (enable tools.sessions_spawn.attachments.enabled)",
+    );
+
+    setRuntimeConfigSnapshot({
+      tools: {
+        sessions_spawn: {
+          attachments: { enabled: true, maxFileBytes: 4, maxTotalBytes: 4 },
+        },
+      },
+    });
+    await expect(
+      tool.execute("call-invalid-name", {
+        task: "invalid attachment name",
+        attachments: [{ name: "../handoff.txt", content: "data" }],
+      }),
+    ).rejects.toThrow("attachments_invalid_name");
+    await expect(
+      tool.execute("call-invalid-base64", {
+        task: "invalid attachment encoding",
+        attachments: [{ name: "handoff.txt", content: "not-base64", encoding: "base64" }],
+      }),
+    ).rejects.toThrow("attachments_invalid_base64_or_too_large");
+    await expect(
+      tool.execute("call-oversized-attachment", {
+        task: "oversized attachment",
+        attachments: [{ name: "handoff.txt", content: "12345" }],
+      }),
+    ).rejects.toThrow("attachments_file_bytes_exceeded");
+
+    expect(consumePendingDelegates("test-session")).toEqual([]);
+  });
+
   it("resets the per-turn budget at the provider-turn boundary for the same tool instance", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { maxDelegatesPerTurn: 2 } } },
@@ -505,22 +660,32 @@ describe("continue_delegate tool", () => {
   });
 
   it("stages post-compaction delegates as silent-wake delegates", async () => {
+    setRuntimeConfigSnapshot({
+      tools: { sessions_spawn: { attachments: { enabled: true } } },
+    });
     const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+    const attachment = { name: "state.md", content: "fresh compacted state" };
 
     const result = await executeTool(tool, 0, {
       task: "carry compacted working state forward",
       mode: "post-compaction",
+      attachments: [attachment],
+      attachAs: { mountPath: "handoff" },
     });
 
     expect(result).toMatchObject({
       status: "queued-for-compaction",
       mode: "post-compaction",
+      attachmentCount: 1,
+      attachAs: { mountPath: "handoff" },
     });
     expect(consumeStagedPostCompactionDelegates("test-session")).toEqual([
       expect.objectContaining({
         task: "carry compacted working state forward",
         silent: true,
         silentWake: true,
+        attachments: [attachment],
+        attachAs: { mountPath: "handoff" },
       }),
     ]);
   });

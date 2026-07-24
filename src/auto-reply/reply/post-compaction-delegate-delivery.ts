@@ -137,6 +137,8 @@ export function normalizePostCompactionDelegate(
       ? { targetSessionKeys: delegate.targetSessionKeys }
       : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
+    ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
+    ...(delegate.attachAs ? { attachAs: delegate.attachAs } : {}),
     ...(internalTraceparent
       ? {
           traceparent: internalTraceparent,
@@ -584,6 +586,10 @@ export async function deliverQueuedPostCompactionDelegate(
         chainId: persistedChain.chainId,
       },
       ...(params.entry.model ? { model: params.entry.model } : {}),
+      ...(params.entry.attachments ? { attachments: params.entry.attachments } : {}),
+      ...(params.entry.attachAs?.mountPath
+        ? { attachMountPath: params.entry.attachAs.mountPath }
+        : {}),
       ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
     },
     {

@@ -9,6 +9,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import type { InlineAttachment } from "../shared/inline-attachments.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 
 function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
@@ -33,12 +34,7 @@ function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | nu
   return decoded;
 }
 
-type SubagentInlineAttachment = {
-  name: string;
-  content: string;
-  encoding?: "utf8" | "base64";
-  mimeType?: string;
-};
+type SubagentInlineAttachment = InlineAttachment;
 
 type AcpInlineImageAttachment = {
   mediaType: string;
@@ -205,11 +201,23 @@ function prepareSubagentAttachments(params: {
   let totalBytes = 0;
 
   for (const raw of params.attachments) {
-    const name = normalizeOptionalString(raw?.name) ?? "";
-    const content = typeof raw?.content === "string" ? raw.content : "";
-    const encodingRaw = normalizeOptionalString(raw?.encoding) ?? "utf8";
-    const encoding = encodingRaw === "base64" ? "base64" : "utf8";
-    const mimeType = normalizeOptionalString(raw?.mimeType) ?? "";
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      failAttachment("attachments_invalid_member (expected object)");
+    }
+    const item = raw as Record<string, unknown>;
+    if (typeof item.name !== "string" || typeof item.content !== "string") {
+      failAttachment("attachments_invalid_member (name and content must be strings)");
+    }
+    if (item.encoding !== undefined && item.encoding !== "utf8" && item.encoding !== "base64") {
+      failAttachment("attachments_invalid_member (encoding must be utf8 or base64)");
+    }
+    if (item.mimeType !== undefined && typeof item.mimeType !== "string") {
+      failAttachment("attachments_invalid_member (mimeType must be a string)");
+    }
+    const name = normalizeOptionalString(item.name) ?? "";
+    const content = item.content;
+    const encoding = item.encoding ?? "utf8";
+    const mimeType = normalizeOptionalString(item.mimeType) ?? "";
 
     validateAttachmentName(name);
     if (seen.has(name)) {
@@ -247,6 +255,28 @@ function prepareSubagentAttachments(params: {
   }
 
   return { attachments, totalBytes };
+}
+
+export function validateSubagentAttachments(params: {
+  config: OpenClawConfig;
+  attachments?: SubagentInlineAttachment[];
+}): string | undefined {
+  const request = resolveSubagentAttachmentRequest(params);
+  if (request.status === "none") {
+    return undefined;
+  }
+  if (request.status !== "ok") {
+    return request.error;
+  }
+  try {
+    prepareSubagentAttachments({
+      attachments: request.attachments,
+      limits: request.limits,
+    });
+    return undefined;
+  } catch (err) {
+    return err instanceof Error ? err.message : "attachments_validation_failed";
+  }
 }
 
 export function resolveAcpSessionsSpawnImageAttachments(params: {

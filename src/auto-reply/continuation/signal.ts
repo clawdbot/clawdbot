@@ -144,6 +144,9 @@ function parseDelegateDirective(
     return { status: "applied" };
   }
 
+  // Token syntax is intentionally attachment-free. Unknown assignments such
+  // as `attachment=...` remain task text; callers can reference a workspace
+  // file, but inline blobs are accepted only by the typed tool.
   return { status: "unknown" };
 }
 

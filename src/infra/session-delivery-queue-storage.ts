@@ -1,20 +1,28 @@
 // Persists queued session deliveries for retry and recovery.
+import { z } from "zod";
 import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionPostCompactionDelegate } from "../config/sessions/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import {
+  parseInlineAttachmentMountPath,
+  type InlineAttachment,
+  type InlineAttachmentMount,
+} from "../shared/inline-attachments.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
   completeDeliveryQueueEntry,
+  failPendingDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntries,
-  loadDeliveryQueueEntry,
+  loadDeliveryQueueEntryResult,
+  loadDeliveryQueueEntryResults,
   moveDeliveryQueueEntryToFailed,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
   type DeliveryQueueCompletionRetention,
+  type DeliveryQueueEntryLoadResult,
   type DeliveryQueueRowMetadata,
 } from "./delivery-queue-sqlite.js";
 import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
@@ -121,15 +129,25 @@ type QueuedSessionDeliveryPayloadMetadata = {
   attachments?: AttachmentRef[];
 };
 
-export type QueuedSessionDeliveryPayload = (
-  | {
+type QueuedSessionDeliveryCommonMetadata = Omit<
+  QueuedSessionDeliveryPayloadMetadata,
+  "attachments"
+>;
+
+/**
+ * Durable payloads whose metadata can contain only descriptor references.
+ * Inline attachment bytes are deliberately excluded from generic delivery
+ * records: they are accepted only by the post-compaction handoff below.
+ */
+type QueuedSessionDeliveryGenericPayload =
+  | ({
       kind: "systemEvent";
       sessionKey: string;
       text: string;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
-    }
-  | {
+    } & QueuedSessionDeliveryPayloadMetadata)
+  | ({
       kind: "agentTurn";
       sessionKey: string;
       message: string;
@@ -142,29 +160,43 @@ export type QueuedSessionDeliveryPayload = (
       expectedMediaUrls?: string[];
       suppressTextDelivery?: true;
       idempotencyKey?: string;
-    }
-  | {
-      kind: "postCompactionDelegate";
-      sessionKey: string;
-      task: string;
-      createdAt: number;
-      firstArmedAt?: number;
-      silent?: boolean;
-      silentWake?: boolean;
-      targetSessionKey?: string;
-      targetSessionKeys?: string[];
-      fanoutMode?: "tree" | "all";
-      model?: string;
-      sourceFlowId?: string;
-      sourceExpectedRevision?: number;
-      deliveryContext?: SessionDeliveryContext;
-      idempotencyKey?: string;
-    }
-) &
-  SessionDeliveryRetryPolicy &
-  QueuedSessionDeliveryPayloadMetadata;
+    } & QueuedSessionDeliveryPayloadMetadata);
 
-export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
+/**
+ * The sole durable queue payload permitted to retain raw inline attachments.
+ * It is consumed at the post-compaction seam and must not be widened into the
+ * generic system-event/agent-turn metadata contract.
+ */
+type QueuedPostCompactionDelegatePayload = {
+  kind: "postCompactionDelegate";
+  sessionKey: string;
+  task: string;
+  createdAt: number;
+  firstArmedAt?: number;
+  silent?: boolean;
+  silentWake?: boolean;
+  targetSessionKey?: string;
+  targetSessionKeys?: string[];
+  fanoutMode?: "tree" | "all";
+  model?: string;
+  attachments?: InlineAttachment[];
+  attachAs?: InlineAttachmentMount;
+  sourceFlowId?: string;
+  sourceExpectedRevision?: number;
+  deliveryContext?: SessionDeliveryContext;
+  idempotencyKey?: string;
+} & QueuedSessionDeliveryCommonMetadata;
+
+export type QueuedSessionDeliveryPayload = (
+  | QueuedSessionDeliveryGenericPayload
+  | QueuedPostCompactionDelegatePayload
+) &
+  SessionDeliveryRetryPolicy;
+
+export type QueuedSessionDeliveryPayloadWithRetry = QueuedSessionDeliveryPayload &
+  SessionDeliveryRetryPolicy;
+
+export type QueuedSessionDelivery = QueuedSessionDeliveryPayloadWithRetry & {
   id: string;
   enqueuedAt: number;
   agentRunAttempt?: number;
@@ -177,6 +209,157 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   settlementOutcome?: SessionDeliverySettledOutcome;
   availableAt?: number;
 };
+
+const QueuedInlineAttachmentSchema = z
+  .object({
+    name: z.string(),
+    content: z.string(),
+    encoding: z.enum(["utf8", "base64"]).optional(),
+    mimeType: z.string().optional(),
+  })
+  .strict();
+
+const QueuedInlineAttachmentMountSchema = z
+  .object({
+    mountPath: z.string().optional(),
+  })
+  .strict()
+  .transform((mount, ctx) => {
+    const parsed = parseInlineAttachmentMountPath(mount.mountPath);
+    if (parsed.status === "invalid") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "invalid attachment mount path",
+      });
+      return z.NEVER;
+    }
+    return parsed.status === "valid" ? { mountPath: parsed.mountPath } : undefined;
+  });
+
+const QueuedPostCompactionDelegateSchema = z
+  .object({
+    kind: z.literal("postCompactionDelegate"),
+    sessionKey: z.string().min(1),
+    task: z.string(),
+    createdAt: z.number(),
+    firstArmedAt: z.number().optional(),
+    silent: z.boolean().optional(),
+    silentWake: z.boolean().optional(),
+    targetSessionKey: z.string().optional(),
+    targetSessionKeys: z.array(z.string()).optional(),
+    fanoutMode: z.enum(["tree", "all"]).optional(),
+    model: z.string().optional(),
+    attachments: z
+      .array(QueuedInlineAttachmentSchema)
+      .max(50)
+      .transform((attachments) => (attachments.length > 0 ? attachments : undefined))
+      .optional(),
+    attachAs: QueuedInlineAttachmentMountSchema.optional(),
+    sourceFlowId: z.string().optional(),
+    sourceExpectedRevision: z.number().int().optional(),
+    deliveryContext: z
+      .object({
+        channel: z.string().optional(),
+        to: z.string().optional(),
+        accountId: z.string().optional(),
+        threadId: z.union([z.string(), z.number()]).optional(),
+      })
+      .strict()
+      .optional(),
+    idempotencyKey: z.string().optional(),
+    traceparent: z.string().optional(),
+    traceparentProvenance: z.literal("internal").optional(),
+    maxRetries: z.number().optional(),
+    completionRetention: z.literal("permanent").optional(),
+    id: z.string().min(1),
+    enqueuedAt: z.number(),
+    retryCount: z.number(),
+    agentRunAttempt: z.number().optional(),
+    lastChargedAgentRunAttempt: z.number().optional(),
+    lastAttemptAt: z.number().optional(),
+    lastError: z.string().optional(),
+    deliveryStartedAt: z.number().optional(),
+    acknowledgedAt: z.number().optional(),
+    settlementOutcome: z.enum(["recovered", "moved-to-failed"]).optional(),
+    availableAt: z.number().optional(),
+  })
+  .passthrough();
+
+const INVALID_POST_COMPACTION_DELIVERY_JSON =
+  "invalid postCompactionDelegate delivery payload: invalid JSON";
+const INVALID_POST_COMPACTION_DELIVERY_SHAPE =
+  "invalid postCompactionDelegate delivery payload: invalid shape";
+
+function failInvalidPostCompactionDelivery(params: {
+  entry: { id: string; enqueuedAt: number; retryCount: number };
+  error: string;
+  stateDir?: string;
+}): void {
+  failPendingDeliveryQueueEntry({
+    queueName: QUEUE_NAME,
+    id: params.entry.id,
+    expectedStatus: "pending",
+    lastError: params.error,
+    entry: {
+      id: params.entry.id,
+      enqueuedAt: params.entry.enqueuedAt,
+      retryCount: params.entry.retryCount,
+    },
+    stateDir: params.stateDir,
+  });
+}
+
+function decodeLoadedSessionDelivery(
+  result: Extract<DeliveryQueueEntryLoadResult, { status: "loaded" }>,
+  stateDir?: string,
+): QueuedSessionDelivery | null {
+  const item = result.entry as typeof result.entry & { kind?: unknown };
+  const isPostCompaction =
+    result.entryKind === "postCompactionDelegate" || item.kind === "postCompactionDelegate";
+  if (!isPostCompaction) {
+    return result.entry as QueuedSessionDelivery;
+  }
+  const parsed = QueuedPostCompactionDelegateSchema.safeParse(result.entry);
+  if (parsed.success) {
+    return parsed.data as QueuedSessionDelivery;
+  }
+  failInvalidPostCompactionDelivery({
+    entry: result.entry,
+    error: INVALID_POST_COMPACTION_DELIVERY_SHAPE,
+    stateDir,
+  });
+  return null;
+}
+
+function decodeSessionDeliveryResult(
+  result: DeliveryQueueEntryLoadResult,
+  stateDir?: string,
+): QueuedSessionDelivery | null {
+  if (result.status === "loaded") {
+    return decodeLoadedSessionDelivery(result, stateDir);
+  }
+  if (result.entry.entryKind === "postCompactionDelegate") {
+    failInvalidPostCompactionDelivery({
+      entry: result.entry,
+      error: INVALID_POST_COMPACTION_DELIVERY_JSON,
+      stateDir,
+    });
+  }
+  return null;
+}
+
+function normalizeSessionDeliveryForPersistence(
+  entry: QueuedSessionDelivery,
+): QueuedSessionDelivery {
+  if (entry.kind !== "postCompactionDelegate") {
+    return entry;
+  }
+  const parsed = QueuedPostCompactionDelegateSchema.safeParse(entry);
+  if (!parsed.success) {
+    throw new Error(INVALID_POST_COMPACTION_DELIVERY_SHAPE);
+  }
+  return parsed.data as QueuedSessionDelivery;
+}
 
 // Strip trailing whitespace per line and at end-of-string before hashing the
 // idempotency key, so same-intent keys that differ only by trailing whitespace
@@ -277,6 +460,10 @@ export function buildPostCompactionDelegateDeliveryPayload(params: {
       : {}),
     ...(params.delegate.fanoutMode ? { fanoutMode: params.delegate.fanoutMode } : {}),
     ...(params.delegate.model ? { model: params.delegate.model } : {}),
+    ...(params.delegate.attachments && params.delegate.attachments.length > 0
+      ? { attachments: params.delegate.attachments }
+      : {}),
+    ...(params.delegate.attachAs ? { attachAs: params.delegate.attachAs } : {}),
     ...(params.delegate.traceparentProvenance === "internal" && params.delegate.traceparent
       ? {
           traceparent: params.delegate.traceparent,
@@ -318,12 +505,12 @@ export async function enqueueSessionDelivery(
   const payload = normalizeQueuedTraceparent(params);
   const id = buildEntryId(payload.idempotencyKey);
 
-  const entry: QueuedSessionDelivery = {
+  const entry = normalizeSessionDeliveryForPersistence({
     ...payload,
     id,
     enqueuedAt: Date.now(),
     retryCount: 0,
-  };
+  } as QueuedSessionDelivery);
   upsertDeliveryQueueEntry({
     queueName: QUEUE_NAME,
     entry,
@@ -363,13 +550,13 @@ export async function enqueueClaimedSessionDelivery(
 }> {
   const id = buildEntryId(params.idempotencyKey);
   const payload = normalizeQueuedTraceparent(params);
-  const entry: QueuedSessionDelivery = {
+  const entry = normalizeSessionDeliveryForPersistence({
     ...payload,
     id,
     enqueuedAt: Date.now(),
     retryCount: 0,
     availableAt: Date.now() + Math.max(0, initialAttemptLeaseMs),
-  };
+  } as QueuedSessionDelivery);
   const claimed = upsertDeliveryQueueEntry({
     queueName: QUEUE_NAME,
     entry,
@@ -560,14 +747,18 @@ export async function loadPendingSessionDelivery(
   id: string,
   stateDir?: string,
 ): Promise<QueuedSessionDelivery | null> {
-  return loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir) as QueuedSessionDelivery | null;
+  const result = loadDeliveryQueueEntryResult(QUEUE_NAME, id, stateDir);
+  return result ? decodeSessionDeliveryResult(result, stateDir) : null;
 }
 
 /** Load all pending session deliveries in retry order. */
 export async function loadPendingSessionDeliveries(
   stateDir?: string,
 ): Promise<QueuedSessionDelivery[]> {
-  return loadDeliveryQueueEntries(QUEUE_NAME, stateDir) as QueuedSessionDelivery[];
+  return loadDeliveryQueueEntryResults(QUEUE_NAME, stateDir).flatMap((result) => {
+    const entry = decodeSessionDeliveryResult(result, stateDir);
+    return entry ? [entry] : [];
+  });
 }
 
 /** Move an exhausted session delivery out of the pending queue. */

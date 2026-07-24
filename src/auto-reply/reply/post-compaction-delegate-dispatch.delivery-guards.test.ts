@@ -552,6 +552,51 @@ describe("post-compaction delegate dispatch extraction", () => {
     });
   });
 
+  it("persists attachment input in the durable queue and forwards it on replay", async () => {
+    await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
+      const storePath = path.join(tempDir, "sessions.json");
+      const stateDir = path.join(tempDir, "state");
+      const attachments = [{ name: "state.md", content: "durable compacted input" }];
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
+      const deliveryId = await enqueuePostCompactionDelegateDeliveryQueue(
+        {
+          sessionKey: "main",
+          delegate: {
+            task: "queued delegate",
+            createdAt: 1,
+            attachments,
+            attachAs: { mountPath: "handoff" },
+          },
+          sequence: 0,
+        },
+        stateDir,
+      );
+      const queued = expectDefined(
+        await loadPendingSessionDelivery(deliveryId, stateDir),
+        "queued delivery",
+      );
+      expect(queued).toMatchObject({
+        kind: "postCompactionDelegate",
+        attachments,
+        attachAs: { mountPath: "handoff" },
+      });
+      const { deps, spawnSubagentDirect } = createDeliveryDeps({ storePath });
+
+      await deliverQueuedPostCompactionDelegate(
+        { entry: queued as QueuedPostCompactionDelegateDelivery },
+        deps,
+      );
+
+      expect(spawnSubagentDirect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachments,
+          attachMountPath: "handoff",
+        }),
+        expect.any(Object),
+      );
+    });
+  });
+
   it("charges chain count even when the spawn fails (cmt451: persist-then-spawn over-counts conservatively)", async () => {
     await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
       const storePath = path.join(tempDir, "sessions.json");

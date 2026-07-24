@@ -98,6 +98,12 @@ describe("continue_work tool", () => {
     });
   }
 
+  it("does not expose attachment-bearing input fields", () => {
+    const schema = JSON.stringify(makeTool().parameters);
+    expect(schema).not.toContain('"attachments"');
+    expect(schema).not.toContain('"attachAs"');
+  });
+
   it("schedules another turn with the default delay and forwards the reason", async () => {
     const requestContinuation = vi.fn();
     const tool = makeTool({ requestContinuation });

@@ -74,6 +74,8 @@ function delegate(
         }
       : {}),
     ...(overrides?.model ? { model: overrides.model } : {}),
+    ...(overrides?.attachments ? { attachments: overrides.attachments } : {}),
+    ...(overrides?.attachAs ? { attachAs: overrides.attachAs } : {}),
   };
 }
 
@@ -643,6 +645,41 @@ describe("post-compaction delegate dispatch extraction", () => {
     ).toMatchObject({
       task: "staged",
       model: "github-copilot/claude-haiku-4.5",
+    });
+  });
+
+  it("threads attachment input into queued post-compaction deliveries", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      pendingPostCompactionDelegates: [],
+    };
+    const attachments = [{ name: "state.md", content: "post-compaction input" }];
+    const { deps, enqueuePostCompactionDelegateDelivery } = createDispatchDeps({
+      staged: [delegate("staged", { attachments, attachAs: { mountPath: "handoff" } })],
+    });
+
+    await dispatchPostCompactionDelegates(
+      {
+        cfg,
+        compactionCount: 3,
+        followupRun: createFollowupRun(),
+        postCompactionDelegatesToPreserve: [],
+        sessionEntry,
+        sessionKey: "main",
+      },
+      deps,
+    );
+    await flushMicrotasks();
+
+    expect(
+      expectDefined(
+        enqueuePostCompactionDelegateDelivery.mock.calls.at(0)?.at(0),
+        "queued delegate delivery",
+      ).delegate,
+    ).toMatchObject({
+      attachments,
+      attachAs: { mountPath: "handoff" },
     });
   });
 });

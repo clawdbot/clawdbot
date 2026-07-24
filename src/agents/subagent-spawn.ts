@@ -30,6 +30,10 @@ import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { recordSubagentSpawned } from "../sessions/session-state-events.js";
 import type { FastMode } from "../shared/fast-mode.js";
+import {
+  parseInlineAttachmentMountPath,
+  type InlineAttachment,
+} from "../shared/inline-attachments.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
@@ -197,12 +201,7 @@ type SpawnSubagentBaseParams = {
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
-  attachments?: Array<{
-    name: string;
-    content: string;
-    encoding?: "utf8" | "base64";
-    mimeType?: string;
-  }>;
+  attachments?: InlineAttachment[];
   attachMountPath?: string;
   /** Deliver completion as silent continuation enrichment instead of a channel message. */
   silentAnnounce?: boolean;
@@ -819,30 +818,6 @@ async function rollbackPreparedContextEngine(
     // Best-effort cleanup only.
     return false;
   }
-}
-
-function sanitizeMountPathHint(value?: string): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (hasPromptUnsafeControlCharacter(trimmed)) {
-    return undefined;
-  }
-  if (!/^[A-Za-z0-9._\-/:]+$/.test(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
-}
-
-function hasPromptUnsafeControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f || code === 0x85 || code === 0x2028 || code === 0x2029) {
-      return true;
-    }
-  }
-  return false;
 }
 
 async function cleanupProvisionalSession(
@@ -1557,7 +1532,9 @@ export async function spawnSubagentDirect(
       childSessionOrigin =
         mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
     }
-    const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
+    const parsedMountPath = parseInlineAttachmentMountPath(params.attachMountPath);
+    const mountPathHint =
+      parsedMountPath.status === "valid" ? parsedMountPath.mountPath : undefined;
 
     let childSystemPrompt = buildSubagentSystemPrompt({
       requesterSessionKey,

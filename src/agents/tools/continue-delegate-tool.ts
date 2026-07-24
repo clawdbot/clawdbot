@@ -17,10 +17,17 @@ import {
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKeys,
 } from "../../auto-reply/continuation/targeting.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import {
+  parseInlineAttachmentMountPath,
+  type InlineAttachment,
+  type InlineAttachmentMount,
+} from "../../shared/inline-attachments.js";
 import { optionalStringEnum } from "../schema/typebox.js";
+import { validateSubagentAttachments } from "../subagent-attachments.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -84,6 +91,34 @@ const ContinueDelegateToolSchema = Type.Object({
         "Same form as sessions_spawn's model param.",
     }),
   ),
+  attachments: Type.Optional(
+    Type.Array(
+      Type.Object({
+        name: Type.String(),
+        content: Type.String(),
+        encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
+        mimeType: Type.Optional(Type.String()),
+      }),
+      {
+        maxItems: 50,
+        description:
+          "Inline snapshots mounted into the new child workspace. Uses the same limits and safety policy as sessions_spawn attachments.",
+      },
+    ),
+  ),
+  attachAs: Type.Optional(
+    Type.Object(
+      {
+        mountPath: Type.Optional(
+          Type.String({
+            description:
+              "Workspace-relative mount hint. The attachment receipt remains under the child workspace.",
+          }),
+        ),
+      },
+      { description: "Attachment mount options for the new child workspace." },
+    ),
+  ),
 });
 
 function readStrictStringArrayParam(
@@ -108,6 +143,69 @@ function readStrictStringArrayParam(
     values.push(entry.trim());
   }
   return normalizeContinuationTargetKeys(values);
+}
+
+function readInlineAttachmentsParam(
+  params: Record<string, unknown>,
+): InlineAttachment[] | undefined {
+  const raw = readSnakeCaseParamRaw(params, "attachments");
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(raw) || raw.length > 50) {
+    throw new ToolInputError("attachments must contain no more than 50 attachment objects.");
+  }
+  if (raw.length === 0) {
+    return undefined;
+  }
+  return raw.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new ToolInputError(`attachments[${index}] must be an attachment object.`);
+    }
+    const record = entry as Record<string, unknown>;
+    if (typeof record.name !== "string" || typeof record.content !== "string") {
+      throw new ToolInputError(
+        `attachments[${index}] must include string name and content fields.`,
+      );
+    }
+    if (
+      record.encoding !== undefined &&
+      record.encoding !== "utf8" &&
+      record.encoding !== "base64"
+    ) {
+      throw new ToolInputError(`attachments[${index}].encoding must be "utf8" or "base64".`);
+    }
+    if (record.mimeType !== undefined && typeof record.mimeType !== "string") {
+      throw new ToolInputError(`attachments[${index}].mimeType must be a string.`);
+    }
+    const attachment: InlineAttachment = {
+      name: record.name,
+      content: record.content,
+    };
+    if (record.encoding) {
+      attachment.encoding = record.encoding;
+    }
+    if (record.mimeType !== undefined) {
+      attachment.mimeType = record.mimeType;
+    }
+    return attachment;
+  });
+}
+
+function readAttachAsParam(params: Record<string, unknown>): InlineAttachmentMount | undefined {
+  const raw = readSnakeCaseParamRaw(params, "attachAs");
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ToolInputError("attachAs must be an object.");
+  }
+  const mountPath = readSnakeCaseParamRaw(raw as Record<string, unknown>, "mountPath");
+  const parsed = parseInlineAttachmentMountPath(mountPath);
+  if (parsed.status === "invalid") {
+    throw new ToolInputError("attachAs.mountPath contains unsupported characters.");
+  }
+  return parsed.status === "valid" ? { mountPath: parsed.mountPath } : undefined;
 }
 
 /**
@@ -140,6 +238,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       "Call multiple times in one turn for parallel fan-out; the main session stays free.",
       'Use mode="silent-wake" for ambient enrichment that quietly returns to context and wakes you to act on it.',
       'Use mode="post-compaction" to stage working-state survival across the compaction seam (lich-protocol phylactery shape — what survives is what you elect to carry).',
+      "Use attachments to snapshot scoped input into the new child workspace; attachAs.mountPath is a mount hint.",
       "Return targeting: default returns to the dispatching session; targetSessionKey returns to one other session; targetSessionKeys returns byte-identical enrichment to multiple sessions; fanoutMode=tree returns to all ancestors in the chain; fanoutMode=all returns to all known sessions on this host.",
       "Use fanoutMode for distribution across comms channel between sessions that can be dispatched of delegates at low cost to this session.",
     ].join(" "),
@@ -158,6 +257,20 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       if (!task.trim()) {
         throw new ToolInputError("task must be a non-empty string describing the delegated work.");
       }
+      const attachments = readInlineAttachmentsParam(params);
+      const attachAs = readAttachAsParam(params);
+      const runtimeConfig = getRuntimeConfig();
+      const attachmentValidationError = validateSubagentAttachments({
+        config: runtimeConfig,
+        attachments,
+      });
+      if (attachmentValidationError) {
+        throw new ToolInputError(attachmentValidationError);
+      }
+      const attachmentFields = {
+        ...(attachments ? { attachments } : {}),
+        ...(attachAs ? { attachAs } : {}),
+      };
 
       const delaySeconds = readNumberParam(params, "delaySeconds");
       const requestedDelayMs =
@@ -200,7 +313,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
       const modelField = modelOverride ? { model: modelOverride } : {};
 
-      const continuationConfig = resolveContinuationRuntimeConfig();
+      const continuationConfig = resolveContinuationRuntimeConfig(runtimeConfig);
       const delayMs =
         requestedDelayMs !== undefined && requestedDelayMs > 0
           ? clampDelayMs(requestedDelayMs, continuationConfig)
@@ -243,6 +356,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         stagePostCompactionTaskFlowDelegate(sessionKey, {
           task,
           stagedAt: Date.now(),
+          ...attachmentFields,
           ...targetingFields,
           ...traceContextFields,
           ...modelField,
@@ -254,6 +368,8 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
           mode: "post-compaction",
           delegateIndex: scheduledThisTurn,
           delegatesThisTurn: scheduledThisTurn,
+          ...(attachments ? { attachmentCount: attachments.length } : {}),
+          ...(attachAs ? { attachAs } : {}),
           ...targetingFields,
           ...modelField,
           note:
@@ -270,6 +386,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         task,
         delayMs,
         ...(mode !== "normal" ? { mode } : {}),
+        ...attachmentFields,
         ...targetingFields,
         ...traceContextFields,
         ...modelField,
@@ -283,6 +400,8 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         delaySeconds: delayMs ? delayMs / 1000 : 0,
         delegateIndex: dispatchIndex,
         delegatesThisTurn: dispatchIndex,
+        ...(attachments ? { attachmentCount: attachments.length } : {}),
+        ...(attachAs ? { attachAs } : {}),
         ...targetingFields,
         ...modelField,
         note:

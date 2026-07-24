@@ -278,6 +278,22 @@ describe("parseContinuationSignal", () => {
     });
   });
 
+  it("keeps attachment= text in the token task instead of treating it as typed input", () => {
+    const signal = parseContinuationSignal(
+      "[[CONTINUE_DELEGATE: inspect workspace file handoff.md | attachment=inline-blob]]",
+    );
+
+    expect(signal).toEqual({
+      kind: "delegate",
+      task: "inspect workspace file handoff.md | attachment=inline-blob",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: undefined,
+    });
+    expect(signal).not.toHaveProperty("attachments");
+    expect(signal).not.toHaveProperty("attachAs");
+  });
+
   it("omits model when the delegate token carries no model modifier", () => {
     const signal = parseContinuationSignal("[[CONTINUE_DELEGATE: inherit parent model]]");
     expect(signal).toEqual({

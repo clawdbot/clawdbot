@@ -681,6 +681,8 @@ export async function dispatchToolDelegates(params: {
             chainId: dispatchChainId,
           },
           ...(delegate.model ? { model: delegate.model } : {}),
+          ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
+          ...(delegate.attachAs?.mountPath ? { attachMountPath: delegate.attachAs.mountPath } : {}),
           ...(delegate.flowId ? { continuationDelegateFlowId: delegate.flowId } : {}),
           ...(silent ? { silentAnnounce: true } : {}),
           ...(silentWake ? { silentAnnounce: true, wakeOnReturn: true } : {}),

@@ -126,21 +126,21 @@ A usable continuation primitive for OpenClaw had to satisfy several constraints 
 
 This RFC uses the following terms consistently:
 
-| Term                   | Meaning                                                                                                                                                                                                        |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **human-user**         | The person who owns the deployment, grants opt-in, and can interrupt or disable continuation.                                                                                                                  |
-| **operator**           | The deploying human-user role when discussing configuration, logs, or runtime policy.                                                                                                                          |
-| **turn**               | One model generation cycle with a bounded prompt, tool surface, and reply/follow-up lifecycle.                                                                                                                 |
-| **successor turn**     | A later turn that receives structure arranged by an earlier turn: a wake, a delegate result, post-compaction context, or a compaction outcome.                                                                 |
-| **continuation**       | Agent-elected work that crosses a turn boundary without becoming an unbounded loop.                                                                                                                            |
-| **continuation chain** | The bounded sequence of successor turns and delegates tracked by chain count, token budget, and chain id where available.                                                                                      |
-| **delegate**           | A sub-agent shard spawned through `continue_delegate()` or response-token fallback, with a task string, mode, return targeting (`targetSessionKey`, `targetSessionKeys`, or `fanoutMode`), and optional delay. |
-| **relay**              | A precursor or fallback pattern where one session wakes another by returning a result later.                                                                                                                   |
-| **temporal shard**     | Work split across time rather than only across simultaneous agents.                                                                                                                                            |
-| **substrate**          | The mechanism that carries a continuation path: process timer/reservation, TaskFlow, session-delivery queue, or compaction lifecycle.                                                                          |
-| **broker**             | Gateway code that translates agent intent into substrate mechanics and policy enforcement.                                                                                                                     |
-| **TaskFlow**           | The managed-work SQLite-backed substrate used for same-session `continue_work` elections, pending delegates, and post-compaction staging.                                                                      |
-| **OTel**               | OpenTelemetry trace emission through `extensions/diagnostics-otel`.                                                                                                                                            |
+| Term                   | Meaning                                                                                                                                                                                                                                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **human-user**         | The person who owns the deployment, grants opt-in, and can interrupt or disable continuation.                                                                                                                                                                                                       |
+| **operator**           | The deploying human-user role when discussing configuration, logs, or runtime policy.                                                                                                                                                                                                               |
+| **turn**               | One model generation cycle with a bounded prompt, tool surface, and reply/follow-up lifecycle.                                                                                                                                                                                                      |
+| **successor turn**     | A later turn that receives structure arranged by an earlier turn: a wake, a delegate result, post-compaction context, or a compaction outcome.                                                                                                                                                      |
+| **continuation**       | Agent-elected work that crosses a turn boundary without becoming an unbounded loop.                                                                                                                                                                                                                 |
+| **continuation chain** | The bounded sequence of successor turns and delegates tracked by chain count, token budget, and chain id where available.                                                                                                                                                                           |
+| **delegate**           | A sub-agent shard spawned through `continue_delegate()` or response-token fallback, with a task string, mode, return targeting (`targetSessionKey`, `targetSessionKeys`, or `fanoutMode`), and optional delay. The typed tool can also carry scoped input attachments into the new child workspace. |
+| **relay**              | A precursor or fallback pattern where one session wakes another by returning a result later.                                                                                                                                                                                                        |
+| **temporal shard**     | Work split across time rather than only across simultaneous agents.                                                                                                                                                                                                                                 |
+| **substrate**          | The mechanism that carries a continuation path: process timer/reservation, TaskFlow, session-delivery queue, or compaction lifecycle.                                                                                                                                                               |
+| **broker**             | Gateway code that translates agent intent into substrate mechanics and policy enforcement.                                                                                                                                                                                                          |
+| **TaskFlow**           | The managed-work SQLite-backed substrate used for same-session `continue_work` elections, pending delegates, and post-compaction staging.                                                                                                                                                           |
+| **OTel**               | OpenTelemetry trace emission through `extensions/diagnostics-otel`.                                                                                                                                                                                                                                 |
 
 Status markers:
 
@@ -193,7 +193,27 @@ When a `continuation_work` row matures while the session is idle, the dispatcher
 
 `continue_delegate()` externalizes a shard of future cognition. The task string is a letter to a successor worker: it must carry scope, evidence requirements, desired return shape, and the parent action it is meant to enable.
 
-**Shipped behavior:** the current tool schema exposes `task`, `delaySeconds`, `mode`, `targetSessionKey`, `targetSessionKeys`, `fanoutMode`, and `model`. The default completion recipient remains the session that dispatched the delegate. Explicit target fields route the same completion envelope through the `session-delivery-queue` substrate to other known sessions on the same host. Delegates using `normal` mode and no explicit target keep the existing visible announce behavior; targeted returns are delivered as session-addressed enrichment events so one delegate completion can fan out byte-identically without duplicating the delegate run.
+**Shipped behavior:** the current tool schema exposes `task`, `delaySeconds`, `mode`, `targetSessionKey`, `targetSessionKeys`, `fanoutMode`, `model`, `attachments`, and `attachAs`. The default completion recipient remains the session that dispatched the delegate. Explicit target fields route the same completion envelope through the `session-delivery-queue` substrate to other known sessions on the same host. Delegates using `normal` mode and no explicit target keep the existing visible announce behavior; targeted returns are delivered as session-addressed enrichment events so one delegate completion can fan out byte-identically without duplicating the delegate run.
+
+Typed input attachments use this shape:
+
+```ts
+attachments: Array<{
+  name: string;
+  content: string;
+  encoding?: "utf8" | "base64";
+  mimeType?: string;
+}>;
+attachAs?: {
+  mountPath?: string;
+};
+```
+
+These fields carry scoped input into the **new child delegate workspace**. An accepted non-empty attachment array is a bounded snapshot **by value at tool dispatch**, not a source path, URL, workspace scan, or later-resolved reference. An omitted or empty `attachments` array means no snapshot. Non-empty arrays contain 1–50 entries. An omitted or empty `attachAs` object means no mount hint. A non-empty `mountPath` is trimmed to its canonical value before durable enqueue and accepts only ASCII letters, digits, `.`, `_`, `-`, `/`, and `:`; unsafe or control-bearing hints are rejected. The hint affects only the child prompt—it is not an alternate materialization destination.
+
+The fields use the same validation, limits, private receipt directory, per-file hashes, cleanup policy, and `tools.sessions_spawn.attachments` configuration as `sessions_spawn` attachments. Immediate, delayed/recovered, and post-compaction typed delegates retain the snapshot until child spawn or a crash-safe post-compaction queue handoff. Terminal TaskFlow rows retain lifecycle and routing state but remove `attachments` and `attachAs`. Repaired and newly persisted `continue_delegate` tool calls replace each `attachments[].content` value with the established redaction marker while preserving the task and attachment metadata; this does not change the separate trusted-transcript behavior of `sessions_spawn`. Post-compaction queue recovery runtime-validates the discriminated payload and strict attachment members. Malformed records are dead-lettered with structural-only diagnostics, and their raw queue JSON is replaced so attachment bytes do not remain in the failed row. The tool result reports only attachment count and canonical mount options, never attachment content.
+
+This is an input contract, not an attachment-bearing return contract. The current child completion path captures a text result, renders a text completion event, and gives continuation return delivery a `text` field. Although the general internal task-completion event type can represent generated-media attachments, ordinary sub-agent completion capture does not populate structured attachments and targeted continuation delivery does not transport them. Adding a structured child-to-parent attachment result, preserving it through continuation return routing, and rendering or mounting it at recipients is separate [#666](https://github.com/karmaterminal/openclaw/issues/666) work.
 
 **What the target fields do — and explicitly do not — do.** Every `continue_delegate()` call spawns a fresh sub-agent owned by the dispatcher (a new session under `agent:<targetAgentId>:subagent:<UUID>`). The fresh sub-agent receives the `task` body, runs it, and produces a completion envelope. The `targetSessionKey`, `targetSessionKeys`, and `fanoutMode` fields control **where that completion envelope is delivered** when the fresh sub-agent finishes. They do not redirect the task body, they do not wake an existing session's run loop with the original task, and they do not route work into a named live-attached recipient. A live-attached recipient named via `targetSessionKey` will see only the post-completion `[continuation:enrichment-return]` envelope; it will never see the original `task` string from this primitive.
 
@@ -214,7 +234,7 @@ Multi-recipient return is distinct from multi-delegate fan-out: multi-delegate f
 Compared with the delegate response token, `continue_delegate()` adds three core properties:
 
 1. **Multi-delegate fan-out.** Multiple calls in one turn can dispatch multiple delegates in parallel.
-2. **Typed parameters.** Delay, mode, task, and return targets are schema-validated rather than parsed from free text.
+2. **Typed parameters.** Delay, mode, task, return targets, and input attachments are schema-validated rather than parsed from free text.
 3. **Tool-surface discoverability.** The tool is presented directly in the agent’s available interface when enabled.
 
 The delegate return modes are:
@@ -244,6 +264,8 @@ The delegate response token uses the same targeting contract for fallback/direct
 [[CONTINUE_DELEGATE: task | model=provider/model]]
 [[CONTINUE_DELEGATE: task | model=sonnet | fanout=tree]]
 ```
+
+The response-token form does **not** accept inline attachment blobs. Text such as `attachment=...` remains part of the delegate task; it is not parsed into an attachment field. A token-path task may refer to a file that already exists in the shared workspace, but models and callers must not treat `attachment=` as supported token syntax. `continue_work()` also has no attachment fields.
 
 Without `silent-wake`, parent-orchestrated chain hops can stall. In canary testing, enrichment arrived successfully but did not trigger hop 2 until an unrelated external message arrived six minutes later.
 
@@ -297,6 +319,7 @@ Parser constraints are part of the portable interface:
 - Response tokens take precedence over a same-turn `continue_work()` tool request when both exist.
 - The delegate parser matches the last end-anchored `[[CONTINUE_DELEGATE: ...]]` block and supports multiline task bodies.
 - Delegate fallback accepts an optional `+Ns` suffix for spawn delay; optional `| silent` / `| silent-wake` suffixes; optional `| target=...`, `| targets=...`, or `| fanout=tree|all` return-target directives; and an optional `| model=<provider/model>` override that routes the spawned delegate to a specific model (omitted => inherit the parent session's model). Example: `[[CONTINUE_DELEGATE: task | model=sonnet | fanout=tree]]`. The model string is not validated at parse time; an empty `model=` value is rejected as malformed.
+- Delegate fallback has no attachment directive. `attachment=...` is ordinary task text; reference an existing workspace file or use the typed tool instead.
 - Delegate fallback task text is truncated to 4096 characters, matching the tool schema.
 - `CONTINUE_WORK` accepts an optional integer seconds suffix as `CONTINUE_WORK:N`.
 
@@ -370,7 +393,7 @@ The implementation hooks into existing gateway layers rather than adding a paral
 2. **Signal detection:** the main reply runner, follow-up runner, and spawn-init attempt path inspect finalized payloads and typed tool callbacks with `extractContinuationSignal()`, so typed `continue_work()` and `CONTINUE_WORK[:N]` fallback produce the same work signal.
 3. **Same-session work scheduling:** `scheduleContinuationWork()` persists a `continuation_work` TaskFlow row and advances continuation chain state after the current turn completes. The row, not the timer handle, is the durable election.
 4. **Same-session work dispatch:** `dispatchPendingContinuationWork()` consumes matured rows, enqueues `[continuation:wake]`, checks that the elected session is present and not already active, then calls `getReplyFromConfig()` directly for that same `SessionKey`. Busy sessions are requeued instead of orphaned.
-5. **Delegate queueing:** tool-path delegates are enqueued via `enqueuePendingDelegate()` into TaskFlow and consumed after the response finishes or after a follow-up/announce boundary drains the same queue.
+5. **Delegate queueing:** tool-path delegates, including typed input attachments and mount options, are enqueued via `enqueuePendingDelegate()` into TaskFlow and consumed after the response finishes or after a follow-up/announce boundary drains the same queue.
 6. **Return routing:** delegate completions resolve default, explicit, multi-recipient, tree, or host-wide return targets and deliver same-host targeted returns through `session-delivery-queue`.
 7. **Lifecycle dispatch:** post-compaction delegates are staged in the TaskFlow-backed post-compaction queue and released through the compaction completion path into `session-delivery-queue` delivery.
 
@@ -399,8 +422,8 @@ For response-token fallback, the gateway then:
 
 For the typed tool path, the gateway instead writes a TaskFlow row:
 
-1. `continue_delegate()` validates `task`, `delaySeconds`, `mode`, and optional return targeting.
-2. `enqueuePendingDelegate()` writes a queued TaskFlow record for `core/continuation-delegate` or `core/continuation-post-compaction`.
+1. `continue_delegate()` validates `task`, `delaySeconds`, `mode`, optional return targeting, and typed input attachments.
+2. `enqueuePendingDelegate()` writes a queued TaskFlow record for `core/continuation-delegate` or `core/continuation-post-compaction`, preserving attachment content and mount options for the later child spawn.
 3. `consumePendingDelegates()` drains only matured rows. Unmatured rows stay queued until `createdAt + delayMs`.
 4. `peekSoonestUnmaturedDelegateDueAt()` lets the dispatcher arm a hedge timer so a quiet channel still re-drains at the next due time.
 5. Corrupt TaskFlow payloads are logged and moved through `failFlow`; they are not silently dropped.
@@ -460,11 +483,11 @@ sequenceDiagram
 
 #### Gap window
 
-Between scheduling and spawn, the parent session is idle while either a response-token reservation or a TaskFlow row is live. This is the principal temporal gap for audit and security analysis. The gap stores task text and routing metadata, not a private cryptographic capability.
+Between scheduling and spawn, the parent session is idle while either a response-token reservation or a TaskFlow row is live. This is the principal temporal gap for audit and security analysis. Typed attachment content is stored in the TaskFlow row until materialization; the token path stores only task text and routing metadata. Neither path carries a private cryptographic capability.
 
 #### Spawn and wake
 
-When the timer fires, `spawnSubagentDirect()` creates the child session, carries forward delivery context, records `[continuation:delegate-spawned]`, and advances accepted chain state.
+When the timer fires, `spawnSubagentDirect()` creates the child session, materializes any typed attachments under the child's private `.openclaw/attachments/<id>` receipt directory, carries forward delivery context, records `[continuation:delegate-spawned]`, and advances accepted chain state. Attachment names, encodings, sizes, and mount hints pass through the same validation and limits as `sessions_spawn`.
 
 When the child completes, the existing announce path delivers untargeted results back to the dispatching session. Targeted returns resolve one or more same-host recipient session keys and deliver a byte-identical completion envelope through `session-delivery-queue`; `silent-wake` targets also request a heartbeat wake for those recipients. The wake is classified through structured continuation metadata such as `continuationTrigger: "delegate-return"`, allowing a successor turn to distinguish internal continuation from unrelated user input.
 
@@ -506,6 +529,8 @@ When the child finishes, `runSubagentAnnounceFlow()` assembles an internal compl
 
 The task string effectively becomes a letter to the future turn. Any useful context embedded in that task survives into the child prompt and the later completion payload.
 
+Input attachments stop at the child workspace boundary. They are not copied back into the completion payload. The missing #666 seam starts where `readSubagentOutput()` selects text from child history, continues through the text-only event assembled by `runSubagentAnnounceFlow()`, and ends at `enqueueContinuationReturnDeliveries({ text })`. A future return-attachment contract must define structured capture, persistence, recipient rendering or mounting, cleanup, and fan-out semantics across that whole path.
+
 Session metadata tracks continuation state through:
 
 - `continuationChainCount`
@@ -538,6 +563,7 @@ Follow-up turns also drain the `continue_delegate` queue and persist advanced ch
 For `continue_delegate()` specifically:
 
 - tool calls enqueue TaskFlow-backed work; runtime objects use `mode` as the single source of truth, while boolean flags remain only a persisted compatibility projection;
+- typed input attachments and `attachAs` mount options use the shared sub-agent attachment contract and remain attached to the TaskFlow work item until child spawn;
 - `agent-runner.ts`, `followup-runner.ts`, and the announce path consume that queue after the relevant generation boundary;
 - delayed tool delegates use filter-at-consume plus the hedge timer described above;
 - response-token fallback keeps using process-scoped delayed reservations.
@@ -560,13 +586,13 @@ This keeps the agent’s taught interface aligned with the actual capability sur
 
 ### 3.5 Temporal sharding with context attachments
 
-Continuation is not limited to “same session, one more turn.” It also composes with `sessions_spawn`, context attachments, and targeted delegate return.
+Continuation is not limited to “same session, one more turn.” Both `sessions_spawn` and the typed `continue_delegate()` tool can create a child with scoped inline input attachments, and continuation can combine that child input with delayed dispatch and targeted text return.
 
 This yields **temporal sharding**:
 
 ```text
 agent receives complex task
-  → spawns N sub-agents with scoped inline attachments
+  → spawns N sub-agents with sessions_spawn or continue_delegate and scoped inline attachments
   → sub-agents execute in parallel over different horizons
   → completions return to the parent, a named sibling, the ancestor tree, or all known sessions
   → parent synthesizes
@@ -581,7 +607,9 @@ Inline context attachments can include:
 - diffs or code fragments,
 - human-user-provided working notes.
 
-This turns `sessions_spawn` from “start a task” into “start a task with scoped memory already attached.” Without such attachments, wide fan-out delegates repeatedly rediscover the same state. With them, the parent becomes a coordinator rather than a re-explainer.
+This turns either typed child-spawn surface from “start a task” into “start a task with scoped memory already attached.” `sessions_spawn` is the explicit child-task primitive. `continue_delegate()` adds continuation chain accounting, delayed and post-compaction durability, and return modes while reusing the same attachment materializer. `continue_work()` and `[[CONTINUE_DELEGATE: ...]]` remain attachment-free.
+
+These are parent-to-child input attachments only. The text completion paths described below do not provide the structured child-to-parent return attachments tracked by #666.
 
 Targeted return adds an out-of-tree path back to a useful recipient. A depth-3 leaf can return directly to root; a verifier can wake the sibling session that owns deployment; a monitor can drip silent context into a session that should learn the fact but should not speak yet. `fanoutMode: "tree"` addresses every ancestor in the current chain, while `fanoutMode: "all"` addresses every known session on the host. This is why targeted return is a signaling primitive, not merely a delegate convenience.
 
@@ -603,13 +631,13 @@ delivery:
 
 Continuation is not carried by one substrate. Each path has its own persistence and failure semantics:
 
-| Path                                             | Substrate                                                                 | Durability                                                                                            | Important failure behavior                                                                                                                                               |
-| ------------------------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Same-session `continue_work()` wake              | TaskFlow `continuation_work` plus trusted system-event/fold-note delivery | Queued row survives restart; hedge timer is process-scoped and re-established by recovery or dispatch | Explicit user/directive reset cancels queued work, timers, and chain state. Due+active fold-note delivery failure leaves the row recoverable and keeps semantic `dueAt`. |
-| Response-token `[[CONTINUE_DELEGATE: ... +Ns]]`  | Process reservation plus process timer                                    | Reservation/timer do not survive gateway restart                                                      | Exact delayed work can be lost on restart or explicit reset before spawn.                                                                                                |
-| Tool `continue_delegate()`                       | TaskFlow pending-delegate queue                                           | Queued row survives restart until consumed, cancelled, failed, or completed                           | Unmatured rows remain queued; corrupt rows are logged and failed via `failFlow`.                                                                                         |
-| Tool `continue_delegate(mode="post-compaction")` | TaskFlow post-compaction staging                                          | Staged row survives until compaction release, cancellation, stale TTL, or queue failure               | Release consumes `maxDelegatesPerTurn` budget and may drop stale/overflow work.                                                                                          |
-| Post-compaction delivery after release           | `session-delivery-queue`                                                  | Filesystem-backed atomic write with retry/restart recovery                                            | Failed entries move to `failed/`; retry cap emits `[session-delivery-queue:retry-budget-exhausted]`.                                                                     |
+| Path                                             | Substrate                                                                 | Durability                                                                                                                  | Important failure behavior                                                                                                                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Same-session `continue_work()` wake              | TaskFlow `continuation_work` plus trusted system-event/fold-note delivery | Queued row survives restart; hedge timer is process-scoped and re-established by recovery or dispatch                       | Explicit user/directive reset cancels queued work, timers, and chain state. Due+active fold-note delivery failure leaves the row recoverable and keeps semantic `dueAt`.        |
+| Response-token `[[CONTINUE_DELEGATE: ... +Ns]]`  | Process reservation plus process timer                                    | Reservation/timer do not survive gateway restart                                                                            | Exact delayed work can be lost on restart or explicit reset before spawn.                                                                                                       |
+| Tool `continue_delegate()`                       | TaskFlow pending-delegate queue                                           | Queued row, including typed input attachments, survives restart until consumed, cancelled, failed, or completed             | Unmatured rows remain queued; corrupt rows are logged without attachment content and failed via `failFlow`.                                                                     |
+| Tool `continue_delegate(mode="post-compaction")` | TaskFlow post-compaction staging                                          | Staged row, including typed input attachments, survives until compaction release, cancellation, stale TTL, or queue failure | Release consumes `maxDelegatesPerTurn` budget and may drop stale/overflow work.                                                                                                 |
+| Post-compaction delivery after release           | SQLite-backed `session-delivery-queue`                                    | Durable queue records preserve child input attachments through retry/restart recovery                                       | Failed entries move to `failed/`; retry cap emits `[session-delivery-queue:retry-budget-exhausted]`. This is pre-spawn input durability, not a child return-attachment channel. |
 
 **Session-delivery queue scope.** `session-delivery-queue` is a local-gateway substrate keyed by `sessionKey`. It accepts `systemEvent`, `agentTurn`, and `postCompactionDelegate` payloads against addressable sessions in the same gateway namespace. It is load-bearing for restart-recovered session deliveries and post-compaction delegate delivery; it is not the ordinary substrate for tool-path pending delegates before compaction.
 
@@ -1437,7 +1465,7 @@ Additional deployment note: delegate returns rely on an internal announce path. 
 
 The delegated continuation path introduces a temporal gap between dispatch and return. During that period, task text, inline attachments, and pending delegate metadata are stored and transported as plaintext within the broader trust boundary of the OpenClaw instance.
 
-Existing bounds reduce accidental overreach but are not cryptographic guarantees. Response-token delegate tasks are truncated at 4096 characters. Post-compaction context reads use boundary-file protections and reject symlink or hardlink escapes from the workspace root. Session-delivery queue files are local filesystem records, not encrypted envelopes.
+Existing bounds reduce accidental overreach but are not cryptographic guarantees. Response-token delegate tasks are truncated at 4096 characters and cannot carry inline attachment blobs. Typed attachments use strict names and encodings, shared file/count/byte limits, private receipt directories, and a manifest with per-file SHA-256 hashes after child materialization. Those hashes do not authenticate the earlier TaskFlow or session-delivery queue hops. Post-compaction context reads use boundary-file protections and reject symlink or hardlink escapes from the workspace root. Session-delivery queue files are local filesystem records, not encrypted envelopes.
 
 Threat model:
 
@@ -1525,6 +1553,9 @@ The automated suite covers:
 - continuation scheduling and cancellation,
 - streaming false-positive prevention,
 - delegate spawn behavior and failure handling,
+- typed `continue_delegate()` attachment schema, validation, redacted results, and mounted child input,
+- attachment preservation through delayed restart recovery and post-compaction staging/replay,
+- explicit attachment-free policy for `continue_work()` and `[[CONTINUE_DELEGATE: ...]]`,
 - response-token target parsing for `target=`, `targets=`, and `fanout=`,
 - same-host return-target resolution for default, explicit, multi-recipient, tree, and host-wide returns,
 - session isolation,
@@ -1641,6 +1672,8 @@ The feature ships disabled by default, respects human-user guardrails, and integ
 
 Several future directions are now technically credible because the continuation substrate exists. The nearest is better post-compaction recovery: richer savegames, stronger payload integrity, and recovery strategies that preserve working-state shape rather than only summary facts. TaskFlow can carry more durable background work; `session-delivery-queue` can carry more forms of addressed enrichment; trace context can make both auditable.
 
+Structured child-to-parent return attachments are a separate next step tracked by #666. The required seam is wider than adding a field to `continue_delegate()`: child completion capture must produce structured attachment metadata, completion events and continuation return queues must preserve it, recipients need defined render or mount behavior, and multi-recipient delivery needs cleanup and ownership semantics. The typed input attachment work in this RFC does not claim that return path.
+
 The broader shape is the harness as a **door-as-tool**: the session does not maintain transports, retry loops, delivery queues, or broadcast rings in its prompt. It says what door it wants opened, and the gateway chooses the mechanism. `continue_delegate()` is the first expression of that discipline. A later stream-publish surface should follow the same rule: the agent names intent and audience, while the tool handles deterministic ringbuffer fill, aging, addressing, fan-out, bridge-to-queue, and trace emission.
 
 That future points toward a **Binary Canticle** layer above this RFC: ringbuffer-backed `station:stream` presentation into OpenClaw; low-friction dispatch for sessions; DNS SRV discovery for domains of interest; local-network multicast; station relays in the shape of DHCP helper/relay agents; and receive-side bridges that can turn a heard stream into quiet context or queued delivery. The important constraint is low maintenance for the session. A persistent agent should not spend every turn remembering transport mechanics; it should tune what it sings, what it listens to, and what provenance it trusts.
@@ -1712,15 +1745,16 @@ None of these systems combine agent-elected continuation with persistent convers
 
 ### B.3 `continue_delegate()` compared with `sessions_spawn`
 
-| Dimension        | `sessions_spawn`                                         | `continue_delegate()`                                                                                  |
-| ---------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Initiation       | visible, human-user- or agent-invoked task               | continuation-specific delegated follow-up                                                              |
-| Visibility       | always announced                                         | supports `silent`, `silent-wake`, and `post-compaction`                                                |
-| Cost model       | independent child sessions                               | chain-aware cost and depth guards                                                                      |
-| Timing           | immediate                                                | immediate or delayed                                                                                   |
-| Model selection  | optional `model` override (inherits parent when omitted) | optional `model` override (inherits parent when omitted) — parity with `sessions_spawn`                |
-| Return semantics | normal announce                                          | default, explicit target, multi-recipient, tree/all fan-out, silent, wake-on-return, lifecycle release |
-| Best fit         | explicit visible tasks                                   | background enrichment and continuation-carrying work                                                   |
+| Dimension         | `sessions_spawn`                                         | `continue_delegate()`                                                                                        |
+| ----------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Initiation        | visible, human-user- or agent-invoked task               | continuation-specific delegated follow-up                                                                    |
+| Visibility        | always announced                                         | supports `silent`, `silent-wake`, and `post-compaction`                                                      |
+| Cost model        | independent child sessions                               | chain-aware cost and depth guards                                                                            |
+| Timing            | immediate                                                | immediate or delayed                                                                                         |
+| Model selection   | optional `model` override (inherits parent when omitted) | optional `model` override (inherits parent when omitted) — parity with `sessions_spawn`                      |
+| Input attachments | typed inline attachments mounted in the child workspace  | same typed inline input and shared materialization policy; preserved across delayed/post-compaction dispatch |
+| Return semantics  | normal announce                                          | default, explicit target, multi-recipient, tree/all fan-out, silent, wake-on-return, lifecycle release       |
+| Best fit          | explicit visible tasks                                   | background enrichment and continuation-carrying work                                                         |
 
 `requestHeartbeatNow()` remains lighter than either, but it carries no task payload and no chain state. It is a wake signal, not a continuation-bearing result channel.
 
@@ -1800,6 +1834,9 @@ The key property is **pre-run inclusion**: the event is enqueued and then draine
 | Continuation runtime config defaults             | `src/auto-reply/continuation/config.ts`, `src/config/types.agent-defaults.ts`, `src/config/zod-schema.agent-defaults.ts`                                                          |
 | `continue_work()` budgeting and durable dispatch | `src/auto-reply/continuation/scheduler.ts`, `src/auto-reply/continuation/work-store.ts`, `src/auto-reply/continuation/work-dispatch.ts` + colocated tests                         |
 | `continue_delegate()` tool schema                | `src/agents/tools/continue-delegate-tool.ts` + `src/agents/tools/continuation-tools-registration.test.ts`                                                                         |
+| Shared child input attachment contract           | `src/shared/inline-attachments.ts`, `src/agents/subagent-attachments.ts`, `src/agents/subagent-spawn.attachments.test.ts`                                                         |
+| Continuation attachment durability               | `src/auto-reply/continuation/delegate-flow-store.ts`, `src/auto-reply/continuation/delegate-store.ts`, `src/infra/session-delivery-queue-storage.ts` + colocated tests            |
+| Text-only continuation return seam (#666)        | `src/agents/subagent-announce-output.ts`, `src/agents/subagent-announce.ts`, `src/agents/subagent-announce.continuation-return.ts`, `src/auto-reply/continuation/targeting.ts`    |
 | Return-target resolution and delivery            | `src/auto-reply/continuation/targeting.ts` + `src/auto-reply/continuation/cross-session-targeting.test.ts`                                                                        |
 | Response-token fallback parsing                  | `src/auto-reply/tokens.ts` + `src/auto-reply/tokens.continuation.test.ts`                                                                                                         |
 | Pending and staged delegate persistence          | `src/auto-reply/continuation/delegate-store.ts` + `src/auto-reply/continuation/delegate-store.test.ts`                                                                            |

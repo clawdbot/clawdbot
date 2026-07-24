@@ -532,6 +532,36 @@ describe("trusted delegate task echoes", () => {
     expectTrustedSanitizedTaskEcho("[continuation:delegate-spawned]", sessionKey);
   });
 
+  it("forwards typed attachments into the continuation child spawn", async () => {
+    const sessionKey = "session-with-attachments";
+    const attachments = [{ name: "handoff.txt", content: "scoped child input" }];
+    enqueuePendingDelegate(sessionKey, {
+      task: "consume the handoff",
+      attachments,
+      attachAs: { mountPath: "handoff" },
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+      config: continuationConfig(),
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments,
+        attachMountPath: "handoff",
+      }),
+      expect.objectContaining({ agentSessionKey: sessionKey }),
+    );
+  });
+
   it("keeps every prompt-facing delegate task echo behind the sanitizer helper", () => {
     const sourceFiles = ["./delegate-dispatch.ts", "./post-compaction-staged-dispatch.ts"].map(
       (sourcePath) =>

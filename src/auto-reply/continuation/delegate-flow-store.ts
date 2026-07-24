@@ -10,6 +10,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { registerDiagnosticContinuationQueueMetricsProvider } from "../../logging/diagnostic-continuation-queues.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { parseInlineAttachmentMountPath } from "../../shared/inline-attachments.js";
 import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import {
   createManagedTaskFlow,
@@ -21,6 +22,7 @@ import {
   listTaskFlowsForOwnerKey,
   updateFlowRecordByIdExpectedRevision,
 } from "../../tasks/task-flow-runtime-internal.js";
+import type { JsonValue } from "../../tasks/task-registry.types.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
   normalizeContinuationTargetKey,
@@ -47,6 +49,29 @@ const TraceparentStateSchema = z
   )
   .optional();
 
+const InlineAttachmentStateSchema = z.object({
+  name: z.string(),
+  content: z.string(),
+  encoding: z.enum(["utf8", "base64"]).optional(),
+  mimeType: z.string().optional(),
+});
+
+const InlineAttachmentMountStateSchema = z
+  .object({
+    mountPath: z.string().optional(),
+  })
+  .transform((mount, ctx) => {
+    const parsed = parseInlineAttachmentMountPath(mount.mountPath);
+    if (parsed.status === "invalid") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "attachAs.mountPath contains unsupported characters",
+      });
+      return z.NEVER;
+    }
+    return parsed.status === "valid" ? { mountPath: parsed.mountPath } : undefined;
+  });
+
 const PendingDelegateStateSchema = z
   .object({
     kind: z.literal("continuation_delegate"),
@@ -56,6 +81,12 @@ const PendingDelegateStateSchema = z
     silentWake: z.boolean().optional(),
     postCompaction: z.boolean().optional(),
     firstArmedAt: z.number().int().nonnegative().optional(),
+    attachments: z
+      .array(InlineAttachmentStateSchema)
+      .max(50)
+      .transform((attachments) => (attachments.length > 0 ? attachments : undefined))
+      .optional(),
+    attachAs: InlineAttachmentMountStateSchema.optional(),
     targetSessionKey: z.string().min(1).optional(),
     targetSessionKeys: z.array(z.string().min(1)).optional(),
     fanoutMode: z.enum(CONTINUATION_DELEGATE_FANOUT_MODES).optional(),
@@ -150,6 +181,12 @@ function encodeDelegateState(delegate: PendingContinuationDelegate): PendingDele
   const targetSessionKey = normalizeContinuationTargetKey(delegate.targetSessionKey);
   const targetSessionKeys = normalizeContinuationTargetKeys(delegate.targetSessionKeys);
   const traceparent = normalizeDiagnosticTraceparent(delegate.traceparent);
+  const parsedMountPath = parseInlineAttachmentMountPath(delegate.attachAs?.mountPath);
+  if (parsedMountPath.status === "invalid") {
+    throw new Error("invalid continuation delegate attachment mount path");
+  }
+  const attachAs =
+    parsedMountPath.status === "valid" ? { mountPath: parsedMountPath.mountPath } : undefined;
   return {
     kind: "continuation_delegate",
     task: delegate.task,
@@ -160,6 +197,10 @@ function encodeDelegateState(delegate: PendingContinuationDelegate): PendingDele
     ...(delegate.firstArmedAt !== undefined || delegate.delayMs !== undefined
       ? { firstArmedAt: delegate.firstArmedAt ?? Date.now() }
       : {}),
+    ...(delegate.attachments && delegate.attachments.length > 0
+      ? { attachments: delegate.attachments }
+      : {}),
+    ...(attachAs ? { attachAs } : {}),
     ...(targetSessionKey ? { targetSessionKey } : {}),
     ...(targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
@@ -227,6 +268,18 @@ function resolveUpdatedDelegateState(params: {
   return state ? applyDelegateStateChanges(state, params.changes) : undefined;
 }
 
+function scrubStoredDelegateAttachmentState(
+  stateJson: JsonValue | null | undefined,
+): JsonValue | null | undefined {
+  if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
+    return stateJson;
+  }
+  const scrubbed = { ...stateJson };
+  delete scrubbed.attachments;
+  delete scrubbed.attachAs;
+  return scrubbed;
+}
+
 function decodeDelegateState(flow: TaskFlowRecord): PendingDelegateState | undefined {
   const parsed = PendingDelegateStateSchema.safeParse(flow.stateJson);
   return parsed.success ? parsed.data : undefined;
@@ -250,6 +303,8 @@ export function decodeDelegateFlow(flow: TaskFlowRecord): PendingContinuationDel
     ...(state.delayMs !== undefined ? { delayMs: state.delayMs } : {}),
     ...(mode !== undefined ? { mode } : {}),
     ...(state.firstArmedAt !== undefined ? { firstArmedAt: state.firstArmedAt } : {}),
+    ...(state.attachments ? { attachments: state.attachments } : {}),
+    ...(state.attachAs ? { attachAs: state.attachAs } : {}),
     ...(state.targetSessionKey ? { targetSessionKey: state.targetSessionKey } : {}),
     ...(state.targetSessionKeys && state.targetSessionKeys.length > 0
       ? { targetSessionKeys: state.targetSessionKeys }
@@ -446,17 +501,33 @@ export const delegateFlowRecords = {
       flowId: params.flowId,
       expectedRevision: params.expectedRevision,
       currentStep: params.currentStep,
-      stateJson: state,
+      stateJson: scrubStoredDelegateAttachmentState(state),
       updatedAt: params.updatedAt,
       endedAt: params.endedAt,
     });
   },
-  fail: failFlow,
+  fail(params: Parameters<typeof failFlow>[0]) {
+    const current = getTaskFlowById(params.flowId);
+    const stateJson = params.stateJson !== undefined ? params.stateJson : current?.stateJson;
+    return failFlow({
+      ...params,
+      ...(stateJson !== undefined
+        ? { stateJson: scrubStoredDelegateAttachmentState(stateJson) }
+        : {}),
+    });
+  },
   get: getTaskFlowById,
   listAll: listTaskFlowRecords,
   listForOwner: listTaskFlowsForOwnerKey,
   delete: deleteTaskFlowRecordById,
 };
+
+function describeStoredDelegateState(stateJson: unknown): string {
+  if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
+    return `stateType=${Array.isArray(stateJson) ? "array" : typeof stateJson}`;
+  }
+  return `stateType=object keyCount=${Object.keys(stateJson as Record<string, unknown>).length}`;
+}
 
 export function rejectCorruptDelegateFlow(
   flow: TaskFlowRecord,
@@ -467,7 +538,7 @@ export function rejectCorruptDelegateFlow(
     ? "continuation:post-compaction-decode-failed"
     : "continuation:delegate-decode-failed";
   log.warn(
-    `[${tag}] flowId=${flow.flowId} session=${options.sessionKey} raw=${JSON.stringify(flow.stateJson).slice(0, 200)}`,
+    `[${tag}] flowId=${flow.flowId} session=${options.sessionKey} ${describeStoredDelegateState(flow.stateJson)}`,
   );
   delegateFlowRecords.fail({
     flowId: flow.flowId,
@@ -483,7 +554,7 @@ export function rejectCorruptDelegateFlow(
 
 export function warnCorruptRecoverablePostCompactionFlow(flow: TaskFlowRecord): void {
   log.warn(
-    `[continuation:post-compaction-recover-decode-failed] flowId=${flow.flowId} owner=${flow.ownerKey} raw=${JSON.stringify(flow.stateJson).slice(0, 200)}`,
+    `[continuation:post-compaction-recover-decode-failed] flowId=${flow.flowId} owner=${flow.ownerKey} ${describeStoredDelegateState(flow.stateJson)}`,
   );
 }
 

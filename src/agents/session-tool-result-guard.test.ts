@@ -85,6 +85,42 @@ function getToolResultText(messages: AgentMessage[]): string {
 }
 
 describe("installSessionToolResultGuard", () => {
+  it("redacts continue_delegate attachment content before persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const secret = "PERSISTED_CONTINUE_DELEGATE_SECRET";
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_delegate",
+            name: "continue_delegate",
+            arguments: {
+              task: "use durable input",
+              attachments: [
+                {
+                  name: "brief.md",
+                  content: secret,
+                  encoding: "utf8",
+                  mimeType: "text/markdown",
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    const serialized = JSON.stringify(getPersistedMessages(sm));
+    expect(serialized).not.toContain(secret);
+    expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
+    expect(serialized).toContain('"name":"brief.md"');
+    expect(serialized).toContain("use durable input");
+  });
+
   it("inserts synthetic toolResult before non-tool message when pending", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

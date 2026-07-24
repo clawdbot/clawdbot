@@ -12,6 +12,7 @@ import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -224,6 +225,8 @@ export type SessionPostCompactionDelegate = {
   /** Post-compaction delegates are silent by contract; persist the intent across store round trips. */
   silent?: boolean;
   silentWake?: boolean;
+  attachments?: InlineAttachment[];
+  attachAs?: InlineAttachmentMount;
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";

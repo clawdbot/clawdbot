@@ -1745,6 +1745,12 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Use the `continue_delegate` tool");
     expect(prompt).toContain("Prefer the tool. Use brackets only as fallback.");
     expect(prompt).toContain("[[CONTINUE_DELEGATE:");
+    expect(prompt).toContain(
+      "The typed `continue_delegate` tool can carry inline attachments into its new child workspace.",
+    );
+    expect(prompt).toContain(
+      "Bracket `[[CONTINUE_DELEGATE: ...]]` syntax cannot carry attachment blobs",
+    );
   });
 
   it("teaches bracket-only continuation when continue_delegate is NOT in toolNames", () => {
@@ -1762,6 +1768,9 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("[[CONTINUE_DELEGATE:");
     expect(prompt).not.toContain("Use the `continue_delegate` tool");
     expect(prompt).not.toContain("Prefer the tool");
+    expect(prompt).toContain(
+      "Bracket `[[CONTINUE_DELEGATE: ...]]` syntax cannot carry attachment blobs",
+    );
   });
 
   it("teaches bracket-only continuation when toolNames is undefined", () => {

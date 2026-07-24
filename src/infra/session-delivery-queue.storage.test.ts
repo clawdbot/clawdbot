@@ -6,6 +6,7 @@ import {
   advanceSessionDeliveryAgentRun,
   completeSessionDelivery,
   deferSessionDelivery,
+  enqueuePostCompactionDelegateDelivery,
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
@@ -37,6 +38,22 @@ describe("session-delivery queue storage", () => {
       .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'session' AND id = ?")
       .get(id) as { status?: string } | undefined;
     return row?.status;
+  }
+
+  function readSessionQueueRow(
+    tempDir: string,
+    id: string,
+  ): { status: string; entry_json: string; last_error: string | null } | undefined {
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+    });
+    return db
+      .prepare(
+        `SELECT status, entry_json, last_error
+           FROM delivery_queue_entries
+          WHERE queue_name = 'session' AND id = ?`,
+      )
+      .get(id) as { status: string; entry_json: string; last_error: string | null } | undefined;
   }
 
   it("dedupes entries when an idempotency key is reused", async () => {
@@ -194,6 +211,110 @@ describe("session-delivery queue storage", () => {
       expect(await loadPendingSessionDeliveries(tempDir)).toEqual([
         expect.objectContaining({ id, text: "restart complete" }),
       ]);
+    });
+  });
+
+  it("canonicalizes post-compaction mount hints before durable enqueue", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueuePostCompactionDelegateDelivery(
+        {
+          sessionKey: "agent:main:main",
+          delegate: {
+            task: "use the durable snapshot",
+            createdAt: 123,
+            attachments: [{ name: "brief.md", content: "snapshot" }],
+            attachAs: { mountPath: "  handoff/path  " },
+          },
+          sequence: 0,
+        },
+        tempDir,
+      );
+
+      await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toMatchObject({
+        kind: "postCompactionDelegate",
+        attachAs: { mountPath: "handoff/path" },
+      });
+      await expect(
+        enqueuePostCompactionDelegateDelivery(
+          {
+            sessionKey: "agent:main:main",
+            delegate: {
+              task: "reject unsafe mount",
+              createdAt: 124,
+              attachAs: { mountPath: "unsafe\npath" },
+            },
+            sequence: 1,
+          },
+          tempDir,
+        ),
+      ).rejects.toThrow("invalid postCompactionDelegate delivery payload: invalid shape");
+    });
+  });
+
+  it("dead-letters invalid post-compaction JSON without retaining raw bytes", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueuePostCompactionDelegateDelivery(
+        {
+          sessionKey: "agent:main:main",
+          delegate: { task: "recover valid snapshot", createdAt: 123 },
+          sequence: 0,
+        },
+        tempDir,
+      );
+      const secret = "CORRUPT_QUEUE_JSON_SECRET";
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      });
+      db.prepare(
+        `UPDATE delivery_queue_entries
+            SET entry_json = ?
+          WHERE queue_name = 'session' AND id = ?`,
+      ).run(`{"secret":"${secret}"`, id);
+
+      await expect(loadPendingSessionDeliveries(tempDir)).resolves.toEqual([]);
+      const row = readSessionQueueRow(tempDir, id);
+      expect(row).toMatchObject({
+        status: "failed",
+        last_error: "invalid postCompactionDelegate delivery payload: invalid JSON",
+      });
+      expect(row?.entry_json).not.toContain(secret);
+    });
+  });
+
+  it("dead-letters malformed post-compaction attachment members without retaining content", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const secret = "MALFORMED_QUEUE_ATTACHMENT_SECRET";
+      const id = await enqueuePostCompactionDelegateDelivery(
+        {
+          sessionKey: "agent:main:main",
+          delegate: {
+            task: "recover attachment snapshot",
+            createdAt: 123,
+            attachments: [{ name: "brief.md", content: secret }],
+          },
+          sequence: 0,
+        },
+        tempDir,
+      );
+      const current = readSessionQueueRow(tempDir, id);
+      const malformed = JSON.parse(current?.entry_json ?? "{}") as Record<string, unknown>;
+      malformed.attachments = [{ name: "brief.md", content: secret, encoding: "hex" }];
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      });
+      db.prepare(
+        `UPDATE delivery_queue_entries
+            SET entry_json = ?
+          WHERE queue_name = 'session' AND id = ?`,
+      ).run(JSON.stringify(malformed), id);
+
+      await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toBeNull();
+      const row = readSessionQueueRow(tempDir, id);
+      expect(row).toMatchObject({
+        status: "failed",
+        last_error: "invalid postCompactionDelegate delivery payload: invalid shape",
+      });
+      expect(row?.entry_json).not.toContain(secret);
     });
   });
 

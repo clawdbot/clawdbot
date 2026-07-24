@@ -357,6 +357,8 @@ export function stagePostCompactionTaskFlowDelegate(
     task: delegate.task,
     mode: "post-compaction",
     firstArmedAt: delegate.firstArmedAt ?? delegate.stagedAt,
+    ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
+    ...(delegate.attachAs ? { attachAs: delegate.attachAs } : {}),
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
@@ -605,6 +607,8 @@ export function stagePostCompactionDelegate(
     task: delegate.task,
     stagedAt,
     firstArmedAt: delegate.firstArmedAt ?? stagedAt,
+    ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
+    ...(delegate.attachAs ? { attachAs: delegate.attachAs } : {}),
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
@@ -629,6 +633,8 @@ export function consumeStagedPostCompactionDelegates(
       firstArmedAt,
       silent: true,
       silentWake: true,
+      ...(claimed.attachments ? { attachments: claimed.attachments } : {}),
+      ...(claimed.attachAs ? { attachAs: claimed.attachAs } : {}),
     };
     if (claimed.targetSessionKey) {
       delegate.targetSessionKey = claimed.targetSessionKey;

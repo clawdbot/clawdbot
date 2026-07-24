@@ -15,6 +15,7 @@ import { generateChainId } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
+import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { markPendingDelegateFailed } from "./delegate-store.js";
 import { checkContinuationBudget, type ChainState } from "./scheduler.js";
@@ -52,6 +53,8 @@ export interface PostCompactionSpawnContext {
 export async function dispatchStagedPostCompactionDelegates(
   delegates: Array<{
     task: string;
+    attachments?: InlineAttachment[];
+    attachAs?: InlineAttachmentMount;
     targetSessionKey?: string;
     targetSessionKeys?: string[];
     fanoutMode?: "tree" | "all";
@@ -234,6 +237,8 @@ export async function dispatchStagedPostCompactionDelegates(
           },
           ...(delegate.flowId ? { continuationDelegateFlowId: delegate.flowId } : {}),
           ...(delegate.model ? { model: delegate.model } : {}),
+          ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
+          ...(delegate.attachAs?.mountPath ? { attachMountPath: delegate.attachAs.mountPath } : {}),
           ...(delegate.targetSessionKey
             ? { continuationTargetSessionKey: delegate.targetSessionKey }
             : {}),

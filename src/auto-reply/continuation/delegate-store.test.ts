@@ -117,16 +117,21 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       return { applied: true, flow: { ...flow } };
     },
   ),
-  failFlow: vi.fn((params: { flowId: string; updatedAt?: number; endedAt?: number }) => {
-    const flow = mockFlows.get(params.flowId);
-    if (flow) {
-      flow.status = "failed";
-      flow.endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
-      flow.updatedAt = params.updatedAt ?? flow.endedAt;
-      flow.revision = flow.revision + 1;
-    }
-    return { applied: Boolean(flow) };
-  }),
+  failFlow: vi.fn(
+    (params: { flowId: string; stateJson?: unknown; updatedAt?: number; endedAt?: number }) => {
+      const flow = mockFlows.get(params.flowId);
+      if (flow) {
+        flow.status = "failed";
+        if (params.stateJson !== undefined) {
+          flow.stateJson = params.stateJson;
+        }
+        flow.endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
+        flow.updatedAt = params.updatedAt ?? flow.endedAt;
+        flow.revision = flow.revision + 1;
+      }
+      return { applied: Boolean(flow) };
+    },
+  ),
   deleteTaskFlowRecordById: vi.fn((flowId: string) => {
     mockFlows.delete(flowId);
   }),
@@ -316,6 +321,83 @@ describe("delegate store — TaskFlow-backed", () => {
       task: "silent task",
       mode: "silent-wake",
     });
+  });
+
+  it("preserves attachments and mount options through TaskFlow round-trip", () => {
+    enqueuePendingDelegate("session-1", {
+      task: "attachment task",
+      attachments: [
+        { name: "brief.md", content: "read me", mimeType: "text/markdown" },
+        { name: "data.bin", content: "AQID", encoding: "base64" },
+      ],
+      attachAs: { mountPath: "  handoff/path  " },
+    });
+
+    expect(consumePendingDelegates("session-1")[0]).toMatchObject({
+      task: "attachment task",
+      attachments: [
+        { name: "brief.md", content: "read me", mimeType: "text/markdown" },
+        { name: "data.bin", content: "AQID", encoding: "base64" },
+      ],
+      attachAs: { mountPath: "handoff/path" },
+    });
+  });
+
+  it("normalizes empty attachment state to absence", () => {
+    enqueuePendingDelegate("session-empty-attachments", {
+      task: "no attachment snapshot",
+      attachments: [],
+      attachAs: {},
+    });
+
+    const delegate = expectDefined(
+      consumePendingDelegates("session-empty-attachments").at(0),
+      "delegate",
+    );
+    expect(delegate).not.toHaveProperty("attachments");
+    expect(delegate).not.toHaveProperty("attachAs");
+    expect(mockFlows.get(delegate.flowId!)?.stateJson).not.toHaveProperty("attachments");
+    expect(mockFlows.get(delegate.flowId!)?.stateJson).not.toHaveProperty("attachAs");
+  });
+
+  it("rejects unsafe mount hints before TaskFlow persistence", () => {
+    expect(() =>
+      enqueuePendingDelegate("session-invalid-mount", {
+        task: "unsafe mount",
+        attachAs: { mountPath: "unsafe\npath" },
+      }),
+    ).toThrow("invalid continuation delegate attachment mount path");
+    expect(
+      [...mockFlows.values()].filter((flow) => flow.ownerKey === "session-invalid-mount"),
+    ).toEqual([]);
+  });
+
+  it("scrubs attachment bytes when a delegate reaches a terminal state", () => {
+    enqueuePendingDelegate("session-terminal-success", {
+      task: "successful attachment task",
+      attachments: [{ name: "success.txt", content: "SUCCESS_SECRET" }],
+      attachAs: { mountPath: "handoff" },
+    });
+    const accepted = expectDefined(
+      consumePendingDelegates("session-terminal-success").at(0),
+      "accepted delegate",
+    );
+    expect(markPendingDelegateSpawnAccepted(accepted, "agent:main:subagent:child")).toBe(true);
+    expect(mockFlows.get(accepted.flowId!)?.stateJson).not.toHaveProperty("attachments");
+    expect(mockFlows.get(accepted.flowId!)?.stateJson).not.toHaveProperty("attachAs");
+
+    enqueuePendingDelegate("session-terminal-failure", {
+      task: "failed attachment task",
+      attachments: [{ name: "failure.txt", content: "FAILURE_SECRET" }],
+      attachAs: { mountPath: "handoff" },
+    });
+    const failed = expectDefined(
+      consumePendingDelegates("session-terminal-failure").at(0),
+      "failed delegate",
+    );
+    markPendingDelegateFailed(failed, "spawn rejected");
+    expect(mockFlows.get(failed.flowId!)?.stateJson).not.toHaveProperty("attachments");
+    expect(mockFlows.get(failed.flowId!)?.stateJson).not.toHaveProperty("attachAs");
   });
 
   it("preserves cross-session target metadata through TaskFlow round-trip", () => {
@@ -709,6 +791,8 @@ describe("session post-compaction delegate contract", () => {
     stageSessionPostCompactionDelegate("session-adapter-finalize", {
       task: "first",
       createdAt: 100,
+      attachments: [{ name: "handoff.txt", content: "HANDOFF_SECRET" }],
+      attachAs: { mountPath: "handoff" },
     });
     stageSessionPostCompactionDelegate("session-adapter-finalize", {
       task: "second",
@@ -720,6 +804,8 @@ describe("session post-compaction delegate contract", () => {
 
     expect(finalizeStagedPostCompactionDelegates([first.flowId])).toBe(1);
     expect(mockFlows.get(first.flowId!)?.status).toBe("succeeded");
+    expect(mockFlows.get(first.flowId!)?.stateJson).not.toHaveProperty("attachments");
+    expect(mockFlows.get(first.flowId!)?.stateJson).not.toHaveProperty("attachAs");
     expect(mockFlows.get(second.flowId!)?.status).toBe("running");
     expect(finalizeStagedPostCompactionDelegates([first.flowId])).toBe(0);
     expect(finalizeStagedPostCompactionDelegates([second.flowId])).toBe(1);
@@ -1033,6 +1119,26 @@ describe("consume-paths corrupt-payload breadcrumbs", () => {
           r.message.includes("session=session-453b"),
       ),
     ).toBe(true);
+  });
+
+  it("summarizes corrupt attachment-bearing state without logging attachment content", () => {
+    const attachmentContent = "CORRUPT_ATTACHMENT_CONTENT_MUST_NOT_LOG";
+    const maliciousKey = "ATTACKER_CONTROLLED_KEY_MUST_NOT_LOG";
+    const flowId = queueRawPendingFlow("session-redacted", {
+      kind: "continuation_delegate",
+      attachments: [{ name: "secret.txt", content: attachmentContent }],
+      [maliciousKey]: true,
+    });
+
+    expect(consumePendingDelegates("session-redacted")).toEqual([]);
+    const warningText = loggerRecords
+      .filter((record) => record.level === "warn")
+      .map((record) => record.message)
+      .join("\n");
+    expect(warningText).toContain("stateType=object keyCount=3");
+    expect(warningText).not.toContain(attachmentContent);
+    expect(warningText).not.toContain(maliciousKey);
+    expect(mockFlows.get(flowId)?.stateJson).not.toHaveProperty("attachments");
   });
 
   it("fails multiple corrupt rows in a single consume call without aborting later valid ones", () => {

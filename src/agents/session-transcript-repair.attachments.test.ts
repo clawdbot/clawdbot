@@ -128,3 +128,50 @@ describe("sanitizeToolCallInputs preserves sessions_spawn payloads", () => {
     expect(out).toStrictEqual(input);
   });
 });
+
+describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
+  it("redacts content in arguments and input while preserving attachment metadata", () => {
+    const argumentsSecret = "CONTINUE_ARGUMENTS_SECRET";
+    const inputSecret = "CONTINUE_INPUT_SECRET";
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_arguments",
+            name: " continue_delegate ",
+            arguments: {
+              task: "use the argument snapshot",
+              attachments: [
+                {
+                  name: "brief.md",
+                  content: argumentsSecret,
+                  encoding: "utf8",
+                  mimeType: "text/markdown",
+                },
+              ],
+            },
+          },
+          {
+            type: "toolUse",
+            id: "call_continue_input",
+            name: "continue_delegate",
+            input: {
+              task: "use the input snapshot",
+              attachments: [{ name: "input.txt", content: inputSecret }],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const serialized = JSON.stringify(sanitizeToolCallInputs(input));
+    expect(serialized).not.toContain(argumentsSecret);
+    expect(serialized).not.toContain(inputSecret);
+    expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
+    expect(serialized).toContain('"name":"brief.md"');
+    expect(serialized).toContain('"mimeType":"text/markdown"');
+    expect(serialized).toContain("use the input snapshot");
+  });
+});

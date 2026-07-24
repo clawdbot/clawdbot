@@ -8,10 +8,14 @@
  * the rest of the continuation surface is built on.
  */
 
+import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import type {
   ContinuationCrossSessionTargetingPolicy,
   ContinuationDelegateFanoutMode,
 } from "./targeting-pure.js";
+
+export type ContinuationDelegateAttachment = InlineAttachment;
+export type ContinuationDelegateAttachAs = InlineAttachmentMount;
 
 // ---------------------------------------------------------------------------
 // Continuation signals — parsed from response text or captured from tool calls
@@ -68,6 +72,8 @@ export type PendingContinuationDelegate = {
   delayMs?: number;
   mode?: "normal" | "silent" | "silent-wake" | "post-compaction";
   firstArmedAt?: number;
+  attachments?: ContinuationDelegateAttachment[];
+  attachAs?: ContinuationDelegateAttachAs;
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: ContinuationDelegateFanoutMode;
@@ -183,6 +189,8 @@ export type StagedPostCompactionDelegate = {
   task: string;
   stagedAt: number;
   firstArmedAt?: number;
+  attachments?: ContinuationDelegateAttachment[];
+  attachAs?: ContinuationDelegateAttachAs;
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: ContinuationDelegateFanoutMode;

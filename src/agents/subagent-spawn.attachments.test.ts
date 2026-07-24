@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -156,6 +157,25 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 
+  it.each([
+    ["non-object member", [null]],
+    ["non-string content", [{ name: "file.txt", content: 42 }]],
+    ["unknown encoding", [{ name: "file.txt", content: "MATERIALIZER_SECRET", encoding: "hex" }]],
+    ["non-string mimeType", [{ name: "file.txt", content: "data", mimeType: 42 }]],
+  ])("rejects malformed runtime attachment shape: %s", async (_label, attachments) => {
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: attachments as never,
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_invalid_member/);
+    expect(JSON.stringify(result)).not.toContain("MATERIALIZER_SECRET");
+  });
+
   it("materializes attachments under explicit cwd when native subagent cwd is provided", async () => {
     const explicitWorkspaceDir = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-cwd-attachments-${process.pid}-${Date.now()}-`),
@@ -179,6 +199,40 @@ describe("spawnSubagentDirect filename validation", () => {
     } finally {
       fs.rmSync(explicitWorkspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("materializes continuation delegate input in the new child workspace", async () => {
+    const attachmentContent = "continuation child input";
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "read delegated input",
+        drainsContinuationDelegateQueue: true,
+        continuationChainState: {
+          count: 1,
+          startedAt: Date.now(),
+          tokens: 0,
+          chainId: "attachment-chain",
+        },
+        attachments: [{ name: "handoff.txt", content: attachmentContent }],
+        attachMountPath: "handoff",
+      },
+      ctx,
+    );
+
+    expect(result.status).toBe("accepted");
+    const attachmentRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
+    const receiptDirs = fs.readdirSync(attachmentRoot);
+    expect(receiptDirs).toHaveLength(1);
+    expect(
+      fs.readFileSync(
+        path.join(
+          attachmentRoot,
+          expectDefined(receiptDirs.at(0), "receipt directory"),
+          "handoff.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe(attachmentContent);
   });
 
   it("normalizes explicit cwd before materializing native subagent attachments", async () => {

@@ -90,10 +90,18 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
   it("directly dispatches accepted delegates with post-compaction wake flags", async () => {
     const sessionKey = "session-post-compact-accepted";
     const spawnCtx = { agentSessionKey: sessionKey, agentChannel: "discord" };
+    const attachments = [{ name: "state.md", content: "recovered compacted input" }];
     mockState.spawnSubagentDirect.mockResolvedValueOnce({ status: "accepted" });
 
     const result = await dispatchStagedPostCompactionDelegates(
-      [{ task: SPOOFED_DELEGATE_TASK, flowId: "pc-flow-1" }],
+      [
+        {
+          task: SPOOFED_DELEGATE_TASK,
+          flowId: "pc-flow-1",
+          attachments,
+          attachAs: { mountPath: "handoff" },
+        },
+      ],
       sessionKey,
       spawnCtx,
     );
@@ -107,6 +115,8 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
         drainsContinuationDelegateQueue: true,
         continuationChainState: expect.objectContaining({ count: 1, tokens: 0 }),
         continuationDelegateFlowId: "pc-flow-1",
+        attachments,
+        attachMountPath: "handoff",
       }),
       spawnCtx,
     );

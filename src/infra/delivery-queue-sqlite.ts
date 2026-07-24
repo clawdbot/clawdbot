@@ -58,6 +58,7 @@ type FailPendingDeliveryQueueEntryResult = { status: "failed" } | { status: "not
 type QueueRow = {
   id: string;
   entry_json: string;
+  entry_kind?: string | null;
   enqueued_at: number | bigint;
   retry_count: number | bigint;
   last_attempt_at: number | bigint | null;
@@ -65,6 +66,17 @@ type QueueRow = {
   platform_send_started_at: number | bigint | null;
   recovery_state: string | null;
 };
+
+export type CorruptDeliveryQueueEntry = {
+  id: string;
+  entryKind?: string;
+  enqueuedAt: number;
+  retryCount: number;
+};
+
+export type DeliveryQueueEntryLoadResult =
+  | { status: "loaded"; entry: DeliveryQueueEntryState; entryKind?: string }
+  | { status: "corrupt"; entry: CorruptDeliveryQueueEntry };
 
 function openStateDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
@@ -87,6 +99,7 @@ function inflate(row: QueueRow): DeliveryQueueEntryState | null {
   } catch {
     return null;
   }
+
   return {
     ...parsed,
     id: row.id,
@@ -98,6 +111,26 @@ function inflate(row: QueueRow): DeliveryQueueEntryState | null {
       ? {}
       : { platformSendStartedAt: Number(row.platform_send_started_at) }),
     ...(row.recovery_state == null ? {} : { recoveryState: row.recovery_state }),
+  };
+}
+
+function inflateResult(row: QueueRow): DeliveryQueueEntryLoadResult {
+  const entry = inflate(row);
+  if (entry) {
+    return {
+      status: "loaded",
+      entry,
+      ...(row.entry_kind ? { entryKind: row.entry_kind } : {}),
+    };
+  }
+  return {
+    status: "corrupt",
+    entry: {
+      id: row.id,
+      ...(row.entry_kind ? { entryKind: row.entry_kind } : {}),
+      enqueuedAt: Number(row.enqueued_at),
+      retryCount: Number(row.retry_count),
+    },
   };
 }
 
@@ -351,6 +384,16 @@ export function loadDeliveryQueueEntry(
   id: string,
   stateDir?: string,
 ): DeliveryQueueEntryState | null {
+  const result = loadDeliveryQueueEntryResult(queueName, id, stateDir);
+  return result?.status === "loaded" ? result.entry : null;
+}
+
+/** Load one pending entry while preserving structural metadata for invalid JSON. */
+export function loadDeliveryQueueEntryResult(
+  queueName: string,
+  id: string,
+  stateDir?: string,
+): DeliveryQueueEntryLoadResult | null {
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const row = executeSqliteQueryTakeFirstSync(
@@ -360,6 +403,7 @@ export function loadDeliveryQueueEntry(
       .select([
         "id",
         "entry_json",
+        "entry_kind",
         "enqueued_at",
         "retry_count",
         "last_attempt_at",
@@ -371,7 +415,7 @@ export function loadDeliveryQueueEntry(
       .where("id", "=", id)
       .where("status", "=", "pending"),
   ) as QueueRow | undefined;
-  return row ? inflate(row) : null;
+  return row ? inflateResult(row) : null;
 }
 
 /** Read row status without hiding dead-lettered entries. */
@@ -398,6 +442,16 @@ export function loadDeliveryQueueEntries(
   queueName: string,
   stateDir?: string,
 ): DeliveryQueueEntryState[] {
+  return loadDeliveryQueueEntryResults(queueName, stateDir).flatMap((result) =>
+    result.status === "loaded" ? [result.entry] : [],
+  );
+}
+
+/** Load pending entries while preserving structural metadata for invalid JSON rows. */
+export function loadDeliveryQueueEntryResults(
+  queueName: string,
+  stateDir?: string,
+): DeliveryQueueEntryLoadResult[] {
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const rows = executeSqliteQuerySync(
@@ -407,6 +461,7 @@ export function loadDeliveryQueueEntries(
       .select([
         "id",
         "entry_json",
+        "entry_kind",
         "enqueued_at",
         "retry_count",
         "last_attempt_at",
@@ -419,7 +474,7 @@ export function loadDeliveryQueueEntries(
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows as QueueRow[];
-  return rows.map(inflate).filter((entry): entry is DeliveryQueueEntryState => entry != null);
+  return rows.map(inflateResult);
 }
 
 /** Delete a pending delivery queue entry after successful delivery. */

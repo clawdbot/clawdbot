@@ -458,6 +458,40 @@ describe("recoverPendingContinuationDelegates", () => {
     expect(mockFlows.get("flow-1")).toMatchObject({ status: "succeeded" });
   });
 
+  it("preserves delayed attachment input when restart recovery arms the hedge", async () => {
+    const sessionKey = "agent:main:delayed-attachment-recovery";
+    const attachments = [{ name: "restart.txt", content: "durable child input" }];
+    enqueuePendingDelegate(sessionKey, {
+      task: "recover delayed attachments",
+      delayMs: 60_000,
+      attachments,
+      attachAs: { mountPath: "recovered" },
+    });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 0,
+        continuationChainStartedAt: Date.now(),
+        continuationChainTokens: 0,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments,
+        attachMountPath: "recovered",
+      }),
+      expect.objectContaining({ agentSessionKey: sessionKey }),
+    );
+  });
+
   it("reconciles a claimed continuation child accepted before registry registration", async () => {
     const sessionKey = "agent:main:parent";
     enqueuePendingDelegate(sessionKey, { task: "recover without duplicate spawn" });
