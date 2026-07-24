@@ -108,15 +108,17 @@ function readSessionHeaderStartedAtMs(params: {
 }): number | undefined {
   const sessionId = params.entry.sessionId?.trim();
   const sessionKey = params.sessionKey?.trim();
-  if (!sessionId || !sessionKey || !params.storePath) {
+  const agentId =
+    params.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
+  if (!sessionId || !agentId || !params.storePath) {
     return undefined;
   }
   try {
     const header = loadTranscriptHeaderSync({
-      agentId: params.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
+      agentId,
       sessionId,
-      sessionKey,
       storePath: params.storePath,
+      ...(sessionKey ? { sessionKey } : {}),
     }) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
     if (
       header?.type !== "session" ||

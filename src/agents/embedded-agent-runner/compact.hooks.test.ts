@@ -4183,6 +4183,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expectRecordFields(mockCallArg(maintain), {
       sessionId: delegatedSessionId,
       sessionFile: TEST_SESSION_KEY,
+      sessionTarget: expect.objectContaining({ sessionId: delegatedSessionId }),
     });
   });
 

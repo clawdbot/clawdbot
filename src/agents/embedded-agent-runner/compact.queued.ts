@@ -663,6 +663,11 @@ async function compactResolvedContextEngine(
           postCompactionSessionId = resolvedDelegatedTarget.sessionId;
           postCompactionSessionFile = resolvedDelegatedTarget.sessionKey;
           postCompactionSessionTarget = resolvedDelegatedTarget;
+        } else if (delegatedSessionId && !delegatedSessionFile) {
+          postCompactionSessionTarget = {
+            ...runtimeTarget,
+            sessionId: delegatedSessionId,
+          };
         }
         if (result.ok && result.compacted) {
           checkpointSnapshotRetained = await persistCompactionCheckpoint({
@@ -686,7 +691,7 @@ async function compactResolvedContextEngine(
               ...params,
               sessionFile: postCompactionSessionFile,
               sessionId: postCompactionSessionId,
-              sessionTarget: delegatedSessionTarget ?? params.sessionTarget,
+              sessionTarget: postCompactionSessionTarget,
             }),
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
