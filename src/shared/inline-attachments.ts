@@ -43,21 +43,9 @@ export const DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS = {
 /** Portable basename ceiling shared by supported local filesystems. */
 export const MAX_INLINE_ATTACHMENT_BASENAME_BYTES = 255;
 
-const PORTABLE_ATTACHMENT_NAME_FORBIDDEN = new Set([
-  "<",
-  ">",
-  ":",
-  '"',
-  "/",
-  "\\",
-  "|",
-  "?",
-  "*",
-  "%",
-  "!",
-]);
-const WINDOWS_RESERVED_ATTACHMENT_BASENAME =
-  /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/u;
+const PORTABLE_ATTACHMENT_NAME_FORBIDDEN = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*"]);
+const WINDOWS_RESERVED_ATTACHMENT_STEM =
+  /^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])$/u;
 
 export type InlineAttachmentSnapshotLimits = {
   maxTotalBytes: number;
@@ -114,6 +102,9 @@ function validateInlineAttachmentName(name: string): void {
   if (!isWellFormedAttachmentName(name) || name.includes("\uFFFD")) {
     throw new Error("attachments_invalid_name (invalid Unicode)");
   }
+  if (name.trim() !== name) {
+    throw new Error("attachments_invalid_name (leading or trailing whitespace)");
+  }
   if (
     name.includes("\u0000") ||
     Array.from(name).some((char) => PORTABLE_ATTACHMENT_NAME_FORBIDDEN.has(char))
@@ -137,11 +128,12 @@ function validateInlineAttachmentName(name: string): void {
     throw new Error(`attachments_invalid_name (${name})`);
   }
   const filesystemKey = name.toUpperCase();
+  const preExtensionStem = (filesystemKey.split(".", 1)[0] ?? "").replace(/[. ]+$/u, "");
   if (
     name === "." ||
     name === ".." ||
     filesystemKey === ".MANIFEST.JSON" ||
-    WINDOWS_RESERVED_ATTACHMENT_BASENAME.test(filesystemKey)
+    WINDOWS_RESERVED_ATTACHMENT_STEM.test(preExtensionStem)
   ) {
     throw new Error(`attachments_invalid_name (${name})`);
   }
@@ -182,6 +174,9 @@ export function prepareInlineAttachmentSnapshots(params: {
     const rawName = item.name;
     if (!isWellFormedAttachmentName(rawName) || rawName.includes("\uFFFD")) {
       throw new Error("attachments_invalid_name (invalid Unicode)");
+    }
+    if (rawName.trim() !== rawName) {
+      throw new Error("attachments_invalid_name (leading or trailing whitespace)");
     }
     const name = rawName.normalize("NFC");
     const content = item.content;

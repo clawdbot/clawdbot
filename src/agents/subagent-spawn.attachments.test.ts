@@ -132,9 +132,14 @@ describe("spawnSubagentDirect filename validation", () => {
   it.each([
     ["case-insensitive manifest alias", ".MANIFEST.JSON"],
     ["manifest trailing-dot alias", ".manifest.json."],
+    ["manifest trailing-NBSP alias", ".manifest.json\u00A0"],
+    ["leading-space alias", " foo.txt"],
     ["trailing-space alias", "handoff.txt "],
     ["overlong UTF-8 basename", "é".repeat(128)],
     ["Windows reserved device basename", "CON.txt"],
+    ["Windows device stem with pre-extension space", "CON .txt"],
+    ["Windows console input device", "CONIN$.txt"],
+    ["Windows console output device", "CONOUT$.txt"],
     ["Windows portable forbidden character", "handoff?.txt"],
     ["lone surrogate", "\uD800"],
     ["replacement character", "\uFFFD"],
@@ -142,6 +147,11 @@ describe("spawnSubagentDirect filename validation", () => {
     const result = await spawnWithName(name);
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/attachments_invalid_name/);
+  });
+
+  it.each(["100%.txt", "wow!.txt"])("permits portable filename %s", async (name) => {
+    const result = await spawnWithName(name);
+    expect(result.status).toBe("accepted");
   });
 
   it("name with newline returns attachments_invalid_name", async () => {
