@@ -114,4 +114,26 @@ describe("transport stream shared helpers", () => {
       expect(output.errorMessage).toBeTruthy();
     }
   });
+
+  it("extracts error code from cause.code for Undici network errors", () => {
+    // Simulates a "fetch failed" error where Undici wraps a SocketError with
+    // code ECONNRESET in the cause chain. Verifies via assignTransportErrorDetails
+    // which calls extractTransportErrorDetails internally.
+    const output: { stopReason: string; errorCode?: string } = { stopReason: "stop" };
+    assignTransportErrorDetails(output, {
+      message: "fetch failed",
+      cause: { code: "ECONNRESET" },
+    });
+    expect(output.errorCode).toBe("ECONNRESET");
+  });
+
+  it("prefers top-level errorCode over cause.code", () => {
+    const output: { stopReason: string; errorCode?: string } = { stopReason: "stop" };
+    assignTransportErrorDetails(output, {
+      errorCode: "TOP_LEVEL",
+      code: "MIDDLE",
+      cause: { code: "CAUSE_CODE" },
+    });
+    expect(output.errorCode).toBe("TOP_LEVEL");
+  });
 });
