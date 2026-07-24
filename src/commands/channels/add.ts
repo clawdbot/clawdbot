@@ -1,8 +1,8 @@
 // Implements guided and non-interactive `openclaw channels add` account setup.
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { resolveChannelSetupCliOptionMetadata } from "../../channels/plugins/cli-add-options.js";
+import { findChannelEntryByIdOrAlias } from "../../channels/plugins/entry-resolution.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
@@ -50,13 +50,19 @@ export type ChannelsAddOptions = {
   account?: string;
 } & Record<string, unknown>;
 
+export type ChannelsAddCommandParams = {
+  hasFlags?: boolean;
+  beforePersistentEffect?: () => Promise<void>;
+  /**
+   * The CLI owns direct entry for an explicit selection. Other guided callers
+   * retain picker-first navigation with the same channel highlighted.
+   */
+  directEntry?: boolean;
+};
+
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
-  const trimmed = normalizeOptionalLowercaseString(raw);
-  if (!trimmed) {
-    return undefined;
-  }
   const entries = cfg
     ? await import("../channel-setup/trusted-catalog.js").then(
         ({ listTrustedChannelPluginCatalogEntries }) =>
@@ -69,14 +75,7 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
         ({ listRawChannelPluginCatalogEntries }) =>
           listRawChannelPluginCatalogEntries({ excludeWorkspace: true }),
       );
-  return entries.find((entry) => {
-    if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
-      return true;
-    }
-    return (entry.meta.aliases ?? []).some(
-      (alias) => normalizeOptionalLowercaseString(alias) === trimmed,
-    );
-  });
+  return findChannelEntryByIdOrAlias(entries, raw);
 }
 
 function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
@@ -124,7 +123,7 @@ function buildChannelOwnedSetupInput(opts: ChannelsAddOptions): Record<string, u
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
-  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
+  params?: ChannelsAddCommandParams,
 ) {
   try {
     return await channelsAddCommandImpl(opts, runtime, params);
@@ -140,7 +139,7 @@ export async function channelsAddCommand(
 async function channelsAddCommandImpl(
   opts: ChannelsAddOptions,
   runtime: RuntimeEnv,
-  params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
+  params?: ChannelsAddCommandParams,
 ) {
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
@@ -162,6 +161,7 @@ async function channelsAddCommandImpl(
       runtime,
       prompter: createClackPrompter(),
       ...(initialChannel ? { initialChannel } : {}),
+      ...(initialChannel && params?.directEntry ? { directEntryChannel: initialChannel } : {}),
       ...(params?.beforePersistentEffect
         ? { beforePersistentEffect: params.beforePersistentEffect }
         : {}),
@@ -170,8 +170,8 @@ async function channelsAddCommandImpl(
   }
 
   const rawChannel = opts.channel ?? "";
-  let channel = normalizeChannelId(rawChannel);
   let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
+  let channel = catalogEntry ? (catalogEntry.id as ChannelId) : normalizeChannelId(rawChannel);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.
@@ -238,7 +238,7 @@ async function channelsAddCommandImpl(
         ...(result.pluginId ? { pluginId: result.pluginId } : {}),
       };
     }
-    channel ??= normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
+    channel ??= catalogEntry.id as ChannelId;
   }
 
   if (!channel) {

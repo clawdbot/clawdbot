@@ -441,7 +441,7 @@ describe("runSystemAgentTui", () => {
     }> = [
       {
         handoff: { kind: "open-setup", target: "channels", channel: "slack" },
-        expected: "channels:slack:false:function",
+        expected: "channels:slack:false:function:undefined",
       },
     ];
 
@@ -482,7 +482,7 @@ describe("runSystemAgentTui", () => {
           },
           runChannelsAdd: async (opts, _runtime, params) => {
             events.push(
-              `channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}:${typeof params?.beforePersistentEffect}`,
+              `channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}:${typeof params?.beforePersistentEffect}:${String(params?.directEntry)}`,
             );
           },
         },

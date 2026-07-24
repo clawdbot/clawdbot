@@ -236,12 +236,13 @@ export async function setupChannels(
     await prompter.note(statusLines.join("\n"), t("wizard.channels.statusTitle"));
   }
 
-  const shouldConfigure = options?.skipConfirm
-    ? true
-    : await prompter.confirm({
-        message: t("wizard.channels.setupConfirm"),
-        initialValue: true,
-      });
+  const shouldConfigure =
+    options?.skipConfirm || options?.directEntryChannel
+      ? true
+      : await prompter.confirm({
+          message: t("wizard.channels.setupConfirm"),
+          initialValue: true,
+        });
   if (!shouldConfigure) {
     return cfg;
   }
@@ -819,6 +820,10 @@ export async function setupChannels(
     }
     return "done";
   };
+
+  if (options?.directEntryChannel) {
+    await handleChannelChoice(options.directEntryChannel);
+  }
 
   if (options?.quickstartDefaults) {
     const skipValue = "__skip__" as const;

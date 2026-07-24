@@ -520,7 +520,7 @@ describe("registerChannelsCli", () => {
     expect(channelsAddCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "telegram" }),
       runtimeMock,
-      { hasFlags: false },
+      { hasFlags: false, directEntry: true },
     );
   });
 

@@ -1,8 +1,8 @@
 // Guided channel-setup wizard flow shared by `openclaw channels add` (clack
 // prompter) and the gateway `wizard.start {flow:"channels"}` RPC (session
 // prompter driving the Control UI / native clients).
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { findChannelEntryByIdOrAlias } from "../../channels/plugins/entry-resolution.js";
 import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { readConfigFileSnapshot, type OpenClawConfig } from "../../config/config.js";
@@ -26,10 +26,6 @@ export async function resolveInitialWizardChannel(
   raw: string,
   cfg: OpenClawConfig,
 ): Promise<ChannelChoice | undefined> {
-  const normalized = normalizeOptionalLowercaseString(raw);
-  if (!normalized) {
-    return undefined;
-  }
   const [{ listActiveChannelSetupPlugins }, { resolveChannelSetupEntries }] = await Promise.all([
     import("../../channels/plugins/setup-registry.js"),
     import("../channel-setup/discovery.js"),
@@ -39,13 +35,7 @@ export async function resolveInitialWizardChannel(
     installedPlugins: listActiveChannelSetupPlugins(),
     workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
   });
-  return resolved.entries.find(
-    (entry) =>
-      normalizeOptionalLowercaseString(entry.id) === normalized ||
-      (entry.meta.aliases ?? []).some(
-        (alias) => normalizeOptionalLowercaseString(alias) === normalized,
-      ),
-  )?.id;
+  return findChannelEntryByIdOrAlias(resolved.entries, raw)?.id;
 }
 
 type ChannelsAddWizardFlowParams = {
@@ -54,6 +44,7 @@ type ChannelsAddWizardFlowParams = {
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   initialChannel?: ChannelChoice;
+  directEntryChannel?: ChannelChoice;
   beforePersistentEffect?: () => Promise<void>;
   /**
    * The controlling client completes device linking itself after config is
@@ -79,6 +70,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   await prompter.intro("Channel setup");
   let nextConfig = await onboardChannels.setupChannels(cfg, runtime, prompter, {
     ...(params.initialChannel ? { initialSelection: [params.initialChannel] } : {}),
+    ...(params.directEntryChannel ? { directEntryChannel: params.directEntryChannel } : {}),
     allowDisable: false,
     allowIMessageInstall: true,
     allowSignalInstall: true,

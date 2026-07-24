@@ -323,6 +323,8 @@ export type SetupChannelsOptions = {
   skipDmPolicyPrompt?: boolean;
   skipConfirm?: boolean;
   quickstartDefaults?: boolean;
+  /** Enter this channel's guided setup before showing the channel picker. */
+  directEntryChannel?: ChannelId;
   initialSelection?: ChannelId[];
   secretInputMode?: "plaintext" | "ref";
 };

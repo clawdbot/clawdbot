@@ -336,6 +336,7 @@ export async function registerChannelsCli(
         defaultRuntime,
         {
           hasFlags,
+          ...(!hasFlags ? { directEntry: true } : {}),
         },
       );
     });

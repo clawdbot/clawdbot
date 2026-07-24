@@ -4,7 +4,7 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { ChannelsAddOptions } from "../commands/channels/add.js";
+import type { ChannelsAddCommandParams, ChannelsAddOptions } from "../commands/channels/add.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -53,7 +53,7 @@ export type SystemAgentTuiOptions = {
   runChannelsAdd?: (
     opts: ChannelsAddOptions,
     runtime: RuntimeEnv,
-    params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
+    params?: ChannelsAddCommandParams,
   ) => Promise<unknown>;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 };

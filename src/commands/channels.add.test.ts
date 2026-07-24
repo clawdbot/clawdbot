@@ -505,6 +505,7 @@ describe("channelsAddCommand", () => {
     expect(setupOptions().deferStatusUntilSelection).toBe(true);
     expect(setupOptions().skipStatusNote).toBe(true);
     expect(setupOptions().promptAccountIds).toBe(true);
+    expect(setupOptions().directEntryChannel).toBeUndefined();
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
   });
@@ -543,7 +544,7 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("Channels updated.");
   });
 
-  it("preselects an installable catalog channel in guided setup", async () => {
+  it("keeps a resolved guided channel as a picker highlight for non-CLI callers", async () => {
     const config: OpenClawConfig = { channels: {} };
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
@@ -551,12 +552,118 @@ describe("channelsAddCommand", () => {
       config,
     });
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      { ...createExternalChatCatalogEntry(), origin: "workspace" },
+      {
+        ...createExternalChatCatalogEntry(),
+        origin: "workspace",
+        meta: {
+          ...createExternalChatCatalogEntry().meta,
+          aliases: ["ext"],
+        },
+      },
     ]);
 
-    await channelsAddCommand({ channel: "external-chat" }, runtime, { hasFlags: false });
+    await channelsAddCommand({ channel: "ext" }, runtime, { hasFlags: false });
 
     expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+    expect(setupOptions().directEntryChannel).toBeUndefined();
+  });
+
+  it("opens a resolved installable catalog alias directly for the CLI caller", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        ...createExternalChatCatalogEntry(),
+        origin: "workspace",
+        meta: {
+          ...createExternalChatCatalogEntry().meta,
+          aliases: ["ext"],
+        },
+      },
+    ]);
+
+    await channelsAddCommand({ channel: "ext" }, runtime, { hasFlags: false, directEntry: true });
+
+    expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+    expect(setupOptions().directEntryChannel).toBe("external-chat");
+  });
+
+  it("prefers an exact channel id over an earlier channel alias", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    const baseCatalogEntry = createExternalChatCatalogEntry();
+    const msteams = createChannelTestPluginBase({
+      id: "msteams",
+      label: "Microsoft Teams",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "msteams",
+          plugin: {
+            ...msteams,
+            meta: { ...msteams.meta, aliases: ["teams"] },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        ...baseCatalogEntry,
+        meta: {
+          ...baseCatalogEntry.meta,
+          label: "A Alias Owner",
+          selectionLabel: "A Alias Owner",
+          aliases: ["teams"],
+        },
+      },
+      {
+        ...baseCatalogEntry,
+        id: "teams",
+        pluginId: "@vendor/teams-plugin",
+        meta: {
+          ...baseCatalogEntry.meta,
+          id: "teams",
+          label: "Z Teams Plugin",
+          selectionLabel: "Z Teams Plugin",
+        },
+        install: { npmSpec: "@vendor/teams" },
+      },
+    ]);
+
+    await channelsAddCommand({ channel: "teams" }, runtime, {
+      hasFlags: false,
+      directEntry: true,
+    });
+
+    expect(setupOptions().initialSelection).toEqual(["teams"]);
+    expect(setupOptions().directEntryChannel).toBe("teams");
+
+    vi.mocked(ensureChannelSetupPluginInstalled).mockClear();
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
+    await channelsAddCommand({ channel: "teams", token: "secret" }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({ id: "teams" }),
+      }),
+    );
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "teams",
+      }),
+    );
   });
 
   it("exits quietly when guided channel setup is cancelled", async () => {
