@@ -2,21 +2,13 @@
  * Shared helpers for clearing assistant usage snapshots invalidated by
  * transcript compaction.
  */
+import {
+  isWithinRetainedCompactionRange,
+  parseCompactionBoundaryTimestamp,
+  resolveCompactionBoundary,
+} from "./compaction-boundary.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
-
-function parseCompactionUsageTimestamp(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-}
 
 export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends AgentMessage>(
   messages: TMessage[],
@@ -25,19 +17,8 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
     whenMissingCompactionSummary?: "preserve" | "zeroAssistantUsage";
   } = {},
 ): TMessage[] {
-  let latestCompactionSummaryIndex = -1;
-  let latestCompactionTimestamp: number | null = null;
-  for (let i = 0; i < messages.length; i += 1) {
-    const entry = messages[i];
-    if (entry?.role !== "compactionSummary") {
-      continue;
-    }
-    latestCompactionSummaryIndex = i;
-    latestCompactionTimestamp = parseCompactionUsageTimestamp(
-      (entry as { timestamp?: unknown }).timestamp ?? null,
-    );
-  }
-  const hasCompactionSummary = latestCompactionSummaryIndex !== -1;
+  const boundary = resolveCompactionBoundary(messages);
+  const hasCompactionSummary = boundary !== null;
   if (!hasCompactionSummary && options.whenMissingCompactionSummary !== "zeroAssistantUsage") {
     return messages;
   }
@@ -55,15 +36,25 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
       continue;
     }
 
-    const messageTimestamp = parseCompactionUsageTimestamp(candidate.timestamp);
-    const compactionTimestamp = latestCompactionTimestamp;
+    const messageTimestamp = parseCompactionBoundaryTimestamp(candidate.timestamp);
+    const compactionTimestamp = boundary?.latestSummaryTimestamp ?? null;
     const hasTimestampBoundary =
       hasCompactionSummary && compactionTimestamp !== null && messageTimestamp !== null;
     const staleByMissingSummary = !hasCompactionSummary;
     const staleByTimestamp = hasTimestampBoundary && messageTimestamp <= compactionTimestamp;
+    const staleByRetainedRange =
+      boundary !== null && !hasTimestampBoundary && isWithinRetainedCompactionRange(boundary, i);
     const staleByLegacyOrdering =
-      hasCompactionSummary && !hasTimestampBoundary && i < latestCompactionSummaryIndex;
-    if (!staleByMissingSummary && !staleByTimestamp && !staleByLegacyOrdering) {
+      boundary !== null &&
+      !hasTimestampBoundary &&
+      boundary.retainedStartIndex === null &&
+      i < boundary.latestSummaryIndex;
+    if (
+      !staleByMissingSummary &&
+      !staleByTimestamp &&
+      !staleByRetainedRange &&
+      !staleByLegacyOrdering
+    ) {
       continue;
     }
 

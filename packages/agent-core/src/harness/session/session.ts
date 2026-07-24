@@ -67,17 +67,14 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
 
   const messages: AgentMessage[] = [];
   if (boundary) {
+    let compactionSummary: Extract<AgentMessage, { role: "compactionSummary" }> | undefined;
     if (boundary.type === "compaction") {
-      messages.push(
-        asAgentMessage(
-          createCompactionSummaryMessage(
-            boundary.summary,
-            boundary.tokensBefore,
-            boundary.timestamp,
-          ),
-        ),
-      );
+      compactionSummary = asAgentMessage(
+        createCompactionSummaryMessage(boundary.summary, boundary.tokensBefore, boundary.timestamp),
+      ) as Extract<AgentMessage, { role: "compactionSummary" }>;
+      messages.push(compactionSummary);
     }
+    const retainedMessagesStart = messages.length;
     const boundaryIdx = pathEntries.findIndex((entry) => entry.id === boundary.id);
     // A reset kept tail mirrors the old cross-log replay contract: only user/assistant
     // rows survive. Compaction keeps its existing richer retained-tail behavior.
@@ -93,6 +90,11 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
           appendContextMessage(messages, entry);
         }
       }
+    }
+    if (compactionSummary) {
+      // The summary is intentionally first in model context. Preserve the source boundary
+      // structurally so invalid timestamps cannot make retained metadata look post-compaction.
+      compactionSummary.retainedMessageCount = messages.length - retainedMessagesStart;
     }
     for (const entry of pathEntries.slice(boundaryIdx + 1)) {
       appendContextMessage(messages, entry);

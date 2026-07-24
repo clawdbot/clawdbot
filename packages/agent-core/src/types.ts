@@ -365,7 +365,12 @@ export interface CompactionSummaryMessage {
   /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Timestamp may be numeric in memory or string when loaded from older persisted rows. */
-  timestamp: number | string;
+  timestamp?: number | string;
+  /**
+   * Number of replayed messages immediately following this summary that were retained
+   * from before the compaction boundary. Runtime-only metadata for stale-state cleanup.
+   */
+  retainedMessageCount?: number;
   /** Optional estimated context tokens after compaction. */
   tokensAfter?: number;
   /** Optional first retained entry id from the compaction range. */

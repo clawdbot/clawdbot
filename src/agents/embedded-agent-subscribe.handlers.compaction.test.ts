@@ -432,6 +432,40 @@ describe("handleCompactionEnd", () => {
     expect(freshAssistant.usage).toEqual(freshUsage);
   });
 
+  it("uses the retained range for summary-first transcripts without a timestamp", async () => {
+    const staleUsage = makeUsageSnapshot(120_000);
+    const freshUsage = makeUsageSnapshot(1_250);
+    const messages = [
+      { ...makeCompactionSummaryMessage(), retainedMessageCount: 1 },
+      makeAssistantUsageMessage({
+        text: "kept pre-compaction answer",
+        timestamp: 1_000,
+        usage: staleUsage,
+      }),
+      makeAssistantUsageMessage({
+        text: "fresh answer",
+        timestamp: 2_000,
+        usage: freshUsage,
+      }),
+    ] as AgentMessage[];
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-retained-usage-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      messages,
+    });
+
+    finishCompaction(ctx);
+
+    const staleAssistant = messages[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const freshAssistant = messages[2] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(staleAssistant.usage).toEqual(makeZeroUsageSnapshot());
+    expect(freshAssistant.usage).toEqual(freshUsage);
+  });
+
   it("uses index fallback only for legacy transcripts without timestamps", async () => {
     const staleUsage = makeUsageSnapshot(120_000);
     const freshUsage = makeUsageSnapshot(1_250);

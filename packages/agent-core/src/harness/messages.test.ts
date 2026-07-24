@@ -36,7 +36,7 @@ describe("harness message timestamps", () => {
 
     const [message] = convertToLlm(persistedMessages);
 
-    expect(message?.timestamp).toBe(0);
+    expect(message).not.toHaveProperty("timestamp");
   });
 
   it("omits loose persisted compaction timestamps", () => {
@@ -49,13 +49,13 @@ describe("harness message timestamps", () => {
       },
     ]);
 
-    expect(message?.timestamp).toBe(0);
+    expect(message).not.toHaveProperty("timestamp");
   });
 
   it("keeps out-of-range compaction summaries non-fatal during context creation", () => {
     expect(
       createCompactionSummaryMessage("older context", 123, "+275760-09-13T00:00:00.001Z"),
-    ).toMatchObject({ timestamp: 0 });
+    ).not.toHaveProperty("timestamp");
   });
 });
 

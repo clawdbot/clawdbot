@@ -327,6 +327,60 @@ describe("AgentSession loop correctness", () => {
     );
   });
 
+  it("does not reuse retained high usage after an invalid compaction timestamp", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const retainedUserId = sessionManager.appendMessage({
+      role: "user",
+      content: "retained prompt",
+      timestamp: 1_000,
+    });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "retained answer" }], "stop", 100),
+      timestamp: 2_000,
+    });
+    sessionManager.appendCompaction("older context", retainedUserId, 100);
+    const compaction = sessionManager.getEntries().find((entry) => entry.type === "compaction");
+    if (!compaction || compaction.type !== "compaction") {
+      throw new Error("expected compaction entry");
+    }
+    compaction.timestamp = "9999-12-31";
+    sessionManager.appendMessage({ role: "user", content: "fresh prompt", timestamp: 3_000 });
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream({
+        ...createAssistant(activeModel, [], "error", 0),
+        errorMessage: "temporary upstream failure",
+      }),
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("retry later");
+
+    expect(compactionEvents).toEqual([]);
+    const retainedAssistant = session.messages.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.content.some((block) => block.type === "text" && block.text === "retained answer"),
+    );
+    if (!retainedAssistant || retainedAssistant.role !== "assistant") {
+      throw new Error("expected retained assistant message");
+    }
+    expect(retainedAssistant.usage.totalTokens).toBe(0);
+  });
+
   it("does not retry a high-usage turn terminated by a tool result", async () => {
     const terminalTool: ToolDefinition = {
       name: "finish",

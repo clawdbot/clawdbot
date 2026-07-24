@@ -51,10 +51,35 @@ describe("buildSessionContext", () => {
       "user",
     ]);
     expect(context.messages).toMatchObject([
-      { summary: "older context" },
+      { summary: "older context", retainedMessageCount: 1 },
       { content: "retained" },
       { content: "new turn" },
     ]);
+  });
+
+  it("preserves the retained range when a compaction timestamp is invalid", () => {
+    const entries: SessionTreeEntry[] = [
+      userEntry("kept", null, "retained"),
+      {
+        type: "compaction",
+        id: "compaction",
+        parentId: "kept",
+        timestamp: "9999-12-31",
+        summary: "older context",
+        firstKeptEntryId: "kept",
+        tokensBefore: 123,
+      },
+      userEntry("new", "compaction", "new turn"),
+    ];
+
+    const messages = buildSessionContext(entries).messages;
+
+    expect(messages).toMatchObject([
+      { role: "compactionSummary", retainedMessageCount: 1 },
+      { role: "user", content: "retained" },
+      { role: "user", content: "new turn" },
+    ]);
+    expect(messages[0]).not.toHaveProperty("timestamp");
   });
 
   it("treats the latest reset as a hard cut with a user/assistant-only kept tail", () => {

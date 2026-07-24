@@ -351,10 +351,16 @@ describe("SessionManager.open", () => {
     }
     compaction.timestamp = "+275760-09-13T00:00:00.001Z";
 
-    expect(manager.buildSessionContext().messages).toMatchObject([
-      { role: "compactionSummary", summary: "older context", timestamp: 0 },
+    const messages = manager.buildSessionContext().messages;
+    expect(messages).toMatchObject([
+      {
+        role: "compactionSummary",
+        summary: "older context",
+        retainedMessageCount: 1,
+      },
       { role: "user", content: "retained" },
     ]);
+    expect(messages[0]).not.toHaveProperty("timestamp");
   });
 
   it("normalizes session names to one line", () => {

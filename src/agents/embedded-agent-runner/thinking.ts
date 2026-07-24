@@ -4,6 +4,11 @@
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import {
+  isWithinRetainedCompactionRange,
+  parseCompactionBoundaryTimestamp,
+  resolveCompactionBoundary,
+} from "../compaction-boundary.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
 import { log } from "./logger.js";
 
@@ -94,19 +99,6 @@ function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
   return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
 }
 
-function parseTimestampMs(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return null;
-}
-
 function stripSignatureFieldsFromThinkingBlock(
   block: AssistantContentBlock,
 ): AssistantContentBlock {
@@ -185,30 +177,30 @@ export function stripThinkingSignaturesFromMessage(message: AgentMessage): Agent
 export function stripStaleThinkingSignaturesForCompactionReplay(
   messages: AgentMessage[],
 ): AgentMessage[] {
-  let latestCompactionTimestamp: number | null = null;
-  for (const message of messages) {
-    if ((message as { role?: unknown }).role !== "compactionSummary") {
-      continue;
-    }
-    const ts = parseTimestampMs((message as { timestamp?: unknown }).timestamp);
-    if (ts !== null) {
-      latestCompactionTimestamp =
-        latestCompactionTimestamp === null ? ts : Math.max(latestCompactionTimestamp, ts);
-    }
+  const boundary = resolveCompactionBoundary(messages);
+  if (!boundary) {
+    return messages;
   }
-  if (latestCompactionTimestamp === null) {
+  const useRetainedRange =
+    boundary.latestSummaryTimestamp === null && boundary.retainedStartIndex !== null;
+  const latestCompactionTimestamp = useRetainedRange ? null : boundary.maxSummaryTimestamp;
+  if (latestCompactionTimestamp === null && !useRetainedRange) {
     return messages;
   }
 
   let touched = false;
   const out: AgentMessage[] = [];
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
     if (!isAssistantMessageWithContent(message)) {
       out.push(message);
       continue;
     }
-    const ts = parseTimestampMs((message as { timestamp?: unknown }).timestamp);
-    if (ts === null || ts >= latestCompactionTimestamp) {
+    const ts = parseCompactionBoundaryTimestamp((message as { timestamp?: unknown }).timestamp);
+    const staleByTimestamp =
+      latestCompactionTimestamp !== null && ts !== null && ts < latestCompactionTimestamp;
+    const staleByRetainedRange =
+      useRetainedRange && isWithinRetainedCompactionRange(boundary, index);
+    if (!staleByTimestamp && !staleByRetainedRange) {
       out.push(message);
       continue;
     }

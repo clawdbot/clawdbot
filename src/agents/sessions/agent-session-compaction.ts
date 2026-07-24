@@ -1,6 +1,10 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
-import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
 import type { AssistantMessage, Model } from "../../llm/types.js";
+import {
+  isWithinRetainedCompactionRange,
+  resolveCompactionBoundary,
+} from "../compaction-boundary.js";
+import { stripStaleAssistantUsageBeforeLatestCompaction } from "../compaction-usage.js";
 import {
   calculateContextTokens,
   compact,
@@ -15,7 +19,7 @@ import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
-import { getLatestCompactionEntry, type CompactionEntry } from "./session-manager.js";
+import type { CompactionEntry } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 
 type CompactionReason = "manual" | "threshold" | "overflow";
@@ -264,14 +268,22 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     // Skip compaction checks if this assistant message is older than the latest
     // compaction boundary. This prevents a stale pre-compaction usage/error
     // from retriggering compaction on the first prompt after compaction.
-    const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
-    const compactionTimestampMs =
-      compactionEntry === null
-        ? undefined
-        : parseStrictTimestampStringMs(compactionEntry.timestamp);
+    const messages = this.agent.state.messages;
+    const boundary = resolveCompactionBoundary(messages);
+    const compactionTimestampMs = boundary?.latestSummaryTimestamp ?? null;
+    const assistantIndex = messages.lastIndexOf(assistantMessage);
+    const assistantIsRetainedFromBeforeCompaction =
+      boundary !== null &&
+      assistantIndex !== -1 &&
+      isWithinRetainedCompactionRange(boundary, assistantIndex);
     const assistantIsFromBeforeCompaction =
-      compactionTimestampMs !== undefined && assistantMessage.timestamp <= compactionTimestampMs;
+      assistantIsRetainedFromBeforeCompaction ||
+      (compactionTimestampMs !== null && assistantMessage.timestamp <= compactionTimestampMs);
     if (assistantIsFromBeforeCompaction) {
+      const sanitizedMessages = stripStaleAssistantUsageBeforeLatestCompaction(messages);
+      if (sanitizedMessages !== messages) {
+        this.agent.state.messages = sanitizedMessages;
+      }
       return false;
     }
 
@@ -312,7 +324,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     // This ensures sessions that hit persistent API errors (e.g. 529) can still compact.
     let contextTokens: number;
     if (assistantMessage.stopReason === "error") {
-      const messages = this.agent.state.messages;
+      const messages = stripStaleAssistantUsageBeforeLatestCompaction(this.agent.state.messages);
+      if (messages !== this.agent.state.messages) {
+        this.agent.state.messages = messages;
+      }
       const estimate = estimateContextTokens(messages);
       if (estimate.lastUsageIndex === null) {
         return false;
@@ -322,7 +337,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       // trigger compaction right after one just finished.
       const usageMsg = messages.at(estimate.lastUsageIndex);
       if (
-        compactionTimestampMs !== undefined &&
+        compactionTimestampMs !== null &&
         usageMsg?.role === "assistant" &&
         usageMsg.timestamp <= compactionTimestampMs
       ) {

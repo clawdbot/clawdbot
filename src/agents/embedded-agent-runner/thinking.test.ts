@@ -1124,6 +1124,44 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     ]);
   });
 
+  it("uses the retained range when the compaction timestamp is unavailable", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "compactionSummary",
+        summary: "summary",
+        tokensBefore: 100,
+        retainedMessageCount: 1,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "old think", thinkingSignature: "stale_sig" },
+          { type: "text", text: "old answer" },
+        ],
+        timestamp: 1_000,
+      }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "new think", thinkingSignature: "fresh_sig" },
+          { type: "text", text: "new answer" },
+        ],
+        timestamp: 2_000,
+      }),
+    ];
+
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+
+    expect((result[1] as AssistantMessage).content).toEqual([
+      { type: "thinking", thinking: "old think" },
+      { type: "text", text: "old answer" },
+    ]);
+    expect((result[2] as AssistantMessage).content).toEqual([
+      { type: "thinking", thinking: "new think", thinkingSignature: "fresh_sig" },
+      { type: "text", text: "new answer" },
+    ]);
+  });
+
   it("strips thinkingSignature from a thinking-only pre-compaction message, leaving text for downstream handling", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
