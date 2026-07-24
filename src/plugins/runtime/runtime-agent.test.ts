@@ -609,6 +609,7 @@ describe("plugin runtime session creation", () => {
         const existing = {
           sessionId: "foreign-workspace-initializer",
           updatedAt: Date.now(),
+          delivery: { kind: "none" as const },
           initializationPending: true as const,
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -656,6 +657,7 @@ describe("plugin runtime session creation", () => {
         const existing = {
           sessionId: "foreign-initializer",
           updatedAt: Date.now(),
+          delivery: { kind: "none" as const },
           initializationPending: true as const,
           agentHarnessId: "codex",
           modelSelectionLocked: true,
@@ -704,6 +706,7 @@ describe("plugin runtime session creation", () => {
       const existing = {
         sessionId: "foreign-initializer",
         updatedAt: Date.now(),
+        delivery: { kind: "none" as const },
         initializationPending: true as const,
         modelSelectionLocked: true,
         pluginOwnerId: "other-plugin",

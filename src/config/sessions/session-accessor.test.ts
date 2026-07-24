@@ -993,6 +993,7 @@ describe("session accessor seam", () => {
     }
     expect(created.sessionFile).toContain("sqlite:main:session-1:");
     expect(created.entry.sessionFile).toBe(created.sessionFile);
+    expect(created.entry.delivery).toEqual({ kind: "none" });
     await expect(
       loadTranscriptEvents({
         agentId: "main",

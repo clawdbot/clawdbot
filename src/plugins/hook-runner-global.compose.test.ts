@@ -182,7 +182,12 @@ describe("global hook runner composition (#91918, #107933)", () => {
     // Give the active registry a channel so the channel-presentation selector
     // would prefer it and evict the zero-channel pinned registry — the raw
     // live-registry collector must keep the pinned one regardless.
-    (channelActive.channels as unknown[]).push({});
+    channelActive.channels.push({
+      pluginId: "chan",
+      pluginName: "chan",
+      plugin: { id: "chan", meta: { label: "chan" } } as never,
+      source: "test",
+    });
 
     setActivePluginRegistry(channelActive);
     pinActivePluginChannelRegistry(hookOnlyPinned);

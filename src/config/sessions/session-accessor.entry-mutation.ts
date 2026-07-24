@@ -13,6 +13,7 @@ import {
 } from "./session-accessor.entry.js";
 import type { SessionLifecycleStoreTarget } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
+import { normalizeSqliteSessionEntryTimestamp } from "./session-accessor.sqlite-session-row.js";
 import {
   appendSqliteTranscriptEvent,
   forkSqliteSessionEntryFromParentTarget,
@@ -186,13 +187,14 @@ export async function createSessionEntryWithTranscript<TError = string>(
     };
   }
 
-  const entry =
+  const entryWithSessionFile =
     created.entry.sessionFile === sessionFile
       ? created.entry
       : {
           ...created.entry,
           sessionFile,
         };
+  const entry = normalizeSqliteSessionEntryTimestamp(entryWithSessionFile);
   await applySessionEntryLifecycleMutation({
     agentId,
     storePath,
