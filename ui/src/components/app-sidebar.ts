@@ -276,8 +276,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.onOpenNewSession?.(this.expandedAgentId());
   }
 
-  setVisibleSessionLimit(limit: number): void {
-    this.sessionData.setVisibleSessionLimit(limit);
+  setVisibleSessionLimit(sectionId: string, limit: number): void {
+    this.sessionData.setVisibleSessionLimit(sectionId, limit);
   }
 
   dismissSessionMutationError(): void {
@@ -317,13 +317,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         sidebarRowsByKey.set(row.key, navigationState.toSidebarSession(row));
       }
     }
-    const { sections, expandedRows, visibleRows } = this.zonedVisibleSections(visibleSessions);
+    const { sections } = this.zonedVisibleSections(visibleSessions);
     return renderSessionList({
       host: this,
       empty: visibleSessions.length === 0,
       sections,
-      expandedRows,
-      visibleRowCount: visibleRows.length,
       showDraft:
         Boolean(this.draftSessionAgentId) &&
         normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
