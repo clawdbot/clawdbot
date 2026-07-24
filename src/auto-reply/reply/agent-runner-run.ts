@@ -535,6 +535,7 @@ export async function runReplyAgent(
           agentId: followupRun.run.agentId,
           sessionId: replyOperation.sessionId,
           sessionFile: undefined,
+          sessionKey: replySessionKey,
           storePath,
         });
         if (admittedSessionFile) {

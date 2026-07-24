@@ -352,13 +352,14 @@ export function resolveAdmittedRunSessionFile(params: {
   agentId: string;
   sessionId: string;
   sessionFile?: string;
+  sessionKey?: string;
   storePath?: string;
 }): string | undefined {
   if (params.sessionFile) {
     return params.sessionFile;
   }
   if (params.storePath) {
-    return params.sessionId;
+    return params.sessionKey;
   }
   return params.sessionFile;
 }

@@ -649,6 +649,7 @@ describe("Engine contract tests", () => {
         tokensBefore: 0,
         tokensAfter: 0,
         details: undefined,
+        sessionTarget,
       },
     });
   });

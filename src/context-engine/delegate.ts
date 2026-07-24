@@ -1,5 +1,6 @@
 // Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
 import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   buildMemoryPromptSection,
   getActivePreparedMemoryPromptSection,
@@ -26,13 +27,14 @@ function buildCompactionResultSessionTarget(params: {
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;
 }): ContextEngineSessionTarget | undefined {
-  const sessionId = params.sessionTarget?.sessionId ?? params.sessionId;
+  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  const sessionId = params.sessionTarget?.sessionId ?? params.sessionId ?? marker?.sessionId;
   if (!sessionId) {
     return undefined;
   }
-  const agentId = params.sessionTarget?.agentId ?? params.agentId;
+  const agentId = params.sessionTarget?.agentId ?? params.agentId ?? marker?.agentId;
   const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
-  const storePath = params.sessionTarget?.storePath;
+  const storePath = params.sessionTarget?.storePath ?? marker?.storePath;
   return {
     ...(agentId ? { agentId } : {}),
     sessionId,

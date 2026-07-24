@@ -1,7 +1,6 @@
 /**
  * Reads prior session transcript context for `/btw` side-question handoffs.
  */
-import { readFile } from "node:fs/promises";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -16,7 +15,6 @@ import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   buildSessionContext,
   migrateSessionEntries,
-  parseSessionEntries,
   type SessionEntry as AgentSessionEntry,
 } from "./sessions/session-manager.js";
 
@@ -108,15 +106,15 @@ export async function readBtwTranscriptMessages(params: {
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
-    const entries =
-      params.sessionKey && params.storePath
-        ? ((await loadTranscriptEvents({
-            agentId: params.agentId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-          })) as AgentSessionEntry[])
-        : parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
+    if (!params.sessionKey || !params.storePath) {
+      return [];
+    }
+    const entries = (await loadTranscriptEvents({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    })) as AgentSessionEntry[];
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is AgentSessionEntry => entry.type !== "session",

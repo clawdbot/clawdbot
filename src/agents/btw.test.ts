@@ -435,6 +435,7 @@ function createTranscriptEntry(params: { id: string; parentId?: string | null; m
 
 function mockTranscriptEntries(entries: unknown[]) {
   parseSessionEntriesMock.mockReturnValue(entries);
+  loadTranscriptEventsMock.mockResolvedValue(entries);
 }
 
 function mockActiveTranscript(messages: unknown[]) {
@@ -609,7 +610,7 @@ describe("runBtwSideQuestion", () => {
 
     readFileMock.mockResolvedValue("mock transcript");
     loadTranscriptEventsMock.mockResolvedValue([]);
-    parseSessionEntriesMock.mockReturnValue([
+    mockTranscriptEntries([
       createTranscriptEntry({
         id: "user-1",
         message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
@@ -714,6 +715,7 @@ describe("runBtwSideQuestion", () => {
       sessionEntry: createSessionEntry(),
       sessionStore: {},
       sessionKey: DEFAULT_SESSION_KEY,
+      storePath: DEFAULT_STORE_PATH,
       resolvedThinkLevel: "low",
       resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
       blockReplyChunking: {

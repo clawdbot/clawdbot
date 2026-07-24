@@ -2,7 +2,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-import { sqliteSessionFileMarkerMatchesTarget } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  parseSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesTarget,
+} from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createPluginBlobStore,
@@ -314,6 +317,26 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         if (sessionIds.has(entry.sessionId)) {
           assertSessionEntryOwned({ action: params.action, entry, sessionKey });
         }
+      }
+      for (const sessionFile of sessionFiles) {
+        const marker = parseSqliteSessionFileMarker(sessionFile);
+        if (!marker) {
+          throw new Error("Plugin session ownership checks require a SQLite transcript marker.");
+        }
+        const markerEntries = registryParams.runtime.agent.session.listSessionEntries({
+          agentId: marker.agentId,
+          storePath: marker.storePath,
+          readOnly: true,
+        });
+        const match = markerEntries.find(({ entry }) => entry.sessionId === marker.sessionId);
+        if (!match) {
+          throw new Error(`Plugin session ownership target not found: ${marker.sessionId}`);
+        }
+        assertSessionEntryOwned({
+          action: params.action,
+          entry: match.entry,
+          sessionKey: match.sessionKey,
+        });
       }
     };
     const resolveRunSessionExecutionOwner = (
