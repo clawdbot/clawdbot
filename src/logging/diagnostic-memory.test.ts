@@ -9,7 +9,11 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
+import {
+  emitDiagnosticMemorySample,
+  resetDiagnosticMemoryForTest,
+  resolveThresholds,
+} from "./diagnostic-memory.js";
 import {
   readLatestDiagnosticStabilityBundleSync,
   resetDiagnosticStabilityBundleForTest,
@@ -36,6 +40,17 @@ function memoryUsage(overrides: Partial<NodeJS.MemoryUsage>): NodeJS.MemoryUsage
   };
 }
 
+const MEMORY_THRESHOLD_ENV_KEYS = [
+  "OPENCLAW_DIAGNOSTIC_RSS_WARNING_BYTES",
+  "OPENCLAW_DIAGNOSTIC_RSS_CRITICAL_BYTES",
+  "OPENCLAW_DIAGNOSTIC_HEAP_WARNING_BYTES",
+  "OPENCLAW_DIAGNOSTIC_HEAP_CRITICAL_BYTES",
+  "OPENCLAW_DIAGNOSTIC_RSS_GROWTH_WARNING_BYTES",
+  "OPENCLAW_DIAGNOSTIC_RSS_GROWTH_CRITICAL_BYTES",
+  "OPENCLAW_DIAGNOSTIC_GROWTH_WINDOW_MS",
+  "OPENCLAW_DIAGNOSTIC_PRESSURE_REPEAT_MS",
+];
+
 describe("diagnostic memory", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -56,6 +71,44 @@ describe("diagnostic memory", () => {
     resetDiagnosticStabilityRecorderForTest();
     setLoggerOverride(null);
     resetLogger();
+    for (const key of MEMORY_THRESHOLD_ENV_KEYS) {
+      delete process.env[key];
+    }
+  });
+
+  it("allows memory pressure thresholds to be raised with env vars", () => {
+    process.env.OPENCLAW_DIAGNOSTIC_RSS_WARNING_BYTES = String(3 * 1024 * 1024 * 1024);
+    process.env.OPENCLAW_DIAGNOSTIC_RSS_CRITICAL_BYTES = String(4 * 1024 * 1024 * 1024);
+    process.env.OPENCLAW_DIAGNOSTIC_HEAP_WARNING_BYTES = String(2 * 1024 * 1024 * 1024);
+    process.env.OPENCLAW_DIAGNOSTIC_HEAP_CRITICAL_BYTES = String(5 * 1024 * 1024 * 1024);
+    process.env.OPENCLAW_DIAGNOSTIC_RSS_GROWTH_WARNING_BYTES = String(768 * 1024 * 1024);
+    process.env.OPENCLAW_DIAGNOSTIC_RSS_GROWTH_CRITICAL_BYTES = String(1536 * 1024 * 1024);
+    process.env.OPENCLAW_DIAGNOSTIC_GROWTH_WINDOW_MS = "900000";
+    process.env.OPENCLAW_DIAGNOSTIC_PRESSURE_REPEAT_MS = "120000";
+
+    expect(resolveThresholds()).toMatchObject({
+      rssWarningBytes: 3 * 1024 * 1024 * 1024,
+      rssCriticalBytes: 4 * 1024 * 1024 * 1024,
+      heapUsedWarningBytes: 2 * 1024 * 1024 * 1024,
+      heapUsedCriticalBytes: 5 * 1024 * 1024 * 1024,
+      rssGrowthWarningBytes: 768 * 1024 * 1024,
+      rssGrowthCriticalBytes: 1536 * 1024 * 1024,
+      growthWindowMs: 900000,
+      pressureRepeatMs: 120000,
+    });
+  });
+
+  it("keeps explicit threshold arguments above env vars", () => {
+    process.env.OPENCLAW_DIAGNOSTIC_RSS_WARNING_BYTES = String(3 * 1024 * 1024 * 1024);
+
+    expect(resolveThresholds({ rssWarningBytes: 42 }).rssWarningBytes).toBe(42);
+  });
+
+  it("ignores invalid memory threshold env vars", () => {
+    for (const bad of ["", "   ", "abc", "-5", "0"]) {
+      process.env.OPENCLAW_DIAGNOSTIC_RSS_WARNING_BYTES = bad;
+      expect(resolveThresholds().rssWarningBytes).toBe(1536 * 1024 * 1024);
+    }
   });
 
   it("emits memory samples with byte counts", () => {

@@ -58,18 +58,54 @@ function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage
   };
 }
 
-function resolveThresholds(
+// Environment override for memory-pressure thresholds. Precedence:
+// explicit thresholds argument > OPENCLAW_DIAGNOSTIC_* env var > built-in default.
+// Only positive finite values are accepted; invalid env values fall through to defaults.
+function envThreshold(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") {
+    return undefined;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+export function resolveThresholds(
   thresholds?: DiagnosticMemoryThresholds,
 ): Required<DiagnosticMemoryThresholds> {
   return {
-    rssWarningBytes: thresholds?.rssWarningBytes ?? DEFAULT_RSS_WARNING_BYTES,
-    rssCriticalBytes: thresholds?.rssCriticalBytes ?? DEFAULT_RSS_CRITICAL_BYTES,
-    heapUsedWarningBytes: thresholds?.heapUsedWarningBytes ?? DEFAULT_HEAP_WARNING_BYTES,
-    heapUsedCriticalBytes: thresholds?.heapUsedCriticalBytes ?? DEFAULT_HEAP_CRITICAL_BYTES,
-    rssGrowthWarningBytes: thresholds?.rssGrowthWarningBytes ?? DEFAULT_RSS_GROWTH_WARNING_BYTES,
-    rssGrowthCriticalBytes: thresholds?.rssGrowthCriticalBytes ?? DEFAULT_RSS_GROWTH_CRITICAL_BYTES,
-    growthWindowMs: thresholds?.growthWindowMs ?? DEFAULT_GROWTH_WINDOW_MS,
-    pressureRepeatMs: thresholds?.pressureRepeatMs ?? DEFAULT_PRESSURE_REPEAT_MS,
+    rssWarningBytes:
+      thresholds?.rssWarningBytes ??
+      envThreshold("OPENCLAW_DIAGNOSTIC_RSS_WARNING_BYTES") ??
+      DEFAULT_RSS_WARNING_BYTES,
+    rssCriticalBytes:
+      thresholds?.rssCriticalBytes ??
+      envThreshold("OPENCLAW_DIAGNOSTIC_RSS_CRITICAL_BYTES") ??
+      DEFAULT_RSS_CRITICAL_BYTES,
+    heapUsedWarningBytes:
+      thresholds?.heapUsedWarningBytes ??
+      envThreshold("OPENCLAW_DIAGNOSTIC_HEAP_WARNING_BYTES") ??
+      DEFAULT_HEAP_WARNING_BYTES,
+    heapUsedCriticalBytes:
+      thresholds?.heapUsedCriticalBytes ??
+      envThreshold("OPENCLAW_DIAGNOSTIC_HEAP_CRITICAL_BYTES") ??
+      DEFAULT_HEAP_CRITICAL_BYTES,
+    rssGrowthWarningBytes:
+      thresholds?.rssGrowthWarningBytes ??
+      envThreshold("OPENCLAW_DIAGNOSTIC_RSS_GROWTH_WARNING_BYTES") ??
+      DEFAULT_RSS_GROWTH_WARNING_BYTES,
+    rssGrowthCriticalBytes:
+      thresholds?.rssGrowthCriticalBytes ??
+      envThreshold("OPENCLAW_DIAGNOSTIC_RSS_GROWTH_CRITICAL_BYTES") ??
+      DEFAULT_RSS_GROWTH_CRITICAL_BYTES,
+    growthWindowMs:
+      thresholds?.growthWindowMs ??
+      envThreshold("OPENCLAW_DIAGNOSTIC_GROWTH_WINDOW_MS") ??
+      DEFAULT_GROWTH_WINDOW_MS,
+    pressureRepeatMs:
+      thresholds?.pressureRepeatMs ??
+      envThreshold("OPENCLAW_DIAGNOSTIC_PRESSURE_REPEAT_MS") ??
+      DEFAULT_PRESSURE_REPEAT_MS,
   };
 }
 
