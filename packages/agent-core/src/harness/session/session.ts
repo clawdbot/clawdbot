@@ -9,6 +9,20 @@ import type { CompactionEntry, ResetEntry, SessionContext, SessionTreeEntry } fr
 
 type ContextBoundary = CompactionEntry | ResetEntry;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
+const COMPACTION_RETAINED_BOUNDARY = Symbol.for("openclaw.compactionRetainedBoundary");
+
+function withCompactionRetainedBoundary<TMessage extends AgentMessage>(
+  message: TMessage,
+  boundaryId: string,
+): TMessage {
+  const marked = { ...message } as TMessage & { [COMPACTION_RETAINED_BOUNDARY]?: string };
+  Object.defineProperty(marked, COMPACTION_RETAINED_BOUNDARY, {
+    configurable: true,
+    enumerable: true,
+    value: boundaryId,
+  });
+  return marked;
+}
 
 function appendContextMessage(messages: AgentMessage[], entry: SessionTreeEntry): void {
   if (entry.type === "message") {
@@ -69,9 +83,16 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
   if (boundary) {
     let compactionSummary: Extract<AgentMessage, { role: "compactionSummary" }> | undefined;
     if (boundary.type === "compaction") {
-      compactionSummary = asAgentMessage(
-        createCompactionSummaryMessage(boundary.summary, boundary.tokensBefore, boundary.timestamp),
-      ) as Extract<AgentMessage, { role: "compactionSummary" }>;
+      compactionSummary = withCompactionRetainedBoundary(
+        asAgentMessage(
+          createCompactionSummaryMessage(
+            boundary.summary,
+            boundary.tokensBefore,
+            boundary.timestamp,
+          ),
+        ) as Extract<AgentMessage, { role: "compactionSummary" }>,
+        boundary.id,
+      );
       messages.push(compactionSummary);
     }
     const retainedMessagesStart = messages.length;
@@ -93,7 +114,13 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
     }
     if (compactionSummary) {
       // The summary is intentionally first in model context. Preserve the source boundary
-      // structurally so invalid timestamps cannot make retained metadata look post-compaction.
+      // on each retained message so filtering/windowing cannot make positional metadata stale.
+      for (let index = retainedMessagesStart; index < messages.length; index += 1) {
+        const message = messages[index];
+        if (message) {
+          messages[index] = withCompactionRetainedBoundary(message, boundary.id);
+        }
+      }
       compactionSummary.retainedMessageCount = messages.length - retainedMessagesStart;
     }
     for (const entry of pathEntries.slice(boundaryIdx + 1)) {

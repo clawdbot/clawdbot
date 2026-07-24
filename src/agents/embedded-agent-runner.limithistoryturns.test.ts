@@ -3,6 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import {
+  isWithinRetainedCompactionRange,
+  resolveCompactionBoundary,
+} from "./compaction-boundary.js";
 import { limitHistoryTurns } from "./embedded-agent-runner/history.js";
 
 describe("limitHistoryTurns", () => {
@@ -137,6 +141,49 @@ describe("limitHistoryTurns", () => {
     expect(limited.length).toBe(3);
     expect(expectDefined(limited[0], "limited[0] test invariant").role).toBe("compactionSummary");
     expect(firstText(expectDefined(limited[1], "limited[1] test invariant"))).toBe("message 2");
+  });
+
+  it("does not classify a fresh response as retained after history limiting", () => {
+    const retainedBoundary = Symbol.for("openclaw.compactionRetainedBoundary");
+    const boundaryId = "compaction-1";
+    const markRetained = (message: AgentMessage): AgentMessage => {
+      const marked = { ...message } as AgentMessage & { [retainedBoundary]?: string };
+      Object.defineProperty(marked, retainedBoundary, {
+        enumerable: true,
+        value: boundaryId,
+      });
+      return marked;
+    };
+    const compactionSummary = markRetained({
+      role: "compactionSummary",
+      summary: "Previous conversation",
+      tokensBefore: 5000,
+      retainedMessageCount: 4,
+    } as AgentMessage);
+    const retained = makeMessages(["user", "assistant", "user", "assistant"]).map(markRetained);
+    const currentTurn = makeMessages(["user", "assistant"]);
+
+    const limited = limitHistoryTurns([compactionSummary, ...retained, ...currentTurn], 1).map(
+      (message) => Object.assign({}, message) as AgentMessage,
+    );
+    const freshPrompt = userMessage("fresh prompt");
+    const freshAssistant = assistantTextMessage("fresh response");
+    const runtimeMessages = [...limited, freshPrompt, freshAssistant];
+    const boundary = expectDefined(
+      resolveCompactionBoundary(runtimeMessages),
+      "compaction boundary test invariant",
+    );
+
+    expect(limited.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+    ]);
+    expect(boundary.retainedStartIndex).toBe(1);
+    expect(boundary.retainedEndIndex).toBe(1);
+    expect(isWithinRetainedCompactionRange(boundary, runtimeMessages.indexOf(freshAssistant))).toBe(
+      false,
+    );
   });
 
   it("preserves leading branchSummary when limiting", () => {

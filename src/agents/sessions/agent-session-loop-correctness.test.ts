@@ -12,6 +12,7 @@ const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
 
+import { limitHistoryTurns } from "../embedded-agent-runner/history.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
@@ -379,6 +380,66 @@ describe("AgentSession loop correctness", () => {
       throw new Error("expected retained assistant message");
     }
     expect(retainedAssistant.usage.totalTokens).toBe(0);
+  });
+
+  it("compacts a fresh high-usage response after history limiting retained messages", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const retainedUserId = sessionManager.appendMessage({
+      role: "user",
+      content: "first retained prompt",
+      timestamp: 1_000,
+    });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "first retained answer" }]),
+      timestamp: 2_000,
+    });
+    sessionManager.appendMessage({
+      role: "user",
+      content: "second retained prompt",
+      timestamp: 3_000,
+    });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "second retained answer" }]),
+      timestamp: 4_000,
+    });
+    sessionManager.appendCompaction("older context", retainedUserId, 100);
+    const compaction = sessionManager.getEntries().find((entry) => entry.type === "compaction");
+    if (!compaction || compaction.type !== "compaction") {
+      throw new Error("expected compaction entry");
+    }
+    compaction.timestamp = "9999-12-31";
+    sessionManager.appendMessage({ role: "user", content: "current prompt", timestamp: 5_000 });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "current answer" }]),
+      timestamp: 6_000,
+    });
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "fresh answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.agent.state.messages = limitHistoryTurns(session.agent.state.messages, 1);
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("fresh prompt");
+
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
+    );
   });
 
   it("does not retry a high-usage turn terminated by a tool result", async () => {

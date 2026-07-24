@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { buildSessionContext } from "./session.js";
 
@@ -55,6 +56,16 @@ describe("buildSessionContext", () => {
       { content: "retained" },
       { content: "new turn" },
     ]);
+    const retainedBoundary = Symbol.for("openclaw.compactionRetainedBoundary");
+    expect(
+      (context.messages[0] as AgentMessage & { [retainedBoundary]?: string })[retainedBoundary],
+    ).toBe("compaction");
+    expect(
+      (context.messages[1] as AgentMessage & { [retainedBoundary]?: string })[retainedBoundary],
+    ).toBe("compaction");
+    expect(
+      (context.messages[2] as AgentMessage & { [retainedBoundary]?: string })[retainedBoundary],
+    ).toBeUndefined();
   });
 
   it("preserves the retained range when a compaction timestamp is invalid", () => {
