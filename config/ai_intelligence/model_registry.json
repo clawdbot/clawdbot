@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "updated": "2026-07-23",
+  "models": [
+    {
+      "id": "openai-frontier",
+      "display_name": "OpenAI frontier model",
+      "provider": "OpenAI",
+      "deployment": "cloud",
+      "status": "production",
+      "privacy_tier": "external",
+      "cost_tier": "paid",
+      "notes": "Primary high-capability planning, architecture, and difficult engineering model."
+    },
+    {
+      "id": "kimi-k3",
+      "display_name": "Kimi K3",
+      "provider": "Moonshot AI",
+      "deployment": "cloud",
+      "status": "evaluation",
+      "privacy_tier": "external",
+      "cost_tier": "unknown",
+      "notes": "Candidate for long-context reasoning, repository comprehension, and engineering work. Do not promote until benchmarked."
+    },
+    {
+      "id": "claude",
+      "display_name": "Claude",
+      "provider": "Anthropic",
+      "deployment": "cloud",
+      "status": "evaluation",
+      "privacy_tier": "external",
+      "cost_tier": "paid",
+      "notes": "Candidate for coding, documentation, and long-context analysis."
+    },
+    {
+      "id": "gemini",
+      "display_name": "Gemini",
+      "provider": "Google",
+      "deployment": "cloud",
+      "status": "evaluation",
+      "privacy_tier": "external",
+      "cost_tier": "paid",
+      "notes": "Candidate for multimodal and research-heavy work."
+    },
+    {
+      "id": "grok",
+      "display_name": "Grok",
+      "provider": "xAI",
+      "deployment": "cloud",
+      "status": "watch",
+      "privacy_tier": "external",
+      "cost_tier": "paid",
+      "notes": "Technology-watch candidate; benchmark before operational use."
+    },
+    {
+      "id": "ollama-hermes3-8b",
+      "display_name": "Hermes 3 8B",
+      "provider": "Local Ollama",
+      "deployment": "local",
+      "status": "production",
+      "privacy_tier": "local",
+      "cost_tier": "owned-hardware",
+      "notes": "Default privacy-first local conversational and property-data model."
+    },
+    {
+      "id": "ollama-gemma3-12b",
+      "display_name": "Gemma 3 12B",
+      "provider": "Local Ollama",
+      "deployment": "local",
+      "status": "production",
+      "privacy_tier": "local",
+      "cost_tier": "owned-hardware",
+      "notes": "Local candidate for reasoning and multimodal-adjacent workflows."
+    },
+    {
+      "id": "ollama-llama3.2-3b",
+      "display_name": "Llama 3.2 3B",
+      "provider": "Local Ollama",
+      "deployment": "local",
+      "status": "production-fallback",
+      "privacy_tier": "local",
+      "cost_tier": "owned-hardware",
+      "notes": "Fast low-resource fallback; not preferred for complex engineering."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "task": "private_property_data",
+      "required_privacy_tier": "local",
+      "preferred_models": ["ollama-hermes3-8b", "ollama-gemma3-12b"],
+      "fallback_models": ["ollama-llama3.2-3b"]
+    },
+    {
+      "task": "home_assistant",
+      "preferred_models": ["ollama-hermes3-8b", "openai-frontier"],
+      "fallback_models": ["ollama-gemma3-12b"]
+    },
+    {
+      "task": "linux_admin",
+      "preferred_models": ["openai-frontier", "claude", "kimi-k3"],
+      "fallback_models": ["ollama-gemma3-12b"]
+    },
+    {
+      "task": "long_context_engineering",
+      "preferred_models": ["openai-frontier", "claude", "kimi-k3"],
+      "fallback_models": ["ollama-hermes3-8b"]
+    },
+    {
+      "task": "swift",
+      "preferred_models": ["openai-frontier", "claude"],
+      "fallback_models": ["gemini"]
+    },
+    {
+      "task": "routine_local_query",
+      "required_privacy_tier": "local",
+      "preferred_models": ["ollama-hermes3-8b", "ollama-llama3.2-3b"],
+      "fallback_models": ["ollama-gemma3-12b"]
+    }
+  ]
+}

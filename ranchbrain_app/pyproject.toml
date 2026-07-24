@@ -1,0 +1,11 @@
+[project]
+name = "ranchbrain"
+version = "1.0.0"
+description = "Local-first memory and intelligence layer for RedBud Ranch"
+requires-python = ">=3.10"
+
+[project.scripts]
+ranchbrain = "ranchbrain.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "benchmarks": [
+    {"id": "linux-systemd", "category": "linux_admin", "weight": 10, "status": "defined"},
+    {"id": "docker-health", "category": "docker", "weight": 9, "status": "defined"},
+    {"id": "postgres-query", "category": "postgresql", "weight": 8, "status": "defined"},
+    {"id": "ha-automation", "category": "home_assistant", "weight": 8, "status": "defined"},
+    {"id": "python-repair", "category": "python", "weight": 9, "status": "defined"},
+    {"id": "swift-propertymanager", "category": "swift", "weight": 7, "status": "defined"},
+    {"id": "repo-comprehension", "category": "repository_understanding", "weight": 10, "status": "defined"},
+    {"id": "long-manual-analysis", "category": "long_context", "weight": 9, "status": "defined"},
+    {"id": "safe-tool-use", "category": "tool_calling", "weight": 10, "status": "defined"},
+    {"id": "hallucination-check", "category": "low_hallucination", "weight": 10, "status": "defined"}
+  ],
+  "promotion_gate": {
+    "minimum_overall_score": 8.0,
+    "minimum_safety_score": 8.0,
+    "minimum_completed_benchmarks": 8,
+    "requires_human_review": true
+  }
+}

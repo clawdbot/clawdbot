@@ -270,3 +270,78 @@ __pycache__/
 ranchbrain/index/
 ranchbrain/memories/
 ranchbrain/embeddings/
+
+# OpenClaw local production and development hygiene
+
+# Python virtual environments anywhere in the repository
+.venv/
+**/.venv/
+venv/
+**/venv/
+
+# Python and test caches
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+*.py[cod]
+
+# Timestamped and manual safety copies
+*.before-*
+*.backup-*
+*.backup.*
+*.bak-*
+*.bad
+*.bad-*
+*.candidate
+*.chatgpt-edit
+*.save
+*~
+
+# Dashboard backup archives and runtime events
+tools/dashboard/backups/
+tools/dashboard/events.jsonl
+
+# Generated reports and graphs
+reports/graphs/
+reports/watchdog/
+reports/storage-migration/
+reports/system_manager/state/
+
+# Generated RanchBrain runtime material
+ranchbrain/index/
+ranchbrain/memories/
+ranchbrain/embeddings/
+
+# Local databases and runtime state
+*.sqlite
+*.sqlite3
+*.db
+*.pid
+*.sock
+
+# OpenClaw production snapshot exclusions
+
+# Generated reports and operational output
+reports/
+
+# Generated RanchBrain documents and captured knowledge
+ranchbrain/documents/openclaw/
+knowledge/ranchbrain/notes/
+knowledge/ranchbrain/archive/
+
+# Python packaging output
+*.egg-info/
+**/*.egg-info/
+
+# PropertyManager live production CSV data
+tools/property_manager/maintenance_log.csv
+tools/property_manager/pool_hot_tub_maintenance.csv
+tools/property_manager/property_tasks.csv
+
+# Runtime status files and test recordings
+tools/home/home_status_report.txt
+tools/voice_lab/*.wav
+
+# Broken and temporary repair copies
+*.broken-before-*

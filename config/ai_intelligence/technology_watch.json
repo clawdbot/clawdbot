@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "updated": "2026-07-23",
+  "providers": [
+    "OpenAI", "Anthropic", "Google", "Moonshot AI", "xAI",
+    "DeepSeek", "Mistral", "Meta", "Alibaba Qwen"
+  ],
+  "candidates": [
+    {
+      "model_id": "kimi-k3",
+      "state": "evaluate",
+      "reason": "Potential long-context and engineering value for RanchBrain.",
+      "next_action": "Run the OpenClaw benchmark suite and record evidence."
+    }
+  ]
+}
