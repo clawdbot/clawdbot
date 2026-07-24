@@ -12,6 +12,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { getFileStatSnapshot } from "../cache-utils.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import type {
@@ -143,7 +144,8 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
 
   // Cache hit: derive both light and full results from cached entries.
   if (isSessionStoreCacheEnabled()) {
-    const cached = readSessionStoreCache({ storePath: dbPath, clone: false });
+    const currentFileStat = getFileStatSnapshot(dbPath);
+    const cached = readSessionStoreCache({ storePath: dbPath, ...currentFileStat, clone: false });
     if (cached) {
       let entries = Object.entries(cached)
         .filter(([key]) => !isInternalSessionEffectsKey(key))
