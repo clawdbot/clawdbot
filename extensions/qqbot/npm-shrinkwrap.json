@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/qqbot",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/qqbot",
-      "version": "2026.7.2-beta.4",
+      "version": "2026.7.2-beta.5",
       "dependencies": {
         "@tencent-connect/qqbot-connector": "1.2.0",
         "mpg123-decoder": "1.0.3",
@@ -17,7 +17,7 @@
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.7.2-beta.4"
+        "openclaw": ">=2026.7.2-beta.5"
       },
       "peerDependenciesMeta": {
         "openclaw": {

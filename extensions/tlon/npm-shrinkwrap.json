@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/tlon",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/tlon",
-      "version": "2026.7.2-beta.4",
+      "version": "2026.7.2-beta.5",
       "dependencies": {
         "@aws-sdk/client-s3": "3.1090.0",
         "@aws-sdk/s3-request-presigner": "3.1090.0",
@@ -15,7 +15,7 @@
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.7.2-beta.4"
+        "openclaw": ">=2026.7.2-beta.5"
       },
       "peerDependenciesMeta": {
         "openclaw": {

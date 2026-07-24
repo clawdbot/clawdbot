@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/anthropic-vertex-provider",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "description": "OpenClaw Anthropic Vertex provider plugin for Claude models on Google Vertex AI.",
   "repository": {
     "type": "git",
@@ -25,10 +25,10 @@
       "minHostVersion": ">=2026.5.12-beta.1"
     },
     "compat": {
-      "pluginApi": ">=2026.7.2-beta.4"
+      "pluginApi": ">=2026.7.2-beta.5"
     },
     "build": {
-      "openclawVersion": "2026.7.2-beta.4",
+      "openclawVersion": "2026.7.2-beta.5",
       "bundledDist": false
     },
     "release": {

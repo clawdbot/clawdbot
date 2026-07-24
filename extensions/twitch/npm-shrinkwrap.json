@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/twitch",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/twitch",
-      "version": "2026.7.2-beta.4",
+      "version": "2026.7.2-beta.5",
       "dependencies": {
         "@twurple/api-call": "8.1.4",
         "@twurple/auth": "8.1.4",
