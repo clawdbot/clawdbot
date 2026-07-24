@@ -71,19 +71,16 @@ flow:
         - set: requestCursorBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
-        - call: startAgentRun
-          saveAs: started
-          args:
-            - ref: env
-            - sessionKey:
-                ref: sessionKey
-              message:
-                expr: config.prompt
-              to:
-                expr: "`dm:${conversationId}`"
-              taskTracking: true
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 180000)
+        - sendInbound:
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: QA Restart Operator
+            text:
+              expr: config.prompt
         - call: waitForCondition
           saveAs: plannedWait
           args:
@@ -166,4 +163,4 @@ flow:
             expr: "recoveryLogs.includes('dispatching restart-safe recovery') && recoveryLogs.includes('restart-safe recovery tool policy retained')"
             message:
               expr: "`restart-safe host policy was not observed; logs=${recoveryLogs}`"
-      detailsExpr: "`runId=${started.runId} session=${sessionKey} plannedTool=${plannedWait.plannedToolName} persistedTail=${interruptedTranscript.lastMessageRole}/${interruptedTranscript.lastAssistantStopReason}/${interruptedTranscript.lastAssistantToolNames?.join(',')} recoveredTail=${postRestartTranscript.lastMessageRole}/${postRestartTranscript.lastAssistantStopReason}/${postRestartTranscript.lastAssistantContentTypes?.join(',')} recoveredMarkers=${interruptedMatches.length} resendNotices=${restartNotices.length} restartSafePolicy=true heartbeatPoll=false\\n${outbound.text}`"
+      detailsExpr: "`session=${sessionKey} plannedTool=${plannedWait.plannedToolName} persistedTail=${interruptedTranscript.lastMessageRole}/${interruptedTranscript.lastAssistantStopReason}/${interruptedTranscript.lastAssistantToolNames?.join(',')} recoveredTail=${postRestartTranscript.lastMessageRole}/${postRestartTranscript.lastAssistantStopReason}/${postRestartTranscript.lastAssistantContentTypes?.join(',')} recoveredMarkers=${interruptedMatches.length} resendNotices=${restartNotices.length} restartSafePolicy=true heartbeatPoll=false\\n${outbound.text}`"
