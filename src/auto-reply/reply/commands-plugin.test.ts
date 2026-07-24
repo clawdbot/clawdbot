@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -98,6 +99,8 @@ describe("handlePluginCommand", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
+    params.agentId = "requester";
+    params.sessionKey = "agent:target:whatsapp:direct:test-user";
     params.sessionEntry = {
       sessionId: "wrapper-session",
       sessionFile: "/tmp/wrapper-session.jsonl",
@@ -118,13 +121,28 @@ describe("handlePluginCommand", () => {
     const [commandParams] = expectDefined(
       (
         executePluginCommandMock.mock.calls as unknown as Array<
-          [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]
+          [
+            {
+              authProfileId?: string;
+              sessionId?: string;
+              sessionFile?: string;
+              sessionTarget?: { agentId?: string; sessionId?: string; sessionKey?: string };
+            },
+          ]
         >
       )[0],
       "(executePluginCommandMock.mock.calls as unknown as Array<\n        [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]\n      >)[0] test invariant",
     );
     expect(commandParams.sessionId).toBe("target-session");
-    expect(commandParams.sessionFile).toBe("/tmp/target-session.jsonl");
+    expect(commandParams.sessionTarget).toMatchObject({
+      agentId: "target",
+      sessionId: "target-session",
+      sessionKey: params.sessionKey,
+    });
+    expect(parseSqliteSessionFileMarker(commandParams.sessionFile)).toMatchObject({
+      agentId: "target",
+      sessionId: "target-session",
+    });
     expect(commandParams.authProfileId).toBe("openai:owner@example.com");
   });
 

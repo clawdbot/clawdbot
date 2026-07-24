@@ -6,7 +6,11 @@
  */
 
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 /**
@@ -20,6 +24,18 @@ export const handlePluginCommand: CommandHandler = async (
 ): Promise<CommandHandlerResult | null> => {
   const { command, cfg } = params;
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const targetAgentId =
+    resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }) ??
+    params.agentId ??
+    DEFAULT_AGENT_ID;
+  const sessionTarget = targetSessionEntry?.sessionId
+    ? {
+        agentId: targetAgentId,
+        sessionId: targetSessionEntry.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: resolveStorePath(cfg.session?.store, { agentId: targetAgentId }),
+      }
+    : undefined;
 
   if (!allowTextCommands) {
     return null;
@@ -44,7 +60,8 @@ export const handlePluginCommand: CommandHandler = async (
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
-    sessionFile: targetSessionEntry ? params.sessionKey : undefined,
+    sessionTarget,
+    sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody: command.commandBodyNormalized,
     config: cfg,
