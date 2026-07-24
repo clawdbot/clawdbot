@@ -11,6 +11,7 @@ import {
   modelCostsEqual,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -162,7 +163,8 @@ export function normalizeAnthropicVertexResolvedModel(
   const fable5 = resolveClaudeFable5ModelIdentity(ref) !== undefined;
   const mythos5 = resolveClaudeMythos5ModelIdentity(ref) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(ref) !== undefined;
-  if (!fable5 && !mythos5 && !sonnet5) {
+  const opus5 = resolveClaudeOpus5ModelIdentity(ref) !== undefined;
+  if (!fable5 && !mythos5 && !sonnet5 && !opus5) {
     return undefined;
   }
   const input: ProviderRuntimeModel["input"] = model.input.includes("image")

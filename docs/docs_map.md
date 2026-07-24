@@ -7862,7 +7862,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Usage and cost tracking
   - H2: Getting started
   - H2: Claude sessions across computers
-  - H2: Thinking defaults (Claude Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
+  - H2: Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Fable 5)
   - H3: Why this exists
   - H3: How it works
