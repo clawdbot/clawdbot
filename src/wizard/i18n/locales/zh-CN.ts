@@ -112,6 +112,7 @@ export const zh_CN = {
       warningTitle: "Tailscale 警告",
     },
     completion: catalogFamily(authoringCatalog.messages, "wizard.completion"),
+    postInstallMigration: catalogFamily(authoringCatalog.messages, "wizard.postInstallMigration"),
     migration: {
       apply: "现在应用这次迁移？",
       appliedTitle: "迁移已应用",

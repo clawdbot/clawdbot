@@ -7,6 +7,10 @@
     "wizard.completion.installed": "Shell completion installed. {reloadHint}",
     "wizard.completion.reloadPowerShell": "Restart your shell or run: {command}",
     "wizard.completion.reloadShell": "Restart your shell or run: source {profile}",
-    "wizard.completion.title": "Shell completion"
+    "wizard.completion.title": "Shell completion",
+    "wizard.postInstallMigration.confirm": "Migrate {description} into this agent now?",
+    "wizard.postInstallMigration.failed": "{label} migration failed: {reason}. Re-run with {command} to inspect.",
+    "wizard.postInstallMigration.hint": "Detected {description}. Preview migration with {command}.",
+    "wizard.postInstallMigration.promptSkipped": "Skipping {label} migration prompt: {reason}"
   }
 }

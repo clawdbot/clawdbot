@@ -113,6 +113,7 @@ export const en = {
       warningTitle: "Tailscale Warning",
     },
     completion: catalogFamily(authoringCatalog.messages, "wizard.completion"),
+    postInstallMigration: catalogFamily(authoringCatalog.messages, "wizard.postInstallMigration"),
     migration: {
       apply: "Apply this migration now?",
       appliedTitle: "Migration applied",

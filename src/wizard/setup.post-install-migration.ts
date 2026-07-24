@@ -9,6 +9,7 @@ import {
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
 type PostInstallMigrationOptions = {
@@ -112,7 +113,12 @@ function describeCandidate(candidate: ResolvedProviderCandidate): string {
 
 function logMigrationHint(runtime: RuntimeEnv, candidate: ResolvedProviderCandidate): void {
   const command = formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`);
-  runtime.log(`Detected ${describeCandidate(candidate)}. Preview migration with ${command}.`);
+  runtime.log(
+    t("wizard.postInstallMigration.hint", {
+      description: describeCandidate(candidate),
+      command,
+    }),
+  );
 }
 
 function applyMigrationConfigPatches(
@@ -180,14 +186,17 @@ export async function offerPostInstallMigrations(
     let accepted;
     try {
       accepted = await prompter.confirm({
-        message: `Migrate ${description} into this agent now?`,
+        message: t("wizard.postInstallMigration.confirm", { description }),
         initialValue: false,
       });
     } catch (error) {
       // Prompt cancellations / non-TTY refusals fall back to the hint path so
       // onboarding never aborts on an optional offer.
       params.runtime.log(
-        `Skipping ${candidate.provider.label} migration prompt: ${formatErrorMessage(error)}`,
+        t("wizard.postInstallMigration.promptSkipped", {
+          label: candidate.provider.label,
+          reason: formatErrorMessage(error),
+        }),
       );
       logMigrationHint(params.runtime, candidate);
       continue;
@@ -220,9 +229,13 @@ export async function offerPostInstallMigrations(
       });
       nextConfig = applyMigrationConfigPatches(nextConfig, result);
     } catch (error) {
+      const command = formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`);
       params.runtime.log(
-        `${candidate.provider.label} migration failed: ${formatErrorMessage(error)}. ` +
-          `Re-run with ${formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`)} to inspect.`,
+        t("wizard.postInstallMigration.failed", {
+          label: candidate.provider.label,
+          reason: formatErrorMessage(error),
+          command,
+        }),
       );
     } finally {
       await preparation?.dispose?.();
