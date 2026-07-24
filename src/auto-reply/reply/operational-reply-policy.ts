@@ -20,9 +20,9 @@ const deliveredOperationalReplyOnceKeys = new Set<string>();
 const pendingOperationalReplyOnceKeys = new Set<string>();
 const MAX_OPERATIONAL_REPLY_ONCE_KEYS = 1024;
 
-export type OperationalReplyPolicy = "always" | "once" | "redirect" | "silent";
+type OperationalReplyPolicy = "always" | "once" | "redirect" | "silent";
 
-export type OperationalReplyPolicyResult =
+type OperationalReplyPolicyResult =
   | { markDelivered?: (delivered: boolean) => Promise<void> | void; shouldDeliver: true }
   | { intentionalSilence: true; redirected?: boolean; shouldDeliver: false };
 
@@ -35,9 +35,15 @@ export async function markOperationalReplyPolicyDelivered(
   }
 }
 
-export function clearOperationalReplyPolicyStateForTest(): void {
+function clearOperationalReplyPolicyStateForTest(): void {
   deliveredOperationalReplyOnceKeys.clear();
   pendingOperationalReplyOnceKeys.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.operationalReplyPolicyTestApi")
+  ] = { clearOperationalReplyPolicyStateForTest };
 }
 
 export function resolveOperationalReplyPolicy(cfg: OpenClawConfig): {

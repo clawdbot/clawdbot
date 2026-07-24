@@ -238,7 +238,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.operationalReplies":
     'Controls automatic operational notices such as fallback, compaction, usage-limit, backend error, and status messages. Default "always" preserves existing delivery. Use "silent" to keep notices in logs only, "once" to show one matching notice per source session, or "redirect" with redirectSessionKey to write notices to an operator session instead of the source chat.',
   "messages.operationalReplies.policy":
-    'Delivery policy for automatic operational notices. "always" preserves existing behavior, "silent" suppresses source-chat notices, "once" reduces repeats per source session, and "redirect" writes notices to redirectSessionKey.',
+    'Controls delivery of automatic operational notices. "always" preserves existing behavior, "silent" suppresses source-chat notices, "once" reduces repeats per source session, and "redirect" writes notices to redirectSessionKey.',
   "messages.operationalReplies.redirectSessionKey":
     'Session key that receives redirected operational notices when messages.operationalReplies.policy is "redirect". Keep this pointed at an operator-owned session; normal assistant replies are not redirected by this setting.',
   "messages.groupChat":

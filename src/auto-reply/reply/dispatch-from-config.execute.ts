@@ -222,12 +222,21 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                     const isForcedToolProgress =
                       shouldDeliverForcedToolProgressDespiteSourceSuppression();
+                    const payloadMetadata = getReplyPayloadMetadata(payload);
+                    // Bare isError means failed tool output in this progress callback, not a
+                    // terminal backend notice. Runtime-owned errors use the final/block lanes
+                    // or explicit delivery metadata so message-tool-only suppression stays intact.
+                    const isExplicitOperationalToolProgress =
+                      payload.isError !== true ||
+                      payloadMetadata?.deliverDespiteSourceReplySuppression === true ||
+                      payloadMetadata?.nonTerminalToolErrorWarning === true;
                     const shouldEvaluateOperationalPayload =
                       !sendPolicyDenied &&
                       isOperationalReplyPayload({
                         payload,
                         explicitCommandTurn: false,
                       }) &&
+                      isExplicitOperationalToolProgress &&
                       (ctx.InboundEventKind !== "room_event" ||
                         state.operationalReplyPolicy.policy !== "always");
                     const progressCallbackForwarded = shouldForwardToolResultProgressCallback(

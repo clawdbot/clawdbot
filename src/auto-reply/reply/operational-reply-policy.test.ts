@@ -1,27 +1,24 @@
-// Tests operational reply delivery policy state and durable once-key behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import {
   applyOperationalReplyPolicy,
-  clearOperationalReplyPolicyStateForTest,
   isOperationalReplyPayload,
   markOperationalReplyPolicyDelivered,
 } from "./operational-reply-policy.js";
+import { clearOperationalReplyPolicyStateForTest } from "./operational-reply-policy.test-support.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function createSessionStoreFixture(params?: {
   operationalReplyOnceKeys?: string[];
   operationalReplyPendingOnceKeys?: string[];
 }) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-operational-reply-policy-"));
-  tempDirs.push(root);
+  const root = tempDirs.make("openclaw-operational-reply-policy-");
   const storePath = path.join(root, "sessions.json");
   const sessionKey = "agent:main:visiblechat:direct:user";
   const entry: SessionEntry = {
@@ -93,11 +90,8 @@ describe("operational reply policy", () => {
     clearOperationalReplyPolicyStateForTest();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     clearOperationalReplyPolicyStateForTest();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
   });
 
   it("classifies plain error payloads without delivery metadata as operational", async () => {
