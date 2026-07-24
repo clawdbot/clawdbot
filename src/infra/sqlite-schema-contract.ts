@@ -17,7 +17,7 @@ type SqliteIndexTermRow = {
   seqno: number;
 };
 
-export type SqliteIndexTermContract = Omit<SqliteIndexTermRow, "cid"> & {
+type SqliteIndexTermContract = Omit<SqliteIndexTermRow, "cid"> & {
   kind: "column" | "expression" | "rowid";
 };
 
@@ -33,7 +33,7 @@ type SqliteTableListRow = {
   wr: number;
 };
 
-export type SqliteIndexContract = {
+type SqliteIndexContract = {
   name: string | null;
   origin: string;
   partial: number;
