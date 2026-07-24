@@ -471,6 +471,44 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(JSON.stringify(failed.stateJson)).not.toContain(secret);
   });
 
+  it("dead-letters otherwise valid stale running post-compaction state widened at the root", () => {
+    const secret = "RUNNING_POST_COMPACTION_ROOT_SECRET_MUST_NOT_RETAIN";
+    const flowId = queueRawPendingFlow("session-running-post-compaction-root-extra", {
+      kind: "continuation_delegate",
+      task: "reject root-widened crash orphan",
+      postCompaction: true,
+      extra: secret,
+    });
+    const flow = expectDefined(mockFlows.get(flowId), "running root-widened post-compaction flow");
+    flow.controllerId = CONTINUATION_POST_COMPACTION_CONTROLLER_ID;
+    flow.status = "running";
+    flow.updatedAt = 100;
+
+    expect(listRecoverableStagedPostCompactionDelegates({ runningUpdatedAtOrBefore: 100 })).toEqual(
+      [],
+    );
+    const failed = expectDefined(mockFlows.get(flowId), "failed root-widened post-compaction flow");
+    expect(failed.status).toBe("failed");
+    expect(failed.stateJson).toEqual({});
+    expect(JSON.stringify(failed.stateJson)).not.toContain(secret);
+  });
+
+  it("terminalizes invalid root-widened pending state without retaining the secret", () => {
+    const secret = "PENDING_ROOT_SECRET_MUST_NOT_RETAIN";
+    const flowId = queueRawPendingFlow("session-pending-root-extra", {
+      kind: "continuation_delegate",
+      task: "reject invalid root-widened pending flow",
+      delayMs: "not a number",
+      extra: secret,
+    });
+
+    expect(consumePendingDelegates("session-pending-root-extra")).toEqual([]);
+    const failed = expectDefined(mockFlows.get(flowId), "failed root-widened pending flow");
+    expect(failed.status).toBe("failed");
+    expect(failed.stateJson).toEqual({});
+    expect(JSON.stringify(failed.stateJson)).not.toContain(secret);
+  });
+
   it("replaces corrupt non-record recovered state with a minimal scrubbed value", () => {
     for (const secret of [
       "RECOVERY_ARRAY_SECRET_MUST_NOT_RETAIN",

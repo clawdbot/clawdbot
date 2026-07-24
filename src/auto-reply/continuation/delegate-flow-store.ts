@@ -120,6 +120,7 @@ const PendingDelegateStateSchema = z
     spawnRequesterThreadId: z.union([z.string().min(1), z.number()]).optional(),
     awaitingNextCompaction: z.boolean().optional(),
   })
+  .strict()
   .superRefine((state, ctx) => {
     const hasSilent = state.silent === true;
     const hasSilentWake = state.silentWake === true;
@@ -562,6 +563,7 @@ export function rejectCorruptDelegateFlow(
   delegateFlowRecords.fail({
     flowId: flow.flowId,
     expectedRevision: flow.revision,
+    stateJson: {},
     currentStep: isPostCompaction
       ? "Rejected invalid post-compaction payload"
       : "Rejected invalid continuation payload",
