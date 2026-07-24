@@ -20,6 +20,7 @@ minimumReleaseAgeExclude:
   - "axios"
   - "basic-ftp"
   - "baileys@7.0.0-rc13"
+  - "brace-expansion@5.0.8"
   - "hono"
   - "libopus-wasm@0.2.0"
   - "libsignal@6.0.0"
@@ -134,6 +135,7 @@ overrides:
   file-type: 22.0.1
   form-data: 2.5.6
   ip-address: 10.2.0
+  brace-expansion: 5.0.8
   minimatch: 10.2.5
   path-to-regexp: 8.4.2
   qs: 6.15.3
