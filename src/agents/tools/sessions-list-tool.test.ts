@@ -2,8 +2,13 @@
 // helpers, and numeric argument validation.
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsListTool } from "./sessions-list-tool.js";
+
+const VALID_CONFIG: OpenClawConfig = {
+  agents: { entries: { main: { default: true } } },
+};
 
 const mocks = vi.hoisted(() => ({
   gatewayCall: vi.fn(),
@@ -88,7 +93,7 @@ describe("sessions-list-tool", () => {
       main: { "agent:main:main": 7, "agent:main:subagent:child": 0 },
     });
 
-    const result = await createSessionsListTool({ config: {} as never }).execute("call-state", {});
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("call-state", {});
 
     expect(mocks.getSessionStateVersions).toHaveBeenCalledWith([
       { sessionKey: "agent:main:main", agentId: "main" },
@@ -107,7 +112,7 @@ describe("sessions-list-tool", () => {
       ],
     });
 
-    const result = await createSessionsListTool({ config: {} as never }).execute("blind", {});
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("blind", {});
 
     expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
       "agent:main:dashboard:visible",
@@ -143,7 +148,7 @@ describe("sessions-list-tool", () => {
     mocks.getSessionStateVersions.mockReturnValue({
       main: { "agent:main:subagent:child": 4 },
     });
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
     const result = await tool.execute("contract", {});
 
     expect(tool.outputSchema).toBeDefined();
@@ -213,7 +218,7 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-1", {});
     const details = getSessionsListDetails(result);
@@ -237,7 +242,7 @@ describe("sessions-list-tool", () => {
       ],
     });
 
-    const result = await createSessionsListTool({ config: {} as never }).execute("lineage", {});
+    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("lineage", {});
 
     expect(getSessionsListDetails(result).sessions?.[0]?.parentSessionKey).toBe(
       "agent:main:subagent:parent",
@@ -281,7 +286,7 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-agent-scoped-channel", {});
     const details = getSessionsListDetails(result);
@@ -321,7 +326,7 @@ describe("sessions-list-tool", () => {
       }
       return {};
     });
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-3", {});
     const details = getSessionsListDetails(result);
@@ -350,7 +355,7 @@ describe("sessions-list-tool", () => {
         },
       ],
     });
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     const result = await tool.execute("call-archived", { archived: true });
 
@@ -375,7 +380,7 @@ describe("sessions-list-tool", () => {
   ])("rejects invalid numeric parameter %o", async (params, message) => {
     // Reject before gateway dispatch so malformed limits cannot reach session
     // store queries.
-    const tool = createSessionsListTool({ config: {} as never });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
 
     await expect(tool.execute("call-4", params)).rejects.toThrow(message);
     expect(mocks.gatewayCall).not.toHaveBeenCalled();
