@@ -18,6 +18,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import {
@@ -220,6 +221,7 @@ async function runHelperWithExistingSentinel(params: {
     writeRestartSentinelRow(env, params.sentinel);
   }
   const helperParamsPath = path.join(tmpDir, "helper-params.json");
+  const stateDatabasePath = resolveOpenClawStateSqlitePath(env);
   await fs.writeFile(
     helperParamsPath,
     `${JSON.stringify(
@@ -227,7 +229,8 @@ async function runHelperWithExistingSentinel(params: {
         ...helperParams,
         parentPid: process.pid,
         parentExitTimeoutMs: params.parentExitTimeoutMs ?? 1,
-        stateDatabasePath: resolveOpenClawStateSqlitePath(env),
+        stateDatabasePath,
+        nodeSqliteLocation: resolveNodeSqliteLocation(stateDatabasePath),
         logPath: path.join(tmpDir, "handoff.log"),
         sensitivePaths: [],
       },
@@ -321,6 +324,9 @@ async function runHelperWithCommand(params: {
   >;
 
   const helperParamsPath = path.join(tmpDir, "helper-params.json");
+  const stateDatabasePath = resolveOpenClawStateSqlitePath({
+    OPENCLAW_STATE_DIR: tmpDir,
+  });
   await fs.writeFile(
     helperParamsPath,
     `${JSON.stringify(
@@ -331,7 +337,8 @@ async function runHelperWithCommand(params: {
           params.parentExitTimeoutMs === undefined ? 5000 : params.parentExitTimeoutMs,
         cwd: tmpDir,
         commandArgv: params.commandArgv,
-        stateDatabasePath: resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tmpDir }),
+        stateDatabasePath,
+        nodeSqliteLocation: resolveNodeSqliteLocation(stateDatabasePath),
         logPath: path.join(tmpDir, "handoff.log"),
         sensitivePaths: [],
         ...(params.serviceRecovery ? { serviceRecovery: params.serviceRecovery } : {}),

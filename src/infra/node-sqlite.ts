@@ -17,6 +17,13 @@ export function resolveSqliteFilesystemPath(pathname: string): string {
   return path.toNamespacedPath(path.resolve(pathname));
 }
 
+export function resolveNodeSqliteLocation(location: string): string {
+  if (location === "" || location === ":memory:" || location.startsWith("file:")) {
+    return location;
+  }
+  return resolveSqliteFilesystemPath(location);
+}
+
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
   if (isSqliteWalResetSafeVersion(version)) {
     return;
