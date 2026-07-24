@@ -146,6 +146,34 @@ describe("session accessor seam", () => {
     });
   });
 
+  it("derives a scoped key owner before fixed-store read and write target resolution", async () => {
+    const fixedStorePath = path.join(tempDir, "fixed-sessions.json");
+    const scope = {
+      defaultAgentId: "main",
+      sessionKey: "agent:ops:main",
+      storePath: fixedStorePath,
+    };
+
+    await replaceSessionEntry(scope, {
+      sessionId: "ops-session",
+      updatedAt: 10,
+    });
+
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "ops-session" });
+    await expect(loadTranscriptEvents({ ...scope, sessionId: "ops-session" })).resolves.toEqual([]);
+    const opsPath = resolveSqliteTargetFromSessionStorePath(fixedStorePath, {
+      agentId: "ops",
+      defaultAgentId: "main",
+    }).path;
+    const mainPath = resolveSqliteTargetFromSessionStorePath(fixedStorePath, {
+      agentId: "main",
+      defaultAgentId: "main",
+    }).path;
+    expect(opsPath).not.toBe(mainPath);
+    expect(fs.existsSync(opsPath)).toBe(true);
+    expect(fs.existsSync(mainPath)).toBe(false);
+  });
+
   it("excludes transcript-only nodes from logical entry counts and keys", async () => {
     await replaceSessionEntry(
       { sessionKey: "agent:main:logical-entry", storePath },

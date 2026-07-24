@@ -115,7 +115,8 @@ export function resolveSqliteScope(
     "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
   >,
 ): ResolvedSqliteScope {
-  const scopedAgentId = resolveExplicitSqliteAgentId(scope);
+  const parsedAgentId = parseAgentSessionKey(scope.sessionKey)?.agentId;
+  const scopedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : parsedAgentId;
   const incognitoAgentId = isIncognitoSessionKey(scope.sessionKey)
     ? resolveAgentIdFromSessionKey(scope.sessionKey)
     : undefined;
@@ -154,7 +155,8 @@ export function resolveSqliteReadScope(
   >,
 ): ResolvedSqliteReadScope {
   const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
-  const scopedAgentId = resolveExplicitSqliteAgentId({ ...scope, sessionKey });
+  const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  const scopedAgentId = scope.agentId ? normalizeAgentId(scope.agentId) : parsedAgentId;
   const incognitoAgentId = isIncognitoSessionKey(sessionKey)
     ? resolveAgentIdFromSessionKey(sessionKey)
     : undefined;
@@ -184,15 +186,6 @@ export function resolveSqliteReadScope(
     ...(storeTarget ? { path: storeTarget.path } : {}),
     ...(sessionKey ? { sessionKey } : {}),
   };
-}
-
-function resolveExplicitSqliteAgentId(params: {
-  agentId?: string;
-  sessionKey?: string;
-}): string | undefined {
-  return params.agentId
-    ? normalizeAgentId(params.agentId)
-    : parseAgentSessionKey(params.sessionKey)?.agentId;
 }
 
 export function resolveSqliteStoreScope(
