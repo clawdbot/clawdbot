@@ -395,6 +395,17 @@ describe("resolveSubagentToolPolicyForSession", () => {
 });
 
 describe("resolveEffectiveToolPolicy", () => {
+  it("applies implicit-main defaults tool restrictions to a pre-roster config", () => {
+    const cfg = {
+      agents: { defaults: { tools: { deny: ["exec"] } } },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveEffectiveToolPolicy({ config: cfg });
+
+    expect(result.agentId).toBe("main");
+    expect(result.agentPolicy).toEqual({ deny: ["exec"] });
+  });
+
   it("uses the configured default agent policy for an unscoped session alias", () => {
     const cfg = {
       agents: {

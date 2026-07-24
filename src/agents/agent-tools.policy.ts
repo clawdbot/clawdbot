@@ -21,6 +21,7 @@ import {
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { hasAgentRosterProperty } from "./agent-scope-config.js";
 import { listAgentEntries, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
@@ -383,12 +384,20 @@ export function resolveEffectiveToolPolicy(params: {
   const agentId =
     explicitAgentId ??
     (params.sessionKey ? parseAgentSessionKey(params.sessionKey)?.agentId : undefined) ??
-    (params.config && listAgentEntries(params.config).length > 0
+    (params.config &&
+    (!hasAgentRosterProperty(params.config) || listAgentEntries(params.config).length > 0)
       ? resolveDefaultAgentId(params.config)
       : undefined);
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
-  const agentTools = agentConfig?.tools;
+  // Shipped pre-roster SDK inputs allowed this raw defaults shape. Runtime-loaded
+  // configs materialize main, but direct SDK callers still need its deny policy.
+  const implicitDefaultTools = params.config
+    ? (params.config.agents?.defaults as { tools?: AgentToolsConfig } | undefined)?.tools
+    : undefined;
+  const agentTools =
+    agentConfig?.tools ??
+    (params.config && !hasAgentRosterProperty(params.config) ? implicitDefaultTools : undefined);
   const globalTools = params.config?.tools;
 
   const profile = agentTools?.profile ?? globalTools?.profile;

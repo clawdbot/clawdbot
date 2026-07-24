@@ -152,6 +152,41 @@ description: test skill
     expect(skillFinding.detail).toMatch(/runner\.js:\d+/);
   });
 
+  it("scans every explicit workspace when malformed defaults prevent default resolution", async () => {
+    const stateDir = await makeTmpDir("audit-malformed-roster-workspaces");
+    const workspaceA = path.join(stateDir, "workspace-a");
+    const workspaceB = path.join(stateDir, "workspace-b");
+    const scannedDirs: string[] = [];
+    vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockImplementation(async (dirPath) => {
+      scannedDirs.push(dirPath);
+      return {
+        scannedFiles: 0,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        truncated: false,
+        findings: [],
+      };
+    });
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: {
+          alpha: { default: true, workspace: workspaceA },
+          beta: { default: true, workspace: workspaceB },
+        },
+      },
+    };
+
+    await collectInstalledSkillsCodeSafetyFindings({ cfg, stateDir });
+
+    expect(scannedDirs).toEqual(
+      expect.arrayContaining([
+        path.join(workspaceA, "skills", "evil-skill"),
+        path.join(workspaceB, "skills", "evil-skill"),
+      ]),
+    );
+  });
+
   it("scans SKILL.md text for dangerous skill instructions", async () => {
     const stateDir = await makeTmpDir("audit-skill-markdown");
     const workspaceDir = path.join(stateDir, "workspace");

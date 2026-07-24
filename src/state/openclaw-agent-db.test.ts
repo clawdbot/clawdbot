@@ -1701,6 +1701,30 @@ describe("openclaw agent database", () => {
       expect(() => isSameOpenClawAgentDatabasePath(loopPath, realPath)).toThrow(
         expect.objectContaining({ code: "ELOOP" }),
       );
+      const expandingLoopPath = path.join(stateDir, "expanding-database-loop.sqlite");
+      fs.symlinkSync("expanding-database-loop.sqlite/child", expandingLoopPath);
+      expect(() => isSameOpenClawAgentDatabasePath(expandingLoopPath, realPath)).toThrow(
+        expect.objectContaining({ code: "ELOOP" }),
+      );
+      const repeatedLinkDir = path.join(stateDir, "repeated-link-dir");
+      fs.mkdirSync(repeatedLinkDir);
+      fs.symlinkSync(".", path.join(repeatedLinkDir, "self"), "dir");
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          path.join(repeatedLinkDir, "repeated.sqlite"),
+          path.join(repeatedLinkDir, "self", "self", "repeated.sqlite"),
+        ),
+      ).toBe(true);
+      const rewrittenLinkDir = path.join(stateDir, "rewritten-link-dir");
+      fs.mkdirSync(path.join(rewrittenLinkDir, "K"), { recursive: true });
+      fs.symlinkSync(".", path.join(rewrittenLinkDir, "L"), "dir");
+      fs.symlinkSync("L/K", path.join(rewrittenLinkDir, "J"));
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          path.join(rewrittenLinkDir, "K", "db.sqlite"),
+          path.join(rewrittenLinkDir, "L", "J", "db.sqlite"),
+        ),
+      ).toBe(true);
       const database = openOpenClawAgentDatabase({ agentId: "worker", env, path: realPath });
       unregisterOpenClawAgentDatabase({ agentId: "worker", env, path: database.path });
       registerOpenClawAgentDatabase({ agentId: "worker", env, path: aliasPath });
@@ -1716,6 +1740,23 @@ describe("openclaw agent database", () => {
           path.join(stateDir, "Worker.sqlite"),
           path.join(stateDir, "worker.sqlite"),
         ),
+      ).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "resolves finite relative traversal through hard-linked symlink entries",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      const hardLinkedRoot = path.join(stateDir, "hard-linked-symlink");
+      const hardLinkedNested = path.join(hardLinkedRoot, "d");
+      fs.mkdirSync(hardLinkedNested, { recursive: true });
+      const firstHardLink = path.join(hardLinkedRoot, "link");
+      fs.symlinkSync("d/link", firstHardLink);
+      fs.linkSync(firstHardLink, path.join(hardLinkedNested, "link"));
+
+      expect(
+        isSameOpenClawAgentDatabasePath(path.join(hardLinkedNested, "d", "link"), firstHardLink),
       ).toBe(true);
     },
   );

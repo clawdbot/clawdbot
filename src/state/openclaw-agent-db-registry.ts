@@ -52,6 +52,13 @@ type AgentDatabasePathIdentity = {
 };
 
 const parentCaseSemanticsCache = new Map<string, boolean>();
+const MAX_DANGLING_SYMLINK_HOPS = 64;
+
+function createSymlinkLoopError(lexicalPath: string): NodeJS.ErrnoException {
+  const error = new Error(`Symlink loop while resolving ${lexicalPath}.`) as NodeJS.ErrnoException;
+  error.code = "ELOOP";
+  return error;
+}
 
 function swapFirstAsciiLetterCase(value: string): string | undefined {
   const index = value.search(/[A-Za-z]/u);
@@ -213,7 +220,9 @@ function resolveCanonicalPathFromExistingParent(lexicalPath: string): {
 function resolveDanglingSymlinkTargetPath(lexicalPath: string): string {
   let resolved = path.parse(lexicalPath).root;
   const remaining = lexicalPath.slice(resolved.length).split(path.sep).filter(Boolean);
-  const visitedStates = new Set<string>();
+  const visitedSymlinks = new Set<string>();
+  const visitedResolutionStates = new Set<string>();
+  let symlinkHops = 0;
   while (remaining.length > 0) {
     const segment = remaining.shift();
     if (!segment || segment === ".") {
@@ -225,20 +234,22 @@ function resolveDanglingSymlinkTargetPath(lexicalPath: string): string {
     }
     const candidate = path.join(resolved, segment);
     try {
-      const stat = lstatSync(candidate);
+      const stat = lstatSync(candidate, { bigint: true });
       if (!stat.isSymbolicLink()) {
         resolved = candidate;
         continue;
       }
-      const stateKey = `${candidate}\0${remaining.join(path.sep)}`;
-      if (visitedStates.has(stateKey)) {
-        const error = new Error(
-          `Symlink loop while resolving ${lexicalPath}.`,
-        ) as NodeJS.ErrnoException;
-        error.code = "ELOOP";
-        throw error;
+      const symlinkIdentity = `${stat.dev}:${stat.ino}:${candidate}`;
+      const resolutionState = `${symlinkIdentity}\0${remaining.join(path.sep)}`;
+      if (
+        symlinkHops >= MAX_DANGLING_SYMLINK_HOPS ||
+        (visitedSymlinks.has(symlinkIdentity) && visitedResolutionStates.has(resolutionState))
+      ) {
+        throw createSymlinkLoopError(lexicalPath);
       }
-      visitedStates.add(stateKey);
+      visitedSymlinks.add(symlinkIdentity);
+      visitedResolutionStates.add(resolutionState);
+      symlinkHops += 1;
       const target = readlinkSync(candidate);
       if (path.isAbsolute(target)) {
         resolved = path.parse(target).root;

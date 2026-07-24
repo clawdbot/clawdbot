@@ -1,7 +1,10 @@
 // Workspace audit helpers inspect local skill folders for security and trust issues.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
+import {
+  listAgentWorkspaceDirs,
+  listExplicitAgentWorkspaceDirs,
+} from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SecurityAuditFinding } from "../../security/audit.types.js";
 import { isPathInside } from "../../security/scan-paths.js";
@@ -124,7 +127,10 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
     }
   } catch {
     // Raw audit input can precede roster migration or be malformed. Keep the
-    // explicit audit workspace scannable even when roster resolution is unavailable.
+    // entry-authored workspaces scannable even when default resolution is unavailable.
+    for (const workspaceDir of listExplicitAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
   }
   if (workspaceDirs.size === 0) {
     return findings;

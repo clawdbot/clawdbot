@@ -905,10 +905,8 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
-  const [{ listAgentWorkspaceDirs }, { resolveSkillSource }] = await Promise.all([
-    loadAgentWorkspaceDirsModule(),
-    loadSkillSourceModule(),
-  ]);
+  const [{ listAgentWorkspaceDirs, listExplicitAgentWorkspaceDirs }, { resolveSkillSource }] =
+    await Promise.all([loadAgentWorkspaceDirsModule(), loadSkillSourceModule()]);
   const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
   try {
     for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
@@ -916,7 +914,10 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
     }
   } catch {
     // Deep audit accepts raw pre-migration and malformed configs. Continue
-    // scanning the explicit workspace instead of turning a finding into a crash.
+    // scanning every entry-authored workspace instead of turning a finding into a crash.
+    for (const workspaceDir of listExplicitAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
   }
   const { loadWorkspaceSkillEntries } = await loadSkillsModule();
 

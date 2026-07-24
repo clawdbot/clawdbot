@@ -9,7 +9,7 @@ import {
   formatValidationErrors,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -901,13 +901,16 @@ async function loadCostUsageSummaryCached(params: {
   agentId?: string;
   agentScope?: "all";
 }): Promise<CostUsageSummary> {
-  const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
+  const allAgents = params.agentScope === "all";
+  const agentId = allAgents
+    ? undefined
+    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
   const dayBucketKey = params.dayBucket
     ? params.dayBucket.mode === "time-zone"
       ? `time-zone:${params.dayBucket.timeZone}`
       : `utc-offset:${params.dayBucket.utcOffsetMinutes}`
     : "gateway";
-  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
+  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -923,7 +926,7 @@ async function loadCostUsageSummaryCached(params: {
 
   const entry: CostUsageCacheEntry = cached ?? {};
   const inFlight = (
-    params.agentScope === "all"
+    allAgents
       ? loadAllAgentCostUsageSummary({
           startMs: params.startMs,
           endMs: params.endMs,
@@ -935,7 +938,7 @@ async function loadCostUsageSummaryCached(params: {
           endMs: params.endMs,
           dayBucket: params.dayBucket,
           config: params.config,
-          agentId,
+          agentId: expectDefined(agentId, "non-aggregate usage agent id"),
           requestRefresh: true,
           refreshMode: "background",
         })
@@ -979,9 +982,7 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
-    normalizeAgentId(agent.id),
-  );
+  const agentIds = listAgentIds(params.config).map((agentId) => normalizeAgentId(agentId));
   const summaries = await runUsageAgentTasks(
     agentIds.map(
       (agentId) => () =>
