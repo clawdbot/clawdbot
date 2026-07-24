@@ -5,8 +5,8 @@ import type {
   WorkboardProofPage,
 } from "@openclaw/workboard-contract";
 
-export const WORKBOARD_PROOF_VIEW_LIMIT = 40;
-export const WORKBOARD_EMBEDDED_PROOF_BYTES = 24 * 1024;
+const WORKBOARD_PROOF_VIEW_LIMIT = 40;
+const WORKBOARD_EMBEDDED_PROOF_BYTES = 24 * 1024;
 
 const WORKBOARD_PROOF_CURSOR_PREFIX = "proof-v1.";
 

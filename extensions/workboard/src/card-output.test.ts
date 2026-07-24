@@ -1,11 +1,12 @@
 import type { WorkboardCard, WorkboardProof } from "@openclaw/workboard-contract";
 import { describe, expect, it } from "vitest";
 import {
-  WORKBOARD_EMBEDDED_PROOF_BYTES,
   paginateWorkboardProof,
   readWorkboardProofPageRequest,
   toBoundedWorkboardCard,
 } from "./card-output.js";
+
+const EMBEDDED_PROOF_BYTES = 24 * 1024;
 
 function createProof(count: number, note?: string): WorkboardProof[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -63,7 +64,7 @@ describe("Workboard card output projection", () => {
     expect(projectedProof.length).toBeLessThan(40);
     expect(projectedProof.at(-1)?.id).toBe("proof-99");
     expect(Buffer.byteLength(JSON.stringify(projectedProof), "utf8")).toBeLessThanOrEqual(
-      WORKBOARD_EMBEDDED_PROOF_BYTES,
+      EMBEDDED_PROOF_BYTES,
     );
     expect(view.proofPage).toMatchObject({ total: 100, hasMore: true });
   });
@@ -155,7 +156,7 @@ describe("Workboard card output projection", () => {
     if (!oversized) {
       throw new Error("expected oversized proof");
     }
-    oversized.id = `proof-${"x".repeat(WORKBOARD_EMBEDDED_PROOF_BYTES)}`;
+    oversized.id = `proof-${"x".repeat(EMBEDDED_PROOF_BYTES)}`;
 
     const view = toBoundedWorkboardCard(createCard(proof));
     expect(view.metadata?.proof).toBeUndefined();

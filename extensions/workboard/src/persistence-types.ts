@@ -44,7 +44,7 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   entries(): Promise<Array<{ key: string; value: T }>>;
 };
 
-export type PersistedWorkboardProofPage = {
+type PersistedWorkboardProofPage = {
   proof: WorkboardProof[];
   total: number;
   hasMore: boolean;
