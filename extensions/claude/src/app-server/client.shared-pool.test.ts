@@ -164,6 +164,68 @@ describe("shared claude app-server client pool (openclaw-7ss)", () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * Regression test for openclaw-9jr: a Claude setup-token profile (Tank) and
+   * a platform API-key profile (main/narcissus/shiva) both default to the
+   * SAME pool key (`claude-bridge:anthropic`, since neither overrides
+   * appServer.modelProvider) but resolve to DIFFERENT spawn env, hence
+   * different opts fingerprints. Before the fix, a same-key/different-
+   * fingerprint request unconditionally called the existing entry's
+   * client.stop() — so agent B's turn arriving mid-flight for agent A would
+   * kill A's live subprocess and reject A's pending work with "claude-bridge
+   * stopped", even though A's turn hadn't failed. Fails before the fix
+   * (agent A's client gets stopped), passes after (both clients coexist).
+   */
+  it("does NOT stop a BUSY client when a different credential's fingerprint requests the same key (openclaw-9jr)", async () => {
+    const credA = {
+      command: "fake-bridge",
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "agent-a-setup-token" },
+    };
+    const credB = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "agent-b-platform-key" } };
+
+    const clientA = getSharedClaudeAppServerClient(ANTHROPIC_KEY, credA);
+    const childA = await startAndInitialize(clientA);
+
+    // Simulate agent A's in-flight turn: run-attempt.ts registers a
+    // notification handler for the whole duration of a turn (see
+    // ClaudeAppServerClient.isBusy doc comment).
+    const unsubscribeA = clientA.onNotification(() => {});
+    expect(clientA.isBusy()).toBe(true);
+
+    // Agent B's turn arrives with a different credential fingerprint under
+    // the SAME pool key (same default "anthropic" provider). This must NOT
+    // touch agent A's still-busy client.
+    const clientB = getSharedClaudeAppServerClient(ANTHROPIC_KEY, credB);
+
+    expect(clientA.isRunning()).toBe(true);
+    expect(childA.stdin.destroyed).toBe(false);
+    expect(clientA.isBusy()).toBe(true);
+
+    expect(clientB).not.toBe(clientA);
+    const childB = await startAndInitialize(clientB);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(childA.stdin.destroyed).toBe(false);
+
+    // Both credentials' clients coexist and are independently retrievable.
+    expect(getSharedClaudeAppServerClient(ANTHROPIC_KEY, credA)).toBe(clientA);
+    expect(getSharedClaudeAppServerClient(ANTHROPIC_KEY, credB)).toBe(clientB);
+
+    // Once agent A's turn ends (handler unsubscribed), a THIRD credential
+    // arriving at the same key may now clean up idle entries — the cheap
+    // "reconfiguration" path still works once nothing is actually busy. Both
+    // A and B are idle at this point (neither has a notification handler or
+    // a pending request), so both get cleaned up; the invariant under test is
+    // that a BUSY entry is never touched, not that idle siblings are spared.
+    unsubscribeA();
+    expect(clientA.isBusy()).toBe(false);
+    const credC = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "agent-c-key" } };
+    const clientC = getSharedClaudeAppServerClient(ANTHROPIC_KEY, credC);
+    expect(clientC).not.toBe(clientA);
+    expect(clientC).not.toBe(clientB);
+    expect(childA.stdin.destroyed).toBe(true);
+    expect(childB.stdin.destroyed).toBe(true);
+  });
+
   it("peek reflects the most recently accessed pool entry", async () => {
     const anthropicOpts = { command: "fake-bridge", env: { ANTHROPIC_API_KEY: "real-key" } };
     const zaiOpts = { command: "fake-bridge", env: { ANTHROPIC_AUTH_TOKEN: "zai-key" } };

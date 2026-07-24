@@ -356,6 +356,27 @@ export class ClaudeAppServerClient {
     return this.pending.size;
   }
 
+  /**
+   * Whether this client currently has an in-flight turn or compaction. Both
+   * `runClaudeAppServerAttempt` (run-attempt.ts) and `acquireSharedCompactionClient`
+   * (compact.ts) register exactly one notification handler for the duration of
+   * their operation via {@link onNotification} and remove it on every
+   * completion path (success, abort, idle timeout, exit) — no other caller in
+   * this plugin registers a longer-lived notification handler — so a non-empty
+   * `notificationHandlers` list is a reliable "a turn/compaction is running"
+   * signal without needing separate begin/end instrumentation. `pending.size`
+   * covers the brief request/response windows (e.g. `turn/start`'s ack, or a
+   * quick catalog RPC) outside that.
+   *
+   * Used by the shared pool (`getSharedClaudeAppServerClient`) to decide
+   * whether a same-key, different-fingerprint request may safely evict this
+   * entry: a busy client must never be torn down out from under its caller
+   * (openclaw-9jr).
+   */
+  isBusy(): boolean {
+    return this.notificationHandlers.length > 0 || this.pending.size > 0;
+  }
+
   /** Resolved command path/argv string, for diagnostics. */
   commandDescription(): string {
     const cmd = this.opts.command ?? DEFAULT_COMMAND;
@@ -670,15 +691,35 @@ export function assertSupportedBridgeVersion(
  * — so "same provider identity" and "same pool slot" stay the same question
  * (openclaw-7ss design decision, confirmed by Eddie 2026-07-02).
  *
- * Each slot separately fingerprints its own spawn options so an operator
- * config change (env, command, args) for a given key still triggers a clean
- * respawn — the same "reconfiguration is cheap" property the old single-slot
- * design had — without that fingerprint being the identity of the slot
- * itself.
+ * A KEY can hold more than one live entry, distinguished by their spawn-options
+ * fingerprint (command/args/env). This matters because the key is provider
+ * identity (e.g. "claude-bridge:anthropic"), which every agent talking to that
+ * provider shares regardless of which credential resolves for its turn — a
+ * Claude setup-token vs a platform API key, or two different platform keys,
+ * all fingerprint differently (env is part of the fingerprint) under the
+ * identical key. A same-key, different-fingerprint request only tears down
+ * and replaces an existing entry when that entry is IDLE
+ * ({@link ClaudeAppServerClient.isBusy} false) — this is the cheap
+ * "reconfiguration" path a single-slot design always had (operator changed
+ * appServer.env/command/args, or the previous credential's work is done). A
+ * BUSY entry (an in-flight turn or compaction on a DIFFERENT credential) is
+ * left running under its own fingerprint slot instead: before this guard,
+ * agent B's turn arriving with a different credential while agent A's turn
+ * was still in flight would call agent A's `client.stop()` — killing A's live
+ * subprocess and rejecting its pending work with "claude-bridge stopped" /
+ * "claude-bridge is not initialized", even though nothing about A's turn had
+ * actually failed (openclaw-9jr).
+ *
+ * A same-key, SAME-fingerprint request against a busy entry still reuses it
+ * (multiple turns for the identical credential correctly keep sharing one
+ * process, unchanged from before).
  */
 type SharedClientPoolEntry = { client: ClaudeAppServerClient; optsFingerprint: string };
-const sharedClients = new Map<string, SharedClientPoolEntry>();
-let lastAccessedKey: string | null = null;
+// key -> fingerprint -> entry. Most keys hold exactly one live fingerprint;
+// more than one arises only when distinct credentials are concurrently active
+// for the same provider identity (see doc above, openclaw-9jr).
+const sharedClients = new Map<string, Map<string, SharedClientPoolEntry>>();
+let lastAccessed: { key: string; fingerprint: string } | null = null;
 
 function computeOptsFingerprint(
   opts: Pick<ClaudeAppServerStartOptions, "command" | "args" | "env">,
@@ -695,51 +736,74 @@ export function getSharedClaudeAppServerClient(
   opts: ClaudeAppServerStartOptions,
 ): ClaudeAppServerClient {
   const fingerprint = computeOptsFingerprint(opts);
-  const existing = sharedClients.get(key);
-  if (existing && existing.client.isRunning() && existing.optsFingerprint === fingerprint) {
-    lastAccessedKey = key;
-    return existing.client;
+  let entries = sharedClients.get(key);
+  if (!entries) {
+    entries = new Map();
+    sharedClients.set(key, entries);
   }
-  if (existing) {
+
+  const exact = entries.get(fingerprint);
+  if (exact && exact.client.isRunning()) {
+    lastAccessed = { key, fingerprint };
+    return exact.client;
+  }
+
+  // No running entry for this exact fingerprint. Clear out any OTHER
+  // fingerprint at this key that isn't both running AND busy — busy entries
+  // belong to a different concurrently-active credential and must be left
+  // alone (see doc comment above, openclaw-9jr).
+  for (const [fp, entry] of entries) {
+    if (fp === fingerprint) {
+      continue;
+    }
+    if (entry.client.isRunning() && entry.client.isBusy()) {
+      continue;
+    }
     try {
-      existing.client.stop();
+      entry.client.stop();
     } catch {
       /* ignore */
     }
+    entries.delete(fp);
   }
+
   const client = new ClaudeAppServerClient(opts);
-  sharedClients.set(key, { client, optsFingerprint: fingerprint });
-  lastAccessedKey = key;
+  entries.set(fingerprint, { client, optsFingerprint: fingerprint });
+  lastAccessed = { key, fingerprint };
   return client;
 }
 
-/** Stop and remove one pool slot by key, or every slot when `key` is omitted. */
+/** Stop and remove one pool slot by key (every credential entry under it), or every slot when `key` is omitted. */
 export async function clearSharedClaudeAppServerClient(key?: string): Promise<void> {
   if (key !== undefined) {
-    const entry = sharedClients.get(key);
-    if (!entry) {
+    const entries = sharedClients.get(key);
+    if (!entries) {
       return;
     }
-    try {
-      entry.client.stop();
-    } catch {
-      /* ignore */
+    for (const entry of entries.values()) {
+      try {
+        entry.client.stop();
+      } catch {
+        /* ignore */
+      }
     }
     sharedClients.delete(key);
-    if (lastAccessedKey === key) {
-      lastAccessedKey = null;
+    if (lastAccessed?.key === key) {
+      lastAccessed = null;
     }
     return;
   }
-  for (const entry of sharedClients.values()) {
-    try {
-      entry.client.stop();
-    } catch {
-      /* ignore */
+  for (const entries of sharedClients.values()) {
+    for (const entry of entries.values()) {
+      try {
+        entry.client.stop();
+      } catch {
+        /* ignore */
+      }
     }
   }
   sharedClients.clear();
-  lastAccessedKey = null;
+  lastAccessed = null;
 }
 
 /**
@@ -752,11 +816,16 @@ export async function clearSharedClaudeAppServerClient(key?: string): Promise<vo
  * extension-scoped command like /claude status|version, which must report the
  * Claude extension's process, not whichever bridge ran a turn most recently.
  *
- * With `key` omitted the snapshot falls back to the most recently accessed pool
- * entry (`lastAccessedKey`) — exact for the common single-extension case, but
- * with two concurrently-active harness extensions (openclaw-7ss) it reflects
- * whichever ran a turn most recently rather than a specific one (the ambiguity
- * that motivated the keyed variant, GLM review G7).
+ * With `key` omitted the snapshot falls back to the most recently accessed
+ * (key, fingerprint) pair (`lastAccessed`) — exact for the common
+ * single-extension, single-credential case, but with two concurrently-active
+ * harness extensions (openclaw-7ss) or two concurrently-active credentials
+ * under one key (openclaw-9jr) it reflects whichever ran a turn most recently
+ * rather than a specific one (the ambiguity that motivated the keyed variant,
+ * GLM review G7). A keyed peek against a key holding multiple live credential
+ * entries resolves the same way: the most-recently-accessed entry under that
+ * key, or an arbitrary one if none of that key's entries were the globally
+ * most-recent access.
  */
 export function peekSharedClaudeAppServerClient(key?: string): {
   running: boolean;
@@ -765,11 +834,19 @@ export function peekSharedClaudeAppServerClient(key?: string): {
   lastError?: string;
   runningVersion?: string;
 } | null {
-  const lookupKey = key ?? lastAccessedKey;
+  const lookupKey = key ?? lastAccessed?.key;
   if (!lookupKey) {
     return null;
   }
-  const entry = sharedClients.get(lookupKey);
+  const entries = sharedClients.get(lookupKey);
+  if (!entries || entries.size === 0) {
+    return null;
+  }
+  const values = [...entries.values()];
+  const entry =
+    (lastAccessed?.key === lookupKey ? entries.get(lastAccessed.fingerprint) : undefined) ??
+    values[values.length - 1] ??
+    values[0];
   if (!entry) {
     return null;
   }
