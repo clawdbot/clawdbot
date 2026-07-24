@@ -201,6 +201,30 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           .catch(() => {});
       }
     },
+    getReadinessSnapshot() {
+      if (!cronEnabled) {
+        return { enabled: false, phase: "disabled", recoveryPending: false };
+      }
+      if (stopped) {
+        return { enabled: true, phase: "stopped", recoveryPending: false };
+      }
+      if (schedulingPaused) {
+        return {
+          enabled: true,
+          phase: "paused",
+          recoveryPending: loaded?.state.cron.getReadinessSnapshot().recoveryPending ?? false,
+        };
+      }
+      if (!loaded) {
+        return { enabled: true, phase: "idle", recoveryPending: false };
+      }
+      const snapshot = loaded.state.cron.getReadinessSnapshot();
+      return {
+        enabled: true,
+        phase: loaded.phase,
+        recoveryPending: snapshot.recoveryPending,
+      };
+    },
     async stopAndDrain() {
       stopped = true;
       lifecycleGeneration += 1;

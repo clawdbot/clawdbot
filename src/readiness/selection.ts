@@ -14,6 +14,10 @@ import {
 import { createPluginReadinessResolver } from "./plugin-readiness.js";
 import { CORE_READINESS_SUBJECT_REFS } from "./subjects.js";
 import {
+  createStateServiceReadinessResolver,
+  type StateServiceReadinessSnapshot,
+} from "./state-services.js";
+import {
   buildWorkspaceReadinessCondition,
   createWorkspaceReadinessEvidenceResolver,
 } from "./workspace.js";
@@ -63,17 +67,32 @@ function withRequirement(
   };
 }
 
+function stateServiceSelectorId(condition: ReadinessCondition): string | undefined {
+  switch (condition.type) {
+    case "StateReady":
+      return "openclaw.state-ready";
+    case "DeliveryRuntimeReady":
+      return "openclaw.delivery-runtime-ready";
+    case "SchedulerReady":
+      return "openclaw.scheduler-ready";
+    default:
+      return undefined;
+  }
+}
+
 export function createSelectedReadinessResolver() {
   const resolveWorkspace = createWorkspaceReadinessEvidenceResolver();
   const resolvePlugins = createPluginReadinessResolver();
   const resolveActivation = createActivationReadinessResolver();
   const resolveExecutionCapabilities = createExecutionCapabilityReadinessResolver();
+  const resolveStateServices = createStateServiceReadinessResolver();
 
   return async (params: {
     config: OpenClawConfig;
     registry: Pick<PluginRegistry, "readinessCriteria">;
     executionCapabilities?: ExecutionCapabilityReadinessSnapshot;
     env?: NodeJS.ProcessEnv;
+    stateServices?: StateServiceReadinessSnapshot;
   }): Promise<ReadinessContribution> => {
     const selected = resolveSelectedReadinessCriteria(params.config);
     if (selected.length === 0) {
@@ -108,6 +127,16 @@ export function createSelectedReadinessResolver() {
       snapshot: params.executionCapabilities,
     })) {
       conditions.set(id, capabilityCondition);
+    }
+    for (const condition of resolveStateServices({
+      criterionIds: selectedIds,
+      env: params.env,
+      snapshot: params.stateServices,
+    })) {
+      const selectedId = stateServiceSelectorId(condition);
+      if (selectedId) {
+        conditions.set(selectedId, condition);
+      }
     }
     if (workspaceEvidence) {
       conditions.set(

@@ -25,7 +25,10 @@ type BuiltInReadinessConditionType =
   | "SandboxReady"
   | "HarnessReady"
   | "GatewayResponding"
-  | "PluginsLoaded";
+  | "PluginsLoaded"
+  | "StateReady"
+  | "DeliveryRuntimeReady"
+  | "SchedulerReady";
 
 type ReadinessConditionType = BuiltInReadinessConditionType | (string & {});
 

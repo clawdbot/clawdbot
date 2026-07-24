@@ -321,6 +321,47 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(1);
     expect(reconcileExitWatchers).not.toHaveBeenCalled();
   });
+
+  it("observes scheduler lifecycle without forcing lazy activation", async () => {
+    const finishStart = deferred();
+    const cron = createCronService();
+    cron.start = vi.fn(async () => await finishStart.promise);
+    hoisted.setState(createCronState(cron));
+    const lazy = createLazyGatewayCronState(createParams());
+
+    expect(lazy.cron.getReadinessSnapshot()).toEqual({
+      enabled: true,
+      phase: "idle",
+      recoveryPending: false,
+    });
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+
+    lazy.cron.pauseScheduling();
+    expect(lazy.cron.getReadinessSnapshot().phase).toBe("paused");
+    lazy.cron.resumeScheduling();
+
+    const startPromise = lazy.cron.start();
+    await vi.waitFor(() => expect(cron["start"]).toHaveBeenCalledOnce());
+    expect(lazy.cron.getReadinessSnapshot().phase).toBe("starting");
+
+    finishStart.resolve();
+    await startPromise;
+    expect(lazy.cron.getReadinessSnapshot().phase).toBe("started");
+
+    lazy.cron.stop();
+    expect(lazy.cron.getReadinessSnapshot().phase).toBe("stopped");
+  });
+
+  it("treats a disabled scheduler as satisfied without loading it", () => {
+    const lazy = createLazyGatewayCronState(createParams({ cron: { enabled: false } }));
+
+    expect(lazy.cron.getReadinessSnapshot()).toEqual({
+      enabled: false,
+      phase: "disabled",
+      recoveryPending: false,
+    });
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
 });
 
 function createParams(overrides: Partial<OpenClawConfig> = {}) {
@@ -345,6 +386,11 @@ function createCronService(): GatewayCronServiceContract {
   return {
     start: vi.fn(async () => undefined),
     stop: vi.fn(),
+    getReadinessSnapshot: vi.fn(() => ({
+      enabled: true,
+      phase: "started" as const,
+      recoveryPending: false,
+    })),
     pauseScheduling: vi.fn(),
     resumeScheduling: vi.fn(),
     status: vi.fn(async () => ({ enabled: true }) as never),
