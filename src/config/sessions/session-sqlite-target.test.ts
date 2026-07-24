@@ -6,15 +6,19 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 
 describe("resolveSqliteTargetFromSessionStorePath", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  it("assigns a new exact SQLite locator to the configured default", () => {
+  it("assigns a new exact SQLite locator to the configured default without caller capture", () => {
     const databasePath = path.resolve("tmp", "stores", "new-shared.sqlite");
 
     expect(
-      resolveSqliteTargetFromSessionStorePath(databasePath, { defaultAgentId: "ops" }),
+      resolveSqliteTargetFromSessionStorePath(databasePath, {
+        agentId: "worker",
+        defaultAgentId: "ops",
+      }),
     ).toMatchObject({
       agentId: "ops",
       ownerSource: "configured-default",
       path: databasePath,
+      shared: true,
     });
   });
 

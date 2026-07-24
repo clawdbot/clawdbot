@@ -46,6 +46,7 @@ type SessionSqliteDatabase = Pick<
 
 export type ResolvedSqliteScope = {
   agentId: string;
+  databaseAgentId?: string;
   env?: NodeJS.ProcessEnv;
   path?: string;
   sessionKey: string;
@@ -53,6 +54,7 @@ export type ResolvedSqliteScope = {
 
 export type ResolvedSqliteReadScope = {
   agentId: string;
+  databaseAgentId?: string;
   env?: NodeJS.ProcessEnv;
   path?: string;
   sessionKey?: string;
@@ -133,12 +135,14 @@ export function resolveSqliteScope(
     scopedAgentId: effectiveAgentId,
     sessionKey: scope.sessionKey,
     storeAgentId: storeTarget?.agentId,
+    storeShared: storeTarget?.shared,
   });
   if (!agentId) {
     throw new Error("Cannot resolve SQLite session scope without an agent id");
   }
   return {
     agentId,
+    ...(storeTarget?.shared && storeTarget.agentId ? { databaseAgentId: storeTarget.agentId } : {}),
     ...(scope.env ? { env: scope.env } : {}),
     ...(storeTarget ? { path: storeTarget.path } : {}),
     sessionKey: normalizeSqliteSessionKey(scope.sessionKey),
@@ -172,12 +176,14 @@ export function resolveSqliteReadScope(
     scopedAgentId: effectiveAgentId,
     sessionKey,
     storeAgentId: storeTarget?.agentId,
+    storeShared: storeTarget?.shared,
   });
   if (!agentId) {
     throw new Error("Cannot resolve SQLite transcript read scope without an agent id");
   }
   return {
     agentId,
+    ...(storeTarget?.shared && storeTarget.agentId ? { databaseAgentId: storeTarget.agentId } : {}),
     ...(scope.env ? { env: scope.env } : {}),
     ...(storeTarget ? { path: storeTarget.path } : {}),
     ...(sessionKey ? { sessionKey } : {}),
@@ -199,9 +205,15 @@ function resolveSqliteAgentId(params: {
   scopedAgentId?: string;
   sessionKey?: string;
   storeAgentId?: string;
+  storeShared?: boolean;
 }): string | undefined {
   const scopedAgentId = params.scopedAgentId ? normalizeAgentId(params.scopedAgentId) : undefined;
-  if (scopedAgentId && params.storeAgentId && scopedAgentId !== params.storeAgentId) {
+  if (
+    scopedAgentId &&
+    params.storeAgentId &&
+    scopedAgentId !== params.storeAgentId &&
+    !params.storeShared
+  ) {
     throw new Error(
       `SQLite session store path belongs to agent ${params.storeAgentId}; requested agent ${scopedAgentId}.`,
     );
@@ -258,10 +270,10 @@ export function resolveSqliteTranscriptReadScope(
 }
 
 export function toDatabaseOptions(
-  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">,
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "databaseAgentId" | "env" | "path">,
 ): OpenClawAgentDatabaseOptions {
   return {
-    agentId: scope.agentId,
+    agentId: scope.databaseAgentId ?? scope.agentId,
     ...(scope.env ? { env: scope.env } : {}),
     ...(scope.path ? { path: scope.path } : {}),
   };

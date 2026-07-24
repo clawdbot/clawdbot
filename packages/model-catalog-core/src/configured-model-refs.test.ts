@@ -80,6 +80,17 @@ describe("configured model refs", () => {
     ]);
   });
 
+  it("ignores a shadowed legacy list when keyed entries are authoritative", () => {
+    expect(
+      collectConfiguredModelRefs({
+        agents: {
+          entries: { ops: { model: "openai/gpt-5.6" } },
+          list: [{ id: "stale", model: "anthropic/claude-opus-4-8" }],
+        },
+      }),
+    ).toEqual([{ path: "agents.entries.ops.model", value: "openai/gpt-5.6" }]);
+  });
+
   it("ignores array-shaped malformed records", () => {
     expect(
       collectConfiguredModelRefs({

@@ -207,6 +207,31 @@ describe("config io write prepare", () => {
     });
   });
 
+  it("preserves an unchanged env-backed default during an unrelated roster addition", () => {
+    const resolvedMain = { default: true, agentDir: "/srv/main" };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: { agents: { entries: { main: resolvedMain } } },
+      sourceConfig: { agents: { entries: { main: resolvedMain } } },
+      rootAuthoredConfig: {
+        agents: {
+          entries: {
+            main: { default: "${MAIN_DEFAULT}", agentDir: "/srv/main" },
+          },
+        },
+      },
+      nextConfig: {
+        agents: {
+          entries: {
+            main: resolvedMain,
+            worker: { workspace: "/srv/worker" },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries?.main?.default).toBe("${MAIN_DEFAULT}");
+  });
+
   it("honors an explicit roster leaf write that equals the resolved runtime value", () => {
     const resolvedMain = { default: true, agentDir: "/srv/main" };
     const nextConfig = { agents: { entries: { main: resolvedMain } } };

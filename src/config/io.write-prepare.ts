@@ -1426,7 +1426,18 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       const value = projected.present ? projected.value : nextEntry;
       if (isRecord(value) && isRecord(nextEntry)) {
         if (Object.hasOwn(nextEntry, "default")) {
-          value.default = cloneUnknown(nextEntry.default);
+          const preservesAuthoredReference =
+            Object.hasOwn(value, "default") &&
+            containsAuthoredRosterReference(value.default) &&
+            ((Object.hasOwn(runtimeEntries, priorId) &&
+              isRecord(runtimeEntries[priorId]) &&
+              isDeepStrictEqual(runtimeEntries[priorId].default, nextEntry.default)) ||
+              (Object.hasOwn(sourceEntries, priorId) &&
+                isRecord(sourceEntries[priorId]) &&
+                isDeepStrictEqual(sourceEntries[priorId].default, nextEntry.default)));
+          if (!preservesAuthoredReference) {
+            value.default = cloneUnknown(nextEntry.default);
+          }
         } else {
           delete value.default;
         }

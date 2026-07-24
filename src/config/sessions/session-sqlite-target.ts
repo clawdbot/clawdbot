@@ -19,6 +19,7 @@ type ResolvedSqliteStoreTarget = {
     | "configured-default"
     | "ambiguous-registry";
   path: string;
+  shared?: boolean;
   unsuffixedOwnerAgentId?: string;
 };
 
@@ -255,13 +256,13 @@ export function resolveSqliteTargetFromSessionStorePath(
     const configuredDefaultAgentId = normalizeAgentId(
       options.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,
     );
-    const ownerAgentId =
-      registeredOwners[0] ??
-      databaseOwner ??
-      (options.agentId ? normalizeAgentId(options.agentId) : configuredDefaultAgentId);
+    const ownerAgentId = registeredOwners[0] ?? databaseOwner ?? configuredDefaultAgentId;
     return {
       ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
       path: unsuffixedTarget.path,
+      // Exact locators are shared session stores: scoped keys partition rows inside one file.
+      // The physical schema owner must never turn the first caller into the store's sole owner.
+      shared: true,
       ...(registeredOwners.length === 1
         ? { ownerSource: "database-registry" as const }
         : databaseOwner

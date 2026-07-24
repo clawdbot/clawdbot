@@ -1350,16 +1350,16 @@ describe("activateSetupInference", () => {
           sourceConfig: runtimeConfig,
           runtimeConfig,
         })) as never,
-        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-4-8")) as never,
+        runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         createTempDir: makeTempDir,
       },
     });
 
-    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-4-8" });
+    expect(result).toMatchObject({ ok: true, modelRef: "claude-cli/claude-opus-5" });
     expect(configHarness.current()).toMatchObject({
       agents: {
-        defaults: { model: "claude-cli/claude-opus-4-8" },
+        defaults: { model: "claude-cli/claude-opus-5" },
         entries: { main: { default: true } },
       },
     });

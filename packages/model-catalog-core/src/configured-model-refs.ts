@@ -86,8 +86,7 @@ export function collectConfiguredModelRefs(
     for (const [agentId, entry] of Object.entries(agents.entries)) {
       collectFromAgent(`agents.entries.${agentId}`, entry);
     }
-  }
-  if (Array.isArray(agents.list)) {
+  } else if (Array.isArray(agents.list)) {
     for (const [index, entry] of agents.list.entries()) {
       collectFromAgent(`agents.list.${index}`, entry);
     }
