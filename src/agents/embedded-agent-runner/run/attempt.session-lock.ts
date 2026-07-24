@@ -77,6 +77,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   }
   const noOpLock = { release: async () => {} } as SessionLock;
   let disposed = false;
+  let takeoverDetected = false;
   let promptReleased = false;
   let promptSettled = Promise.resolve();
   let settlePrompt: (() => void) | undefined;
@@ -116,6 +117,11 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         }
         try {
           await params.reloadPromptReleasedSessionFile?.();
+        } catch (error) {
+          if (error instanceof EmbeddedAttemptSessionTakeoverError) {
+            takeoverDetected = true;
+          }
+          throw error;
         } finally {
           promptReleased = false;
           settlePrompt?.();
@@ -131,7 +137,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       await serializeLifecycle(() => {});
       return noOpLock;
     },
-    hasSessionTakeover: () => false,
+    hasSessionTakeover: () => takeoverDetected,
     dispose: async () => {
       disposed = true;
       if (promptReleased) {

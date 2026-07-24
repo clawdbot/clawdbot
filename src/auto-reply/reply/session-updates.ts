@@ -370,9 +370,11 @@ export async function incrementCompactionCount(params: {
   const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
   sessionStore[sessionKey] = nextEntry;
   if (storePath) {
-    const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
-      fallbackEntry: nextEntry,
-    });
+    const persistedEntry = await patchSessionEntry(
+      { ...(agentId ? { agentId } : {}), storePath, sessionKey },
+      () => updates,
+      { fallbackEntry: nextEntry },
+    );
     if (persistedEntry) {
       sessionStore[sessionKey] = persistedEntry;
     }
