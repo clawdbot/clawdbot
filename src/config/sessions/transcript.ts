@@ -326,8 +326,20 @@ export async function readRecentUserAssistantTextForSession(
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(
-  sessionFile: string | undefined,
+  target:
+    | string
+    | {
+        agentId?: string;
+        sessionId: string;
+        sessionKey?: string;
+        storePath?: string;
+      }
+    | undefined,
 ): Promise<LatestAssistantTranscriptText | undefined> {
+  if (target && typeof target === "object") {
+    return readLatestTranscriptAssistantText(target);
+  }
+  const sessionFile = target;
   const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
   if (sqliteMarker) {
     return readLatestTranscriptAssistantText({

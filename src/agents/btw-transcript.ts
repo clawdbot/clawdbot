@@ -100,18 +100,23 @@ function isTrailingUserMessage(entry: AgentSessionEntry | undefined): boolean {
  * messages.
  */
 export async function readBtwTranscriptMessages(params: {
+  agentId?: string;
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  storePath?: string;
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
-    const entries = params.sessionKey
-      ? ((await loadTranscriptEvents({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-        })) as AgentSessionEntry[])
-      : parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
+    const entries =
+      params.sessionKey && params.storePath
+        ? ((await loadTranscriptEvents({
+            agentId: params.agentId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          })) as AgentSessionEntry[])
+        : parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is AgentSessionEntry => entry.type !== "session",

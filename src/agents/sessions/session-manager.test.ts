@@ -163,6 +163,71 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("persists explicit leaf controls across SQLite reopen", async () => {
+    const dir = await makeTempDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "sqlite-leaf-control",
+      sessionKey: "agent:main:dashboard:sqlite-leaf-control",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+    });
+    const manager = SessionManager.open(scope, dir);
+    const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    const secondId = manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
+
+    manager.appendLeafControl({
+      targetId: firstId,
+      appendParentId: secondId,
+      appendMode: "side",
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "leaf",
+          targetId: firstId,
+          appendParentId: secondId,
+          appendMode: "side",
+        }),
+      ]),
+    );
+
+    const reopened = SessionManager.open(scope, dir);
+    expect(reopened.getLeafId()).toBe(firstId);
+    expect(reopened.getAppendParentId()).toBe(secondId);
+    expect(reopened.getAppendMode()).toBe("side");
+  });
+
+  it("migrates version-two hook messages before current-role validation", () => {
+    const manager = SessionManager.fromEntries([
+      {
+        type: "session",
+        version: 2,
+        id: "legacy-hook-session",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: "/tmp",
+      },
+      {
+        type: "message",
+        id: "legacy-hook-message",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: {
+          role: "hookMessage",
+          customType: "hook",
+          content: "legacy hook context",
+        },
+      },
+    ]);
+
+    expect(manager.getEntry("legacy-hook-message")).toMatchObject({
+      message: { role: "custom", content: "legacy hook context" },
+    });
+  });
+
   it("keeps stale appenders valid across a reset while snapshot replacement rotates generation", async () => {
     const dir = await makeTempDir();
     const scope = {

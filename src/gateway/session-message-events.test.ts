@@ -774,8 +774,12 @@ describe("session.message websocket events", () => {
         throw new Error(`append failed: ${appended.reason}`);
       }
       const emitParams = requireRecord(emitSpy.mock.calls.at(0)?.[0], "transcript update params");
-      expect(emitParams.sessionFile).toBe(appended.sessionFile);
       expect(emitParams.sessionKey).toBe("agent:main:main");
+      expect(emitParams.target).toMatchObject({
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+      });
       expect(emitParams.messageId).toBe(appended.messageId);
       expectRecordFields(emitParams.message, {
         role: "assistant",
@@ -1063,7 +1067,7 @@ describe("session.message websocket events", () => {
       },
       timestamp: Date.now(),
     };
-    const turn = await persistSessionTranscriptTurn(
+    await persistSessionTranscriptTurn(
       {
         agentId: "main",
         sessionId: "sess-main",
@@ -1150,7 +1154,7 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "early selected prompt" }],
       timestamp: Date.now(),
     };
-    const turn = await persistSessionTranscriptTurn(
+    await persistSessionTranscriptTurn(
       {
         agentId: "main",
         sessionId: "sess-main",
@@ -1174,8 +1178,12 @@ describe("session.message websocket events", () => {
 
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
       emitSessionTranscriptUpdate({
-        sessionFile: turn.sessionFile,
-        sessionKey: "agent:main:main",
+        target: {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        },
         message: transcriptMessage,
         messageId: "msg-selected",
       });
@@ -1855,7 +1863,7 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "shared transcript update" }],
       timestamp: Date.now(),
     };
-    const turn = await persistSessionTranscriptTurn(
+    await persistSessionTranscriptTurn(
       {
         agentId: "main",
         sessionId: "sess-new",
@@ -1872,7 +1880,12 @@ describe("session.message websocket events", () => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({
-        sessionFile: turn.sessionFile,
+        target: {
+          agentId: "main",
+          sessionId: "sess-new",
+          sessionKey: "agent:main:newer",
+          storePath,
+        },
         message,
         messageId: "msg-shared",
       });

@@ -8,7 +8,6 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   loadSessionEntry,
   readTranscriptStatsSync,
@@ -308,15 +307,6 @@ describe("runMemoryFlushIfNeeded", () => {
       };
       if (typeof params.newSessionId === "string" && params.newSessionId) {
         nextEntry.sessionId = params.newSessionId;
-        if (typeof params.newSessionFile === "string" && params.newSessionFile) {
-          nextEntry.sessionFile = params.newSessionFile;
-        } else {
-          const storePath = typeof params.storePath === "string" ? params.storePath : rootDir;
-          nextEntry.sessionFile = path.join(
-            path.dirname(storePath),
-            `${params.newSessionId}.jsonl`,
-          );
-        }
       }
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
@@ -416,7 +406,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshCall.key).toBe(sessionKey);
     expect(refreshCall.previousSessionId).toBe("session");
     expect(refreshCall.nextSessionId).toBe("session-rotated");
-    expect(refreshCall.nextSessionFile).toContain("session-rotated.jsonl");
+    expect(refreshCall.nextSessionFile).toBe(sessionKey);
 
     const persisted = loadMainSessionEntry(storePath);
     expect(persisted.sessionId).toBe("session-rotated");
@@ -1358,7 +1348,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1453,7 +1443,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1501,7 +1491,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1562,7 +1552,7 @@ describe("runMemoryFlushIfNeeded", () => {
       });
       const sessionEntry: SessionEntry = {
         sessionId: "session",
-        sessionFile,
+        transcriptPath: sessionFile,
         updatedAt: Date.now(),
         totalTokens: 120,
         totalTokensFresh: true,
@@ -1615,7 +1605,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1670,7 +1660,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -1706,7 +1696,7 @@ describe("runMemoryFlushIfNeeded", () => {
       const sessionFile = path.join(rootDir, "budget-session.jsonl");
       const sessionEntry: SessionEntry = {
         sessionId: "session",
-        sessionFile,
+        transcriptPath: sessionFile,
         updatedAt: Date.now(),
         totalTokens: 245_000,
         totalTokensFresh: true,
@@ -1750,16 +1740,15 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionKey = "agent:main:main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: "session",
-        storePath,
-      }),
       updatedAt: Date.now(),
       totalTokens: 985,
       totalTokensFresh: true,
       compactionCount: 0,
     };
+    await upsertSessionEntry(
+      { agentId: "main", sessionId: "session", sessionKey, storePath },
+      sessionEntry,
+    );
 
     await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -1845,7 +1834,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -1871,15 +1860,15 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(entry?.sessionId).toBe("session-rotated");
-    expect(entry?.sessionFile).toBe(successorFile);
+    expect(entry?.sessionFile).toBeUndefined();
     expect(followupRun.run.sessionId).toBe("session-rotated");
-    expect(followupRun.run.sessionFile).toBe(successorFile);
+    expect(followupRun.run.sessionFile).toBe("agent:main:main");
     expect(replyOperation.updateSessionId).toHaveBeenCalledWith("session-rotated");
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
       key: "agent:main:main",
       previousSessionId: "session",
       nextSessionId: "session-rotated",
-      nextSessionFile: successorFile,
+      nextSessionFile: "agent:main:main",
     });
   });
 
@@ -1906,7 +1895,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -1951,7 +1940,7 @@ describe("runMemoryFlushIfNeeded", () => {
       .mockImplementation(async (target, options) => originalStat(target, options));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -1995,7 +1984,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: path.join(rootDir, "required-preflight-session.jsonl"),
+      transcriptPath: path.join(rootDir, "required-preflight-session.jsonl"),
       updatedAt: Date.now(),
       totalTokens: 180_499,
       totalTokensFresh: true,
@@ -2300,7 +2289,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2356,7 +2345,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2413,7 +2402,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2468,7 +2457,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2526,7 +2515,7 @@ describe("runMemoryFlushIfNeeded", () => {
     }));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokensFresh: false,
     };
@@ -2585,7 +2574,7 @@ describe("runMemoryFlushIfNeeded", () => {
     );
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 10,
       totalTokensFresh: true,
@@ -2641,11 +2630,6 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: "session",
-        storePath,
-      }),
       updatedAt: Date.now(),
       totalTokens: 10,
       totalTokensFresh: true,
@@ -2702,11 +2686,6 @@ describe("runMemoryFlushIfNeeded", () => {
     ]);
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: "session",
-        storePath,
-      }),
       updatedAt: Date.now(),
       totalTokens: 10,
       totalTokensFresh: true,
@@ -2743,7 +2722,7 @@ describe("runMemoryFlushIfNeeded", () => {
     );
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -2793,7 +2772,7 @@ describe("runMemoryFlushIfNeeded", () => {
     incrementCompactionCountMock.mockRejectedValueOnce(new Error("count update failed"));
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
@@ -2844,7 +2823,7 @@ describe("runMemoryFlushIfNeeded", () => {
     );
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile,
+      transcriptPath: sessionFile,
       updatedAt: Date.now(),
       totalTokens: 10,
       totalTokensFresh: true,

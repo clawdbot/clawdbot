@@ -714,7 +714,6 @@ describe("runBtwSideQuestion", () => {
       sessionEntry: createSessionEntry(),
       sessionStore: {},
       sessionKey: DEFAULT_SESSION_KEY,
-      storePath: DEFAULT_STORE_PATH,
       resolvedThinkLevel: "low",
       resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
       blockReplyChunking: {
@@ -2387,9 +2386,8 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runMathSideQuestion({
       sessionKey: DEFAULT_SESSION_KEY,
-      sessionEntry: createSessionEntry({
-        sessionFile: `sqlite:main:session-1:${DEFAULT_STORE_PATH}`,
-      }),
+      sessionEntry: createSessionEntry(),
+      storePath: DEFAULT_STORE_PATH,
     });
 
     expect(result).toEqual({ text: MATH_ANSWER });

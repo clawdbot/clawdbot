@@ -5,6 +5,7 @@ import type {
   QueuedFileWriterDiagnostics,
 } from "../agents/queued-file-writer.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSecrets } from "../logging/redact.js";
 import { parseBooleanValue } from "../utils/boolean.js";
@@ -25,6 +26,7 @@ type TrajectoryRuntimeInit = {
   sessionId: string;
   sessionKey?: string;
   sessionFile?: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   provider?: string;
   modelId?: string;
   modelApi?: string | null;
@@ -250,8 +252,9 @@ function createSqliteTrajectoryRuntimeSink(params: {
   maxRuntimeFileBytes: number;
   sessionFile?: string;
   sessionId: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
 }): TrajectoryRuntimeSink | null {
-  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  const marker = params.sessionTarget ?? parseSqliteSessionFileMarker(params.sessionFile);
   if (!marker || marker.sessionId !== params.sessionId) {
     return null;
   }
@@ -329,6 +332,7 @@ export function createTrajectoryRuntimeRecorder(
         maxRuntimeFileBytes,
         sessionFile: params.sessionFile,
         sessionId: params.sessionId,
+        sessionTarget: params.sessionTarget,
       });
   if (!sink) {
     return null;

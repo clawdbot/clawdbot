@@ -184,15 +184,19 @@ async function handleTranscriptUpdateBroadcast(
   if (messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
-    const fallbackTarget = loadSessionEntryReadOnly(sessionKey, { agentId: visibleAgentId });
+    const updateStorePath = update.target?.storePath;
+    const fallbackTarget = updateStorePath
+      ? undefined
+      : loadSessionEntryReadOnly(sessionKey, { agentId: visibleAgentId });
     const entry = fallbackTarget?.entry;
-    const storePath = fallbackTarget?.storePath;
-    messageSeq = entry?.sessionId
+    const targetSessionId = update.target?.sessionId ?? entry?.sessionId;
+    const storePath = updateStorePath ?? fallbackTarget?.storePath;
+    messageSeq = targetSessionId
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync({
-            agentId: storageAgentId ?? visibleAgentId,
+            agentId: update.target?.agentId ?? storageAgentId ?? visibleAgentId,
             sessionEntry: entry,
-            sessionId: entry.sessionId,
+            sessionId: targetSessionId,
             sessionKey,
             storePath,
           }),

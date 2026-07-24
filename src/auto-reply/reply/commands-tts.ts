@@ -220,7 +220,12 @@ async function handleTtsLatestAction(
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
     return stopWithText("🎤 No active chat session is available for `/tts latest`.");
   }
-  const latest = await readLatestAssistantTextFromSessionTranscript(undefined);
+  const latest = await readLatestAssistantTextFromSessionTranscript({
+    agentId: params.agentId,
+    sessionId: params.sessionEntry.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
   const latestText = latest?.text.trim();
   if (!latestText || isSilentReplyPayloadText(latestText)) {
     return stopWithText("🎤 No readable assistant reply was found in this chat yet.");

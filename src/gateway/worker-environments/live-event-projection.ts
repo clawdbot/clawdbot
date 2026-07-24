@@ -54,7 +54,12 @@ export function createWorkerLiveTrajectoryRecorder(params: {
     runId: params.runId,
     sessionId: params.target.sessionId,
     sessionKey: params.target.sessionKey,
-    sessionFile: params.target.sessionKey,
+    sessionTarget: {
+      agentId: params.target.agentId ?? "main",
+      sessionId: params.target.sessionId,
+      sessionKey: params.target.sessionKey,
+      storePath: params.target.storePath,
+    },
   });
 }
 

@@ -570,7 +570,7 @@ export async function withSqliteTranscriptWriteTransaction<T>(
           agentId: resolved.agentId,
           sessionId: resolved.sessionId,
           sessionKey: resolved.sessionKey,
-          storePath: scope.storePath ?? resolved.path ?? "",
+          storePath: resolved.path ?? scope.storePath ?? "",
         }),
       toDatabaseOptions(resolved),
       { operationLabel: "session.transcript.batch" },

@@ -301,10 +301,15 @@ function isReadableMessage(value: unknown): boolean {
 }
 
 function isReadableLegacySessionEntry(value: unknown): value is FileEntry {
+  const message = isJsonRecord(value) && value.type === "message" ? value.message : undefined;
+  const readableLegacyMessage =
+    isJsonRecord(message) && message.role === "hookMessage"
+      ? isReadableContent(message.content)
+      : isReadableMessage(message);
   return (
     isJsonRecord(value) &&
     isSessionEntryType(value.type) &&
-    (value.type !== "message" || isReadableMessage(value.message))
+    (value.type !== "message" || readableLegacyMessage)
   );
 }
 
@@ -367,7 +372,7 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   const header = entries.find(
     (entry) => isJsonRecord(entry) && entry.type === "session" && typeof entry.id === "string",
   ) as SessionHeader | undefined;
-  const acceptsLegacyEntries = (header?.version ?? 1) < 2;
+  const acceptsLegacyEntries = (header?.version ?? 1) < CURRENT_SESSION_VERSION;
   let hasHeader = false;
   for (const [originalIndex, entry] of entries.entries()) {
     if (

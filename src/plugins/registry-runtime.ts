@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import { sqliteSessionFileMarkerMatchesTarget } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createPluginBlobStore,
@@ -341,6 +342,16 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const directAgentId = normalizeOptionalString(params.agentId);
       const sessionFile = normalizeOptionalString(params.sessionFile);
       if (target) {
+        const legacySessionIdentityMatches =
+          Boolean(sessionFile) &&
+          Boolean(agentId) &&
+          Boolean(storePath) &&
+          Boolean(entry?.sessionId) &&
+          sqliteSessionFileMarkerMatchesTarget(sessionFile, {
+            agentId: agentId!,
+            sessionId: entry!.sessionId,
+            storePath: storePath!,
+          });
         const targetIdentityMatches =
           targetSessionKey === sessionKey &&
           Boolean(storePath) &&
@@ -348,7 +359,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           targetSessionId === entry?.sessionId &&
           directSessionId === entry?.sessionId &&
           targetAgentId === directAgentId &&
-          (!sessionFile || sessionFile === sessionKey);
+          (!sessionFile || sessionFile === sessionKey || legacySessionIdentityMatches);
         if (!targetIdentityMatches) {
           throw new Error(
             `Plugin "${pluginId}" may execute a persisted session only with its exact session target identity.`,

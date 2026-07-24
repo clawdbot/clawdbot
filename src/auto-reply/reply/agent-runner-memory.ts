@@ -39,6 +39,7 @@ import {
 } from "../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
+  loadTranscriptEventsSync,
   readTranscriptStatsSync,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -460,6 +461,46 @@ function deriveTranscriptUsageSnapshot(
   };
 }
 
+function readLatestNonzeroUsageFromTranscriptEvents(
+  events: readonly unknown[],
+): ReturnType<typeof normalizeUsage> | undefined {
+  for (const event of events.toReversed()) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      continue;
+    }
+    const record = event as { message?: unknown; usage?: UsageLike };
+    const message =
+      record.message && typeof record.message === "object" && !Array.isArray(record.message)
+        ? (record.message as { usage?: UsageLike })
+        : undefined;
+    const usage = normalizeUsage(message?.usage ?? record.usage);
+    if (usage && hasNonzeroUsage(usage)) {
+      return usage;
+    }
+  }
+  return undefined;
+}
+
+function readSqliteSessionLogSnapshot(
+  scope: { agentId?: string; sessionId: string; sessionKey?: string; storePath: string },
+  options: { includeByteSize: boolean; includeUsage: boolean },
+): SessionLogSnapshot {
+  const snapshot: SessionLogSnapshot = {};
+  try {
+    if (options.includeByteSize) {
+      snapshot.byteSize = readTranscriptStatsSync(scope).sizeBytes;
+    }
+    if (options.includeUsage) {
+      snapshot.usage = deriveTranscriptUsageSnapshot({
+        usage: readLatestNonzeroUsageFromTranscriptEvents(loadTranscriptEventsSync(scope)),
+      });
+    }
+  } catch {
+    return snapshot;
+  }
+  return snapshot;
+}
+
 type SessionLogSnapshot = {
   byteSize?: number;
   usage?: SessionTranscriptUsageSnapshot;
@@ -495,48 +536,38 @@ async function readSessionLogSnapshot(params: {
   includeByteSize: boolean;
   includeUsage: boolean;
 }): Promise<SessionLogSnapshot> {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  if (params.sessionId && params.sessionKey && params.opts?.storePath && agentId) {
-    if (!params.includeByteSize) {
-      return {};
-    }
-    try {
-      return {
-        byteSize: readTranscriptStatsSync({
-          agentId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          storePath: params.opts.storePath,
-        }).sizeBytes,
-      };
-    } catch {
-      return {};
-    }
-  }
   const logPath = resolveSessionLogPath(
     params.sessionId,
     params.sessionEntry,
     params.sessionKey,
     params.opts,
   );
-  if (!logPath) {
-    return {};
+  const sqliteMarker = logPath ? parseSqliteSessionFileMarker(logPath) : undefined;
+  if (logPath && !sqliteMarker) {
+    return await readFileSessionLogSnapshot(logPath, params);
   }
-  const sqliteMarker = parseSqliteSessionFileMarker(logPath);
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  if (params.sessionId && params.sessionKey && params.opts?.storePath && agentId) {
+    return readSqliteSessionLogSnapshot(
+      {
+        agentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.opts.storePath,
+      },
+      params,
+    );
+  }
   if (sqliteMarker) {
-    // SQLite-backed transcripts intentionally skip the legacy JSONL tail scan
-    // (there is no usage line to parse), but the byte-size guard below still
-    // needs a real value or it silently degrades to token-only triggering.
-    if (!params.includeByteSize) {
-      return {};
-    }
-    try {
-      return { byteSize: readTranscriptStatsSync(sqliteMarker).sizeBytes };
-    } catch {
-      return {};
-    }
+    return readSqliteSessionLogSnapshot(sqliteMarker, params);
   }
+  return {};
+}
 
+async function readFileSessionLogSnapshot(
+  logPath: string,
+  params: { includeByteSize: boolean; includeUsage: boolean },
+): Promise<SessionLogSnapshot> {
   const snapshot: SessionLogSnapshot = {};
   let usageScan: SessionLogUsageScan | undefined;
 
@@ -945,12 +976,13 @@ export async function runPreflightCompactionIfNeeded(params: {
   };
   try {
     await notifyStartCompaction();
-    const sessionFile = resolveSessionLogPath(
-      entry.sessionId,
-      entry,
-      params.sessionKey ?? params.followupRun.run.sessionKey,
-      { agentId: params.followupRun.run.agentId, storePath: params.storePath },
-    );
+    const sessionFile =
+      resolveSessionLogPath(
+        entry.sessionId,
+        entry,
+        params.sessionKey ?? params.followupRun.run.sessionKey,
+        { agentId: params.followupRun.run.agentId, storePath: params.storePath },
+      ) ?? normalizeOptionalString(params.sessionKey ?? params.followupRun.run.sessionKey);
     if (!sessionFile) {
       await notifyTerminalCompaction("skipped");
       return entry ?? params.sessionEntry;

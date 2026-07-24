@@ -5,6 +5,7 @@ import "./session-accessor.types.js";
 declare module "./types.js" {
   interface SessionEntryTestExtensions {
     sessionFile?: string;
+    transcriptPath?: string;
   }
 }
 

@@ -139,10 +139,20 @@ export class SessionManagerPersistence extends SessionManagerCore {
   }
 
   private persistSqliteRecord(entry: unknown, options?: AppendPersistenceOptions): void {
-    if (!isIndexedSessionEntry(entry) || !this.persistenceTarget) {
+    if (!this.persistenceTarget) {
       return;
     }
     const scope = this.persistenceTarget;
+    const leafEntry = parseOpaqueLeafEntry(entry);
+    if (leafEntry) {
+      if (!appendTranscriptEventSync(scope, entry)) {
+        throw new Error(`Session transcript leaf control was not persisted: ${leafEntry.id}`);
+      }
+      return;
+    }
+    if (!isIndexedSessionEntry(entry)) {
+      return;
+    }
     if (entry.type !== "message") {
       appendTranscriptEventSync(scope, entry);
       return;
