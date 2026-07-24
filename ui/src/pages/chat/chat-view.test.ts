@@ -5600,18 +5600,17 @@ describe("right-click Reply", () => {
     } as unknown as Selection;
     vi.spyOn(window, "getSelection").mockReturnValue(mockSelection);
 
+    // A selection that intersects the right-clicked bubble defers to the
+    // browser's native context menu so native Copy works across browsers.
     const selectedEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     bubble.dispatchEvent(selectedEvent);
 
-    expect(selectedEvent.defaultPrevented).toBe(true);
-    expect(
-      [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
-        button.textContent?.trim(),
-      ),
-    ).toEqual(["Copy", "Reply"]);
-    document.querySelector<HTMLButtonElement>('[aria-label="Copy"]')!.click();
-    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("selectable"));
+    expect(selectedEvent.defaultPrevented).toBe(false);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
 
+    // A selection wholly outside the right-clicked bubble still shows the
+    // custom message-actions menu (no Copy entry because the selection does
+    // not intersect this bubble).
     selectedRange = document.createRange();
     selectedRange.selectNodeContents(otherBubble);
     const disjointEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
@@ -5623,6 +5622,74 @@ describe("right-click Reply", () => {
         button.textContent?.trim(),
       ),
     ).toEqual(["Reply"]);
+  });
+
+  it("lets the browser handle the native context menu when text is selected inside the right-clicked bubble", () => {
+    const container = renderChatView({ onSetReply: vi.fn() });
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    expect(section).not.toBeNull();
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageId = "msg-1";
+    bubble.dataset.messageText = "hello world";
+    bubble.textContent = "hello world";
+    group.append(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    const bubbleText = expectDefined(bubble.firstChild, "bubble text node");
+    const selectedRange = document.createRange();
+    selectedRange.setStart(bubbleText, 0);
+    selectedRange.setEnd(bubbleText, 5);
+    const mockSelection = {
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => selectedRange,
+      toString: () => "hello",
+    } as unknown as Selection;
+    vi.spyOn(window, "getSelection").mockReturnValue(mockSelection);
+
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(event);
+
+    // Must NOT prevent the browser's native context menu so Copy works.
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("still shows the custom context menu when selection is collapsed (no text selected)", () => {
+    const container = renderChatView({ onSetReply: vi.fn() });
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    expect(section).not.toBeNull();
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageId = "msg-1";
+    bubble.dataset.messageText = "hello world";
+    bubble.textContent = "hello world";
+    group.append(bubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    // A collapsed selection (caret, no range) should not suppress the menu.
+    const mockSelection = {
+      isCollapsed: true,
+      rangeCount: 0,
+      getRangeAt: () => {
+        throw new Error("no range for collapsed selection");
+      },
+      toString: () => "",
+    } as unknown as Selection;
+    vi.spyOn(window, "getSelection").mockReturnValue(mockSelection);
+
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

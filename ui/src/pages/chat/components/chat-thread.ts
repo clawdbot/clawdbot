@@ -830,6 +830,16 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (!bubble) {
     return;
   }
+  // When the user has selected text inside the clicked bubble, let the browser
+  // show its native context menu so native Copy / Look Up / Search work as
+  // expected. The custom message-actions menu is for message-level operations
+  // on unselected bubbles.
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) {
+    if (selectionIntersectsElement(selection, bubble)) {
+      return;
+    }
+  }
   const group = bubble.closest(".chat-group");
   if (!group) {
     return;
@@ -864,8 +874,12 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
     return;
   }
 
-  const selection = window.getSelection();
-  const selectedText = selectionIntersectsElement(selection, bubble) ? selection?.toString() : "";
+  // The early return above handles selections inside the bubble, so reaching
+  // here means either no selection or selection is outside this bubble.
+  // Only offer "Copy selection" when a cross-bubble selection intersects.
+  const selectedText = selectionIntersectsElement(selection, bubble)
+    ? (selection?.toString() ?? "")
+    : "";
 
   event.preventDefault();
   event.stopPropagation();
