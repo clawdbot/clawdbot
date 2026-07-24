@@ -150,10 +150,9 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
     }
     throw new Error("No agents configured. Run `openclaw onboard` or `openclaw agents add` first.");
   }
-  const defaults = agents.filter((agent) => agent?.default === true);
   // Runtime config loading canonicalizes zero/multiple markers before this helper is called.
   // External SDK callers may still pass the shipped list shape, which chose the first candidate.
-  return normalizeAgentId((defaults[0] ?? agents[0])!.id);
+  return normalizeAgentId((agents.find((agent) => agent?.default === true) ?? agents[0])!.id);
 }
 
 /** Returns the configured default when diagnostics must tolerate an invalid raw roster. */
