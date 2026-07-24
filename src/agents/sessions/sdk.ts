@@ -10,7 +10,6 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
@@ -308,7 +307,8 @@ async function createAgentSessionImpl(
   const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
-  const sessionManager = options.sessionManager ?? (await createDefaultSdkSessionManager(cwd));
+  const sessionManager =
+    options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, agentDir));
 
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -572,13 +572,16 @@ async function createAgentSessionImpl(
   };
 }
 
-async function createDefaultSdkSessionManager(cwd: string): Promise<SessionManager> {
+async function createDefaultSdkSessionManager(
+  cwd: string,
+  agentDir: string,
+): Promise<SessionManager> {
   const sessionId = randomUUID();
   const target = {
     agentId: "main",
     sessionId,
     sessionKey: `agent:main:sdk:${sessionId}`,
-    storePath: resolveStorePath(undefined, { agentId: "main" }),
+    storePath: join(agentDir, "openclaw-agent.sqlite"),
   };
   await upsertSessionEntry(target, { sessionId, updatedAt: Date.now() });
   return SessionManager.open(target, cwd);

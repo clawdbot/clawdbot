@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
 // session write-lock behavior.
@@ -9,6 +12,7 @@ import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -67,6 +71,27 @@ describe("createAgentSession runtime ownership", () => {
     expect(getStreamLlmRuntime(session.agent.streamFn)).toBe(
       getModelRegistryRuntime(modelRegistry).llmRuntime,
     );
+  });
+
+  it("keeps the default SQLite session inside an explicit agent directory", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-session-"));
+    const agentDir = path.join(root, "isolated-agent");
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    try {
+      const { session } = await createAgentSession({
+        agentDir,
+        model: testModel,
+        resourceLoader: createEmptyResourceLoader(),
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: createTestModelRegistry(),
+      });
+
+      expect(session.sessionManager.getSessionTarget()?.storePath).toBe(databasePath);
+      session.dispose();
+    } finally {
+      disposeOpenClawAgentDatabaseByPath(databasePath);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
