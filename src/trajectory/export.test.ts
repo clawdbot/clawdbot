@@ -299,11 +299,13 @@ describe("exportTrajectoryBundle", () => {
 
     const bundle = await exportTrajectoryBundle({
       outputDir,
-      sessionFile: formatSqliteSessionFileMarker({
+      sessionFile: path.join(tmpDir, "stale-session.jsonl"),
+      sessionTarget: {
         agentId: "main",
         sessionId,
+        sessionKey,
         storePath,
-      }),
+      },
       sessionId,
       sessionKey,
       workspaceDir: tmpDir,
@@ -311,6 +313,8 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.header?.id).toBe(sessionId);
     expect(bundle.manifest.transcriptEventCount).toBe(2);
+    expect(bundle.manifest.sourceFiles.session).toMatch(/^agent:/u);
+    expect(bundle.manifest.sourceFiles.session).not.toContain("stale-session");
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
     expect(fs.existsSync(path.join(tmpDir, "session-1.jsonl"))).toBe(false);
   });

@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -220,9 +221,11 @@ async function handleTtsLatestAction(
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
     return stopWithText("🎤 No active chat session is available for `/tts latest`.");
   }
+  const targetSessionEntry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
+  const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) ?? params.agentId;
   const latest = await readLatestAssistantTextFromSessionTranscript({
-    agentId: params.agentId,
-    sessionId: params.sessionEntry.sessionId,
+    agentId: targetAgentId,
+    sessionId: targetSessionEntry.sessionId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
@@ -241,7 +244,7 @@ async function handleTtsLatestAction(
     channel: params.command.channel,
     accountId,
     prefsPath,
-    agentId: params.agentId,
+    agentId: targetAgentId,
   });
   if ("error" in audio) {
     return stopWithText(`❌ Error generating audio: ${audio.error}`);

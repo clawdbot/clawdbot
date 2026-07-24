@@ -337,25 +337,20 @@ describe("handleTtsCommands status fallback reporting", () => {
   it("reads the latest assistant transcript reply once", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-latest-"));
     const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:other:tts-latest";
     const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
-    const sessionStore = { "session-key": sessionEntry };
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: "session-key", storePath },
-      sessionEntry,
-    );
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await replaceSessionEntry({ agentId: "other", sessionKey, storePath }, sessionEntry);
     const transcriptScope = {
-      agentId: "main",
+      agentId: "other",
       sessionId: "s1",
-      sessionKey: "session-key",
+      sessionKey,
       storePath,
     };
     appendTranscriptMessageSync(transcriptScope, {
       message: { role: "assistant", content: [{ type: "text", text: "older reply" }] },
     });
-    Object.assign(
-      sessionEntry,
-      loadSessionEntry({ agentId: "main", sessionKey: "session-key", storePath }),
-    );
+    Object.assign(sessionEntry, loadSessionEntry({ agentId: "other", sessionKey, storePath }));
     appendTranscriptMessageSync(transcriptScope, {
       message: {
         role: "assistant",
@@ -394,6 +389,7 @@ describe("handleTtsCommands status fallback reporting", () => {
         initialSessionEntry,
         sessionEntry,
         sessionStore,
+        sessionKey,
         storePath,
       }),
       true,
