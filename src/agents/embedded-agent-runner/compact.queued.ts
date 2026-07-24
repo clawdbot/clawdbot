@@ -284,17 +284,17 @@ async function compactEmbeddedAgentSessionImpl(
     allowGatewaySubagentBinding: inputParams.allowGatewaySubagentBinding,
   });
   ensureContextEnginesInitialized();
+  const runtimeTarget = await resolveAgentRunSessionTarget(inputParams);
   const agentIds = resolveSessionAgentIds({
-    sessionKey: inputParams.sessionKey,
+    sessionKey: runtimeTarget.sessionKey,
     config: inputParams.config,
-    agentId: inputParams.agentId,
-  });
-  const runtimeTarget = await resolveAgentRunSessionTarget({
-    ...inputParams,
-    agentId: inputParams.agentId ?? agentIds.sessionAgentId,
+    agentId: runtimeTarget.agentId,
   });
   const params = {
     ...inputParams,
+    agentId: runtimeTarget.agentId,
+    sessionId: runtimeTarget.sessionId,
+    sessionKey: runtimeTarget.sessionKey,
     sessionTarget: runtimeTarget,
     sessionFile: runtimeTarget.sessionKey,
   };

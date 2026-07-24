@@ -54,9 +54,10 @@ function migrateV2ToV3(entries: FileEntry[]): void {
       continue;
     }
     if (entry.type === "message" && entry.message) {
-      const message = entry.message as { role: string };
+      const message = entry.message as { role: string; customType?: string };
       if (message.role === "hookMessage") {
         message.role = "custom";
+        message.customType ||= "hook";
       }
     }
   }

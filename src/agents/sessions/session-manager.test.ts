@@ -334,14 +334,13 @@ describe("SessionManager.open", () => {
         timestamp: "2026-01-01T00:00:01.000Z",
         message: {
           role: "hookMessage",
-          customType: "hook",
           content: "legacy hook context",
         },
       },
     ]);
 
     expect(manager.getEntry("legacy-hook-message")).toMatchObject({
-      message: { role: "custom", content: "legacy hook context" },
+      message: { role: "custom", customType: "hook", content: "legacy hook context" },
     });
   });
 

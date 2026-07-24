@@ -4187,6 +4187,25 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("derives queued compaction ownership from a self-contained session target", async () => {
+    await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        agentId: undefined,
+        sessionKey: undefined,
+        sessionTarget: {
+          agentId: "other",
+          sessionId: "other-session",
+          sessionKey: "agent:other:main",
+          storePath: "/tmp/other-sessions.json",
+        },
+      }),
+    );
+
+    expect(resolveSessionAgentIdsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "other", sessionKey: "agent:other:main" }),
+    );
+  });
+
   it("keeps a delegated result that echoes the current transcript on the active transcript", async () => {
     const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,
