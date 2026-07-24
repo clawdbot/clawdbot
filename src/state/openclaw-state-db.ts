@@ -301,7 +301,9 @@ export function resolveOpenClawStateReadOnlyLocation(
   pathname: string,
   hasWalSidecars: boolean,
 ): string {
-  if (process.platform === "win32" || hasWalSidecars) {
+  // SQLite URI authorities reject UNC hosts, while ordinary Windows paths
+  // preserve UNC and already-namespaced locations through the Windows VFS.
+  if (hasWalSidecars || (process.platform === "win32" && pathname.startsWith("\\\\"))) {
     return pathname;
   }
   return `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;

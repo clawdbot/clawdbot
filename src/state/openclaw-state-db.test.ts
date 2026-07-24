@@ -885,9 +885,11 @@ afterEach(() => {
 });
 
 describe("openclaw state database", () => {
-  it("uses immutable file URIs only for non-Windows databases without WAL sidecars", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const pathname = "/var/lib/openclaw/state/openclaw.sqlite";
+  it("uses immutable URIs for local databases without WAL sidecars", () => {
+    const pathname =
+      process.platform === "win32"
+        ? String.raw`C:\Users\OpenClaw\.openclaw\state\openclaw.sqlite`
+        : "/var/lib/openclaw/state/openclaw.sqlite";
 
     expect(resolveOpenClawStateReadOnlyLocation(pathname, false)).toBe(
       `${pathToFileURL(pathname).href}?mode=ro&immutable=1`,
@@ -895,11 +897,16 @@ describe("openclaw state database", () => {
     expect(resolveOpenClawStateReadOnlyLocation(pathname, true)).toBe(pathname);
   });
 
-  it("keeps the ordinary state pathname for immutable reads on Windows", () => {
+  it("keeps UNC and namespaced Windows state paths out of SQLite URI authority parsing", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const pathname = String.raw`C:\Users\OpenClaw\.openclaw\state\openclaw.sqlite`;
 
-    expect(resolveOpenClawStateReadOnlyLocation(pathname, false)).toBe(pathname);
+    for (const pathname of [
+      String.raw`\\server\share\state\openclaw.sqlite`,
+      String.raw`\\?\C:\deep\state\openclaw.sqlite`,
+      String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
+    ]) {
+      expect(resolveOpenClawStateReadOnlyLocation(pathname, false)).toBe(pathname);
+    }
   });
 
   it("resolves under the shared state database directory", () => {
