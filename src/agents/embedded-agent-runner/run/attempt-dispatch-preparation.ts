@@ -104,18 +104,17 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtimeAuthState: runtime.runtimeAuthState,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
-  const trajectorySessionFile = resolvedSessionKey
-    ? (
-        await resolveSessionTranscriptRuntimeReadTarget({
+  const resolvedSessionTarget = resolvedSessionKey
+    ? await resolveSessionTranscriptRuntimeReadTarget({
+        agentId: workspaceResolution.agentId,
+        sessionId: sessionPromptState.sessionId,
+        sessionKey: resolvedSessionKey,
+        storePath: resolveStorePath(params.config?.session?.store, {
           agentId: workspaceResolution.agentId,
-          sessionId: sessionPromptState.sessionId,
-          sessionKey: resolvedSessionKey,
-          storePath: resolveStorePath(params.config?.session?.store, {
-            agentId: workspaceResolution.agentId,
-          }),
-        })
-      ).sessionKey
-    : sessionPromptState.sessionFile;
+        }),
+      })
+    : sessionPromptState.sessionTarget;
+  const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
   }
@@ -151,6 +150,18 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           sessionId: sessionPromptState.sessionId,
           sessionKey: resolvedSessionKey,
           sessionFile: trajectorySessionFile,
+          ...(resolvedSessionTarget?.agentId &&
+          resolvedSessionTarget.sessionKey &&
+          resolvedSessionTarget.storePath
+            ? {
+                sessionTarget: {
+                  agentId: resolvedSessionTarget.agentId,
+                  sessionId: resolvedSessionTarget.sessionId,
+                  sessionKey: resolvedSessionTarget.sessionKey,
+                  storePath: resolvedSessionTarget.storePath,
+                },
+              }
+            : {}),
           provider: trajectoryAttribution.provider,
           modelId: trajectoryAttribution.modelId,
           modelApi: trajectoryAttribution.modelApi,
@@ -170,7 +181,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtime: {
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
-      sessionTarget: sessionPromptState.sessionTarget,
+      sessionTarget: resolvedSessionTarget,
       sessionKey: resolvedSessionKey,
       trajectorySessionFile,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
