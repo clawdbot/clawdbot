@@ -45,6 +45,7 @@ describe("Web Awesome control ownership", () => {
 
   it("limits custom comboboxes to dynamic suggestion surfaces", async () => {
     // Web Awesome Core has no combobox; its combobox is a paid Pro component.
+    // This inventory tracks literal ARIA roles, not Web Awesome elements that own roles internally.
     expect(await matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette.ts",
       "pages/chat/components/chat-composer-slash-menu.ts",
