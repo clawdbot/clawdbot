@@ -15,7 +15,6 @@ const observedElements = new Set<Element>();
 
 class RecordingResizeObserver implements ResizeObserver {
   private readonly targets = new Set<Element>();
-  constructor(_callback: ResizeObserverCallback) {}
   observe(target: Element): void {
     this.targets.add(target);
     observedElements.add(target);
@@ -63,7 +62,9 @@ function transcriptRows(container: HTMLElement): HTMLElement[] {
 }
 
 async function flushDeferredRowPrune(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 describe("chat transcript row measurement", () => {
