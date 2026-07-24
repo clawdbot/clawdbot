@@ -30,7 +30,7 @@ import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import {
   createReadinessChecker,
-  evaluateCanonicalGatewayReadiness,
+  evaluateConfiguredGatewayReadiness,
   type CanonicalGatewayReadinessResult,
 } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
@@ -390,7 +390,8 @@ export async function prepareGatewayRuntimeState(params: {
     throw new Error("Readiness runtime changed while it was being evaluated.");
   };
   const getReadiness = (): Promise<CanonicalGatewayReadinessResult> =>
-    evaluateCanonicalGatewayReadiness({
+    evaluateConfiguredGatewayReadiness({
+      config: pluginRuntime.readinessSnapshot.config,
       evaluateGateway: getGatewayReadiness,
       evaluateRuntime: evaluateRuntimeReadiness,
     });

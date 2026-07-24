@@ -47,6 +47,11 @@ External uptime monitoring services should use the dedicated `/health` endpoint,
 
 ## Selected readiness criteria
 
+Without a `gateway.readiness` section, `/ready` and `/readyz` use the legacy
+Gateway lifecycle and channel checker. Adding the section opts the Gateway into
+bounded canonical condition evaluation; an empty section is an explicit opt-in
+with no additional selected criteria.
+
 An operator can add registered criteria to the Gateway's lifecycle readiness
 conditions without selecting a hosting profile:
 
