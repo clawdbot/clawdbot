@@ -1,7 +1,7 @@
 // Formats status summaries shown in the TUI header and overlays.
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { formatTokenCount } from "../utils/usage-format.js";
-import { createTuiLocalization, type TuiLocalization } from "./i18n/runtime.js";
+import type { TuiLocalization } from "./i18n/runtime.js";
 import { formatContextUsageLine } from "./tui-formatters.js";
 import type { GatewayStatusSummary } from "./tui-types.js";
 
@@ -28,10 +28,7 @@ function formatLocalizedTimeAgo(durationMs: number, localization: TuiLocalizatio
 }
 
 /** Formats Gateway/session health into compact status lines for the TUI. */
-export function formatStatusSummary(
-  summary: GatewayStatusSummary,
-  localization: TuiLocalization = createTuiLocalization(),
-) {
+export function formatStatusSummary(summary: GatewayStatusSummary, localization: TuiLocalization) {
   const lines: string[] = [];
   lines.push(localization.t("tui.status.heading"));
   if (summary.runtimeVersion) {

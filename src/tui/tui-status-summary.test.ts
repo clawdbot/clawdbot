@@ -6,7 +6,8 @@ describe("formatStatusSummary localization", () => {
   it("uses the process locale at the status rendering boundary", () => {
     vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
     try {
-      expect(formatStatusSummary({ sessions: { count: 0 } })[0]).toBe("网关状态");
+      const localization = createTuiLocalization();
+      expect(formatStatusSummary({ sessions: { count: 0 } }, localization)[0]).toBe("网关状态");
     } finally {
       vi.unstubAllEnvs();
     }
