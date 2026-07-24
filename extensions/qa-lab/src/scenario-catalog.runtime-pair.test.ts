@@ -19,7 +19,7 @@ describe("QA runtime-pair scenario catalog", () => {
           .length,
       ]),
     );
-    expect(laneCounts).toEqual({ core: 39, extended: 8, soak: 2 });
+    expect(laneCounts).toEqual({ core: 38, extended: 8, soak: 2 });
   });
 
   it("declares every release agentic scenario in the core lane", () => {
@@ -51,7 +51,7 @@ describe("QA runtime-pair scenario catalog", () => {
       });
     }
 
-    expect(readQaScenarioById("gateway-restart-inflight-run").runtimePairLane).toBe("core");
+    expect(readQaScenarioById("gateway-restart-inflight-run").runtimePairLane).toBeUndefined();
     expect(readQaScenarioExecutionConfig("gateway-restart-inflight-run")).toMatchObject({
       requiredProviderMode: "mock-openai",
     });
