@@ -58,6 +58,10 @@ type SqliteMasterRow = {
   name: string;
 };
 
+type NamedIndexRow = SqliteMasterRow & {
+  tbl_name: string;
+};
+
 type IndexSqlRow = {
   sql?: unknown;
 };
@@ -105,6 +109,67 @@ export function collectSqliteSchemaShape(db: DatabaseSync): SqliteSchemaShape {
       },
     ]),
   );
+}
+
+/** Normalize only DDL whitespace while preserving the full structured shape. */
+export function normalizeSqliteSchemaShapeSql(shape: SqliteSchemaShape): SqliteSchemaShape {
+  return Object.fromEntries(
+    Object.entries(shape).map(([tableName, table]) => [
+      tableName,
+      {
+        ...table,
+        indexes: table.indexes.map((index) => ({
+          ...index,
+          sql: index.sql?.replace(/\s+/gu, " ").trim() ?? null,
+        })),
+      },
+    ]),
+  );
+}
+
+/**
+ * Replace every explicit named UNIQUE index with a same-name ordinary index.
+ *
+ * Startup repair tests use this to prove the repair registry covers the whole
+ * canonical schema rather than only a hand-picked index.
+ */
+export function replaceNamedUniqueIndexesWithOrdinaryIndexes(db: DatabaseSync): string[] {
+  const indexes = db
+    .prepare(
+      `
+        SELECT name, tbl_name
+        FROM sqlite_schema
+        WHERE type = 'index'
+          AND sql IS NOT NULL
+        ORDER BY name ASC
+      `,
+    )
+    .all() as NamedIndexRow[];
+  const uniqueIndexes = indexes.filter((index) =>
+    (
+      db
+        .prepare(`PRAGMA index_list(${quoteSqliteIdentifier(index.tbl_name)})`)
+        .all() as IndexListRow[]
+    ).some((candidate) => candidate.name === index.name && candidate.unique === 1),
+  );
+
+  for (const index of uniqueIndexes) {
+    const firstColumn = (
+      db
+        .prepare(`PRAGMA table_info(${quoteSqliteIdentifier(index.tbl_name)})`)
+        .all() as TableInfoRow[]
+    )[0];
+    if (!firstColumn) {
+      throw new Error(`SQLite table ${index.tbl_name} has no columns`);
+    }
+    db.exec(`
+      DROP INDEX main.${quoteSqliteIdentifier(index.name)};
+      CREATE INDEX main.${quoteSqliteIdentifier(index.name)}
+        ON ${quoteSqliteIdentifier(index.tbl_name)}(${quoteSqliteIdentifier(firstColumn.name)});
+    `);
+  }
+
+  return uniqueIndexes.map((index) => index.name);
 }
 
 function collectStrictFlag(db: DatabaseSync, tableName: string): number {

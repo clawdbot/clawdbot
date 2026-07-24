@@ -1,0 +1,186 @@
+title: Cron explicit authority execution
+
+scenario:
+  id: cron-explicit-authority-execution
+  surface: cron
+  runtimeParityTier: live-only
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+    secondary:
+      - scheduling.cron
+      - agents.tool-fs-write
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom:
+        - qa-cron-authority-operator
+    channels:
+      qa-channel:
+        groups:
+          qa-cron-authority-execution:
+            tools:
+              allow:
+                - cron
+                - write
+  objective: Verify a senderless isolated Cron run consumes its explicit persisted authority after a sender-policy change without selecting the anonymous wildcard.
+  successCriteria:
+    - The trusted operator creates an isolated job with an explicit write cap and immutable owner session.
+    - A Gateway restart applies a wildcard sender policy that denies filesystem tools after creation.
+    - The senderless run retains write despite the global sender wildcard denying filesystem tools.
+    - The run writes the requested workspace proof file and completes successfully.
+  regressionRefs:
+    - openclaw/openclaw#111809
+  docsRefs:
+    - docs/automation/cron-jobs.md
+    - docs/gateway/config-tools.md
+  codeRefs:
+    - src/cron/isolated-agent/run-executor.ts
+    - src/agents/conversation-capability-profile.ts
+    - src/agents/requester-tool-policy.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Applies a sender wildcard deny and forces an isolated tool-bearing Cron run.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 420000
+    summary: Create one group-owned job through the operator API, add a sender wildcard restriction, then prove its scheduled write authority survives requester-policy resolution.
+    config:
+      artifactFile: cron-explicit-authority-proof.txt
+      artifactText: CRON_EXPLICIT_AUTHORITY_OK
+      conversationId: qa-cron-authority-execution
+      ownerSessionKey: agent:qa:qa-channel:group:group:qa-cron-authority-execution
+
+flow:
+  steps:
+    - name: creates and forces an explicitly capped isolated job
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 120000
+        - resetTransport: true
+        - set: artifactPath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, config.artifactFile)"
+        - call: fs.rm
+          args:
+            - ref: artifactPath
+            - force: true
+        - set: scheduledFor
+          value:
+            expr: "new Date(Date.now() + 10 * 60 * 1000).toISOString()"
+        - set: jobName
+          value:
+            expr: "`qa-cron-explicit-authority-${randomUUID()}`"
+        - call: env.gateway.call
+          saveAs: added
+          args:
+            - cron.add
+            - agentId: qa
+              owner:
+                agentId: qa
+                sessionKey:
+                  ref: config.ownerSessionKey
+              name:
+                ref: jobName
+              enabled: true
+              schedule:
+                kind: at
+                at:
+                  ref: scheduledFor
+              sessionTarget: isolated
+              wakeMode: now
+              payload:
+                kind: agentTurn
+                message:
+                  expr: "`Use the write tool to create ${config.artifactFile} in the workspace with exactly ${config.artifactText}. Then reply exactly ${config.artifactText}.`"
+                toolsAllow:
+                  - write
+              delivery:
+                mode: none
+            - timeoutMs: 30000
+        - set: jobId
+          value:
+            expr: added.id
+        - assert:
+            expr: "Boolean(jobId) && added.owner?.sessionKey === config.ownerSessionKey && added.payload?.toolsAllow?.includes('write') === true && added.payload.toolsAllow.includes('exec') === false"
+            message:
+              expr: "`explicit Cron authority was not persisted: ${JSON.stringify(added)}`"
+        - call: patchConfig
+          args:
+            - env:
+                ref: env
+              patch:
+                tools:
+                  toolsBySender:
+                    "*":
+                      deny:
+                        - group:fs
+              sessionKey:
+                ref: config.ownerSessionKey
+              note: Apply the post-creation sender wildcard used by the cron authority regression.
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 120000
+        - set: runStartedAt
+          value:
+            expr: Date.now()
+        - call: env.gateway.call
+          saveAs: runResponse
+          args:
+            - cron.run
+            - id:
+                ref: jobId
+              mode: force
+            - timeoutMs: 30000
+        - assert:
+            expr: "runResponse?.ok === true && runResponse?.ran !== false"
+            message:
+              expr: "`expected cron.run to enqueue one run, got ${JSON.stringify(runResponse)}`"
+
+    - name: records the scheduled run as successful
+      actions:
+        - call: waitForCronRunCompletion
+          saveAs: completedRun
+          args:
+            - callGateway:
+                expr: env.gateway.call.bind(env.gateway)
+              jobId:
+                ref: jobId
+              afterTs:
+                ref: runStartedAt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
+              gatewayCallTimeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
+        - assert:
+            expr: "completedRun?.status === 'ok'"
+            message:
+              expr: "`expected cron run ok, got ${JSON.stringify(completedRun)}`"
+      detailsExpr: "`job=${jobId} status=${completedRun.status}`"
+
+    - name: scheduled authority writes the workspace proof
+      actions:
+        - call: waitForCondition
+          saveAs: artifact
+          args:
+            - lambda:
+                async: true
+                expr: "fs.readFile(artifactPath, 'utf8').then((value) => value.trim() === config.artifactText ? value.trim() : undefined).catch(() => undefined)"
+            - 30000
+            - 250
+        - assert:
+            expr: artifact === config.artifactText
+            message:
+              expr: "`senderless Cron run did not retain explicit write authority; run=${JSON.stringify(completedRun)}`"
+      detailsExpr: "`job=${jobId} status=${completedRun.status} artifact=${artifact}`"

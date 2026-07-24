@@ -126,7 +126,13 @@ function applyGoalPromptToContext(ctx: HandleCommandsParams["ctx"], message: str
     BodyForCommands?: string;
     BodyForAgent?: string;
     BodyStripped?: string;
+    commandText?: string;
+    agentText?: string;
+    rawText?: string;
   };
+  mutableCtx.commandText = message;
+  mutableCtx.agentText = message;
+  mutableCtx.rawText = message;
   mutableCtx.Body = message;
   mutableCtx.RawBody = message;
   mutableCtx.CommandBody = message;

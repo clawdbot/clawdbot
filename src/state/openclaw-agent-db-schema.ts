@@ -70,6 +70,17 @@ const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [
       WHERE message_idempotency_key IS NOT NULL
     `,
   },
+  {
+    name: "idx_agent_transcript_active_event_seq",
+    definition: "ON session_transcript_active_events(session_id, event_seq)",
+  },
+  {
+    name: "idx_agent_transcript_active_messages",
+    definition: `
+      ON session_transcript_active_events(session_id, message_position)
+      WHERE message_position IS NOT NULL
+    `,
+  },
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
 
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
@@ -363,8 +374,11 @@ function migratedSessionScope(
 }
 
 function migratedEntryChannel(entry: MigratedSessionEntry): string | null {
-  const deliveryContext = migratedObjectField(entry, "deliveryContext");
-  const origin = migratedObjectField(entry, "origin");
+  const delivery = migratedObjectField(entry, "delivery");
+  const deliveryContext =
+    migratedObjectField(delivery ?? {}, "context") ?? migratedObjectField(entry, "deliveryContext");
+  const origin =
+    migratedObjectField(delivery ?? {}, "origin") ?? migratedObjectField(entry, "origin");
   return (
     migratedText(entry.channel) ??
     migratedText(deliveryContext?.channel) ??
@@ -374,8 +388,11 @@ function migratedEntryChannel(entry: MigratedSessionEntry): string | null {
 }
 
 function migratedEntryAccountId(entry: MigratedSessionEntry): string | null {
-  const deliveryContext = migratedObjectField(entry, "deliveryContext");
-  const origin = migratedObjectField(entry, "origin");
+  const delivery = migratedObjectField(entry, "delivery");
+  const deliveryContext =
+    migratedObjectField(delivery ?? {}, "context") ?? migratedObjectField(entry, "deliveryContext");
+  const origin =
+    migratedObjectField(delivery ?? {}, "origin") ?? migratedObjectField(entry, "origin");
   return (
     migratedText(deliveryContext?.accountId) ??
     migratedText(entry.lastAccountId) ??

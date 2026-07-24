@@ -9,11 +9,15 @@ import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import {
+  createUpdateConfigSnapshot,
   persistRequestedUpdateChannel,
   readPostCorePreUpdateSourceConfig,
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
-import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import {
+  completePostCorePluginUpdate,
+  runUpdateFinalizationDoctorInFreshProcess,
+} from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
@@ -70,6 +74,20 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
     sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
     currentSnapshot: configSnapshot,
     updateStartedAtMs,
+  });
+  await createUpdateConfigSnapshot();
+  await runUpdateFinalizationDoctorInFreshProcess({
+    root: params.root,
+    yes: params.opts.yes === true,
+    json: params.opts.json === true,
+    timeoutMs: params.timeoutMs,
+  });
+  // The fresh process owns the updated migration contracts. Repair before
+  // plugin convergence writes config, or newly retired plugin keys can block
+  // the update before doctor gets a chance to migrate them.
+  configSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: true,
+    suppressFutureVersionWarning: true,
   });
   configSnapshot = await persistRequestedUpdateChannel({
     configSnapshot,

@@ -5,6 +5,7 @@ import nodePath from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_PROXY_MAX_FILE_BYTES } from "../browser-proxy-envelope.js";
+import { toErrorObject } from "../infra/errors.js";
 
 const BROWSER_PROXY_MAX_FILES = 256;
 const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
@@ -67,7 +68,7 @@ vi.mock("../sdk-node-runtime.js", () => ({
               "abort",
               () =>
                 reject(
-                  toLintErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"),
+                  toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"),
                 ),
               { once: true },
             );
@@ -677,17 +678,3 @@ describe("runBrowserProxyCommand", () => {
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

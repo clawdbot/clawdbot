@@ -215,7 +215,6 @@ export type ChatPageHost = ChatHost &
     localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
-    chatMessageMaxWidth: string | null;
     chatToolMessages: Record<string, unknown>[];
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
@@ -375,6 +374,9 @@ function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
     state,
     { sessionKey },
     {
+      ...(state.chatDisplayedLeafEntryId !== undefined
+        ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
+        : {}),
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination ?? { hasMore: false },
       sessionId: state.currentSessionId ?? null,
@@ -540,6 +542,7 @@ export function resetChatStateForRouteSession(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
     ) === true;
   state.currentSessionId = snapshot.sessionId;
+  state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
   state.reconnectResumeSessionId = null;
   state.chatHistoryPagination = snapshot.pagination;
   state.chatMessage = "";
@@ -1267,7 +1270,6 @@ export function createPageState(
     localMediaPreviewRoots: appConfig.localMediaPreviewRoots,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
-    chatMessageMaxWidth: appConfig.chatMessageMaxWidth,
     client: null,
     connected: false,
     connectionEpoch: 0,
@@ -1281,6 +1283,7 @@ export function createPageState(
     chatSending: false,
     chatMessage: "",
     chatMessages: [] as unknown[],
+    chatDisplayedLeafEntryId: undefined as string | null | undefined,
     chatBranches: [],
     chatBranchesSessionKey: null,
     chatBranchesConnectionEpoch: null,

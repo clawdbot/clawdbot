@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { slackApprovalCapability } from "./approval-native.js";
@@ -667,8 +670,9 @@ describe("slack native approval adapter", () => {
       entry: {
         sessionId: "sess",
         updatedAt: Date.now(),
-        lastChannel: "slack",
-        lastAccountId: "work",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", accountId: "work" },
+        }),
       },
     });
 

@@ -637,6 +637,32 @@ const PLUGIN_COMPAT_RECORDS = [
       "Legacy `runEmbeddedPiAgent` and `EmbeddedPi*` plugin aliases remain as deprecated SDK compatibility only.",
   },
   {
+    code: "plugin-sdk-shipped-channel-setup-exports",
+    status: "deprecated",
+    owner: "channel",
+    introduced: "2026-07-23",
+    deprecated: "2026-07-23",
+    warningStarts: "2026-07-23",
+    removeAfter: "2026-08-30",
+    replacement:
+      "plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
+    docsPath: "/plugins/sdk-migration#published-channel-setup-compatibility",
+    surfaces: [
+      "openclaw/plugin-sdk/bundled-channel-config-schema SlackConfigSchema",
+      "openclaw/plugin-sdk/bundled-channel-config-schema DiscordConfigSchema",
+      "openclaw/plugin-sdk/bundled-channel-config-schema SignalConfigSchema",
+      "openclaw/plugin-sdk/bundled-channel-config-schema MSTeamsConfigSchema",
+      "openclaw/plugin-sdk/setup-runtime createLegacyCompatChannelDmPolicy",
+      "openclaw/plugin-sdk/setup-runtime promptLegacyChannelAllowFromForAccount",
+    ],
+    diagnostics: [
+      "repository deprecated API usage guard for core and bundled plugins; no external runtime import warning",
+    ],
+    tests: ["src/plugin-sdk/shipped-channel-compat.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "Published OpenClaw channel packages through 2026.7.1 remain loadable while they migrate to plugin-owned config and setup helpers.",
+  },
+  {
     code: "generated-bundled-channel-config-fallback",
     status: "active",
     owner: "channel",

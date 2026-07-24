@@ -6,6 +6,9 @@ type GatewayClientSender = { id: string; name?: string };
 export function gatewayClientSenderFields(client: GatewayClient | null): {
   sender?: GatewayClientSender;
 } {
+  if (client?.internal?.senderAttribution) {
+    return { sender: client.internal.senderAttribution };
+  }
   const profile = client?.authenticatedUserProfile;
   if (profile) {
     return {

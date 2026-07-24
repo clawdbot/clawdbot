@@ -6,6 +6,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -154,11 +155,7 @@ export async function completeReplyAgentRun(input: {
   const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
   const rawUserText = isHookBlockedRun
     ? runResult.meta?.finalPromptText
-    : (runResult.meta?.finalPromptText ??
-      sessionCtx.CommandBody ??
-      sessionCtx.RawBody ??
-      sessionCtx.BodyForAgent ??
-      sessionCtx.Body);
+    : (runResult.meta?.finalPromptText ?? (sessionCtx.commandText || sessionCtx.agentText));
   const rawAssistantText = isHookBlockedRun
     ? undefined
     : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);
@@ -344,7 +341,7 @@ export async function completeReplyAgentRun(input: {
           sessionCtx.OriginatingChannel ??
           sessionCtx.Surface ??
           sessionCtx.Provider ??
-          activeSessionEntry?.channel,
+          sessionDeliveryChannel(activeSessionEntry),
         finalTextLength: assistantFinalText.trim().length,
       });
     }

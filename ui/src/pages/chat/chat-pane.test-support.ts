@@ -1,6 +1,9 @@
 import type { TemplateResult } from "lit";
 import { vi } from "vitest";
 import type {
+  SessionSuggestion,
+  SessionSuggestionEvent,
+  SessionTypingEvent,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   TaskSuggestion,
@@ -39,6 +42,24 @@ export type TestChatPane = HTMLElement & {
   refreshSessionPullRequests: (options?: { refresh?: boolean }) => Promise<void>;
   sessionPullRequests: ControlUiSessionPullRequest[];
   taskSuggestions: TaskSuggestion[];
+  presencePayload?: { presence: unknown[] };
+  sessionSuggestionAddOperation: symbol | undefined;
+  sessionSuggestionRole: "admin" | "owner" | "member" | "viewer" | undefined;
+  addCurrentSessionSuggestion: () => Promise<void>;
+  resetSessionSuggestions: () => void;
+  sessionSuggestions: SessionSuggestion[];
+  sessionSuggestionsRequestVersion: number;
+  sessionSuggestionsRefreshPromise: Promise<void> | undefined;
+  sessionSuggestionTargetSignature: string;
+  syncSessionSuggestionTarget: (agentId: string, session: GatewaySessionRow | undefined) => void;
+  handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
+  handleSessionTypingEvent: (event: SessionTypingEvent) => void;
+  typingActors: Map<string, { label: string; expiresAt: number }>;
+  refreshSessionSuggestions: () => Promise<void>;
+  resolveCurrentSessionSuggestion: (
+    suggestion: SessionSuggestion,
+    resolution: "send" | "queue" | "edit" | "dismiss",
+  ) => Promise<void>;
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   switchPaneSession: (nextSessionKey: string) => void;
@@ -97,7 +118,11 @@ export function createSessionContext(
       snapshot: {
         client,
         phase: "connected" as const,
-        hello: { features: { methods: ["taskSuggestions.list"] } },
+        hello: {
+          features: {
+            methods: ["taskSuggestions.list", "session.suggestions.list"],
+          },
+        },
       },
     },
     agents: { state: { agentsList: null } },

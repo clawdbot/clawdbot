@@ -769,9 +769,8 @@ export async function sendMessageIMessage(
     throw new Error("iMessage send requires text or media");
   }
   // Extract markdown bold/italic/underline/strikethrough into typed-run
-  // ranges that the imsg bridge applies via attributedBody. macOS 15+
-  // recipients render the runs natively; earlier macOS recipients still
-  // see the marker-stripped text without literal asterisks.
+  // ranges that the imsg bridge applies via attributedBody. The sender needs
+  // macOS 15+; pre-Sequoia recipients see the same marker-stripped plain text.
   const formatted = message.trim()
     ? extractMarkdownFormatRuns(message)
     : { text: message, ranges: [] };

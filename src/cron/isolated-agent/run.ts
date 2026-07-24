@@ -70,6 +70,7 @@ import {
   mergeCronRunDiagnostics,
   toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
+import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
 import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
 import type {
@@ -1126,6 +1127,11 @@ async function prepareCronRunContext(params: {
           thinkingLevel: requestedThinkLevel,
           toolsAllow: agentPayload?.toolsAllow,
           toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,
+          scheduledToolPolicy: resolveCronScheduledToolPolicy({
+            toolsAllow: agentPayload?.toolsAllow,
+            scheduledToolPolicy: input.job.scheduledToolPolicy,
+            owner: input.job.owner,
+          }),
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,

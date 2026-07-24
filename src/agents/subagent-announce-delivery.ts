@@ -41,7 +41,11 @@ import {
   parseCronRunScopeSuffix,
 } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+  sessionDeliveryChannel,
+} from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -787,7 +791,7 @@ async function maybeSteerSubagentAnnounce(params: {
 
   const queueSettings = resolveQueueSettings({
     cfg,
-    channel: entry?.channel ?? entry?.lastChannel ?? entry?.origin?.provider,
+    channel: sessionDeliveryChannel(entry),
     sessionEntry: entry,
   });
 
@@ -1782,9 +1786,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const requesterQueueSettings = resolveQueueSettings({
       cfg,
       channel:
-        requesterEntry?.channel ??
-        requesterEntry?.lastChannel ??
-        requesterEntry?.origin?.provider ??
+        sessionDeliveryChannel(requesterEntry) ??
         requesterSessionOrigin?.channel ??
         directOrigin?.channel,
       sessionEntry: requesterEntry,

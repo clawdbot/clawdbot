@@ -159,6 +159,10 @@ afterEach(() => {
 });
 
 const CLAUDE_OK_JSONL = `${JSON.stringify({ type: "result", result: "ok" })}\n`;
+const GEMINI_OK_JSONL = `${[
+  JSON.stringify({ type: "message", role: "assistant", content: "ok", delta: true }),
+  JSON.stringify({ type: "result", status: "success" }),
+].join("\n")}\n`;
 
 describe("runCliAgent spawn path", () => {
   it("formats output digests without logging response content", () => {
@@ -280,7 +284,7 @@ describe("runCliAgent spawn path", () => {
         toolAvailability = execution.toolAvailability;
         return [...execution.baseArgs];
       },
-      cliToolAvailability: { native: [], mcp: ["mcp__openclaw__message"] },
+      cliToolAvailability: { native: [], openClaw: ["message"] },
     });
     context.preparedBackend.secretInput = {
       fd: 3,
@@ -297,8 +301,8 @@ describe("runCliAgent spawn path", () => {
 
     expect(output).toMatchObject({ text: "node answer", sessionId: "forked-node-session" });
     // Node runs keep the gateway's native tool policy; loopback MCP tools do
-    // not exist on the node so the mcp list is projected empty.
-    expect(toolAvailability).toEqual({ native: [], mcp: [] });
+    // not exist on the node so the OpenClaw list is projected empty.
+    expect(toolAvailability).toEqual({ native: [], openClaw: [], mcp: [] });
     expect(writeSystemPrompt).not.toHaveBeenCalled();
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
     expect(invokeNode).toHaveBeenCalledWith(
@@ -1180,7 +1184,7 @@ describe("runCliAgent spawn path", () => {
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
     const toolAvailability: NonNullable<PreparedCliRunContext["params"]["cliToolAvailability"]> = {
       native: [],
-      mcp: ["mcp__openclaw__openclaw"],
+      openClaw: ["openclaw"],
     };
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
 
@@ -1193,7 +1197,12 @@ describe("runCliAgent spawn path", () => {
     );
 
     expect(resolveExecutionArgs).toHaveBeenCalledWith(
-      expect.objectContaining({ toolAvailability }),
+      expect.objectContaining({
+        toolAvailability: {
+          ...toolAvailability,
+          mcp: ["mcp__openclaw__openclaw"],
+        },
+      }),
     );
   });
 
@@ -1205,13 +1214,28 @@ describe("runCliAgent spawn path", () => {
         buildPreparedCliRunContext({
           cliToolAvailability: {
             native: [],
-            mcp: ["mcp__openclaw__openclaw"],
+            openClaw: ["openclaw"],
           },
           resolveExecutionArgs,
         }),
       ),
     ).rejects.toThrow("did not enforce exact per-run tool availability");
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
+  });
+
+  it("does not require an argv rewrite after prepared-execution enforcement", async () => {
+    mockSuccessfulCliRun(GEMINI_OK_JSONL);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "google-gemini-cli",
+        model: "gemini-3.1-pro-preview",
+        cliToolAvailability: { native: [], openClaw: ["openclaw"] },
+        toolAvailabilityEnforcement: "prepare-execution",
+      }),
+    );
+
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   });
 
   it("maps Ultra to the strongest generic CLI backend level", async () => {

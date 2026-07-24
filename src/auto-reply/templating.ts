@@ -90,8 +90,18 @@ export type SupplementalContextFacts = {
   untrustedGroupSystemPrompt?: string;
 };
 
+/** Canonical normalized inbound text populated once by `finalizeInboundContext`. */
+export type CanonicalInboundText = {
+  /** Clean text used for command and directive parsing. */
+  commandText: string;
+  /** Prompt-facing text used for the agent turn. */
+  agentText: string;
+  /** Normalized visible/raw inbound text before command-specific projection. */
+  rawText: string;
+};
+
 /** Raw inbound message context accepted from channels before finalization. */
-export type MsgContext = {
+export type MsgContext = Partial<CanonicalInboundText> & {
   Body?: string;
   InboundEventKind?: InboundEventKind;
   /**
@@ -414,10 +424,14 @@ type RuntimeMediaContextKey =
 /** Internal inbound context; legacy media fields exist only on the shipped SDK adapter. */
 export type RuntimeMsgContext = Omit<MsgContext, RuntimeMediaContextKey>;
 
-export type FinalizedRuntimeMsgContext = Omit<RuntimeMsgContext, "CommandAuthorized"> & {
-  CommandAuthorized: boolean;
-  CommandTurn?: CommandTurnContext;
-};
+export type FinalizedRuntimeMsgContext = Omit<
+  RuntimeMsgContext,
+  "CommandAuthorized" | keyof CanonicalInboundText
+> &
+  CanonicalInboundText & {
+    CommandAuthorized: boolean;
+    CommandTurn?: CommandTurnContext;
+  };
 
 export type TemplateContext = RuntimeMsgContext & {
   BodyStripped?: string;
@@ -429,6 +443,9 @@ export type TemplateContext = RuntimeMsgContext & {
   MediaType?: string;
   MediaDir?: string;
 };
+
+export type FinalizedTemplateContext = Omit<TemplateContext, keyof CanonicalInboundText> &
+  CanonicalInboundText;
 
 function formatTemplateValue(value: unknown): string {
   if (value == null) {

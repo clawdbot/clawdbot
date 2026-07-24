@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
@@ -364,7 +365,7 @@ export type UpdateSessionLastRouteParams = {
   /** Account owning the delivery route when the channel is multi-account. */
   accountId?: string;
   /** Delivery channel id persisted as the last route channel. */
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   /** Set false to only patch existing entries; missing sessions stay absent. */
   createIfMissing?: boolean;
   /** Optional inbound context whose session metadata is derived alongside the route. */
@@ -374,7 +375,7 @@ export type UpdateSessionLastRouteParams = {
   /** Group routing resolution for group-owned session keys. */
   groupResolution?: GroupKeyResolution | null;
   /** Canonical channel route persisted as the session route slot. */
-  route?: SessionEntry["route"];
+  route?: ChannelRouteRef;
   /** Canonical or alias session key for the routed conversation. */
   sessionKey: string;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */

@@ -69,6 +69,8 @@ describe("config view", () => {
     setTextScale: vi.fn(),
     sidebarLiveActivity: true,
     setSidebarLiveActivity: vi.fn(),
+    chatMessageMaxWidth: undefined,
+    setChatMessageMaxWidth: vi.fn(),
     showAdvancedSettings: false,
     setShowAdvancedSettings: vi.fn(),
     chatSendShortcut: "enter" as const,
@@ -1631,6 +1633,26 @@ describe("config view", () => {
     expect(row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(true);
     row?.click();
     expect(setSidebarLiveActivity).toHaveBeenCalledWith(false);
+  });
+
+  it("validates and changes the browser-local chat width", () => {
+    const setChatMessageMaxWidth = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      setChatMessageMaxWidth,
+    });
+    const input = container.querySelector<HTMLInputElement>("[data-settings-chat-message-width]");
+    expect(input).not.toBeNull();
+
+    input!.value = " min(1280px,  82%) ";
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(setChatMessageMaxWidth).toHaveBeenCalledWith("min(1280px, 82%)");
+
+    input!.value = "960px; color: red";
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(input!.validationMessage).not.toBe("");
+    expect(setChatMessageMaxWidth).toHaveBeenCalledTimes(1);
   });
 
   it("marks browser follow-up overrides and resets them to the server", () => {

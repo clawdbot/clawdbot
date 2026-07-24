@@ -1020,7 +1020,7 @@ describe("initSessionState BodyStripped", () => {
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
     const result = await initSessionState({
-      ctx: {
+      ctx: finalizeInboundContext({
         Body: "[WhatsApp 123@g.us] ping",
         BodyForAgent: "ping",
         ChatType: "group",
@@ -1028,7 +1028,7 @@ describe("initSessionState BodyStripped", () => {
         SenderE164: "+222",
         SenderId: "222@s.whatsapp.net",
         SessionKey: "agent:main:whatsapp:group:123@g.us",
-      },
+      }),
       cfg,
       commandAuthorized: true,
     });
@@ -1042,14 +1042,14 @@ describe("initSessionState BodyStripped", () => {
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
     const result = await initSessionState({
-      ctx: {
+      ctx: finalizeInboundContext({
         Body: "[WhatsApp +1] ping",
         BodyForAgent: "ping",
         ChatType: "direct",
         SenderName: "Bob",
         SenderE164: "+222",
         SessionKey: "agent:main:whatsapp:dm:+222",
-      },
+      }),
       cfg,
       commandAuthorized: true,
     });

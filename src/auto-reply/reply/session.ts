@@ -85,10 +85,19 @@ import {
   classifySessionStateActor,
   registerMainSessionGroupWatch,
 } from "../../sessions/session-state-events.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
+import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type {
+  FinalizedRuntimeMsgContext,
+  FinalizedTemplateContext as TemplateContext,
+  MsgContext,
+} from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
@@ -189,7 +198,7 @@ export type SessionInitResult = {
 type InitSessionStateParams = {
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
-  ctx: MsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   expectedExistingSessionId?: string;
   pinExpectedExistingSession?: boolean;
   requestedSessionId?: string;
@@ -202,7 +211,7 @@ type InitSessionStateAttemptContext = {
   conversationBindingContext: ReturnType<typeof resolveSessionConversationBindingContext>;
   isSystemEvent: boolean;
   retargetedSession: boolean;
-  sessionCtxForState: MsgContext;
+  sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
 
@@ -497,9 +506,7 @@ async function initSessionStateAttemptLocked(
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
     normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
-  // Prefer CommandBody/RawBody (clean message) for command detection; fall back
-  // to Body which may contain structural context (history, sender labels).
-  const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const commandSource = ctx.commandText ?? "";
   // IMPORTANT: do NOT lowercase the entire command body.
   // Users often pass case-sensitive arguments (e.g. filesystem paths on Linux).
   // Command parsing downstream lowercases only the command token for matching.
@@ -856,66 +863,61 @@ async function initSessionStateAttemptLocked(
   // Otherwise a heartbeat target like "group:..." or a synthetic sender like
   // "heartbeat" leaks into the shared session and later user replies route to
   // the wrong chat.
+  const baseDeliveryContext = deliveryContextFromSession(baseEntry);
+  const baseDeliveryRoute = sessionDeliveryRoute(baseEntry);
+  const baseDeliveryOrigin = sessionDeliveryOrigin(baseEntry);
   const lastChannelRaw = isSystemEvent
-    ? baseEntry?.lastChannel
+    ? baseDeliveryContext?.channel
     : resolveLastChannelRaw({
         originatingChannelRaw,
-        persistedLastChannel: baseEntry?.lastChannel,
+        persistedLastChannel: baseDeliveryContext?.channel,
         sessionKey,
         isInterSession,
       });
   const lastToRaw = isSystemEvent
-    ? baseEntry?.lastTo
+    ? baseDeliveryContext?.to
     : resolveLastToRaw({
         originatingChannelRaw,
         originatingToRaw: ctx.OriginatingTo,
         toRaw: ctx.To,
-        persistedLastTo: baseEntry?.lastTo,
-        persistedLastChannel: baseEntry?.lastChannel,
+        persistedLastTo: baseDeliveryContext?.to,
+        persistedLastChannel: baseDeliveryContext?.channel,
         sessionKey,
         isInterSession,
       });
   const lastAccountIdRaw = isSystemEvent
-    ? baseEntry?.lastAccountId
+    ? baseDeliveryContext?.accountId
     : resolveSessionDefaultAccountId({
         cfg,
         channelRaw: lastChannelRaw,
         accountIdRaw: ctx.AccountId,
-        persistedLastAccountId: baseEntry?.lastAccountId,
+        persistedLastAccountId: baseDeliveryContext?.accountId,
       });
   // Only fall back to persisted threadId for thread sessions. Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
   const lastThreadIdRaw = isSystemEvent
-    ? baseEntry?.lastThreadId
+    ? baseDeliveryContext?.threadId
     : (ctx.MessageThreadId ??
       ctx.TransportThreadId ??
-      (isThread ? baseEntry?.lastThreadId : undefined));
-  const deliveryFields = isSystemEvent
-    ? normalizeSessionDeliveryFields({
-        route: isThread ? baseEntry?.route : stripThreadFromSessionRoute(baseEntry?.route),
-        channel: baseEntry?.channel,
-        lastChannel: baseEntry?.lastChannel,
-        lastTo: baseEntry?.lastTo,
-        lastAccountId: baseEntry?.lastAccountId,
-        lastThreadId:
-          baseEntry?.lastThreadId ??
-          baseEntry?.deliveryContext?.threadId ??
-          baseEntry?.origin?.threadId,
-        deliveryContext: baseEntry?.deliveryContext,
+      (isThread ? baseDeliveryContext?.threadId : undefined));
+  const delivery = isSystemEvent
+    ? normalizeSessionDeliveryState({
+        route: isThread ? baseDeliveryRoute : stripThreadFromSessionRoute(baseDeliveryRoute),
+        context: isThread
+          ? baseDeliveryContext
+          : stripThreadIdFromDeliveryContext(baseDeliveryContext),
+        origin: isThread ? baseDeliveryOrigin : stripThreadIdFromOrigin(baseDeliveryOrigin),
       })
-    : normalizeSessionDeliveryFields({
-        deliveryContext: {
+    : normalizeSessionDeliveryState({
+        context: {
           channel: lastChannelRaw,
           to: lastToRaw,
           accountId: lastAccountIdRaw,
           threadId: lastThreadIdRaw,
         },
+        origin: baseDeliveryOrigin,
       });
-  const lastChannel = deliveryFields.lastChannel ?? lastChannelRaw;
-  const lastTo = deliveryFields.lastTo ?? lastToRaw;
-  const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
-  const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
   const creationStamp =
     !entry && ctx.SessionCreation ? buildSessionCreationStamp(ctx.SessionCreation) : undefined;
   sessionEntry = {
@@ -972,20 +974,13 @@ async function initSessionStateAttemptLocked(
     queueDrop: baseEntry?.queueDrop,
     displayName: persistedDisplayName ?? baseEntry?.displayName,
     chatType: baseEntry?.chatType,
-    channel: baseEntry?.channel,
+    delivery,
     groupId: baseEntry?.groupId,
     subject: baseEntry?.subject,
     groupChannel: baseEntry?.groupChannel,
     space: baseEntry?.space,
     groupActivation: entry?.groupActivation,
     groupActivationNeedsSystemIntro: entry?.groupActivationNeedsSystemIntro,
-    route: deliveryFields.route,
-    deliveryContext: deliveryFields.deliveryContext,
-    // Track originating channel for subagent announce routing.
-    lastChannel,
-    lastTo,
-    lastAccountId,
-    lastThreadId,
   };
   const metaPatch = deriveSessionMetaPatch({
     ctx: sessionCtxForState,
@@ -1000,10 +995,11 @@ async function initSessionStateAttemptLocked(
   if (isSystemEvent && !isThread) {
     sessionEntry = {
       ...sessionEntry,
-      route: stripThreadFromSessionRoute(sessionEntry.route),
-      lastThreadId: undefined,
-      deliveryContext: stripThreadIdFromDeliveryContext(sessionEntry.deliveryContext),
-      origin: stripThreadIdFromOrigin(sessionEntry.origin),
+      delivery: normalizeSessionDeliveryState({
+        route: stripThreadFromSessionRoute(sessionDeliveryRoute(sessionEntry)),
+        context: stripThreadIdFromDeliveryContext(deliveryContextFromSession(sessionEntry)),
+        origin: stripThreadIdFromOrigin(sessionDeliveryOrigin(sessionEntry)),
+      }),
     };
   }
   if (!sessionEntry.chatType) {
@@ -1187,17 +1183,8 @@ async function initSessionStateAttemptLocked(
 
   const sessionCtx: TemplateContext = {
     ...sessionCtxForState,
-    // Keep BodyStripped aligned with Body (best default for agent prompts).
-    // RawBody is reserved for command/directive parsing and may omit context.
-    BodyStripped: normalizeInboundTextNewlines(
-      bodyStripped ??
-        sessionCtxForState.BodyForAgent ??
-        sessionCtxForState.Body ??
-        sessionCtxForState.CommandBody ??
-        sessionCtxForState.RawBody ??
-        sessionCtxForState.BodyForCommands ??
-        "",
-    ),
+    agentText: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
+    BodyStripped: normalizeInboundTextNewlines(bodyStripped ?? sessionCtxForState.agentText),
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };

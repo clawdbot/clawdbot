@@ -143,6 +143,7 @@ let steerQueuedChatMessage: typeof import("./chat-send-actions.ts").steerQueuedC
 let handleAbortChat: typeof import("./run-lifecycle.ts").handleAbortChat;
 let hasAbortableSessionRun: typeof import("./run-lifecycle.ts").hasAbortableSessionRun;
 let handlePageGatewayEvent: typeof import("./chat-state.ts").handlePageGatewayEvent;
+let loadChatBranches: typeof import("./chat-history.ts").loadChatBranches;
 let loadChatHistory: typeof import("./chat-history.ts").loadChatHistory;
 let clearPendingQueueItemsForRun: typeof import("./chat-queue.ts").clearPendingQueueItemsForRun;
 let admitQueuedMessageForSession: typeof import("./chat-queue.ts").admitQueuedMessageForSession;
@@ -170,7 +171,7 @@ async function loadChatHelpers(): Promise<void> {
   const chatState = await import("./chat-state.ts");
   handlePageGatewayEvent = chatState.handlePageGatewayEvent;
   refreshPageChat = chatState.refreshPageChat;
-  ({ loadChatHistory } = await import("./chat-history.ts"));
+  ({ loadChatBranches, loadChatHistory } = await import("./chat-history.ts"));
   ({ handleAbortChat, hasAbortableSessionRun } = await import("./run-lifecycle.ts"));
   ({
     admitQueuedMessageForSession,
@@ -337,6 +338,7 @@ function makeHost(overrides?: MakeHostOverrides): TestChatHost | TestChatHostWit
   const host = {
     client: request ? clientWithRequest(request) : null,
     chatMessages: [],
+    chatDisplayedLeafEntryId: undefined,
     chatStream: null,
     chatStreamSegments: [],
     chatToolMessages: [],
@@ -6265,6 +6267,174 @@ describe("handleSendChat", () => {
       sendRunId: "run-a",
       sendState: "waiting-reconnect",
     });
+  });
+
+  it("keeps the rendered-history leaf after a background branch refresh", async () => {
+    const host = makeHost({
+      requestHandlers: {
+        "sessions.branches.list": {
+          branches: [
+            {
+              leafEntryId: "leaf-server-new",
+              headline: "New active branch",
+              messageCount: 3,
+              active: true,
+            },
+          ],
+        },
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "foreground send payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
+      },
+      chatDisplayedLeafEntryId: "leaf-rendered",
+      chatBranches: [],
+      chatBranchesSessionKey: "agent:main",
+      chatBranchesConnectionEpoch: 0,
+      connectionEpoch: 0,
+      chatMessage: "stay on this branch",
+    });
+
+    await loadChatBranches(host as unknown as Parameters<typeof loadChatBranches>[0]);
+    expect(host.chatBranches).toEqual([
+      expect.objectContaining({ leafEntryId: "leaf-server-new", active: true }),
+    ]);
+    expect(host.chatDisplayedLeafEntryId).toBe("leaf-rendered");
+
+    await handleSendChat(host);
+
+    expect(
+      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "foreground send"),
+    ).toMatchObject({ expectedLeafEntryId: "leaf-rendered" });
+  });
+
+  it("attaches an authoritative empty displayed leaf to a foreground send", async () => {
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "empty-leaf send payload");
+          return { runId: payload.idempotencyKey, status: "started" };
+        },
+      },
+      chatDisplayedLeafEntryId: null,
+      chatMessage: "first message",
+    });
+
+    await handleSendChat(host);
+
+    expect(
+      findRequestPayload(host.request as unknown as MockCallSource, "chat.send", "empty-leaf send"),
+    ).toHaveProperty("expectedLeafEntryId", null);
+  });
+
+  it("omits the active leaf when draining a restored outbox", async () => {
+    const host = makeHost({
+      client: null,
+      connected: false,
+      chatDisplayedLeafEntryId: "leaf-current",
+      chatBranches: [
+        { leafEntryId: "leaf-current", headline: "Current", messageCount: 2, active: true },
+      ],
+      chatBranchesSessionKey: "agent:main",
+      chatMessage: "send after reconnect",
+    });
+    await handleSendChat(host);
+
+    const request = makeRequestMock({
+      "chat.history": idleChatHistory(),
+      "chat.send": (params: unknown) => {
+        const payload = requireRecord(params, "restored send payload");
+        return { runId: payload.idempotencyKey, status: "ok" };
+      },
+    });
+    host.client = clientWithRequest(request);
+    host.connected = true;
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(
+      findRequestPayload(request as unknown as MockCallSource, "chat.send", "restored send"),
+    ).not.toHaveProperty("expectedLeafEntryId");
+  });
+
+  it("preserves a foreground leaf past an earlier outbox row", async () => {
+    const sends: Record<string, unknown>[] = [];
+    const host = makeHost({
+      requestHandlers: {
+        "chat.history": idleChatHistory(),
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "queued foreground send payload");
+          sends.push(payload);
+          return { runId: payload.idempotencyKey, status: "ok" };
+        },
+      },
+      chatDisplayedLeafEntryId: "leaf-before-queue",
+      chatBranches: [
+        { leafEntryId: "leaf-before-queue", headline: "Current", messageCount: 2, active: true },
+      ],
+      chatBranchesSessionKey: "agent:main",
+      chatMessage: "second message",
+      chatQueue: [
+        {
+          id: "earlier-row",
+          text: "first message",
+          createdAt: 1,
+          sendAttempts: 0,
+          sendRunId: "earlier-run",
+          sendState: "waiting-idle",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+
+    await handleSendChat(host);
+
+    expect(sends).toHaveLength(2);
+    expect(sends[1]).toMatchObject({ message: "second message" });
+    expect(sends[1]).toMatchObject({ expectedLeafEntryId: "leaf-before-queue" });
+  });
+
+  it("parks an active-leaf rejection, restores the draft, and refreshes branch state", async () => {
+    const host = makeHost({
+      requestHandlers: {
+        "chat.send": () => {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "active branch changed; review and resend",
+            details: { reason: "active-leaf-changed" },
+          });
+        },
+        "chat.history": idleChatHistory(),
+        "sessions.branches.list": { branches: [] },
+      },
+      chatDisplayedLeafEntryId: "leaf-stale",
+      chatBranches: [
+        { leafEntryId: "leaf-stale", headline: "Stale", messageCount: 2, active: true },
+      ],
+      chatBranchesSessionKey: "agent:main",
+      chatMessage: "stale branch prompt",
+    });
+
+    await handleSendChat(host);
+    await waitForFast(() => {
+      expect(host.request).toHaveBeenCalledWith("chat.history", {
+        sessionKey: "agent:main",
+        limit: 100,
+      });
+      expect(host.request).toHaveBeenCalledWith("sessions.branches.list", {
+        sessionKey: "agent:main",
+      });
+    });
+
+    expect(host.chatMessage).toBe("stale branch prompt");
+    expect(host.chatQueue).toEqual([
+      expect.objectContaining({
+        sendError: "The thread switched branches — review and resend.",
+        sendState: "failed",
+      }),
+    ]);
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });
 
   it("marks validation failures visible and restores the composer", async () => {

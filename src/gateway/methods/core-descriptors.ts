@@ -462,6 +462,10 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "session.members.list", scope: "operator.read", since: "2026.7" },
   { name: "session.members.add", scope: "operator.write", since: "2026.7" },
   { name: "session.members.remove", scope: "operator.write", since: "2026.7" },
+  { name: "session.suggestions.add", scope: "operator.write", since: "2026.7" },
+  { name: "session.suggestions.list", scope: "operator.read", since: "2026.7" },
+  { name: "session.suggestions.resolve", scope: "operator.write", since: "2026.7" },
+  { name: "session.typing", scope: "operator.write", since: "2026.7" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

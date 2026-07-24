@@ -584,7 +584,6 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
 function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
-    // Custom structured redaction runs at each transport boundary; avoid tslog pre-masking divergent records.
     maskValuesOfKeys: [],
     minLevel: levelToMinLevel(settings.level),
     type: "hidden", // no ansi formatting

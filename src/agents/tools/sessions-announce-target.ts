@@ -7,7 +7,6 @@ import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/str
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { GatewaySessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
@@ -51,7 +50,7 @@ export async function resolveAnnounceTarget(params: {
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
 
-    const context = deliveryContextFromSession(match);
+    const context = match?.deliveryContext;
     const threadId = normalizeOptionalStringifiedId(context?.threadId ?? fallbackThreadId);
     if (context?.channel && context.to) {
       return { channel: context.channel, to: context.to, accountId: context.accountId, threadId };

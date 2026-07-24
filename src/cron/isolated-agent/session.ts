@@ -23,7 +23,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
-  "heartbeatTaskState",
   "chatType",
   "thinkingLevel",
   "fastMode",
@@ -46,12 +45,10 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "queueDebounceMs",
   "queueCap",
   "queueDrop",
-  "channel",
   "groupId",
   "subject",
   "groupChannel",
   "space",
-  "origin",
   "acp",
 ] as const satisfies readonly (keyof SessionEntry)[];
 

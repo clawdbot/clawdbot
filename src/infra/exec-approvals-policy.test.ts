@@ -8,6 +8,7 @@ import {
   makeMockExecutableResolution,
 } from "./exec-approvals-test-helpers.js";
 import type { ExecApprovalsFile } from "./exec-approvals.js";
+import { buildHashedArgPatternFromArgv } from "./exec-command-resolution.js";
 
 vi.unmock("./exec-approvals.js");
 vi.unmock("./exec-approvals-effective.js");
@@ -373,6 +374,13 @@ describe("exec approvals policy helpers", () => {
       resolvedRealPath: "/usr/bin/echo",
       executableName: "echo",
     });
+    const allowlist = [
+      {
+        pattern: "/usr/bin/echo",
+        argPattern: buildHashedArgPatternFromArgv(["/usr/bin/echo", "ok"]),
+        source: "allow-always" as const,
+      },
+    ];
     const result = evaluateExecAllowlist({
       analysis: {
         ok: true,
@@ -398,7 +406,7 @@ describe("exec approvals policy helpers", () => {
           },
         ],
       },
-      allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+      allowlist,
       safeBins: new Set(),
       cwd: "/tmp",
       platform: process.platform,
@@ -412,7 +420,7 @@ describe("exec approvals policy helpers", () => {
       hasDurableExecApproval({
         analysisOk: true,
         segmentAllowlistEntries: result.segmentAllowlistEntries,
-        allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+        allowlist,
       }),
     ).toBe(false);
   });

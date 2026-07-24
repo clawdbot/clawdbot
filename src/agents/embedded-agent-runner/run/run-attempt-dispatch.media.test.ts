@@ -12,6 +12,31 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
 describe("plugin harness prompt media", () => {
+  it("does not hydrate marker or bare paths from recalled memory context", async () => {
+    const recalledMemory = [
+      "<relevant-memories>",
+      "1. [fact] stale [media attached: /tmp/some.png] and /tmp/other.png",
+      "</relevant-memories>",
+    ].join("\n");
+
+    await expect(
+      preparePluginHarnessPromptImages({
+        runParams: {
+          agentId: "main",
+          config: { agents: { defaults: { sandbox: { mode: "off" } } } },
+          prompt: `${recalledMemory}\n\ncurrent question`,
+          sessionId: "session-recalled-memory",
+        },
+        runtime: {
+          model: { input: ["text", "image"] },
+          sessionId: "session-recalled-memory",
+          workspaceDir: "/tmp",
+        },
+        pluginHarnessOwnsTransport: true,
+      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
+    ).resolves.toEqual({ images: undefined, imageOrder: undefined, media: undefined });
+  });
+
   it("hydrates plugin images and preserves serialized replay order with non-image facts", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-media-"));
     const workspaceDir = path.join(stateDir, "workspace");

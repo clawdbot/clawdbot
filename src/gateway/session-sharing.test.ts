@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import {
   allowedSessionVisibilities,
+  authorizeIncognitoSessionTarget,
   resolveSessionMutationAuthorization,
   canReceiveSessionEvent,
   filterDraftSessionsForClient,
@@ -77,6 +79,26 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
 }
 
 describe("session sharing policy", () => {
+  it("reports an incognito denial against the caller's requested key", () => {
+    const hiddenTarget = {
+      ...target({ type: "human", id: "owner@example.com" }),
+      canonicalKey: "agent:main:dashboard:incognito-private",
+      entry: {
+        sessionId: "session-incognito",
+        updatedAt: 1,
+        visibility: "suggest" as const,
+        incognito: true as const,
+      },
+    };
+    expect(
+      authorizeIncognitoSessionTarget({
+        client: client({ user: "viewer@example.com" }),
+        sessionKey: "requested-incognito-alias",
+        target: hiddenTarget,
+      })?.message,
+    ).toBe('Incognito session "requested-incognito-alias" was not found.');
+  });
+
   it("keeps identity-less solo mode owner-equivalent for restricted sessions", () => {
     const role = resolveSessionSharingRole({ client: client({}), target: target() });
     expect(role).toBe("owner");
@@ -277,5 +299,97 @@ describe("session sharing policy", () => {
         sessionKeys: ["agent:main:deleted-draft"],
       }),
     ).toBe(false);
+  });
+
+  it("limits suggestion events to participants and the suggestion author", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:suggestions";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-suggestions",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      addSessionMember(
+        { agentId: "main", sessionKey },
+        {
+          identityId: "member",
+          addedBy: "owner",
+          expectedSessionId: "session-suggestions",
+        },
+      );
+      const check = (user: string) =>
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({ user }) as never,
+          sessionKeys: [sessionKey],
+          event: "session.suggestion",
+          payload: { suggestion: { author: { id: "author" } } },
+        });
+
+      expect(check("author")).toBe(true);
+      expect(check("member")).toBe(true);
+      expect(check("owner")).toBe(true);
+      expect(check("viewer")).toBe(false);
+      expect(
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({}) as never,
+          sessionKeys: [sessionKey],
+          event: "session.suggestion",
+          payload: { suggestion: { author: { id: "author" } } },
+        }),
+      ).toBe(false);
+    });
+  });
+
+  it("keeps draft typing events owner and admin only", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:draft-typing";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-draft",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "draft",
+        },
+      );
+      addSessionMember(
+        { agentId: "main", sessionKey },
+        { identityId: "member", addedBy: "owner", expectedSessionId: "session-draft" },
+      );
+      const check = (user: string, event: string) =>
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({ user }) as never,
+          sessionKeys: [sessionKey],
+          event,
+        });
+
+      expect(check("owner", "session.typing")).toBe(true);
+      expect(check("member", "session.typing")).toBe(false);
+      expect(check("viewer", "session.typing")).toBe(false);
+      expect(check("member", "session.message")).toBe(false);
+      expect(
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({ user: "admin", scopes: ["operator.admin"] }) as never,
+          sessionKeys: [sessionKey],
+          event: "session.typing",
+        }),
+      ).toBe(true);
+      expect(
+        canReceiveSessionEvent({
+          cfg: {},
+          client: client({}) as never,
+          sessionKeys: [sessionKey],
+          event: "session.typing",
+        }),
+      ).toBe(false);
+    });
   });
 });

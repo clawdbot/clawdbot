@@ -46,30 +46,6 @@ export function renderSessionOwnerChip(
     : nothing;
 }
 
-export function renderSessionCreatorFilter(params: {
-  creators: readonly SessionCreatorOption[];
-  selectedId: string | null;
-  onChange: (creatorId: string | null) => void;
-}) {
-  if (params.creators.length < 2) {
-    return nothing;
-  }
-  return html`<label class="sidebar-session-creator-filter">
-    <span>${t("sessionsView.filterByCreator")}</span>
-    <select
-      aria-label=${t("sessionsView.filterByCreator")}
-      .value=${params.selectedId ?? ""}
-      @change=${(event: Event) =>
-        params.onChange((event.currentTarget as HTMLSelectElement).value || null)}
-    >
-      <option value="">${t("sessionsView.allCreators")}</option>
-      ${params.creators.map(
-        (creator) => html`<option value=${creator.id}>${creator.label ?? creator.id}</option>`,
-      )}
-    </select>
-  </label>`;
-}
-
 function ownerInitials(createdActor: SessionCreatedActor): string {
   const source = createdActor.label?.trim() || createdActor.id?.trim() || "";
   if (!source) {

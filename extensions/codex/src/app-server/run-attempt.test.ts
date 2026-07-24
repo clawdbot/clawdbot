@@ -30,6 +30,7 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-bridge.js";
@@ -59,6 +60,7 @@ import {
   type CodexDynamicToolSpec,
   type CodexServerNotification,
 } from "./protocol.js";
+import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 
 type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 import {
@@ -1853,26 +1855,21 @@ describe("runCodexAppServerAttempt", () => {
     );
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "commandExecution",
-          id: "cmd-orphan",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: null,
-        },
-      },
-    });
+    await harness.notify(
+      itemNotification("item/started", {
+        type: "commandExecution",
+        id: "cmd-orphan",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "inProgress",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+      }),
+    );
     await harness.notify({
       method: "turn/completed",
       params: {
@@ -1895,7 +1892,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
     const result = await run;
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(result.lastToolError).toMatchObject({
       toolName: "bash",
       error: expect.stringContaining("without a matching tool.result"),
@@ -2243,14 +2240,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!state.notify) {
       throw new Error("expected turn notification handler");
     }
-    await state.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
+    await state.notify(turnCompleted({ id: "turn-1", status: "completed" }));
     await run;
     expect(retireSpy).toHaveBeenCalledWith(state.client);
     expect(closeAndWait).toHaveBeenCalledWith({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
@@ -2314,14 +2304,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!notify) {
       throw new Error("expected turn notification handler");
     }
-    await notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
+    await notify(turnCompleted({ id: "turn-1", status: "completed" }));
     await run;
     expect(retireSpy).not.toHaveBeenCalled();
     expect(closeAndWait).not.toHaveBeenCalled();
@@ -3405,11 +3388,14 @@ describe("runCodexAppServerAttempt", () => {
       }),
     ]);
   });
-  it("points heartbeat Codex turns at HEARTBEAT.md without injecting its contents", async () => {
+  it.each([
+    { name: "non-empty legacy HEARTBEAT.md", contents: "Heartbeat checklist goes here." },
+    { name: "empty legacy HEARTBEAT.md", contents: "\n\n" },
+  ])("keeps $name out of Codex heartbeat context", async ({ contents }) => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const heartbeatPath = path.join(workspaceDir, "HEARTBEAT.md");
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(heartbeatPath, "Heartbeat checklist goes here.");
+    await fs.writeFile(heartbeatPath, contents);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.trigger = "heartbeat";
@@ -3423,47 +3409,10 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const threadStartParams = threadStart?.params as {
-      developerInstructions?: string;
-    };
-    expect(threadStartParams.developerInstructions).not.toContain("Heartbeat checklist goes here.");
+    const threadStartParams = threadStart?.params as { developerInstructions?: string };
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
       input?: Array<{ text?: string }>;
-      collaborationMode?: {
-        settings?: {
-          developer_instructions?: string | null;
-        };
-      };
-    };
-    const inputText = turnStartParams.input?.[0]?.text ?? "";
-    const collaborationInstructions =
-      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(inputText).not.toContain("Heartbeat checklist goes here.");
-    expect(collaborationInstructions).toContain("HEARTBEAT.md exists");
-    expect(collaborationInstructions).toContain("Read it before proceeding with this heartbeat");
-    expect(collaborationInstructions).toContain(heartbeatPath);
-    expect(collaborationInstructions).not.toContain("Heartbeat checklist goes here.");
-  });
-
-  it("omits heartbeat Codex workspace pointers for empty HEARTBEAT.md files", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "\n\n");
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.trigger = "heartbeat";
-    params.bootstrapContextMode = "lightweight";
-    params.bootstrapContextRunKind = "heartbeat";
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const turnStartParams = turnStart?.params as {
       collaborationMode?: {
         settings?: {
           developer_instructions?: string | null;
@@ -3474,6 +3423,13 @@ describe("runCodexAppServerAttempt", () => {
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
     expect(collaborationInstructions).toContain("This is an OpenClaw heartbeat turn");
     expect(collaborationInstructions).not.toContain("HEARTBEAT.md exists");
+    expect(collaborationInstructions).not.toContain(heartbeatPath);
+    const legacyContent = contents.trim();
+    if (legacyContent) {
+      expect(threadStartParams.developerInstructions ?? "").not.toContain(legacyContent);
+      expect(turnStartParams.input?.[0]?.text ?? "").not.toContain(legacyContent);
+      expect(collaborationInstructions).not.toContain(legacyContent);
+    }
   });
   it("keeps lightweight cron Codex turns out of OpenClaw bootstrap context", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -3556,42 +3512,32 @@ describe("runCodexAppServerAttempt", () => {
     params.onToolResult = onToolResult;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "dynamicToolCall",
-          id: "tool-1",
-          namespace: null,
-          tool: "read",
-          arguments: { path: "README.md" },
-          status: "inProgress",
-          contentItems: null,
-          success: null,
-          durationMs: null,
-        },
-      },
-    });
-    await harness.notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "dynamicToolCall",
-          id: "tool-1",
-          namespace: null,
-          tool: "read",
-          arguments: { path: "README.md" },
-          status: "completed",
-          contentItems: [{ type: "inputText", text: "file contents" }],
-          success: true,
-          durationMs: 12,
-        },
-      },
-    });
+    await harness.notify(
+      itemNotification("item/started", {
+        type: "dynamicToolCall",
+        id: "tool-1",
+        namespace: null,
+        tool: "read",
+        arguments: { path: "README.md" },
+        status: "inProgress",
+        contentItems: null,
+        success: null,
+        durationMs: null,
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        type: "dynamicToolCall",
+        id: "tool-1",
+        namespace: null,
+        tool: "read",
+        arguments: { path: "README.md" },
+        status: "completed",
+        contentItems: [{ type: "inputText", text: "file contents" }],
+        success: true,
+        durationMs: 12,
+      }),
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     expect(onToolResult).toHaveBeenCalledTimes(2);
@@ -3614,46 +3560,36 @@ describe("runCodexAppServerAttempt", () => {
     params.prompt = "Send the update to Alice.";
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "commandExecution",
-          id: "tool-settled",
-          command: "echo sent-to-alice",
-          cwd: workspaceDir,
-          processId: null,
-          source: "agent",
-          status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: null,
-        },
-      },
-    });
-    await harness.notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "commandExecution",
-          id: "tool-settled",
-          command: "echo sent-to-alice",
-          cwd: workspaceDir,
-          processId: 42,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: "sent-to-alice\n",
-          exitCode: 0,
-          durationMs: 12,
-        },
-      },
-    });
+    await harness.notify(
+      itemNotification("item/started", {
+        type: "commandExecution",
+        id: "tool-settled",
+        command: "echo sent-to-alice",
+        cwd: workspaceDir,
+        processId: null,
+        source: "agent",
+        status: "inProgress",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        type: "commandExecution",
+        id: "tool-settled",
+        command: "echo sent-to-alice",
+        cwd: workspaceDir,
+        processId: 42,
+        source: "agent",
+        status: "completed",
+        commandActions: [],
+        aggregatedOutput: "sent-to-alice\n",
+        exitCode: 0,
+        durationMs: 12,
+      }),
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
     expect(result.settledTurnFinalizationContext).toMatchObject({
@@ -3677,37 +3613,27 @@ describe("runCodexAppServerAttempt", () => {
       ["command-succeeded", "completed", 0],
       ["command-failed-2", "failed", 2],
     ] as const) {
-      await harness.notify({
-        method: "item/started",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: {
-            type: "commandExecution",
-            id,
-            command: `/bin/bash -lc 'exit ${exitCode}'`,
-            cwd: workspaceDir,
-            status: "inProgress",
-          },
-        },
-      });
-      await harness.notify({
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: {
-            type: "commandExecution",
-            id,
-            command: `/bin/bash -lc 'exit ${exitCode}'`,
-            cwd: workspaceDir,
-            status,
-            aggregatedOutput: "",
-            exitCode,
-            durationMs: 1,
-          },
-        },
-      });
+      await harness.notify(
+        itemNotification("item/started", {
+          type: "commandExecution",
+          id,
+          command: `/bin/bash -lc 'exit ${exitCode}'`,
+          cwd: workspaceDir,
+          status: "inProgress",
+        }),
+      );
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "commandExecution",
+          id,
+          command: `/bin/bash -lc 'exit ${exitCode}'`,
+          cwd: workspaceDir,
+          status,
+          aggregatedOutput: "",
+          exitCode,
+          durationMs: 1,
+        }),
+      );
     }
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
@@ -4017,7 +3943,7 @@ describe("runCodexAppServerAttempt", () => {
       await waitForMethod("turn/start");
       abortController.abort("shutdown");
       const result = await run;
-      expect(result.aborted).toBe(true);
+      expect(readAttemptTerminal(result).aborted).toBe(true);
       await new Promise((resolve) => {
         setImmediate(resolve);
       });
@@ -4066,8 +3992,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     );
     const result = await runCodexAppServerAttempt(createRunParams());
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
   it("does not fail when a buffered terminal notification is followed by client close", async () => {
     let resolveBufferedTerminal!: () => void;
@@ -4080,14 +4005,9 @@ describe("runCodexAppServerAttempt", () => {
           return threadStartResult();
         }
         if (method === "turn/start") {
-          await harness.notify({
-            method: "item/started",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              item: { id: "tool-1", type: "commandExecution" },
-            },
-          });
+          await harness.notify(
+            itemNotification("item/started", { id: "tool-1", type: "commandExecution" }),
+          );
           await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
           resolveBufferedTerminal();
           return turnStartResult("turn-1", "inProgress");
@@ -4102,9 +4022,11 @@ describe("runCodexAppServerAttempt", () => {
     });
     harness.close();
     const result = await run;
-    expect(result.promptError ?? undefined).toBeUndefined();
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+    });
   });
 
   it("does not time out when turn progress arrives before turn/start returns", async () => {
@@ -4140,8 +4062,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
   it("completes when turn/start returns a terminal turn without a follow-up notification", async () => {
     const harness = createAppServerHarness(async (method) => {
@@ -4162,8 +4083,7 @@ describe("runCodexAppServerAttempt", () => {
     const result = await runCodexAppServerAttempt(createRunParams());
     expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
     expect(result.assistantTexts).toEqual(["done from response"]);
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
   it("surfaces Codex-native image generation saved paths as reply media", async () => {
@@ -4233,8 +4153,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const result = await run;
     expect(result.assistantTexts).toEqual(["final completion"]);
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
 
   it("ignores turn/completed notifications for other subscribed threads", async () => {
@@ -4279,8 +4198,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     const result = await run;
     expect(result.assistantTexts).toEqual(["final completion"]);
-    expect(result.aborted).toBe(false);
-    expect(result.timedOut).toBe(false);
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
   });
   it("routes Computer Use MCP elicitations through the native bridge", async () => {
     const bridgeSpy = vi
@@ -4408,14 +4326,7 @@ describe("runCodexAppServerAttempt", () => {
       | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
       | undefined;
     expect(turnStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
-    await elicitation.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
+    await elicitation.notify(turnCompleted({ id: "turn-1", status: "completed" }));
     await run;
   });
 
@@ -4490,14 +4401,7 @@ describe("runCodexAppServerAttempt", () => {
       | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
       | undefined;
     expect(turnStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
-    await elicitation.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
+    await elicitation.notify(turnCompleted({ id: "turn-1", status: "completed" }));
     await run;
   });
   it.each([
@@ -4884,7 +4788,7 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("restarts the app-server once when a shared client closes during startup", async () => {
     const { result, requests } = await runSharedClientRestartTest(1);
-    expect(result.aborted).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests).toEqual([
       ["thread/resume"],
       ["thread/resume", "turn/start", "thread/unsubscribe"],
@@ -4893,7 +4797,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("tolerates a second app-server close while retrying startup", async () => {
     const { result, requests } = await runSharedClientRestartTest(2);
-    expect(result.aborted).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(requests).toEqual([
       ["thread/resume"],
       ["thread/resume"],
@@ -5472,38 +5376,28 @@ describe("runCodexAppServerAttempt", () => {
     const { harness, now, onAgentEvent, onToolResult, run, workspaceDir } =
       await startFastAutoProgressTest();
     const notifyCommand = async (id: string, output: string, nowMs: number) => {
-      await harness.notify({
-        method: "item/started",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: {
-            type: "commandExecution",
-            id,
-            command: `echo ${id}`,
-            cwd: workspaceDir,
-            status: "inProgress",
-          },
-        },
-      });
+      await harness.notify(
+        itemNotification("item/started", {
+          type: "commandExecution",
+          id,
+          command: `echo ${id}`,
+          cwd: workspaceDir,
+          status: "inProgress",
+        }),
+      );
       now.mockReturnValue(nowMs);
-      await harness.notify({
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: {
-            type: "commandExecution",
-            id,
-            command: `echo ${id}`,
-            cwd: workspaceDir,
-            status: "completed",
-            aggregatedOutput: output,
-            exitCode: 0,
-            durationMs: 1,
-          },
-        },
-      });
+      await harness.notify(
+        itemNotification("item/completed", {
+          type: "commandExecution",
+          id,
+          command: `echo ${id}`,
+          cwd: workspaceDir,
+          status: "completed",
+          aggregatedOutput: output,
+          exitCode: 0,
+          durationMs: 1,
+        }),
+      );
     };
     await notifyCommand("tool-before", "before", 20_000);
     await notifyCommand("tool-crossing", "crossing", 35_500);
@@ -5544,19 +5438,14 @@ describe("runCodexAppServerAttempt", () => {
       verbose: false,
     });
     now.mockReturnValue(35_500);
-    await harness.notify({
-      method: "rawResponseItem/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "function_call_output",
-          id: "call-raw-output",
-          call_id: "call-raw-output",
-          output: "tool output",
-        },
-      },
-    });
+    await harness.notify(
+      rawItemCompleted({
+        type: "function_call_output",
+        id: "call-raw-output",
+        call_id: "call-raw-output",
+        output: "tool output",
+      }),
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
@@ -5570,32 +5459,27 @@ describe("runCodexAppServerAttempt", () => {
       setImmediate(resolve);
     });
     now.mockReturnValue(35_500);
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: {
-          id: "turn-1",
-          status: "completed",
-          items: [
-            {
-              type: "commandExecution",
-              id: "tool-crossing",
-              command: "echo crossing",
-              commandActions: [],
-              cwd: workspaceDir,
-              processId: null,
-              source: "agent",
-              status: "completed",
-              aggregatedOutput: "crossing",
-              exitCode: 0,
-              durationMs: 1,
-            },
-          ],
-        },
-      },
-    });
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "completed",
+        items: [
+          {
+            type: "commandExecution",
+            id: "tool-crossing",
+            command: "echo crossing",
+            commandActions: [],
+            cwd: workspaceDir,
+            processId: null,
+            source: "agent",
+            status: "completed",
+            aggregatedOutput: "crossing",
+            exitCode: 0,
+            durationMs: 1,
+          },
+        ],
+      }),
+    );
     await run;
     const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
     expect(texts.filter((text) => text.startsWith("💨Fast: auto-off"))).toEqual([
@@ -5613,19 +5497,14 @@ describe("runCodexAppServerAttempt", () => {
       setImmediate(resolve);
     });
     now.mockReturnValue(35_500);
-    await harness.notify({
-      method: "rawResponseItem/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "function_call_output",
-          id: "call-raw-output",
-          call_id: "call-raw-output",
-          output: "tool output",
-        },
-      },
-    });
+    await harness.notify(
+      rawItemCompleted({
+        type: "function_call_output",
+        id: "call-raw-output",
+        call_id: "call-raw-output",
+        output: "tool output",
+      }),
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
@@ -5647,38 +5526,28 @@ describe("runCodexAppServerAttempt", () => {
           resetAnnounced: false,
         },
       });
-    await harness.notify({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "commandExecution",
-          id: "tool-1",
-          command: "echo tool-1",
-          cwd: workspaceDir,
-          status: "inProgress",
-        },
-      },
-    });
+    await harness.notify(
+      itemNotification("item/started", {
+        type: "commandExecution",
+        id: "tool-1",
+        command: "echo tool-1",
+        cwd: workspaceDir,
+        status: "inProgress",
+      }),
+    );
     now.mockReturnValue(35_500);
-    await harness.notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          type: "commandExecution",
-          id: "tool-1",
-          command: "echo tool-1",
-          cwd: workspaceDir,
-          status: "completed",
-          aggregatedOutput: "tool output",
-          exitCode: 0,
-          durationMs: 1,
-        },
-      },
-    });
+    await harness.notify(
+      itemNotification("item/completed", {
+        type: "commandExecution",
+        id: "tool-1",
+        command: "echo tool-1",
+        cwd: workspaceDir,
+        status: "completed",
+        aggregatedOutput: "tool output",
+        exitCode: 0,
+        durationMs: 1,
+      }),
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");

@@ -18,6 +18,7 @@ import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-sessi
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
@@ -174,7 +175,7 @@ export async function resolveDeliveryTarget(
     ? ({
         sessionId: threadSessionKey ?? mainSessionKey,
         updatedAt: 0,
-        deliveryContext: storedDeliveryContext,
+        delivery: normalizeSessionDeliveryState({ context: storedDeliveryContext }),
       } satisfies SessionEntry)
     : undefined;
   const threadEntry = threadSessionKey

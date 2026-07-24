@@ -228,7 +228,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       agentId: state.agentId,
       modelRef: state.utilityModelRef,
       useUtilityModel: true,
-      useAsyncModelResolution: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
     return await state.preparedPromise;

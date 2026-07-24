@@ -1574,6 +1574,10 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
+  if (refreshFailure) {
+    throw refreshFailure;
+  }
+
   const envResolved = resolveConfigAwareEnvApiKey(
     cfg,
     provider,
@@ -1653,10 +1657,6 @@ export async function resolveApiKeyForProvider(params: {
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
-  }
-
-  if (refreshFailure) {
-    throw refreshFailure;
   }
 
   const hasInlineConfiguredModels =

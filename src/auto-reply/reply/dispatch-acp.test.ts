@@ -657,6 +657,17 @@ describe("tryDispatchAcpReply", () => {
     expect(String(transcript.finalText)).toContain("acp died after streaming");
   });
 
+  it("preserves an intentionally empty canonical agent prompt", async () => {
+    setReadyAcpResolution();
+
+    await runDispatch({
+      bodyForAgent: "",
+      ctxOverrides: { BodyForCommands: "/status", CommandBody: "/status" },
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+  });
+
   it("adds source delivery guidance to tool-only ACP turns", async () => {
     setReadyAcpResolution();
 

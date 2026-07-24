@@ -13,7 +13,7 @@ import {
   type InstallHooksResult,
 } from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub.js";
+import { parseClawHubPluginSpec, reportClawHubPluginInstallTelemetry } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { installBundledPluginSource } from "../plugins/bundled-install.js";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
@@ -1274,6 +1274,11 @@ async function runPluginInstallCommandUnlocked(params: RunPluginInstallCommandPa
           version: result.clawhub.version,
         });
       }
+      await reportClawHubPluginInstallTelemetry({
+        baseUrl: result.clawhub.clawhubUrl,
+        packageName: result.clawhub.clawhubPackage,
+        version: result.clawhub.version,
+      }).catch(() => undefined);
     };
     if (params.clawManaged) {
       return await installFromClawHub();

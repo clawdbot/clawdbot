@@ -311,7 +311,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
           normalizedSpawned,
           requestDeliveryHint,
           requestLabel: request.label,
-          recipientChannel,
           pluginOwnerId:
             freshEntry === undefined
               ? normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId)

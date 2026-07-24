@@ -35,6 +35,7 @@ type SessionSqliteDatabase = Pick<
   | "session_conversations"
   | "session_members"
   | "session_nodes"
+  | "session_suggestions"
   | "session_windows"
   | "transcript_rewrite_watermarks"
   | "trajectory_runtime_events"

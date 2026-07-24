@@ -22,7 +22,10 @@ import {
 } from "../../sessions/model-overrides.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type {
+  FinalizedRuntimeMsgContext as MsgContext,
+  FinalizedTemplateContext as TemplateContext,
+} from "../templating.js";
 import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
@@ -183,7 +186,7 @@ export function initFastReplySessionState(params: {
     listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
   );
   const existingEntry = loadSessionEntry({ storePath, sessionKey });
-  const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const commandSource = ctx.commandText ?? "";
   const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
     ? commandSource.trim()
     : stripStructuralPrefixes(commandSource).trim();
@@ -206,7 +209,7 @@ export function initFastReplySessionState(params: {
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
   const bodyStripped = resetTriggered
     ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
-    : (ctx.BodyForAgent ?? ctx.Body ?? "");
+    : (ctx.agentText ?? "");
   const now = Date.now();
   const sessionFile =
     !resetTriggered && existingEntry?.sessionFile
@@ -277,6 +280,9 @@ export function initFastReplySessionState(params: {
   });
   const sessionCtx: TemplateContext = {
     ...ctx,
+    commandText: ctx.commandText ?? "",
+    agentText: bodyStripped,
+    rawText: ctx.rawText ?? "",
     SessionKey: sessionKey,
     CommandAuthorized: commandAuthorized,
     BodyStripped: bodyStripped,

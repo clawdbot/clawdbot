@@ -47,12 +47,12 @@ import type { ImageContent, TextContent } from "openclaw/plugin-sdk/llm";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveAgentContextLimitValue } from "./agent-context-limits.js";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import {
   createFailedDynamicToolResponse,
   type CodexDynamicToolRuntimeResponse,
   withDynamicToolExecutionState,
+  withDynamicToolTranscriptDetails,
 } from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
@@ -78,6 +78,7 @@ type CodexDynamicToolHookContext = {
   runId?: string;
   channelId?: string;
   currentChannelProvider?: string;
+  contextWindowTokens?: number;
   currentChannelId?: string;
   currentMessagingTarget?: string;
   currentMessageId?: string | number;
@@ -386,6 +387,28 @@ const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
 const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId", "topicId"];
 const EXPLICIT_MESSAGE_REPLY_KEYS = ["replyTo", "replyToId", "replyToIdFull"];
 const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
+const LARGE_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 32_000;
+const XL_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 64_000;
+
+function resolveCodexDynamicToolResultMaxChars(contextWindowTokens?: number): number {
+  if (
+    typeof contextWindowTokens !== "number" ||
+    !Number.isFinite(contextWindowTokens) ||
+    contextWindowTokens <= 0
+  ) {
+    return DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+  }
+  const tokens = Math.floor(contextWindowTokens);
+  const autoCap =
+    tokens >= 200_000
+      ? XL_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS
+      : tokens >= 100_000
+        ? LARGE_CONTEXT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS
+        : DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
+  // Match the core live-result context-share ceiling without importing core
+  // internals across the bundled-plugin boundary.
+  return Math.min(autoCap, Math.max(1, Math.floor(tokens * 0.3) * 4));
+}
 
 function computerFrameImageIdentity(
   content: AgentToolResult<unknown>["content"] | undefined,
@@ -431,7 +454,9 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
-  const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(params.hookContext);
+  const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(
+    params.hookContext?.contextWindowTokens,
+  );
   const availableProjection = projectCodexDynamicTools(params.tools);
   const registeredProjection = params.registeredTools
     ? projectCodexDynamicTools(params.registeredTools)
@@ -683,6 +708,7 @@ export function createCodexDynamicToolBridge(params: {
           },
           terminalType,
         );
+        withDynamicToolTranscriptDetails(response, result.details);
         withDiagnosticFailureDisposition(response, resultFailureKind);
         const blocksSourceReplyTermination = hasExplicitNonSourceMessageRoute(
           executedArgs,
@@ -1165,16 +1191,6 @@ function toToolResultHookContext(
   };
 }
 
-function resolveCodexDynamicToolResultMaxChars(
-  ctx: CodexDynamicToolHookContext | undefined,
-): number {
-  const configured = resolveAgentContextLimitValue({
-    config: ctx?.config,
-    agentId: ctx?.agentId,
-    key: "toolResultMaxChars",
-  });
-  return configured ?? DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS;
-}
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
   const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
   if (activeSignals.length === 0) {

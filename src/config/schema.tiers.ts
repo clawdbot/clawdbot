@@ -169,13 +169,12 @@ tts.providers.* tts.providers.*.apiKey
 ui.assistant.avatar ui.assistant.name ui.prefs.chatFollowUpMode
 ui.prefs.chatPersistCommentary ui.prefs.chatSendShortcut ui.prefs.chatShowThinking
 ui.prefs.chatShowToolCalls ui.prefs.locale ui.prefs.showAdvancedSettings
-ui.prefs.textScale ui.prefs.theme ui.prefs.themeMode update.auto.enabled update.channel
+ui.prefs.theme ui.prefs.themeMode update.auto.enabled update.channel
 wizard.accessMode wizard.appRecommendations
 `
   .trim()
   .split(/\s+/);
 
-const NUMERIC_COMMON_EXCEPTIONS = new Set(["ui.prefs.textScale"]);
 const ADVANCED_TUNING_PATHS = new Set(["agents.defaults.heartbeat.every"]);
 const CHANNEL_KERNEL_TIER_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
 
@@ -240,7 +239,7 @@ function isNumericSchema(schema: JsonSchemaObject): boolean {
 }
 
 function isNumericCommonException(path: string): boolean {
-  return NUMERIC_COMMON_EXCEPTIONS.has(path) || splitPath(path).at(-1) === "port";
+  return splitPath(path).at(-1) === "port";
 }
 
 function resolveTier(params: { inheritedTier: boolean; ownTier: boolean | undefined }): boolean {

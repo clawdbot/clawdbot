@@ -458,6 +458,23 @@ describe("worker placement dispatch", () => {
     expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
+  it("reclaims an active pre-v2 worker instead of adopting its stale launch contract", async () => {
+    const harness = createHarness(placementStore);
+    await harness.environments.attachSession({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: REQUEST.sessionId,
+    });
+    harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentProtocolFeatures([]);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed" });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
   it("reclaims an active placement whose environment is already terminal after restart", async () => {
     const harness = createHarness(placementStore);
     harness.placements.seedActive(harness.attached.ownerEpoch);
@@ -578,6 +595,21 @@ describe("worker placement dispatch", () => {
       "placement:active",
     ]);
     expect(harness.environments.create).not.toHaveBeenCalled();
+  });
+
+  it("tears down a starting pre-v2 worker instead of resuming its stale launch contract", async () => {
+    const harness = createHarness(placementStore);
+    harness.placements.seedStarting();
+    harness.markEnvironmentProtocolFeatures([]);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: "Interrupted worker dispatch cannot safely resume",
+    });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
   it("finishes an interrupted drain through reconciliation before failure", async () => {

@@ -2,6 +2,12 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import {
+  mergeAgentRunAttemptTerminal,
+  normalizeAgentRunAttemptTerminal,
+  projectAgentRunAttemptTerminal,
+  setAgentRunAttemptTerminalFailure,
+} from "../agents/agent-run-terminal-outcome.js";
 import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
@@ -60,6 +66,12 @@ export type {
 } from "../agents/harness/types.js";
 export { AgentHarnessSessionSupersededError } from "../agents/harness/errors.js";
 export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
+export const agentHarnessAttemptTerminal = {
+  merge: mergeAgentRunAttemptTerminal,
+  normalize: normalizeAgentRunAttemptTerminal,
+  project: projectAgentRunAttemptTerminal,
+  setFailure: setAgentRunAttemptTerminalFailure,
+};
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
@@ -293,6 +305,50 @@ export async function loadCodexBundleMcpThreadConfig(
 ): Promise<CodexBundleMcpThreadConfig> {
   const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
   return load(params);
+}
+
+export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+
+/**
+ * Materialize an MCP App view for a tool executed by a harness-native MCP client.
+ * The harness supplies a runtime adapter so the view keeps using that exact connection.
+ */
+export async function prepareHarnessNativeMcpAppPreview(params: {
+  runtime: import("../agents/agent-bundle-mcp-types.js").SessionMcpRuntime;
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  toolCallId: string;
+  toolInput: unknown;
+  toolResult: import("@modelcontextprotocol/sdk/types.js").CallToolResult;
+  allowedAppToolNames: ReadonlySet<string>;
+  resultMetaState?: "unavailable";
+}): Promise<{ mcpAppPreview: unknown } | undefined> {
+  if (params.runtime.mcpAppsEnabled !== true) {
+    return undefined;
+  }
+  const { buildMcpAppCanvasPayload, fetchMcpAppView } =
+    await import("../agents/mcp-ui-resource.js");
+  const view = await fetchMcpAppView({
+    runtime: params.runtime,
+    serverName: params.serverName,
+    toolName: params.toolName,
+    uiResourceUri: params.uiResourceUri,
+    toolCallId: params.toolCallId,
+    toolInput: params.toolInput,
+    toolResult: params.toolResult,
+    allowedAppToolNames: params.allowedAppToolNames,
+  });
+  if (!view) {
+    return undefined;
+  }
+  return {
+    mcpAppPreview: buildMcpAppCanvasPayload({
+      ...view,
+      ...(params.runtime.sessionKey ? { originSessionKey: params.runtime.sessionKey } : {}),
+      ...(params.resultMetaState ? { resultMetaState: params.resultMetaState } : {}),
+    }),
+  };
 }
 
 /**

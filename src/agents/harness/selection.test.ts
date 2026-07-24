@@ -162,14 +162,7 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
 
 function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed,
     messagesSnapshot: [],
     assistantTexts: [`${sessionIdUsed} ok`],

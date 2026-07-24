@@ -17,6 +17,7 @@ import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -169,12 +170,14 @@ describe("delivery-queue recovery", () => {
         sessionId: "reef-session",
         updatedAt: 100,
         chatType: "direct",
-        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-        origin: {
-          provider: "reef",
-          accountId: "default",
-          nativeDirectUserId: "peer-agent",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+          origin: {
+            provider: "reef",
+            accountId: "default",
+            nativeDirectUserId: "peer-agent",
+          },
+        }),
       },
     );
     beginConversationDeliveryOperation(scope, {
@@ -236,12 +239,14 @@ describe("delivery-queue recovery", () => {
         sessionId: "reef-session",
         updatedAt: 100,
         chatType: "direct",
-        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-        origin: {
-          provider: "reef",
-          accountId: "default",
-          nativeDirectUserId: "peer-agent",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+          origin: {
+            provider: "reef",
+            accountId: "default",
+            nativeDirectUserId: "peer-agent",
+          },
+        }),
       },
     );
     beginConversationDeliveryOperation(scope, {
@@ -299,12 +304,14 @@ describe("delivery-queue recovery", () => {
         sessionId: "reef-session",
         updatedAt: 100,
         chatType: "direct",
-        deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
-        origin: {
-          provider: "reef",
-          accountId: "default",
-          nativeDirectUserId: "peer-agent",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "reef", accountId: "default", to: "reef:peer-agent" },
+          origin: {
+            provider: "reef",
+            accountId: "default",
+            nativeDirectUserId: "peer-agent",
+          },
+        }),
       },
     );
     beginConversationDeliveryOperation(scope, {

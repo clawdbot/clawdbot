@@ -303,27 +303,27 @@ export async function runPluginsInstallAction(
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
   const { inspectPluginRegistry, refreshPluginRegistry } =
     await import("../plugins/plugin-registry.js");
-  const cfg = getRuntimeConfig();
 
   if (opts.refresh) {
-    const index = await refreshPluginRegistry({
-      config: cfg,
-      reason: "manual",
-    });
-    if (opts.json) {
-      defaultRuntime.writeJson({
-        refreshed: true,
-        registry: index,
+    return await withPluginLifecycleLease({}, async () => {
+      const index = await refreshPluginRegistry({
+        config: getRuntimeConfig(),
+        reason: "manual",
       });
-      return;
-    }
-    const total = index.plugins.length;
-    const enabled = countEnabledPlugins(index.plugins);
-    defaultRuntime.log(`Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`);
-    return;
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          refreshed: true,
+          registry: index,
+        });
+        return;
+      }
+      const total = index.plugins.length;
+      const enabled = countEnabledPlugins(index.plugins);
+      defaultRuntime.log(`Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`);
+    });
   }
 
-  const inspection = await inspectPluginRegistry({ config: cfg });
+  const inspection = await inspectPluginRegistry({ config: getRuntimeConfig() });
   if (opts.json) {
     defaultRuntime.writeJson({
       state: inspection.state,

@@ -11,6 +11,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,
@@ -108,6 +109,9 @@ describe("SQLite active transcript event projection", () => {
     expect(page.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
       "root",
       "active",
+    ]);
+    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
+      expect.objectContaining({ id: "active" }),
     ]);
     expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
@@ -287,6 +291,16 @@ describe("SQLite active transcript event projection", () => {
       firstKeptEntryId: "old",
       tokensBefore: 10,
     });
+    expect(
+      readRecentSessionTranscriptMessageEvents(scope, {
+        maxBytes: 1_024,
+        maxLines: 1,
+        maxMessages: 1,
+      }).activeLeafEntryId,
+    ).toBe("newer-compaction");
+    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
+      expect.objectContaining({ id: "newer-compaction" }),
+    ]);
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
   });

@@ -548,6 +548,7 @@ final class NodeAppModel {
     let voiceWake = VoiceWakeManager()
     let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
+    private(set) var locationAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
     private let photosService: any PhotosServicing
@@ -990,6 +991,7 @@ final class NodeAppModel {
             rawValue: UserDefaults.standard.string(forKey: Self.preferredCameraFacingKey))
         self.screenRecorder = screenRecorder
         self.locationService = locationService
+        self.locationAuthorizationSnapshot = locationService.authorizationSnapshot()
         self.notificationCenter = notificationCenter
         self.deviceStatusService = deviceStatusService
         self.photosService = photosService
@@ -1089,11 +1091,12 @@ final class NodeAppModel {
         refreshLastShareEventFromRelay()
         let talkEnabled = UserDefaults.standard.bool(forKey: "talk.enabled")
         self.setTalkEnabled(talkEnabled)
-        self.locationService.setAuthorizationChangeHandler { [weak self] status in
+        self.locationService.setAuthorizationChangeHandler { [weak self] snapshot in
             guard let self else { return }
+            self.locationAuthorizationSnapshot = snapshot
             self.reconcileSignificantLocationMonitoring(
                 mode: self.locationMode(),
-                authorizationStatus: status)
+                authorizationStatus: snapshot.authorizationStatus)
         }
 
         // Wire up deep links from canvas taps

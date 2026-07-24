@@ -146,28 +146,12 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts 1M-character tool result caps for long-context agents", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          contextLimits: {
-            toolResultMaxChars: 1_000_000,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
   it("accepts agents.defaults and agents.entries contextLimits overrides", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
           contextLimits: {
             memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 24_000,
             postCompactionMaxChars: 4_000,
           },
         },

@@ -176,8 +176,21 @@ function buildStartupSignature(shell: string): Array<[string, number, number] | 
   });
 }
 
+function readNonBlankPathEnv(value: string | undefined): string | undefined {
+  return value?.trim() ? value : undefined;
+}
+
 function getTrustedShellHome(): string {
-  return process.env.HOME ?? process.env.USERPROFILE ?? os.homedir();
+  const configuredHome =
+    readNonBlankPathEnv(process.env.HOME) ?? readNonBlankPathEnv(process.env.USERPROFILE);
+  if (configuredHome) {
+    return configuredHome;
+  }
+  const accountHome = readNonBlankPathEnv(os.userInfo().homedir);
+  if (!accountHome) {
+    throw new Error("Unable to resolve the current user's home directory");
+  }
+  return accountHome;
 }
 
 async function createShellSnapshot(
@@ -306,6 +319,7 @@ function buildTrustedSnapshotCaptureEnv(
   runtimeEnv: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
   const env = buildSnapshotCaptureEnv(process.env);
+  env.HOME = getTrustedShellHome();
   // OPENCLAW_SHELL is injected by the exec runtime, so startup files can keep
   // their documented exec-specific branches without trusting model input.
   if (runtimeEnv.OPENCLAW_SHELL === "exec") {

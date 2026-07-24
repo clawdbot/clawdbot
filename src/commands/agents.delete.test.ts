@@ -111,10 +111,10 @@ async function arrangeAgentsDeleteTest(params: {
   const storeAgentId = resolveFixtureStoreAgentId(cfg, deletedAgentId);
   const storePath = resolveStorePath(cfg.session?.store, { agentId: deletedAgentId });
   for (const [sessionKey, entry] of Object.entries(params.sessions)) {
-    await replaceSessionEntry(
-      { agentId: storeAgentId, sessionKey, storePath },
-      entry as SessionEntry,
-    );
+    await replaceSessionEntry({ agentId: storeAgentId, sessionKey, storePath }, {
+      ...entry,
+      delivery: { kind: "none" },
+    } as SessionEntry);
   }
   await fs.mkdir(path.join(params.stateDir, `workspace-${deletedAgentId}`), { recursive: true });
   await fs.mkdir(path.join(params.stateDir, "agents", deletedAgentId, "agent"), {
@@ -144,7 +144,14 @@ function expectSessionStore(
         entry,
       ]),
     ),
-  ).toEqual(sessions);
+  ).toEqual(
+    Object.fromEntries(
+      Object.entries(sessions).map(([sessionKey, entry]) => [
+        sessionKey,
+        { ...entry, delivery: { kind: "none" } },
+      ]),
+    ),
+  );
 }
 
 function readJsonLogs(): Array<Record<string, unknown>> {

@@ -1161,12 +1161,13 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.exitSettings();
       return;
     }
-    const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
-    if (commandKey && event.shiftKey && event.code === "Comma") {
+    const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
+    if (settingsModifier && event.shiftKey && event.code === "Comma") {
       event.preventDefault();
       this.navigate("config");
       return;
     }
+    const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
     if (!commandKey || event.shiftKey || event.key.toLowerCase() !== "b") {
       return;
     }
@@ -1818,8 +1819,6 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .connected=${gatewayConnected}
                 .offline=${gatewaySnapshot.offlineStable}
                 .outboxCountForSession=${outboxCountForSession}
-                .queuedOutboxCount=${storedOutboxes?.total ?? 0}
-                .lastError=${gatewaySnapshot.lastError}
                 .terminalAvailable=${terminalAvailable}
                 .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
                 .canPairDevice=${gatewayConnected &&

@@ -43,6 +43,8 @@ type ListState = {
   type: "bullet" | "ordered";
   index: number;
   openLevel: number;
+  id: number;
+  parentId?: number;
 };
 
 type LinkState = {
@@ -80,6 +82,12 @@ type MarkdownListItemMarker = {
   listMarker?: { start: number; end: number };
   task?: true;
   taskMarker?: { start: number; end: number };
+  /** Parser-owned identity and rendered span for block-native list emitters. */
+  listId?: number;
+  parentListId?: number;
+  depth?: number;
+  start?: number;
+  end?: number;
 };
 
 export type MarkdownIR = {
@@ -150,6 +158,7 @@ type RenderState = RenderTarget & {
   headingLineEnd: number | undefined;
   listItems: MarkdownListItemMarker[];
   openListItems: MarkdownListItemMarker[];
+  nextListId: number;
 };
 
 export type MarkdownParseOptions = {
@@ -477,14 +486,19 @@ function appendListPrefix(state: RenderState, isTask: boolean): MarkdownListItem
     return undefined;
   }
   top.index += 1;
+  const itemStart = state.text.length;
   const indent = "  ".repeat(Math.max(0, stack.length - 1));
   const prefix = top.type === "ordered" ? `${top.index}. ` : "• ";
   state.text += indent;
-  const start = state.text.length;
+  const markerStart = state.text.length;
   state.text += prefix;
   return {
     kind: top.type,
-    listMarker: { start, end: state.text.length },
+    listMarker: { start: markerStart, end: state.text.length },
+    listId: top.id,
+    ...(top.parentId !== undefined ? { parentListId: top.parentId } : {}),
+    depth: stack.length - 1,
+    start: itemStart,
     ...(isTask ? { task: true as const } : {}),
   };
 }
@@ -988,7 +1002,15 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         if (state.env.listStack.length > 0) {
           appendNestedListSeparator(state);
         }
-        state.env.listStack.push({ type: "bullet", index: 0, openLevel: token.level ?? 0 });
+        state.env.listStack.push({
+          type: "bullet",
+          index: 0,
+          openLevel: token.level ?? 0,
+          id: state.nextListId++,
+          ...(state.env.listStack.at(-1)?.id !== undefined
+            ? { parentId: state.env.listStack.at(-1)?.id }
+            : {}),
+        });
         break;
       case "bullet_list_close":
         state.env.listStack.pop();
@@ -1006,6 +1028,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
           type: "ordered",
           index: start - 1,
           openLevel: token.level ?? 0,
+          id: state.nextListId++,
+          ...(state.env.listStack.at(-1)?.id !== undefined
+            ? { parentId: state.env.listStack.at(-1)?.id }
+            : {}),
         });
         break;
       }
@@ -1033,6 +1059,11 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
             ...(item.listMarker ? { listMarker: item.listMarker } : {}),
             ...(item.task ? { task: true } : {}),
             ...(item.taskMarker ? { taskMarker: item.taskMarker } : {}),
+            ...(item.listId !== undefined ? { listId: item.listId } : {}),
+            ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
+            ...(item.depth !== undefined ? { depth: item.depth } : {}),
+            ...(item.start !== undefined ? { start: item.start } : {}),
+            end: state.text.length,
           });
         }
         // Avoid double newlines (nested list's last item already added newline)
@@ -1174,6 +1205,11 @@ export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): Mar
             ...(listMarker ? { listMarker } : {}),
             ...(item.task ? { task: true as const } : {}),
             ...(taskMarker ? { taskMarker } : {}),
+            ...(item.listId !== undefined ? { listId: item.listId } : {}),
+            ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
+            ...(item.depth !== undefined ? { depth: item.depth } : {}),
+            ...(item.start !== undefined ? { start: Math.max(item.start, start) - start } : {}),
+            ...(item.end !== undefined ? { end: Math.min(item.end, end) - start } : {}),
           },
         ]
       : [];
@@ -1226,6 +1262,7 @@ export function markdownToIRWithMeta(
     headingLineEnd: undefined,
     listItems: [],
     openListItems: [],
+    nextListId: 0,
   };
 
   renderTokens(tokens as MarkdownToken[], state);
@@ -1260,6 +1297,11 @@ export function markdownToIRWithMeta(
             ...(listMarker ? { listMarker } : {}),
             ...(item.task ? { task: true as const } : {}),
             ...(taskMarker ? { taskMarker } : {}),
+            ...(item.listId !== undefined ? { listId: item.listId } : {}),
+            ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
+            ...(item.depth !== undefined ? { depth: item.depth } : {}),
+            ...(item.start !== undefined ? { start: Math.min(item.start, finalLength) } : {}),
+            ...(item.end !== undefined ? { end: Math.min(item.end, finalLength) } : {}),
           },
         ]
       : [];

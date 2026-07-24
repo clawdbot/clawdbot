@@ -335,6 +335,36 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
   });
 }
 
+export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: {
+  content: AssistantDisplayContentBlock[];
+  idempotencyKey: string;
+  scope: SessionTranscriptWriteScope;
+}): Promise<{ messageId: string } | null> {
+  const idempotencyKey = params.idempotencyKey.trim();
+  if (!idempotencyKey || params.content.length === 0) {
+    return null;
+  }
+  return await withTranscriptWriteLock(params.scope, async (transcript) => {
+    const events = await transcript.readEvents();
+    const target = findAssistantTranscriptMessageByIdempotencyKeyInEvents(events, idempotencyKey);
+    if (!target) {
+      return null;
+    }
+    const rewrittenEvents = events.map((event) =>
+      transcriptEventId(event) === target.messageId
+        ? Object.assign({}, event as Record<string, unknown>, {
+            message: {
+              ...target.message,
+              content: params.content,
+            },
+          })
+        : event,
+    );
+    await transcript.replaceEvents(rewrittenEvents);
+    return { messageId: target.messageId };
+  });
+}
+
 export async function publishAssistantTranscriptRewrite(params: {
   scope: SessionTranscriptWriteScope;
   rewritten: readonly { messageId: string }[];

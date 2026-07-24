@@ -7,7 +7,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const ACTIONLINT_VERSION = "1.7.11";
+const ACTIONLINT_VERSION = "1.7.12";
 const PRE_COMMIT_VERSION = "4.2.0";
 const WORKFLOW_DIR = ".github/workflows";
 

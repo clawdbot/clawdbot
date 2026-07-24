@@ -1,6 +1,6 @@
 // Bot API 10.2 rich block/RichText model: types, size accounting, and the
 // plain-text projection shared by the emitter, splitter, and fallback paths.
-export type TelegramRichBlocksDegradationReason = "table-ascii";
+export type TelegramRichBlocksDegradationReason = "list-limit" | "table-ascii";
 
 export type RichText =
   | string
@@ -235,6 +235,108 @@ export function countInputRichBlockChars(block: InputRichBlock): number {
   }
 }
 
+/** Bot API block budget, including nested blocks, list items, and table rows. */
+export function countInputRichBlocks(blocks: readonly InputRichBlock[]): number {
+  return blocks.reduce((total, block) => {
+    switch (block.type) {
+      case "blockquote":
+      case "details":
+      case "collage":
+      case "slideshow":
+        return total + 1 + countInputRichBlocks(block.blocks);
+      case "list":
+        return (
+          total +
+          1 +
+          block.items.reduce((items, item) => items + 1 + countInputRichBlocks(item.blocks), 0)
+        );
+      case "table":
+        return total + 1 + block.cells.length;
+      default:
+        return total + 1;
+    }
+  }, 0);
+}
+
+function maxRichTextNesting(text: RichText): number {
+  if (typeof text === "string") {
+    return 0;
+  }
+  if (Array.isArray(text)) {
+    return Math.max(0, ...text.map(maxRichTextNesting));
+  }
+  if (text.type === "mathematical_expression" || text.type === "custom_emoji") {
+    return 0;
+  }
+  return 1 + maxRichTextNesting(text.text);
+}
+
+function maxCaptionNesting(caption: RichBlockCaption | undefined): number {
+  return caption
+    ? Math.max(
+        maxRichTextNesting(caption.text),
+        caption.credit ? maxRichTextNesting(caption.credit) : 0,
+      )
+    : 0;
+}
+
+/** Maximum nested block/formatting edges in a rich-message tree. */
+export function maxInputRichBlockNesting(blocks: readonly InputRichBlock[]): number {
+  const blockDepth = (block: InputRichBlock): number => {
+    switch (block.type) {
+      case "paragraph":
+      case "heading":
+      case "footer":
+        return maxRichTextNesting(block.text);
+      case "pullquote":
+        return Math.max(
+          maxRichTextNesting(block.text),
+          block.credit ? maxRichTextNesting(block.credit) : 0,
+        );
+      case "blockquote":
+        return Math.max(
+          1 + maxInputRichBlockNesting(block.blocks),
+          block.credit ? 1 + maxRichTextNesting(block.credit) : 0,
+        );
+      case "details":
+        return Math.max(
+          1 + maxInputRichBlockNesting(block.blocks),
+          1 + maxRichTextNesting(block.summary),
+        );
+      case "collage":
+      case "slideshow":
+        return Math.max(
+          1 + maxInputRichBlockNesting(block.blocks),
+          1 + maxCaptionNesting(block.caption),
+        );
+      case "list":
+        return 1 + Math.max(0, ...block.items.map((item) => maxInputRichBlockNesting(item.blocks)));
+      case "table":
+        return (
+          1 +
+          Math.max(
+            maxRichTextNesting(block.caption ?? ""),
+            ...block.cells.flatMap((row) => row.map((cell) => maxRichTextNesting(cell.text ?? ""))),
+          )
+        );
+      case "photo":
+      case "video":
+      case "audio":
+      case "animation":
+      case "voice_note":
+      case "map":
+        return block.caption ? 1 + maxCaptionNesting(block.caption) : 0;
+      case "pre":
+        // This wire model intentionally narrows pre text to a plain string;
+        // draft-only thinking blocks are not part of InputRichBlock.
+        return 0;
+      default:
+        return 0;
+    }
+  };
+  return Math.max(0, ...blocks.map(blockDepth));
+}
+
 /** Media elements per block, for the wire's 50-media message cap. */
 export function countInputRichBlockMedia(block: InputRichBlock): number {
   switch (block.type) {
@@ -286,7 +388,10 @@ function captionToPlainText(caption: RichBlockCaption | undefined): string {
   return `${richTextToPlainString(caption.text)}${credit}`.trim();
 }
 
-export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
+function inputRichBlocksToPlainTextAtDepth(
+  blocks: readonly InputRichBlock[],
+  listDepth: number,
+): string {
   const parts: string[] = [];
   const push = (value: string) => {
     if (value) {
@@ -314,30 +419,31 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
         );
         break;
       case "blockquote":
-        push(inputRichBlocksToPlainText(block.blocks));
+        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
         if (block.credit) {
           push(`— ${richTextToPlainString(block.credit)}`);
         }
         break;
       case "collage":
       case "slideshow":
-        push(inputRichBlocksToPlainText(block.blocks));
+        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
         push(captionToPlainText(block.caption));
         break;
       case "details":
         push(richTextToPlainString(block.summary));
-        push(inputRichBlocksToPlainText(block.blocks));
+        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
         break;
       case "list":
         for (const item of block.items) {
-          const marker = item.has_checkbox
+          const markerText = item.has_checkbox
             ? item.is_checked
               ? "[x] "
               : "[ ] "
             : item.value !== undefined
               ? `${item.value}. `
               : "• ";
-          push(`${marker}${inputRichBlocksToPlainText(item.blocks)}`);
+          const marker = `${"  ".repeat(listDepth)}${markerText}`;
+          push(`${marker}${inputRichBlocksToPlainTextAtDepth(item.blocks, listDepth + 1)}`);
         }
         break;
       case "table":
@@ -376,6 +482,10 @@ export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): s
     }
   }
   return parts.join("\n");
+}
+
+export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
+  return inputRichBlocksToPlainTextAtDepth(blocks, 0);
 }
 
 export function boldRichText(text: string): RichText {

@@ -1004,7 +1004,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (params.from !== undefined || params.lines !== undefined) {
       const startLine = normalizePositiveInteger(params.from, 1);
       const requestedCount = normalizePositiveInteger(
-        params.lines ?? contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
+        params.lines ?? DEFAULT_MEMORY_READ_LINES,
         DEFAULT_MEMORY_READ_LINES,
       );
       const partial = await this.readPartialText(absPath, startLine, requestedCount);
@@ -1029,7 +1029,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       relPath,
       from: params.from,
       lines: params.lines,
-      defaultLines: contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
+      defaultLines: DEFAULT_MEMORY_READ_LINES,
       maxChars: contextLimits?.memoryGetMaxChars,
       suggestReadFallback: isDefaultMemoryPath(relPath),
     });

@@ -765,6 +765,7 @@ describe("readSessionMessages", () => {
       maxBytes: 2048,
       allowResetArchiveFallback: true,
     });
+    expect(recent.transcriptSource).toBe("reset-archive");
     expect(recent.totalMessages).toBe(2);
     expect(recent.messages).toHaveLength(1);
     expectMessageFields(recent.messages[0], {

@@ -17,7 +17,6 @@ import { readSessionTitleFieldsFromTranscriptAsync } from "../../gateway/session
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
@@ -285,14 +284,11 @@ export function createSessionsListTool(opts?: {
           mainKey,
         });
 
-        const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
-        const entryOrigin =
-          entry.origin && typeof entry.origin === "object"
-            ? (entry.origin as Record<string, unknown>)
-            : undefined;
+        const entryChannel = readStringValue(entry.channel);
+        const entryOrigin = entry.origin as Record<string, unknown> | undefined;
         const originChannel =
           typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
-        const deliveryContext = deliveryContextFromSession(entry);
+        const deliveryContext = entry.deliveryContext;
         const deliveryChannel = readStringValue(deliveryContext?.channel);
         const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
         const derivedChannel = deriveChannel({

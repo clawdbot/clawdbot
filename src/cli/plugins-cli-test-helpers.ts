@@ -12,6 +12,8 @@ type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type LoadConfigFn = (typeof import("../config/config.js"))["loadConfig"];
 type ParseClawHubPluginSpecFn = (typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"];
+type ReportClawHubPluginInstallTelemetryFn =
+  (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"];
 type InstallPluginFromMarketplaceFn =
   (typeof import("../plugins/marketplace.js"))["installPluginFromMarketplace"];
 type InstallPluginFromGitSpecFn =
@@ -112,6 +114,8 @@ export const installPluginFromNpmPackArchive: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
 export const parseClawHubPluginSpec: Mock<ParseClawHubPluginSpecFn> = vi.fn();
+export const reportClawHubPluginInstallTelemetry: Mock<ReportClawHubPluginInstallTelemetryFn> =
+  vi.fn(async () => undefined);
 export const findBundledPluginSourceMock: UnknownMock = vi.fn();
 export const installHooksFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installHooksFromPath: AsyncUnknownMock = vi.fn();
@@ -703,6 +707,18 @@ vi.mock("../infra/clawhub.js", () => ({
       parseClawHubPluginSpec,
       ...args,
     )) as (typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"],
+  reportClawHubPluginInstallTelemetry: ((
+    ...args: Parameters<
+      (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]
+    >
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]>,
+      ReturnType<(typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"]>
+    >(
+      reportClawHubPluginInstallTelemetry,
+      ...args,
+    )) as (typeof import("../infra/clawhub.js"))["reportClawHubPluginInstallTelemetry"],
 }));
 
 const { registerPluginsCli } = await import("./plugins-cli.js");
@@ -758,6 +774,8 @@ export function resetPluginsCliTestState() {
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
   parseClawHubPluginSpec.mockReset();
+  reportClawHubPluginInstallTelemetry.mockReset();
+  reportClawHubPluginInstallTelemetry.mockResolvedValue(undefined);
   findBundledPluginSourceMock.mockReset();
   installHooksFromNpmSpec.mockReset();
   installHooksFromPath.mockReset();

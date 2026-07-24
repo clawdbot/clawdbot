@@ -28,7 +28,12 @@ import {
 import { isSourceReplyTranscriptMirrorPayload } from "./chat-broadcast.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
+import {
+  appendAssistantTranscriptMessage,
+  assistantTranscriptScope,
+  publishAssistantTranscriptRewrite,
+  rewriteAssistantTranscriptMessageByIdempotencyKey,
+} from "./chat-transcript-persistence.js";
 import {
   buildTtsSupplementTranscriptMarker,
   stripVisibleTextFromTtsSupplement,
@@ -168,6 +173,44 @@ export function createChatSendReplyDispatch(params: {
       extractAssistantDisplayTextFromContent(assistantContent) ??
       buildTranscriptReplyText([transcriptPayload]);
     if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
+      return;
+    }
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    const ownedTranscriptIdempotencyKey =
+      payloadMetadata?.assistantTranscriptOwned === true
+        ? payloadMetadata.assistantTranscriptIdempotencyKey?.trim()
+        : undefined;
+    const transcriptScope = assistantTranscriptScope({
+      sessionKey,
+      sessionId,
+      storePath: latestStorePath,
+      agentId,
+    });
+    if (ownedTranscriptIdempotencyKey && transcriptScope) {
+      // The harness row is the canonical final assistant. Replace that exact
+      // identity so media materialization cannot append a parallel reply.
+      const rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
+        content: persistedContentForAppend,
+        idempotencyKey: ownedTranscriptIdempotencyKey,
+        scope: transcriptScope,
+      });
+      if (rewritten) {
+        await publishAssistantTranscriptRewrite({
+          scope: transcriptScope,
+          rewritten: [rewritten],
+        });
+        if (assistantContent?.length) {
+          await attachManagedOutgoingImagesToMessage({
+            messageId: rewritten.messageId,
+            blocks: assistantContent,
+          });
+        }
+        appendedWebchatAgentMedia = true;
+        return;
+      }
+      logGateway.warn(
+        "webchat runtime-owned assistant media rewrite skipped: transcript identity not found",
+      );
       return;
     }
     const appended = await appendAssistantTranscriptMessage({

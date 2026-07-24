@@ -271,7 +271,7 @@ describe("runHeartbeatOnce ack handling", () => {
     });
   });
 
-  it("records completed tasks when HEARTBEAT_OK delivery fails", async () => {
+  it("does not recreate legacy task timestamps when HEARTBEAT_OK delivery fails", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const nowMs = Date.parse("2026-07-06T12:00:00.000Z");
       await seedHeartbeatScratchForTest({
@@ -314,13 +314,11 @@ describe("runHeartbeatOnce ack handling", () => {
       }>(storePath);
       expect(result.status).toBe("ran");
       expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sessionStore[sessionKey]?.heartbeatTaskState).toEqual({
-        "check-deployment": nowMs,
-      });
+      expect(sessionStore[sessionKey]?.heartbeatTaskState).toBeUndefined();
     });
   });
 
-  it("records completed tasks when HEARTBEAT_OK readiness checks fail", async () => {
+  it("does not recreate legacy task timestamps when readiness checks fail", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const nowMs = Date.parse("2026-07-06T12:00:00.000Z");
       await seedHeartbeatScratchForTest({
@@ -363,9 +361,7 @@ describe("runHeartbeatOnce ack handling", () => {
       }>(storePath);
       expect(result.status).toBe("ran");
       expect(sendWhatsApp).not.toHaveBeenCalled();
-      expect(sessionStore[sessionKey]?.heartbeatTaskState).toEqual({
-        "check-deployment": nowMs,
-      });
+      expect(sessionStore[sessionKey]?.heartbeatTaskState).toBeUndefined();
     });
   });
 

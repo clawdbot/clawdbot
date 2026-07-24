@@ -142,11 +142,24 @@ export function writeCronJobScratch(params: {
   const nowMs = params.nowMs ?? Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const cronDb = getCronStoreKysely(db);
       const { currentRevision } = readScratchStateFromDatabase(db, storeKey, params.jobId);
-      if (params.expectedRevision !== undefined && params.expectedRevision !== currentRevision) {
+      const owningJob = executeSqliteQuerySync(
+        db,
+        cronDb
+          .selectFrom("cron_jobs")
+          .select("job_id")
+          .where("store_key", "=", storeKey)
+          .where("job_id", "=", params.jobId),
+      ).rows[0];
+      // Job ownership and scratch revision are one CAS boundary. A heartbeat
+      // finishing after durable job deletion must not recreate orphan scratch.
+      if (
+        !owningJob ||
+        (params.expectedRevision !== undefined && params.expectedRevision !== currentRevision)
+      ) {
         return { ok: false, reason: "revision-conflict", currentRevision } as const;
       }
-      const cronDb = getCronStoreKysely(db);
       if (params.content === null && currentRevision === 0) {
         return { ok: true, currentRevision } as const;
       }
