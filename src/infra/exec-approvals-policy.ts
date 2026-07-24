@@ -14,7 +14,11 @@ export function requiresExecApproval(params: {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied?: boolean;
+  denylisted?: boolean;
 }): boolean {
+  if (params.denylisted === true) {
+    return true;
+  }
   if (params.ask === "always") {
     return true;
   }

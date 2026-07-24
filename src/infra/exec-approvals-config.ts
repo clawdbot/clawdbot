@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import type {
   ExecApprovalsAgent,
@@ -19,6 +20,8 @@ import { expandHomePrefix, resolveHomeRelativePath } from "./home-dir.js";
 import { isPlainObject } from "./plain-object.js";
 
 const toStringOrUndefined = readStringValue;
+const execApprovalsLog = createSubsystemLogger("exec-approvals");
+let warnedAboutIgnoredPersistedDenylist = false;
 
 function isExecSecurity(value: unknown): value is ExecSecurity {
   return value === "allowlist" || value === "full" || value === "deny";
@@ -153,11 +156,39 @@ function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFi
   return true;
 }
 
+function hasIgnoredPersistedDenylist(value: unknown): boolean {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if (isPlainObject(value.defaults) && value.defaults.denylist !== undefined) {
+    return true;
+  }
+  if (!isPlainObject(value.agents)) {
+    return false;
+  }
+  return Object.values(value.agents).some(
+    (agent) => isPlainObject(agent) && agent.denylist !== undefined,
+  );
+}
+
+function warnIgnoredPersistedDenylistOnce(): void {
+  if (warnedAboutIgnoredPersistedDenylist) {
+    return;
+  }
+  warnedAboutIgnoredPersistedDenylist = true;
+  execApprovalsLog.warn(
+    "Ignoring denylist entries in exec-approvals.json; use openclaw.json tools.exec.denylist for exec STOP rules.",
+  );
+}
+
 /** Parse only structurally valid persisted approvals without inventing fallback policy. */
 export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (isValidPersistedExecApprovals(parsed)) {
+      if (hasIgnoredPersistedDenylist(parsed)) {
+        warnIgnoredPersistedDenylistOnce();
+      }
       return normalizeExecApprovalsInternal(parsed);
     }
   } catch {
@@ -299,18 +330,22 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
     delete agents.default;
   }
   for (const [key, agent] of Object.entries(agents)) {
+    const { denylist: _ignoredDenylist, ...agentWithoutDenylist } = agent as ExecApprovalsAgent & {
+      denylist?: unknown;
+    };
     const coerced = coerceAllowlistEntries(agent.allowlist);
     const withIds = ensureAllowlistIds(coerced);
     const allowlist = stripAllowlistCommandText(withIds);
     const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
     const agentChanged =
+      _ignoredDenylist !== undefined ||
       allowlist !== agent.allowlist ||
       sanitizedPolicy.security !== agent.security ||
       sanitizedPolicy.ask !== agent.ask ||
       sanitizedPolicy.askFallback !== agent.askFallback;
     if (agentChanged) {
       agents[key] = {
-        ...agent,
+        ...agentWithoutDenylist,
         allowlist,
         security: sanitizedPolicy.security,
         ask: sanitizedPolicy.ask,

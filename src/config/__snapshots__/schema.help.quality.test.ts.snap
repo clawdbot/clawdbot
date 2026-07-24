@@ -330,6 +330,8 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "tools.exec.applyPatch.workspaceOnly",
   "tools.exec.ask",
   "tools.exec.commandHighlighting",
+  "tools.exec.denylist.*.pattern",
+  "tools.exec.denylist.*.reason",
   "tools.exec.host",
   "tools.exec.mode",
   "tools.exec.node",

@@ -1,4 +1,3 @@
-// Defines Zod schema fragments for per-agent runtime configuration.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -24,6 +23,7 @@ import {
   TypingModeSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import { ToolExecDenylistSchema } from "./zod-schema.exec-denylist.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 function validateSandboxBindEntries(
@@ -484,7 +484,6 @@ const ToolPolicyWithProfileSchema = z
     );
   });
 
-// Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
 export const ElevatedAllowFromSchema = z
   .record(z.string(), z.array(z.union([z.string(), z.number()])))
   .optional();
@@ -519,6 +518,7 @@ const ToolExecBaseShape = {
   commandHighlighting: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
+  denylist: ToolExecDenylistSchema.optional(),
   reviewer: z
     .object({
       model: AgentModelSchema.optional(),

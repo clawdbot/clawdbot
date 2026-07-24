@@ -9,6 +9,7 @@ import {
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { createDedupeCache } from "../infra/dedupe.js";
+import type { ExecDenylistEntry } from "../infra/exec-approvals-denylist.js";
 import {
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
@@ -59,15 +60,27 @@ import {
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
 import {
+  normalizeDeniedReason,
+  sendSystemRunDenied,
+  type SystemRunExecutionContext,
+} from "./invoke-system-run-denial.js";
+import {
+  assertSystemRunDenylistAuthorization,
+  buildSystemRunDenylistBinding,
+  evaluateSystemRunDenylistPolicy,
+  resolveRuntimeConfigAccessor,
+  toPortableDenylistBinding,
+} from "./invoke-system-run-denylist.js";
+import {
   hardenApprovedExecutionPaths,
   revalidateApprovedCwdSnapshot,
   revalidateApprovedMutableFileOperand,
   resolveMutableFileOperandSnapshotSync,
   type ApprovedCwdSnapshot,
 } from "./invoke-system-run-plan.js";
+import { sendSystemRunCompleted } from "./invoke-system-run-result.js";
 import type {
   ExecEventPayload,
-  ExecFinishedResult,
   ExecFinishedEventParams,
   RunResult,
   SkillBinsProvider,
@@ -78,22 +91,6 @@ type SystemRunInvokeResult = {
   ok: boolean;
   payloadJSON?: string | null;
   error?: { code?: string; message?: string } | null;
-};
-
-type SystemRunDeniedReason =
-  | "security=deny"
-  | "approval-required"
-  | "approval-state-write-failed"
-  | "allowlist-miss"
-  | "execution-plan-miss"
-  | "companion-unavailable"
-  | "permission:screenRecording";
-
-type SystemRunExecutionContext = {
-  sessionKey: string;
-  runId: string;
-  commandText: string;
-  suppressNotifyOnExit: boolean;
 };
 
 type SystemRunParsePhase = {
@@ -133,6 +130,11 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   allowlistMatches: ExecAllowlistEntry[];
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  denylisted: boolean;
+  /** openclaw.json config-layer denylist captured before the approval wait. */
+  denylistConfigEntries: ExecDenylistEntry[];
+  /** Effective denylist rule keys (config + approvals-file) at evaluation time. */
+  approvedDenylistRuleKeys: string[];
   allowlistAuthorizationSatisfied: boolean;
   safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
   safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
@@ -175,20 +177,6 @@ function warnWritableTrustedDirOnce(message: string): void {
     return;
   }
   logWarn(message);
-}
-
-function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
-  switch (reason) {
-    case "security=deny":
-    case "approval-required":
-    case "allowlist-miss":
-    case "execution-plan-miss":
-    case "companion-unavailable":
-    case "permission:screenRecording":
-      return reason;
-    default:
-      return "approval-required";
-  }
 }
 
 function resolveAgentExecConfig(
@@ -297,54 +285,6 @@ async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<
   }
   const { getRuntimeConfig } = await import("../config/config.js");
   return getRuntimeConfig();
-}
-
-async function sendSystemRunDenied(
-  opts: Pick<
-    HandleSystemRunInvokeOptions,
-    "client" | "sendNodeEvent" | "buildExecEventPayload" | "sendInvokeResult"
-  >,
-  execution: SystemRunExecutionContext,
-  params: {
-    reason: SystemRunDeniedReason;
-    message: string;
-  },
-) {
-  await opts.sendNodeEvent(
-    opts.client,
-    "exec.denied",
-    opts.buildExecEventPayload({
-      sessionKey: execution.sessionKey,
-      runId: execution.runId,
-      host: "node",
-      command: execution.commandText,
-      reason: params.reason,
-      suppressNotifyOnExit: execution.suppressNotifyOnExit,
-    }),
-  );
-  await opts.sendInvokeResult({
-    ok: false,
-    error: { code: "UNAVAILABLE", message: params.message },
-  });
-}
-
-async function sendSystemRunCompleted(
-  opts: Pick<HandleSystemRunInvokeOptions, "sendExecFinishedEvent" | "sendInvokeResult">,
-  execution: SystemRunExecutionContext,
-  result: ExecFinishedResult,
-  payloadJSON: string,
-) {
-  await opts.sendExecFinishedEvent({
-    sessionKey: execution.sessionKey,
-    runId: execution.runId,
-    commandText: execution.commandText,
-    result,
-    suppressNotifyOnExit: execution.suppressNotifyOnExit,
-  });
-  await opts.sendInvokeResult({
-    ok: true,
-    payloadJSON,
-  });
 }
 
 function argvArraysMatch(left: readonly string[] | undefined, right: readonly string[]): boolean {
@@ -624,6 +564,13 @@ async function evaluateSystemRunPolicyPhase(
   const inlineEvalExecutableTrusted =
     inlineEvalHit !== null &&
     segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
+  const denylistPolicy = evaluateSystemRunDenylistPolicy({
+    config: cfg,
+    agentExecDenylist: agentExec?.denylist,
+    commandText: parsed.commandText,
+    segments,
+    analysisOk,
+  });
   const forwardedAutoReview = parsed.approvalSource === "auto-review";
   let approvalDecision = forwardedAutoReview ? "allow-once" : parsed.approvalDecision;
   let approvalGrantSource: SystemRunPolicyPhase["approvalGrantSource"] = forwardedAutoReview
@@ -644,6 +591,8 @@ async function evaluateSystemRunPolicyPhase(
     // Keep cmd.exe approval gating scoped to inline shell-wrapper transport.
     // Env sanitization uses broader shell-wrapper detection in parse phase.
     shellWrapperInvocation: parsed.shellPayload !== null,
+    denylisted: denylistPolicy.denylisted,
+    denylistReason: denylistPolicy.denylistReason,
   });
   const requiresSecurityAuditSuppressionApproval =
     commandRequiresSecurityAuditSuppressionApproval({
@@ -715,6 +664,9 @@ async function evaluateSystemRunPolicyPhase(
       parsed.approvalPlan !== null &&
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval &&
+      // A denylist hit must reach a HUMAN reviewer; the model auto-reviewer
+      // cannot clear an operator STOP rule.
+      !denylistPolicy.denylisted &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
       const reviewer = await resolveSystemRunAutoReviewer({
@@ -757,6 +709,8 @@ async function evaluateSystemRunPolicyPhase(
           isWindows,
           cmdInvocation,
           shellWrapperInvocation: parsed.shellPayload !== null,
+          denylisted: denylistPolicy.denylisted,
+          denylistReason: denylistPolicy.denylistReason,
         });
       } else {
         autoReviewDeferredMessage = `${policy.errorMessage} (exec auto-review deferred to human approval: ${decision.rationale})`;
@@ -847,6 +801,9 @@ async function evaluateSystemRunPolicyPhase(
     allowlistMatches,
     analysisOk,
     allowlistSatisfied,
+    denylisted: denylistPolicy.denylisted,
+    denylistConfigEntries: denylistPolicy.denylistConfigEntries,
+    approvedDenylistRuleKeys: denylistPolicy.approvedDenylistRuleKeys,
     allowlistAuthorizationSatisfied,
     safeBins,
     safeBinProfiles,
@@ -953,15 +910,43 @@ async function executeSystemRunPhase(
   }
 
   const useMacAppExec = opts.preferMacAppExecHost;
+  const getCurrentRuntimeConfig = await resolveRuntimeConfigAccessor(opts);
+  const denylistBinding = buildSystemRunDenylistBinding(phase, getCurrentRuntimeConfig, execArgv);
   if (useMacAppExec) {
+    try {
+      assertSystemRunDenylistAuthorization({
+        agentId: phase.agentId,
+        binding: denylistBinding,
+      });
+    } catch {
+      logWarn(
+        `security: system.run approval changed before companion launch (runId=${phase.runId})`,
+      );
+      await sendSystemRunDenied(opts, phase.execution, {
+        reason: "approval-state-write-failed",
+        message: APPROVAL_STATE_WRITE_FAILED_MESSAGE,
+      });
+      return;
+    }
+
     const macApprovalSource =
       phase.approvalSource ??
       (phase.approvalGrantSource === "auto-review" ? "auto-review" : undefined);
-    const macApprovalDecision = macApprovalSource
+    const macApprovalDecisionBase = macApprovalSource
       ? null
       : phase.approvalGrantSource === "explicit-approval" && phase.approvalDecision === null
         ? "allow-once"
         : phase.approvalDecision;
+    // Deny-over-allow one-shot contract must cross the companion boundary too. The
+    // macOS exec host persists `.allowAlways` decisions in allowlist mode, so a
+    // denylist-approved command forwarded as `allow-always` would create durable
+    // allowlist trust on the companion despite the local `!phase.denylisted`
+    // persistence guard below. Downgrade a denylisted allow-always approval to a
+    // one-shot `allow-once` before it reaches runViaMacAppExecHost.
+    const macApprovalDecision =
+      phase.denylisted && macApprovalDecisionBase === "allow-always"
+        ? "allow-once"
+        : macApprovalDecisionBase;
     const execRequest: ExecHostRequest = {
       command: execArgv,
       // Forward canonical display text so companion approval/prompt surfaces bind to
@@ -976,6 +961,7 @@ async function executeSystemRunPhase(
       approvalDecision: macApprovalDecision,
       approvalSource: macApprovalSource,
       ...(phase.approvalGrantSource ? { policySnapshot: phase.evaluationPolicySnapshot } : {}),
+      ...(phase.approvalGrantSource ? { denylistBinding: toPortableDenylistBinding(phase) } : {}),
     };
     const response = await opts.runViaMacAppExecHost({
       approvals: phase.approvals,
@@ -1014,7 +1000,7 @@ async function executeSystemRunPhase(
   }
 
   const allowAlwaysDecision =
-    phase.policy.approvalDecision === "allow-always"
+    phase.policy.approvalDecision === "allow-always" && !phase.denylisted
       ? resolveAllowAlwaysPersistenceDecision({
           segments: phase.segments,
           cwd: phase.cwd,
@@ -1043,6 +1029,9 @@ async function executeSystemRunPhase(
     requireAutoAllowSkills: phase.segmentSatisfiedBy.includes("skills"),
     requireExactCommandApproval: phase.durableApprovalRequirement === "exact-command",
     requireDurableAllowlistApproval: phase.durableApprovalRequirement === "segment-allowlist",
+    // Deny-over-allow TOCTOU guard: re-screen the denylist under the approvals
+    // lock so a STOP rule added while this approval was pending blocks dispatch.
+    denylistBinding,
   };
 
   try {

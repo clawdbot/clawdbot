@@ -735,7 +735,31 @@ describe("exec approvals", () => {
     expect(getResultText(result)).toContain("node-ok");
   });
 
-  it("honors ask=off for elevated gateway exec without prompting", async () => {
+  it("keeps a mode=full denylist hit behind human approval", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    mockPendingApprovalRegistration();
+
+    const tool = createExecTool({
+      host: "gateway",
+      mode: "full",
+      denylist: [{ pattern: "echo *", reason: "operator stop" }],
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-mode-full-denylist", { command: "echo ok" });
+    expectPendingCommandText(result, "echo ok");
+  });
+
+  it("lets authorized elevated full bypass a gateway denylist hit", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
       calls.push(method);
@@ -743,15 +767,71 @@ describe("exec approvals", () => {
     });
 
     const tool = createExecTool({
-      ask: "off",
-      security: "full",
+      host: "gateway",
+      mode: "full",
+      denylist: [{ pattern: "echo *", reason: "operator stop" }],
       approvalRunningNoticeMs: 0,
-      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      elevated: { enabled: true, allowed: true, defaultLevel: "full" },
     });
 
     const result = await tool.execute("call3", { command: "echo ok", elevated: true });
     expect(result.details.status).toBe("completed");
     expect(calls).not.toContain("exec.approval.request");
+  });
+
+  it("keeps a node denylist hit behind approval under authorized elevated full", async () => {
+    await writeExecApprovalsConfig({
+      version: 1,
+      defaults: { security: "full", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    const calls: string[] = [];
+    let runParams: Record<string, unknown> | undefined;
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approvals.node.get") {
+        return {
+          file: {
+            version: 1,
+            defaults: { security: "full", ask: "off", askFallback: "deny" },
+            agents: {},
+          },
+        };
+      }
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string; params?: Record<string, unknown> };
+        if (invoke.command === "system.run.prepare") {
+          const prepared = buildPreparedSystemRunPayload(params);
+          return {
+            payload: {
+              ...prepared.payload,
+              execPolicy: { security: "full", ask: "off" },
+            },
+          };
+        }
+        if (invoke.command === "system.run") {
+          runParams = invoke.params;
+          return { payload: { success: true, stdout: "node-ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      mode: "full",
+      denylist: [{ pattern: "echo *", reason: "operator stop" }],
+      approvalRunningNoticeMs: 0,
+      elevated: { enabled: true, allowed: true, defaultLevel: "full" },
+    });
+
+    const result = await tool.execute("call-node-elevated-full-denylist", {
+      command: "echo ok",
+      elevated: true,
+    });
+    expect(result.details.status).toBe("approval-pending");
+    expect(calls).toContain("exec.approval.request");
+    expect(runParams).toBeUndefined();
   });
 
   it("uses exec-approvals defaults to suppress gateway prompts", async () => {

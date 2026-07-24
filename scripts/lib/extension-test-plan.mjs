@@ -31,10 +31,7 @@ import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 import { parsePositiveInt } from "./numeric-options.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
-const TRACKED_EXTENSION_TEST_PATHSPECS = [
-  `:(glob)${BUNDLED_PLUGIN_ROOT_DIR}/**/*.test.ts`,
-  `:(glob)${BUNDLED_PLUGIN_ROOT_DIR}/**/*.test.tsx`,
-];
+const TRACKED_EXTENSION_TEST_PATHSPECS = [BUNDLED_PLUGIN_ROOT_DIR];
 /** Default number of shards for broad bundled extension test batches. */
 export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 8;
 const EXTENSION_TEST_COST_MULTIPLIERS = {

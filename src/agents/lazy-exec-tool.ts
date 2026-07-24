@@ -1,5 +1,6 @@
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveEffectiveExecDenylist } from "../infra/exec-approvals-denylist.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -73,6 +74,11 @@ export function resolveExecToolConfig(params: { cfg?: OpenClawConfig; agentId?: 
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
+    // Deny-over-allow: config denylists UNION across layers instead of the
+    // agent layer overriding the global layer.
+    denylist: resolveEffectiveExecDenylist({
+      layers: [globalExec?.denylist, agentExec?.denylist],
+    }),
     commandHighlighting: resolveExecCommandHighlighting({
       config: cfg,
       agentId: params.agentId,

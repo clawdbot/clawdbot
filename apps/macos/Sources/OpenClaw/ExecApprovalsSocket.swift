@@ -102,7 +102,7 @@ private struct ExecApprovalSocketRequest: Codable {
     var request: ExecApprovalPromptRequest
 }
 
-private struct ExecApprovalSocketDecision: Codable {
+struct ExecApprovalSocketDecision: Codable {
     var type: String
     var id: String
     var decision: ExecApprovalDecision
@@ -129,33 +129,34 @@ struct ExecHostRequest: Codable {
     var approvalDecision: ExecApprovalDecision?
     var approvalSource: String?
     var policySnapshot: OpenClawSystemRunApprovalPolicySnapshot?
-}
+    var denylistBinding: ExecHostDenylistAuthorizationSnapshot?
 
-private struct ExecHostRunResult: Codable {
-    var exitCode: Int?
-    var timedOut: Bool
-    var success: Bool
-    var stdout: String
-    var stderr: String
-    var error: String?
-}
-
-enum ExecHostOutputLimiter {
-    static let maxJsonlResponseBytes = 16 * 1024 * 1024
-    static let maxOutputFieldBytes = 1024 * 1024
-    private static let truncationMarker = "... (truncated) "
-
-    static func truncate(_ value: String) -> String {
-        let bytes = value.utf8
-        guard bytes.count > self.maxOutputFieldBytes else { return value }
-
-        let tailBudget = self.maxOutputFieldBytes - self.truncationMarker.utf8.count
-        var start = bytes.index(bytes.endIndex, offsetBy: -tailBudget)
-        while start < bytes.endIndex, (bytes[start] & 0xC0) == 0x80 {
-            start = bytes.index(after: start)
-        }
-        let tail = String(bytes: bytes[start...], encoding: .utf8) ?? ""
-        return self.truncationMarker + tail
+    init(
+        command: [String],
+        rawCommand: String?,
+        cwd: String?,
+        env: [String: String]?,
+        timeoutMs: Int?,
+        needsScreenRecording: Bool?,
+        agentId: String?,
+        sessionKey: String?,
+        approvalDecision: ExecApprovalDecision?,
+        approvalSource: String? = nil,
+        policySnapshot: OpenClawSystemRunApprovalPolicySnapshot? = nil,
+        denylistBinding: ExecHostDenylistAuthorizationSnapshot? = nil)
+    {
+        self.command = command
+        self.rawCommand = rawCommand
+        self.cwd = cwd
+        self.env = env
+        self.timeoutMs = timeoutMs
+        self.needsScreenRecording = needsScreenRecording
+        self.agentId = agentId
+        self.sessionKey = sessionKey
+        self.approvalDecision = approvalDecision
+        self.approvalSource = approvalSource
+        self.policySnapshot = policySnapshot
+        self.denylistBinding = denylistBinding
     }
 }
 
@@ -165,7 +166,7 @@ struct ExecHostError: Codable, Error {
     var reason: String?
 }
 
-private struct ExecHostResponse: Codable {
+struct ExecHostResponse: Codable {
     var type: String
     var id: String
     var ok: Bool
@@ -860,6 +861,10 @@ enum ExecApprovalsPromptPresenter {
 
 #if DEBUG
 extension ExecApprovalsPromptPresenter {
+    @MainActor static var activeAlertForTesting: NSAlert? {
+        self.activePrompt?.alert
+    }
+
     @MainActor
     static func reservePromptForTesting() -> UUID? {
         guard self.activePrompt == nil else { return nil }
@@ -904,6 +909,9 @@ private enum ExecHostExecutor {
             request.approvalDecision == .allowOnce ||
             request.approvalDecision == .allowAlways
         var persistAllowlist = request.approvalDecision == .allowAlways
+        if request.denylistBinding?.denylisted == true {
+            persistAllowlist = false
+        }
 
         switch ExecHostRequestEvaluator.evaluate(
             context: context,
@@ -947,7 +955,8 @@ private enum ExecHostExecutor {
                 explicitlyApproved = true
                 followupDecision = .allowOnce
             }
-            persistAllowlist = followupDecision == .allowAlways
+            persistAllowlist = followupDecision == .allowAlways &&
+                request.denylistBinding?.denylisted != true
 
             switch ExecHostRequestEvaluator.evaluate(
                 context: context,
@@ -990,10 +999,12 @@ private enum ExecHostExecutor {
 
         let executionCommit = ExecApprovalExecutionCommit.build(
             context: context,
+            executionCommand: executionCommand,
             effectiveSecurity: security,
             approvalSource: approvalSource,
             explicitlyApproved: explicitlyApproved,
             persistAllowlist: persistAllowlist,
+            denylistBinding: request.denylistBinding,
             delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
         let cwd = request.cwd
@@ -1223,6 +1234,7 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
     private var socketFD: Int32 = -1
     private var socketIdentity: ExecApprovalsSocketPathIdentity?
     private var socketLifecycleLease: ExecApprovalsSocketLifecycleLease?
+    private let replayGuard = ExecHostReplayGuard()
     private var acceptTask: Task<Void, Never>?
     private var isRunning = false
 
@@ -1524,8 +1536,8 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
     private func handleClient(fd: Int32) async {
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         do {
-            guard self.isAllowedPeer(fd: fd) else {
-                try self.sendApprovalResponse(handle: handle, id: UUID().uuidString, decision: .deny)
+            guard isExecApprovalsSocketPeerAllowed(fd: fd) else {
+                try sendExecApprovalSocketResponse(handle: handle, id: UUID().uuidString, decision: .deny)
                 return
             }
             try configureSocketTimeouts(fd, timeoutMs: execApprovalsSocketTimeoutMs)
@@ -1544,51 +1556,23 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
             if type == "request" {
                 let request = try JSONDecoder().decode(ExecApprovalSocketRequest.self, from: data)
                 guard request.token == self.token else {
-                    try self.sendApprovalResponse(handle: handle, id: request.id, decision: .deny)
+                    try sendExecApprovalSocketResponse(handle: handle, id: request.id, decision: .deny)
                     return
                 }
                 guard let decision = await self.onPrompt(request.request) else { return }
-                try self.sendApprovalResponse(handle: handle, id: request.id, decision: decision)
+                try sendExecApprovalSocketResponse(handle: handle, id: request.id, decision: decision)
                 return
             }
 
             if type == "exec" {
                 let request = try JSONDecoder().decode(ExecHostSocketRequest.self, from: data)
                 let response = await self.handleExecRequest(request)
-                try self.sendExecResponse(handle: handle, response: response)
+                try sendExecHostSocketResponse(handle: handle, response: response)
                 return
             }
         } catch {
             self.logger.error("exec approvals socket handling failed: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    private func sendApprovalResponse(
-        handle: FileHandle,
-        id: String,
-        decision: ExecApprovalDecision) throws
-    {
-        let response = ExecApprovalSocketDecision(type: "decision", id: id, decision: decision)
-        let data = try JSONEncoder().encode(response)
-        var payload = data
-        payload.append(0x0A)
-        try handle.write(contentsOf: payload)
-    }
-
-    private func sendExecResponse(handle: FileHandle, response: ExecHostResponse) throws {
-        let data = try JSONEncoder().encode(response)
-        var payload = data
-        payload.append(0x0A)
-        try handle.write(contentsOf: payload)
-    }
-
-    private func isAllowedPeer(fd: Int32) -> Bool {
-        var uid = uid_t(0)
-        var gid = gid_t(0)
-        if getpeereid(fd, &uid, &gid) != 0 {
-            return false
-        }
-        return uid == geteuid()
     }
 
     private func handleExecRequest(_ request: ExecHostSocketRequest) async -> ExecHostResponse {
@@ -1609,6 +1593,14 @@ private final class ExecApprovalsSocketServer: @unchecked Sendable {
                 ok: false,
                 payload: nil,
                 error: ExecHostError(code: "INVALID_REQUEST", message: "invalid auth", reason: "hmac"))
+        }
+        guard self.replayGuard.consume(nonce: request.nonce, nowMs: nowMs) else {
+            return ExecHostResponse(
+                type: "exec-res",
+                id: request.id,
+                ok: false,
+                payload: nil,
+                error: ExecHostError(code: "INVALID_REQUEST", message: "replayed request", reason: "replay"))
         }
         guard let requestData = request.requestJson.data(using: .utf8),
               let payload = try? JSONDecoder().decode(ExecHostRequest.self, from: requestData)

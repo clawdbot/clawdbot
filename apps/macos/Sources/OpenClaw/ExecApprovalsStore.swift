@@ -541,6 +541,11 @@ extension ExecApprovalsStore {
             { record in
                 let ensured = self.ensureFile(record)
                 var file = ensured.file
+                // Deny-over-allow: re-screen the forwarded config-layer
+                // STOP rules before writing usage/grant state.
+                if commit.denylistBinding?.requiresFreshApproval(command: commit.executionCommand) == true {
+                    throw self.executionAuthorizationChangedError()
+                }
                 try self.assertCurrentExecutionAuthorization(
                     file: file,
                     agentId: commit.agentId,

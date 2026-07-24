@@ -5,6 +5,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { ExecDenylistEntry } from "../infra/exec-approvals-denylist.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type {
   ExecAsk,
@@ -35,6 +36,7 @@ export type ExecToolDefaults = {
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;
+  denylist?: ExecDenylistEntry[];
   commandHighlighting?: boolean;
   safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;

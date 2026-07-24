@@ -369,6 +369,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
   "tools.exec.strictInlineEval":
     "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
+  "tools.exec.denylist":
+    "Canonical deny-over-allow exec STOP list of { pattern, reason? } globs. Use entries to force review across ordinary full/off and /exec full policy; authorized /elevated full remains the explicit break-glass bypass.",
   "tools.exec.commandHighlighting":
     "Show parser-derived command highlights in exec approval prompts (default: false). Enable this to render highlighted command text without changing exec approval policy.",
   "tools.exec.safeBinTrustedDirs":

@@ -1,6 +1,6 @@
-// Defines tool availability and allowlist configuration types.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
+import type { ExecDenylistEntry } from "../infra/exec-approvals-denylist.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
@@ -299,10 +299,9 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
-  /**
-   * Require explicit approval for interpreter inline-eval forms (`python -c`, `node -e`, etc.).
-   * Prevents silent allowlist reuse and allow-always persistence for those forms.
-   */
+  /** Operator STOP globs; deny wins over allow. */
+  denylist?: ExecDenylistEntry[];
+  /** Require approval for interpreter inline-eval forms (`python -c`, `node -e`, etc.). */
   strictInlineEval?: boolean;
   /** Render parser-derived command highlights in exec approval prompts (default: false). */
   commandHighlighting?: boolean;

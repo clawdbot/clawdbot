@@ -17,7 +17,7 @@ type SystemRunPolicyDecision = {
     }
   | {
       allowed: false;
-      eventReason: "security=deny" | "approval-required" | "allowlist-miss";
+      eventReason: "security=deny" | "denylist-hit" | "approval-required" | "allowlist-miss";
       errorMessage: string;
     }
 );
@@ -55,6 +55,14 @@ export function evaluateSystemRunPolicy(params: {
   isWindows: boolean;
   cmdInvocation: boolean;
   shellWrapperInvocation: boolean;
+  /**
+   * True when the command matches the effective exec denylist. Deny wins over
+   * allow: it is evaluated right after `security=deny`, ahead of the allowlist
+   * and ask paths, and is cleared only by an explicit approval decision.
+   */
+  denylisted?: boolean;
+  /** Human-readable pattern/reason for the denylist hit, for the deny message. */
+  denylistReason?: string | null;
 }): SystemRunPolicyDecision {
   // POSIX node execution intentionally uses `/bin/sh -lc` as a transport wrapper.
   // Keep allowlist decisions based on the analyzed inner shell payload there.
@@ -85,12 +93,31 @@ export function evaluateSystemRunPolicy(params: {
     };
   }
 
+  // Denylist wins over allow. A hit denies unless an explicit approval decision
+  // clears it (durable allowlist trust does NOT clear a denylist hit).
+  if (params.denylisted === true && !approvedByAsk) {
+    const reason = params.denylistReason ? ` (${params.denylistReason})` : "";
+    return {
+      allowed: false,
+      eventReason: "denylist-hit",
+      errorMessage: `SYSTEM_RUN_DENIED: command matches exec denylist${reason}; explicit approval required`,
+      analysisOk,
+      allowlistSatisfied,
+      shellWrapperBlocked,
+      windowsShellWrapperBlocked,
+      requiresAsk: true,
+      approvalDecision: params.approvalDecision,
+      approvedByAsk,
+    };
+  }
+
   const requiresAsk = requiresExecApproval({
     ask: params.ask,
     security: params.security,
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied: params.durableApprovalSatisfied,
+    denylisted: params.denylisted,
   });
   if (requiresAsk && !approvedByAsk) {
     return {

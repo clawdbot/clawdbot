@@ -307,8 +307,8 @@ struct GeneralSettings: View {
             set: { self.state.isPaused = !$0 })
     }
 
-    /// Reflects the effective bridge state: off (and disabled) whenever Computer Control is off,
-    /// so the row matches the host that actually runs instead of a standalone toggle.
+    /// Reflects the effective bridge state: off whenever Computer Control is off,
+    /// so the row matches the host that actually runs.
     private var peekabooBridgeBinding: Binding<Bool> {
         Binding(
             get: { self.computerControlEnabled && self.state.peekabooBridgeEnabled },

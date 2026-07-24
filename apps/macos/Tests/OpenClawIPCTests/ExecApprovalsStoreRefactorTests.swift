@@ -552,6 +552,104 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `stray approvals file denylist is stripped on unrelated approvals write`() async throws {
+        try await self.withTempStateDir { _ in
+            let raw = Data(#"""
+            {
+              "version": 1,
+              "defaults": {
+                "security": "full",
+                "ask": "off",
+                "denylist": [{ "pattern": "printf *", "reason": "legacy stray" }]
+              },
+              "agents": {
+                "main": {
+                  "denylist": [{ "pattern": "rm *" }],
+                  "allowlist": [{ "pattern": "echo *" }]
+                }
+              }
+            }
+            """#.utf8)
+            try Self.replaceRawJSON(String(decoding: raw, as: UTF8.self))
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.ask = .always
+            }.get()
+            let persisted = try JSONEncoder().encode(ExecApprovalsStore.readSnapshot().file)
+            let text = String(decoding: persisted, as: UTF8.self)
+            #expect(!text.contains("\"denylist\""))
+        }
+    }
+
+    @Test
+    func `execution commit rejects config resolved-path denylist rule added while approval was pending`() async throws {
+        try await self.withTempStateDir { _ in
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .full
+                entry.ask = .off
+            }.get()
+            let policySnapshot = ExecApprovalPolicySnapshot(
+                resolved: ExecApprovalsStore.resolve(agentId: "main"))
+            // Approval-time provenance: no STOP rules were effective anywhere.
+            let binding = ExecHostDenylistAuthorizationSnapshot(
+                command: "printf ok",
+                analysisOk: true,
+                configDenylist: [ExecHostDenylistEntry(pattern: "/usr/bin/printf *", reason: "stop")],
+                approvedRuleKeys: [],
+                denylisted: false)
+
+            let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
+                agentId: "main",
+                command: "printf ok",
+                executionCommand: ["/usr/bin/printf", "ok"],
+                denylistBinding: binding,
+                authorization: .explicitOnce(
+                    evaluatedSecurity: .full,
+                    policySnapshot: policySnapshot),
+                uses: []))
+
+            guard case .failure(.unavailable) = result else {
+                Issue.record("expected resolved-path denylist rule added mid-approval to fail the commit")
+                return
+            }
+        }
+    }
+
+    @Test
+    func `execution commit accepts config denylist rule screened at approval time`() async throws {
+        try await self.withTempStateDir { _ in
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
+                entry.security = .full
+                entry.ask = .off
+            }.get()
+            let policySnapshot = ExecApprovalPolicySnapshot(
+                resolved: ExecApprovalsStore.resolve(agentId: "main"))
+            // The rule was already effective (and screened) when the approval
+            // was requested, so it must not revoke the granted approval.
+            let binding = ExecHostDenylistAuthorizationSnapshot(
+                command: "printf ok",
+                analysisOk: true,
+                configDenylist: [ExecHostDenylistEntry(pattern: "printf *", reason: "stop")],
+                approvedRuleKeys: ["printf *\u{0}stop"],
+                denylisted: true)
+
+            let result = ExecApprovalsStore.commitExecution(ExecApprovalExecutionCommit(
+                agentId: "main",
+                command: "printf ok",
+                executionCommand: ["/usr/bin/printf", "ok"],
+                denylistBinding: binding,
+                authorization: .explicitOnce(
+                    evaluatedSecurity: .full,
+                    policySnapshot: policySnapshot),
+                uses: []))
+
+            guard case .success = result else {
+                Issue.record("expected already-screened denylist rule to allow the approved commit")
+                return
+            }
+        }
+    }
+
+    @Test
     func `execution commit rejects unprompted full policy after concurrent deny`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in

@@ -47,6 +47,28 @@ describe("exec approvals protocol validators", () => {
     ).toBe(true);
   });
 
+  it("rejects denylist policy entries in approvals-file protocol payloads", () => {
+    const file = {
+      version: 1 as const,
+      defaults: {
+        denylist: [{ pattern: "rm -rf *", reason: "destructive" }],
+      },
+      agents: {
+        "*": { denylist: [{ pattern: "git push*" }] },
+        main: { denylist: [{ pattern: "shutdown*" }] },
+      },
+    };
+
+    expect(validateExecApprovalsSetParams({ file, baseHash: "abc123" })).toBe(false);
+    expect(
+      validateExecApprovalsNodeSetParams({
+        nodeId: "node-1",
+        file,
+        baseHash: "abc123",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts the shipped Windows node approval contract", () => {
     expect(
       validateExecApprovalsNodeSnapshot({

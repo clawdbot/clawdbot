@@ -20,6 +20,7 @@ import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/s
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
+import { resolveCurrentExecConfigDenylist } from "./bash-tools.exec-denylist.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
@@ -121,6 +122,8 @@ export function createExecTool(
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const resolveLiveExecConfigDenylist = () =>
+    resolveCurrentExecConfigDenylist({ fallback: defaults?.denylist, agentId });
   const resolveHostForParams = createExecHostResolver(defaults);
   const buildUnavailableWorkdirResult = (params: {
     cwd: string;
@@ -429,6 +432,8 @@ export function createExecTool(
             notifySessionKey,
             notifyOnExit,
             trustedSafeBinDirs,
+            execConfigDenylist: defaults?.denylist,
+            resolveCurrentExecConfigDenylist: resolveLiveExecConfigDenylist,
           });
         }
 
@@ -479,6 +484,8 @@ export function createExecTool(
             maxOutput,
             pendingMaxOutput,
             trustedSafeBinDirs,
+            execConfigDenylist: defaults?.denylist,
+            resolveCurrentExecConfigDenylist: resolveLiveExecConfigDenylist,
           });
           if (gatewayResult.pendingResult) {
             return gatewayResult.pendingResult;

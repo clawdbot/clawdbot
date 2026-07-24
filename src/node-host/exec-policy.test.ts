@@ -139,4 +139,66 @@ describe("evaluateSystemRunPolicy", () => {
     expect(allowed.analysisOk).toBe(true);
     expect(allowed.allowlistSatisfied).toBe(true);
   });
+
+  it("denylist hit denies even when the allowlist is satisfied at full/off", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: true,
+          denylisted: true,
+          denylistReason: "git push*--force* (history rewrite)",
+        }),
+      ),
+    );
+    expect(denied.eventReason).toBe("denylist-hit");
+    expect(denied.errorMessage).toContain("exec denylist");
+    expect(denied.errorMessage).toContain("history rewrite");
+  });
+
+  it("denylist hit is evaluated before allowlist/ask ordering", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({ analysisOk: false, allowlistSatisfied: false, denylisted: true }),
+      ),
+    );
+    // denylist-hit, not allowlist-miss/approval-required
+    expect(denied.eventReason).toBe("denylist-hit");
+  });
+
+  it("security=deny still wins over a denylist hit", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(buildPolicyParams({ security: "deny", denylisted: true })),
+    );
+    expect(denied.eventReason).toBe("security=deny");
+  });
+
+  it("an explicit approval decision clears a denylist hit", () => {
+    const allowed = expectAllowedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "off",
+          denylisted: true,
+          approvalDecision: "allow-once",
+        }),
+      ),
+    );
+    expect(allowed.approvedByAsk).toBe(true);
+  });
+
+  it("durable allowlist trust does NOT clear a denylist hit", () => {
+    const denied = expectDeniedDecision(
+      evaluateSystemRunPolicy(
+        buildPolicyParams({
+          security: "full",
+          ask: "off",
+          denylisted: true,
+          durableApprovalSatisfied: true,
+        }),
+      ),
+    );
+    expect(denied.eventReason).toBe("denylist-hit");
+  });
 });

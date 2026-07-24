@@ -86,6 +86,22 @@ function compileGlobRegex(pattern: string): RegExp {
   return compiled;
 }
 
+/**
+ * Matches a target string against an exec glob pattern using the SAME glob
+ * compiler as the allowlist (`*` -> `[^/]*`, `**` -> `.*`, `?` -> `[^/]`,
+ * case-insensitive on win32). Unlike {@link matchesExecAllowlistPattern} this
+ * performs no path/realpath normalization, so it is safe to run against plain
+ * command/argv text (e.g. exec denylist screening) while keeping one shared
+ * pattern language across allow and deny surfaces.
+ */
+export function matchesExecGlob(pattern: string, target: string): boolean {
+  const trimmed = pattern.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return compileGlobRegex(trimmed).test(target);
+}
+
 export function matchesExecAllowlistPattern(pattern: string, target: string): boolean {
   const trimmed = pattern.trim();
   if (!trimmed) {

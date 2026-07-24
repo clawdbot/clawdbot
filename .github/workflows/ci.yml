@@ -3007,7 +3007,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     # Hosted runs may still be finalizing large Swift caches after every test
     # passes; keep that post-job work non-blocking.
-    timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
+    timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
       SWIFT_TEST_EXECUTION: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}
@@ -3216,6 +3216,77 @@ jobs:
             sleep $((attempt * 20))
           done
           exit 1
+
+  macos-exec-approvals-proof:
+    permissions:
+      contents: read
+    name: "macos-exec-approvals-proof"
+    needs: [preflight]
+    if: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.run_macos_swift == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Checkout literal PR head
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify literal PR head checkout
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          if [[ "$tested_sha" != "$EXPECTED_HEAD_SHA" ]]; then
+            echo "::error::Literal PR head mismatch: expected $EXPECTED_HEAD_SHA, got $tested_sha"
+            exit 1
+          fi
+          [[ -z "$(git status --porcelain)" ]]
+
+      - name: Exec approvals literal-head macOS proof
+        env:
+          OPENCLAW_MACOS_INTEGRATION_PROOF: "1"
+          PROOF_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          [[ "$tested_sha" == "$PROOF_HEAD_SHA" ]]
+          proof_log="$RUNNER_TEMP/macos-exec-approvals-proof.log"
+          printf 'MACOS_EXEC_APPROVALS_PROOF candidate-head=%s tested-sha=%s macos=%s arch=%s\n' \
+            "$PROOF_HEAD_SHA" "$tested_sha" \
+            "$(sw_vers -productVersion)" "$(uname -m)" | tee "$proof_log"
+          set +e
+          swift test --package-path apps/macos \
+            --filter ExecApprovalsIntegratedProofTests 2>&1 | tee -a "$proof_log"
+          proof_status="${PIPESTATUS[0]}"
+          set -e
+          if [[ "$proof_status" -ne 0 ]]; then
+            echo "::group::macOS proof diagnostics"
+            log show --last 10m --style compact \
+              --predicate 'process CONTAINS[c] "OpenClawPackageTests"' | tail -200 || true
+            for report in "$HOME"/Library/Logs/DiagnosticReports/*OpenClawPackageTests*; do
+              [[ -f "$report" ]] || continue
+              echo "--- $(basename "$report") ---"
+              tail -200 "$report" || true
+            done
+            echo "::endgroup::"
+            exit "$proof_status"
+          fi
+          for receipt in \
+            'native-prompt=observed' \
+            'allow-once=accepted marker-count=1' \
+            'durable-grant=absent' \
+            'replay=rejected marker-count=1' \
+            'hot-stop-revocation=rejected' \
+            'final-marker-count=1 result=pass'; do
+            grep -Fq "MACOS_EXEC_APPROVALS_PROOF $receipt" "$proof_log"
+          done
+          grep -F 'MACOS_EXEC_APPROVALS_PROOF' "$proof_log"
 
   ios-build:
     permissions:
@@ -3616,6 +3687,7 @@ jobs:
       - checks-windows
       - macos-node
       - macos-swift
+      - macos-exec-approvals-proof
       - ios-build
       - android
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
@@ -3648,6 +3720,7 @@ jobs:
             checks-windows=${{ needs.checks-windows.result }}
             macos-node=${{ needs.macos-node.result }}
             macos-swift=${{ needs.macos-swift.result }}
+            macos-exec-approvals-proof=${{ needs.macos-exec-approvals-proof.result }}
             ios-build=${{ needs.ios-build.result }}
             android=${{ needs.android.result }}
         run: |
@@ -3706,6 +3779,7 @@ jobs:
       - checks-windows
       - macos-node
       - macos-swift
+      - macos-exec-approvals-proof
       - ios-build
       - android
     # TODO(2026-10-01): Re-enable or delete the CI timing-summary job after the next timing-optimization review.

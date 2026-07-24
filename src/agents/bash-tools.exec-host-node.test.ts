@@ -3697,6 +3697,44 @@ describe("executeNodeHostCommand", () => {
     expect(Object.hasOwn(runParams, "systemRunPlan")).toBe(false);
   });
 
+  it("requests approval for config denylist hits at full/off", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({
+        execConfigDenylist: [{ pattern: "bun **", reason: "stop" }],
+      }),
+    );
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(requireGatewayCommand("system.run.prepare")).toBeDefined();
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
+    expect(requiresExecApprovalMock).toHaveBeenCalledWith(
+      expect.objectContaining({ denylisted: true }),
+    );
+  });
+
+  it("keeps config STOP rules ahead of authorized elevated full", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({
+        bypassApprovals: true,
+        execConfigDenylist: [{ pattern: "bun **", reason: "stop" }],
+      }),
+    );
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
+    expect(
+      callGatewayToolMock.mock.calls.some(
+        ([method, , callParams]) =>
+          method === "node.invoke" &&
+          (callParams as MockNodeInvokeParams | undefined)?.command === "system.run",
+      ),
+    ).toBe(false);
+  });
+
   it("does not dispatch a direct full/off command after gateway policy revocation", async () => {
     resolveExecHostApprovalContextMock
       .mockReturnValueOnce({

@@ -3744,6 +3744,65 @@ describe("ci workflow guards", () => {
     expect(testStep.run).toContain("for attempt in 1 2 3");
   });
 
+  it("binds the exec approvals macOS proof to the literal PR head", () => {
+    const workflow = readCiWorkflow();
+    const proofJob = workflow.jobs["macos-exec-approvals-proof"];
+    const checkoutStep = proofJob.steps.find(
+      (step: WorkflowStep) => step.name === "Checkout literal PR head",
+    );
+    const verifyStep = proofJob.steps.find(
+      (step: WorkflowStep) => step.name === "Verify literal PR head checkout",
+    );
+    const proofStep = proofJob.steps.find(
+      (step: WorkflowStep) => step.name === "Exec approvals literal-head macOS proof",
+    );
+
+    expect(proofJob.permissions).toEqual({ contents: "read" });
+    expect(proofJob.needs).toEqual(["preflight"]);
+    expect(proofJob.if).toBe(
+      "${{ github.event_name == 'pull_request' && needs.preflight.outputs.run_macos_swift == 'true' }}",
+    );
+    expect(proofJob["runs-on"]).toBe("macos-26");
+    expect(proofJob["timeout-minutes"]).toBe(30);
+    expect(checkoutStep.uses).toBe(CHECKOUT_V6);
+    expect(checkoutStep.with).toMatchObject({
+      repository: "${{ github.event.pull_request.head.repo.full_name }}",
+      ref: "${{ github.event.pull_request.head.sha }}",
+      "fetch-depth": 1,
+      "fetch-tags": false,
+      "persist-credentials": false,
+      submodules: false,
+    });
+    expect(checkoutStep.with).not.toHaveProperty("token");
+    expect(checkoutStep.with).not.toHaveProperty("ssh-key");
+    expect(verifyStep.env.EXPECTED_HEAD_SHA).toBe("${{ github.event.pull_request.head.sha }}");
+    expect(verifyStep.run).toContain("set -euo pipefail");
+    expect(verifyStep.run).toContain('tested_sha="$(git rev-parse HEAD)"');
+    expect(verifyStep.run).toContain('[[ -z "$(git status --porcelain)" ]]');
+    expect(proofStep.env).toMatchObject({
+      OPENCLAW_MACOS_INTEGRATION_PROOF: "1",
+      PROOF_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+    });
+    expect(proofStep.run).toContain("set -euo pipefail");
+    expect(proofStep.run).toContain('[[ "$tested_sha" == "$PROOF_HEAD_SHA" ]]');
+    expect(proofStep.run).toContain('tee "$proof_log"');
+    expect(proofStep.run).toContain("--filter ExecApprovalsIntegratedProofTests");
+    expect(proofStep.run).toContain('proof_status="${PIPESTATUS[0]}"');
+    expect(proofStep.run).toContain('if [[ "$proof_status" -ne 0 ]]');
+    for (const receipt of [
+      "native-prompt=observed",
+      "allow-once=accepted marker-count=1",
+      "durable-grant=absent",
+      "replay=rejected marker-count=1",
+      "hot-stop-revocation=rejected",
+      "final-marker-count=1 result=pass",
+    ]) {
+      expect(proofStep.run).toContain(`'${receipt}'`);
+    }
+    expect(proofStep.run).toContain('grep -Fq "MACOS_EXEC_APPROVALS_PROOF $receipt" "$proof_log"');
+    expect(workflow.jobs["macos-swift"]["timeout-minutes"]).toBe(30);
+  });
+
   it("bounds the Windows Crabbox hydrate main fetch", () => {
     const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
 
@@ -4883,6 +4942,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "checks-windows",
       "macos-node",
       "macos-swift",
+      "macos-exec-approvals-proof",
       "ios-build",
       "android",
     ];

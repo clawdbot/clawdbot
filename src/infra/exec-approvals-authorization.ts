@@ -9,6 +9,10 @@ import {
 } from "./exec-approvals-allow-always.js";
 import type { AllowAlwaysPersistenceDecision } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile, ExecAsk, ExecSecurity } from "./exec-approvals-core.js";
+import {
+  assertCurrentDenylistAuthorization,
+  type ExecDenylistAuthorizationBinding,
+} from "./exec-approvals-denylist-authorization.js";
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
 import {
@@ -28,6 +32,8 @@ export type ExecApprovalUsageAuthorization = {
   requireAutoAllowSkills?: boolean;
   requireExactCommandApproval?: boolean;
   requireDurableAllowlistApproval?: boolean;
+  /** Denylist provenance for locked pre-dispatch revalidation. */
+  denylistBinding?: ExecDenylistAuthorizationBinding;
 };
 
 function assertCurrentUsageAuthorization(params: {
@@ -37,6 +43,9 @@ function assertCurrentUsageAuthorization(params: {
   matchKeys: ReadonlySet<string>;
   authorization: ExecApprovalUsageAuthorization;
 }): void {
+  assertCurrentDenylistAuthorization({
+    binding: params.authorization.denylistBinding,
+  });
   const current = resolveExecApprovalsFromFileInternal({
     file: params.file,
     agentId: params.agentId,

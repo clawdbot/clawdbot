@@ -1,7 +1,16 @@
 // Sends HMAC-protected exec host requests over the local socket.
 import crypto from "node:crypto";
+import type { ExecDenylistEntry } from "./exec-approvals-denylist.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approvals.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
+
+export type ExecHostDenylistAuthorizationSnapshot = {
+  command: string;
+  analysisOk: boolean;
+  configDenylist: ExecDenylistEntry[];
+  approvedRuleKeys: string[];
+  denylisted?: boolean;
+};
 
 // Exec host requests cross the local JSONL socket boundary into a privileged
 // runner, so payloads stay explicit and HMAC-protected.
@@ -17,6 +26,7 @@ export type ExecHostRequest = {
   approvalDecision?: "allow-once" | "allow-always" | null;
   approvalSource?: "ask-fallback" | "auto-review" | null;
   policySnapshot?: ExecApprovalPolicySnapshot | null;
+  denylistBinding?: ExecHostDenylistAuthorizationSnapshot | null;
 };
 
 export type ExecHostRunResult = {

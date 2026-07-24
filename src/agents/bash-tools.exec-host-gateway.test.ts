@@ -14,6 +14,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
+import { buildExecDenylistRuleKey } from "../infra/exec-approvals-denylist.js";
 import type {
   ExecAllowlistEntry,
   ExecApprovalDecision,
@@ -606,7 +607,120 @@ describe("processGatewayAllowlist", () => {
       hostAsk: "on-miss",
       askFallback: "deny",
     });
+    const result = await runGatewayAllowlist({
+      command: "echo ok",
+      ask: "on-miss",
+    });
 
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("forces approval at security=full when the config exec denylist matches", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "rm -rf /tmp/scratch",
+      security: "full",
+      ask: "off",
+      execConfigDenylist: [{ pattern: "rm **", reason: "destructive" }],
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("makes denylist-triggered gateway approvals one-shot", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "rm -rf /tmp/scratch",
+      security: "full",
+      ask: "off",
+      execConfigDenylist: [{ pattern: "rm **", reason: "destructive" }],
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+      ask: "off",
+      allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+    });
+    expect(resolveExecApprovalUnavailableDecisionsMock).toHaveBeenCalledWith({
+      ask: "off",
+      allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+    });
+    expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    );
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("does not gate security=full commands that miss the config exec denylist", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "echo ok",
+      security: "full",
+      ask: "off",
+      execConfigDenylist: [{ pattern: "rm *" }],
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result.pendingResult ?? null).toBeNull();
+  });
+
+  it("carries denylist provenance into the locked authorization commit", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "echo ok",
+      security: "full",
+      ask: "off",
+      execConfigDenylist: [{ pattern: "rm *", reason: "destructive" }],
+    });
+
+    expect(result.pendingResult ?? null).toBeNull();
+    // The locked commit must receive the pre-wait denylist provenance so a
+    // rule added while an approval waits is re-screened before dispatch.
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          denylistBinding: expect.objectContaining({
+            command: "echo ok",
+            analysisOk: true,
+            configDenylist: [{ pattern: "rm *", reason: "destructive" }],
+            approvedRuleKeys: [
+              buildExecDenylistRuleKey({ pattern: "rm *", reason: "destructive" }),
+            ],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("still requires approval when allowlist execution plan is unavailable despite durable trust", async () => {
     const result = await runGatewayAllowlist({
       command: "echo ok",
       ask: "on-miss",
@@ -1142,6 +1256,64 @@ describe("processGatewayAllowlist", () => {
           source: "current-policy",
           security: "allowlist",
           ask: "off",
+        }),
+      }),
+    );
+  });
+
+  it("screens the enforced dispatch command text in the denylist binding", async () => {
+    const command = "head -c 16";
+    const authorizationPlan = await planShellAuthorization({
+      command,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(authorizationPlan.ok).toBe(true);
+    if (!authorizationPlan.ok) {
+      throw new Error(authorizationPlan.reason);
+    }
+    const enforced = buildAuthorizedShellCommandFromPlan({
+      plan: authorizationPlan,
+      mode: "enforced",
+      segmentSatisfiedBy: ["safeBins"],
+    });
+    expect(enforced.ok).toBe(true);
+    if (!enforced.ok || !enforced.command) {
+      throw new Error("enforced command unavailable");
+    }
+    // The enforced dispatch text pins a resolved executable path the raw
+    // command text does not carry.
+    expect(enforced.command).not.toBe(command);
+    requiresExecApprovalMock.mockReturnValue(false);
+    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: true,
+      allowlistSatisfied: true,
+      segments: [{ raw: command, resolution: null, argv: ["head", "-c", "16"] }],
+      segmentAllowlistEntries: [],
+      segmentSatisfiedBy: ["safeBins"],
+      authorizationPlan,
+    });
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({ command, ask: "off" });
+
+    expect(result).toEqual({ execCommandOverride: enforced.command });
+    // A STOP rule written against the resolved path must be able to see the
+    // enforced dispatch text at the locked commit, not just the raw request
+    // command, so the binding must carry it as a raw screened segment.
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          denylistBinding: expect.objectContaining({
+            command,
+            analysisOk: true,
+            segments: expect.arrayContaining([{ argv: [], raw: enforced.command }]),
+          }),
         }),
       }),
     );
@@ -2652,6 +2824,38 @@ EOF`,
     expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 
+  it("threads the live config denylist resolver into explicit approval commits", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    const resolveCurrentExecConfigDenylist = () => [{ pattern: "pwd", reason: "hot config" }];
+    commitExecAuthorizationMock.mockRejectedValueOnce(
+      new Error("Exec approval changed before execution"),
+    );
+
+    await expect(
+      runGatewayAllowlist({
+        command: "pwd",
+        turnSourceChannel: "webchat",
+        resolveCurrentExecConfigDenylist,
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          denylistBinding: expect.objectContaining({
+            resolveCurrentConfigDenylist: resolveCurrentExecConfigDenylist,
+          }),
+        }),
+      }),
+    );
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+  });
+
   it("binds explicit allow-always persistence to its evaluated policy snapshot", async () => {
     const command = "sh -c 'git status'";
     const env = { PATH: "/usr/bin:/bin" };
@@ -2711,6 +2915,10 @@ EOF`,
             autoAllowSkills: false,
             allowlistRules: [],
           },
+          denylistBinding: expect.objectContaining({
+            configDenylist: [],
+            approvedRuleKeys: [],
+          }),
           requireAutoAllowSkills: false,
           requireExactCommandApproval: false,
           requireDurableAllowlistApproval: false,

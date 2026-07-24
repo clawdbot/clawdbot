@@ -575,3 +575,51 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 });
+
+describe("tools.exec.denylist config schema", () => {
+  it("accepts global exec denylist entries", () => {
+    const res = validateConfigObject({
+      tools: {
+        exec: {
+          denylist: [{ pattern: "rm -rf *" }, { pattern: "git push*", reason: "review first" }],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts per-agent exec denylist entries", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: {
+          scoped: {
+            tools: {
+              exec: {
+                denylist: [{ pattern: "curl *" }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects denylist entries with a blank pattern", () => {
+    const res = validateConfigObject({
+      tools: { exec: { denylist: [{ pattern: "   " }] } },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects denylist entries with unknown fields", () => {
+    const res = validateConfigObject({
+      tools: { exec: { denylist: [{ pattern: "rm *", allow: true }] } },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+});
