@@ -550,7 +550,9 @@ describe("canonical configured Gateway readiness", () => {
       plugins: { errors: [] },
       profile: { id: "node-mode", source: "environment", activation },
     });
-    const result = await evaluateCanonicalGatewayReadiness({
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: {},
+      canonicalEvaluationEnabled: true,
       evaluateGateway: () => failingSnapshot([]),
       evaluateRuntime: async () => runtime,
     });

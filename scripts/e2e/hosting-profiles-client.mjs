@@ -40,8 +40,12 @@ if (scenario === "unprofiled") {
   assert.equal(body.profile, undefined);
   assert.equal(body.profileSource, undefined);
   assert.equal(body.activation, undefined);
-  assert.equal(condition("ConfigLoaded").requirement, "required");
-  assert.equal(condition("GatewayResponding").requirement, "required");
+  assert.equal(findCondition("ConfigLoaded"), undefined);
+  assert.equal(findCondition("GatewayResponding"), undefined);
+  for (const type of ["GatewayStartupComplete", "GatewayAcceptingWork", "ChannelRuntimeReady"]) {
+    assert.equal(condition(type).status, "True");
+    assert.equal(condition(type).requirement, "required");
+  }
   assert.deepEqual(body.failures, []);
 } else if (scenario === "local") {
   assert.equal(response.status, 200);
