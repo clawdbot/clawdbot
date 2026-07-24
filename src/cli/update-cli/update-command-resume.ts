@@ -1,4 +1,3 @@
-import { doctorCommand } from "../../commands/doctor.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
@@ -17,7 +16,7 @@ import {
 } from "./update-command-config.js";
 import {
   completePostCorePluginUpdate,
-  withUpdateFinalizationEnv,
+  runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
@@ -76,13 +75,12 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
     currentSnapshot: configSnapshot,
     updateStartedAtMs,
   });
-  await withUpdateFinalizationEnv(async () => {
-    await createUpdateConfigSnapshot();
-    await doctorCommand(defaultRuntime, {
-      nonInteractive: true,
-      repair: true,
-      yes: params.opts.yes === true,
-    });
+  await createUpdateConfigSnapshot();
+  await runUpdateFinalizationDoctorInFreshProcess({
+    root: params.root,
+    yes: params.opts.yes === true,
+    json: params.opts.json === true,
+    timeoutMs: params.timeoutMs,
   });
   // The fresh process owns the updated migration contracts. Repair before
   // plugin convergence writes config, or newly retired plugin keys can block

@@ -1655,6 +1655,25 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("dns");
     expect(classifyProviderRuntimeFailureKind("socket hang up")).toBe("timeout");
     expect(
+      classifyProviderRuntimeFailureKind({
+        code: "CERT_HAS_EXPIRED",
+        message: "certificate has expired",
+      }),
+    ).toBe("tls_certificate");
+    expect(
+      classifyProviderRuntimeFailureKind({
+        code: "CERT_REVOKED",
+        message: "TLS validation failed",
+      }),
+    ).toBe("tls_certificate");
+    expect(
+      classifyProviderRuntimeFailureKind({
+        status: 400,
+        code: "CERT_HAS_EXPIRED",
+        message: "certificate field rejected",
+      }),
+    ).toBe("unclassified");
+    expect(
       classifyProviderRuntimeFailureKind("INVALID_REQUEST_ERROR: string should match pattern"),
     ).toBe("schema");
     expect(classifyProviderRuntimeFailureKind("exec denied (allowlist-miss):")).toBe(

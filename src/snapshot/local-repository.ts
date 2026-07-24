@@ -275,6 +275,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       const result = await createVerifiedSqliteSnapshot({
         sourcePath,
         targetPath: artifactPath,
+        requireNonEmptySource: identity.role !== "generic",
         transform:
           identity.role === "global"
             ? sanitizeOpenClawGlobalStateSnapshot

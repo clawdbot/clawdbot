@@ -18,6 +18,7 @@ import {
   updateExecApprovalsSync,
 } from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { isGeneratedHashedArgPattern } from "./exec-command-resolution.js";
 
 export type ExecApprovalUsageAuthorization = {
   source: "current-policy" | "ask-fallback" | "explicit-approval" | "auto-review";
@@ -222,7 +223,7 @@ function applyRecordedAllowlistMetadata(params: {
       return Object.assign({}, entry, {
         id: entry.id ?? crypto.randomUUID(),
         lastUsedAt: Date.now(),
-        lastUsedCommand: params.command,
+        lastUsedCommand: isGeneratedHashedArgPattern(entry.argPattern) ? undefined : params.command,
         lastResolvedPath: params.resolvedPath,
       });
     });

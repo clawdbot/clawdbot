@@ -96,6 +96,7 @@ type CreateVerifiedSqliteSnapshotOptions = {
   /** Final caller checks around publication; failures remove only this helper's target. */
   afterPublish?: (guard: PublishedSqliteFileGuard) => void;
   beforePublish?: () => void | Promise<void>;
+  requireNonEmptySource?: boolean;
   transform?: (database: DatabaseSync) => void | Promise<void>;
   validate?: SqliteSnapshotValidator;
 };
@@ -194,10 +195,16 @@ export async function createPrivateSqliteTempDirectory(
   return directoryPath;
 }
 
-async function assertRegularSourceFile(sourcePath: string): Promise<void> {
+async function assertRegularSourceFile(
+  sourcePath: string,
+  requireNonEmptySource: boolean,
+): Promise<void> {
   const stat = await fs.lstat(sourcePath);
   if (!stat.isFile()) {
     throw new Error(`SQLite snapshot source must be a regular file: ${sourcePath}`);
+  }
+  if (requireNonEmptySource && stat.size === 0) {
+    throw new Error(`SQLite snapshot source must not be empty: ${sourcePath}`);
   }
 }
 
@@ -787,7 +794,7 @@ async function removePublicationStagingDirectory(
 export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
-  await assertRegularSourceFile(options.sourcePath);
+  await assertRegularSourceFile(options.sourcePath, options.requireNonEmptySource === true);
   await assertTargetAbsent(options.targetPath);
 
   const stagingDir = await createPrivateSqliteTempDirectory(

@@ -1005,8 +1005,9 @@ describe("update-cli", () => {
     ...overrides,
   });
 
-  const runPostCoreUpdate = (env: NodeJS.ProcessEnv = {}) =>
-    withEnvAsync(
+  const runPostCoreUpdate = (env: NodeJS.ProcessEnv = {}) => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    return withEnvAsync(
       {
         OPENCLAW_UPDATE_POST_CORE: "1",
         OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
@@ -1016,12 +1017,14 @@ describe("update-cli", () => {
         await updateCommand({ yes: true, restart: false });
       },
     );
+  };
 
   const runPostCoreCommand = (
     options: Parameters<typeof updateCommand>[0],
     env: NodeJS.ProcessEnv = {},
-  ) =>
-    withEnvAsync(
+  ) => {
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
+    return withEnvAsync(
       {
         OPENCLAW_UPDATE_POST_CORE: "1",
         OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
@@ -1031,6 +1034,7 @@ describe("update-cli", () => {
         await updateCommand(options);
       },
     );
+  };
 
   const setupInstalledPackageAtNodeModules = async (nodeModules: string, version = "2026.4.21") => {
     const pkgRoot = path.join(nodeModules, "openclaw");
@@ -1472,6 +1476,34 @@ describe("update-cli", () => {
       suppressFutureVersionWarning: true,
     });
     expectNoSideEffects(updateNpmInstalledPlugins, runDaemonInstall, runDaemonRestart);
+  });
+
+  it("routes JSON post-core child output to stderr", async () => {
+    const { entrypoints } = setupUpdatedRootRefresh();
+    const stdoutPipe = vi.fn();
+    const stderrPipe = vi.fn();
+    spawn.mockImplementationOnce(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        once: EventEmitter["once"];
+        stdout: { pipe: typeof stdoutPipe };
+        stderr: { pipe: typeof stderrPipe };
+      };
+      child.stdout = { pipe: stdoutPipe };
+      child.stderr = { pipe: stderrPipe };
+      queueMicrotask(() => {
+        child.emit("exit", 0, null);
+      });
+      return child;
+    });
+
+    await updateCommand({ json: true, restart: false });
+
+    const call = spawnCall();
+    expect(call?.[1]).toEqual([entrypoints[0], "update", "--json", "--no-restart"]);
+    expect(call?.[2]?.stdio).toBe("pipe");
+    expect(stdoutPipe).toHaveBeenCalledWith(process.stderr);
+    expect(stdoutPipe).not.toHaveBeenCalledWith(process.stdout);
+    expect(stderrPipe).toHaveBeenCalledWith(process.stderr);
   });
 
   it("finishes package updates when the post-core process writes a result but keeps handles open", async () => {
@@ -1984,17 +2016,35 @@ describe("update-cli", () => {
         ),
     ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
-    expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
-      nonInteractive: true,
-      repair: true,
-      yes: false,
-    });
-    expect(vi.mocked(doctorCommand).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
+    expectFreshPostUpdateDoctor({ yes: false });
+    const freshDoctorCall = vi
+      .mocked(runExec)
+      .mock.calls.find(
+        ([, args]) => args[0] === FRESH_POST_UPDATE_ENTRYPOINT && args[1] === "doctor",
+      );
+    expect(freshDoctorCall).toBeDefined();
+    expect(vi.mocked(runExec).mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       syncPluginsForUpdateChannel.mock.invocationCallOrder[0] ?? 0,
     );
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("keeps fresh doctor output off stdout during json post-core resume", async () => {
+    vi.mocked(runExec).mockResolvedValueOnce({
+      stdout: "doctor ui output",
+      stderr: "doctor diagnostic output",
+    });
+
+    await runPostCoreCommand({ json: true, restart: false });
+
+    expectFreshPostUpdateDoctor({ yes: false });
+    expect(getLogOutput()).not.toContain("doctor ui output");
+    expect(getErrorOutput()).not.toContain("doctor diagnostic output");
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "ok" }),
+    );
   });
 
   it("post-core resume children exit after writing a plugin update result", async () => {
