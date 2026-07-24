@@ -43,7 +43,6 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
   isCronSessionKey,
-  parseAgentSessionKey,
   parseThreadSessionSuffix,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
@@ -53,6 +52,7 @@ import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
+import { selectCronRouteCurrentSessionKey } from "./delivery-route-session-key.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
 import { resolveCronLifecycleRevisionIdentity } from "./run-session-state.js";
@@ -732,29 +732,6 @@ async function resolveCronDeliveryRouteSessionKey(params: {
     );
     return params.agentSessionKey;
   }
-}
-
-/**
- * Picks the session-key identity used to RESOLVE a cron delivery's outbound route.
- *
- * An isolated cron run executes under an ephemeral `agentSessionKey` that does not
- * carry the source conversation's namespace. When the job is bound to a real
- * conversation thread session (e.g. the gitlab-pipeline-watch recheck bound to
- * `agent:…:mattermost:group:<id>:thread:<root>`), routing the delivery from the
- * isolated key re-derives the namespace from the lossy `channel:<id>` target and
- * forks a phantom `channel:<id>` session, splitting the thread (#95646). Prefer the
- * job's bound Mattermost conversation identity so the existing currentSessionKey-
- * based namespace resolution keeps `group:<id>`. Keep this provider-specific: other
- * adapters have their own current-session semantics and are outside #95646. Falls
- * back to the isolated key for all other bindings.
- */
-export function selectCronRouteCurrentSessionKey(job: CronJob, agentSessionKey: string): string {
-  const bound = (job.sessionKey ?? "").trim();
-  const parsed = parseAgentSessionKey(bound);
-  if (parsed && /^mattermost:(direct|group|channel):[^:]+(?::thread:[^:]+)?$/i.test(parsed.rest)) {
-    return bound;
-  }
-  return agentSessionKey;
 }
 
 /** Resolves the transcript mirror session for direct cron delivery. */

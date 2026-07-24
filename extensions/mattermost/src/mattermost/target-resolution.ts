@@ -212,7 +212,3 @@ export async function resolveMattermostOpaqueTarget(params: {
     return { kind: "channel", id: input, to: `channel:${input}` };
   }
 }
-
-export function resetMattermostOpaqueTargetCacheForTests(): void {
-  mattermostOpaqueTargetCache.clear();
-}

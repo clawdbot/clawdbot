@@ -1,7 +1,7 @@
 // Tests cron delivery route session-key selection (#95646 namespace preservation).
 import { describe, expect, it } from "vitest";
 import type { CronJob } from "../types.js";
-import { selectCronRouteCurrentSessionKey } from "./delivery-dispatch.js";
+import { selectCronRouteCurrentSessionKey } from "./delivery-route-session-key.js";
 
 const job = (sessionKey?: string): CronJob => ({ sessionKey }) as CronJob;
 const ISOLATED_RUN_KEY = "agent:main:cron:job-1:run:run-1";

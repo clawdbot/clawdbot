@@ -21,14 +21,10 @@ vi.mock("./client.js", () => ({
 describe("mattermost target resolution", () => {
   let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
   let resolveMattermostOpaqueTarget: typeof import("./target-resolution.js").resolveMattermostOpaqueTarget;
-  let resetMattermostOpaqueTargetCacheForTests: typeof import("./target-resolution.js").resetMattermostOpaqueTargetCacheForTests;
 
   beforeAll(async () => {
-    ({
-      parseMattermostTarget,
-      resolveMattermostOpaqueTarget,
-      resetMattermostOpaqueTargetCacheForTests,
-    } = await import("./target-resolution.js"));
+    ({ parseMattermostTarget, resolveMattermostOpaqueTarget } =
+      await import("./target-resolution.js"));
   });
 
   beforeEach(() => {
@@ -41,7 +37,6 @@ describe("mattermost target resolution", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetMattermostOpaqueTargetCacheForTests();
   });
 
   it("recognizes ID-shaped values", () => {
