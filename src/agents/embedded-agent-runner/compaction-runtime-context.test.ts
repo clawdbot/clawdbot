@@ -10,6 +10,7 @@ import {
   resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstrap.js";
 
 describe("resolveEmbeddedCompactionThinkingLevel", () => {
   it("lets the compaction override replace the inherited session level", () => {
@@ -743,5 +744,22 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "claude-opus-4-5",
     });
     expect(result.provider).toBe("anthropic");
+  });
+});
+
+describe("buildContextEngineCompactionSessionTarget", () => {
+  it("derives the agent from a scoped session key", () => {
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        config: { session: { store: "/tmp/agents/{agentId}/sessions.json" } },
+        sessionFile: "agent:helper:main",
+        sessionId: "helper-session",
+        sessionKey: "agent:helper:main",
+      }),
+    ).toMatchObject({
+      agentId: "helper",
+      sessionKey: "agent:helper:main",
+      storePath: "/tmp/agents/helper/sessions.json",
+    });
   });
 });

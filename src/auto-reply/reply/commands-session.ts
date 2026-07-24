@@ -33,7 +33,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -315,11 +315,14 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-      agentId: params.agentId,
-    });
+    const sessionAgentId =
+      params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
+        ? resolveSessionAgentId({
+            sessionKey: params.sessionKey,
+            config: params.cfg,
+            agentId: params.agentId,
+          })
+        : params.agentId;
     const usageAgentId = sessionAgentId ?? DEFAULT_AGENT_ID;
     const sessionSummary = await loadSessionCostSummary({
       sessionId: targetSessionEntry?.sessionId,

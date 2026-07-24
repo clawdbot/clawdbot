@@ -181,6 +181,19 @@ describe("handleUsageCommand", () => {
     );
   });
 
+  it("keeps the current agent for an unqualified global session key", async () => {
+    const params = buildUsageParams();
+    params.agentId = "other";
+    params.sessionKey = "global";
+
+    await handleUsageCommand(params, true);
+
+    const args = expectSessionCostArgs();
+    expect(args.agentId).toBe("other");
+    expect(args.sessionTarget).toMatchObject({ agentId: "other", sessionKey: "global" });
+    expect(resolveSessionAgentIdMock).not.toHaveBeenCalled();
+  });
+
   it("prefers the target session entry from sessionStore for /usage cost", async () => {
     const params = buildUsageParams();
     params.sessionEntry = {

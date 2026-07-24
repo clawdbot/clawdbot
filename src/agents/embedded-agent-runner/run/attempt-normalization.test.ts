@@ -26,6 +26,8 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
         sessionFileUsed: "/tmp/session-after.jsonl",
       }),
     ).toThrow("successor files are unsupported");
+    expect(state.adoptSessionId).not.toHaveBeenCalled();
+    expect(state.sessionTarget).toMatchObject({ sessionId: "session-before" });
   });
 
   it("resolves a legacy SQLite marker successor", () => {

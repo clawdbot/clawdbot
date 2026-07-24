@@ -17,15 +17,16 @@ import { resolveAgentHarnessRunAdmissionError } from "./setup.js";
 const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 
 export function buildContextEngineCompactionSessionTarget(params: {
-  agentId: string;
+  agentId?: string;
   config?: RunEmbeddedAgentParams["config"];
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: RunEmbeddedAgentParams["sessionTarget"];
 }): ContextEngineSessionTarget {
-  const agentId = params.sessionTarget?.agentId ?? params.agentId;
   const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
+  const agentId =
+    params.sessionTarget?.agentId ?? params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath =
     params.sessionTarget?.storePath ?? resolveStorePath(params.config?.session?.store, { agentId });
   return {

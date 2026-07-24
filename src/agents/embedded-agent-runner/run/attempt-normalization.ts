@@ -53,10 +53,10 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
 }): void {
   const { sessionPromptState, sessionFileUsed, sessionIdUsed } = params;
   const previousSessionId = sessionPromptState.sessionId;
-  sessionPromptState.adoptSessionId(sessionIdUsed);
   const sessionFileChanged = Boolean(
     sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile,
   );
+  let nextSessionTarget = sessionPromptState.sessionTarget;
   if (sessionFileUsed && sessionFileChanged) {
     const marker = parseSqliteSessionFileMarker(sessionFileUsed);
     if (marker) {
@@ -67,7 +67,7 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
       ) {
         throw new Error("Legacy context-engine successor identity is inconsistent");
       }
-      sessionPromptState.sessionTarget = {
+      nextSessionTarget = {
         ...marker,
         sessionKey: sessionPromptState.sessionTarget.sessionKey,
       };
@@ -76,7 +76,7 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
       sessionPromptState.sessionTarget &&
       resolveAgentIdFromSessionKey(sessionFileUsed) === sessionPromptState.sessionTarget.agentId
     ) {
-      sessionPromptState.sessionTarget = {
+      nextSessionTarget = {
         ...sessionPromptState.sessionTarget,
         sessionId: sessionIdUsed,
         sessionKey: sessionFileUsed,
@@ -86,13 +86,16 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
         "Legacy context-engine successor files are unsupported; return a structured sessionTarget",
       );
     }
-    sessionPromptState.sessionFile = sessionFileUsed;
-  }
-  if (!sessionFileChanged && sessionIdUsed && sessionIdUsed !== previousSessionId) {
-    sessionPromptState.sessionTarget = sessionPromptState.sessionTarget
+  } else if (sessionIdUsed && sessionIdUsed !== previousSessionId) {
+    nextSessionTarget = sessionPromptState.sessionTarget
       ? { ...sessionPromptState.sessionTarget, sessionId: sessionIdUsed }
       : undefined;
   }
+  sessionPromptState.adoptSessionId(sessionIdUsed);
+  if (sessionFileUsed && sessionFileChanged) {
+    sessionPromptState.sessionFile = sessionFileUsed;
+  }
+  sessionPromptState.sessionTarget = nextSessionTarget;
 }
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
 
