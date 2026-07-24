@@ -47,7 +47,7 @@ describe("Web Awesome control ownership", () => {
     // Web Awesome Core has no combobox; its combobox is a paid Pro component.
     expect(await matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette.ts",
-      "pages/chat/components/chat-composer.ts",
+      "pages/chat/components/chat-composer-slash-menu.ts",
       "pages/chat/components/chat-model-controls.ts",
     ]);
   });

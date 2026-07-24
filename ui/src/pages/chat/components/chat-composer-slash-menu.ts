@@ -33,7 +33,7 @@ function hasVisibleSlashMenuState(state: ChatComposerState): boolean {
   );
 }
 
-export function closeSlashMenuIfNeeded(state: ChatComposerState, requestUpdate: () => void): void {
+function closeSlashMenuIfNeeded(state: ChatComposerState, requestUpdate: () => void): void {
   if (!hasVisibleSlashMenuState(state)) {
     return;
   }
