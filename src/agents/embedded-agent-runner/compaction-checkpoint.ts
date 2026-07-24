@@ -1,3 +1,4 @@
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 /** Owns the shared checkpoint lifecycle around both compaction entry points. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -49,9 +50,10 @@ export async function persistCompactionCheckpoint(params: {
       firstKeptEntryId: params.firstKeptEntryId,
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
-      // SQLite checkpoints persist postCompaction.sessionId plus leaf/entry ids.
-      // postSessionFile is reserved for named legacy/artifact fork sources.
-      postSessionFile: params.sessionTarget ? undefined : params.sessionFile,
+      // Keep the full successor location for cross-key/store checkpoint recovery.
+      postSessionFile: params.sessionTarget
+        ? formatSqliteSessionFileMarker(params.sessionTarget)
+        : params.sessionFile,
       postLeafId: checkpointPosition.leafId,
       postEntryId: checkpointPosition.entryId,
       createdAt: params.createdAt,

@@ -196,6 +196,7 @@ describe("handleUsageCommand", () => {
 
   it("prefers the target session entry from sessionStore for /usage cost", async () => {
     const params = buildUsageParams();
+    params.storePath = "/tmp/custom-session-store.sqlite";
     params.sessionEntry = {
       sessionId: "wrapper-session",
       updatedAt: Date.now(),
@@ -215,6 +216,7 @@ describe("handleUsageCommand", () => {
       agentId: "target",
       sessionId: "target-session",
       sessionKey: params.sessionKey,
+      storePath: params.storePath,
     });
   });
 

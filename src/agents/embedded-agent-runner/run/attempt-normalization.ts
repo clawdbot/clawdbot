@@ -2,6 +2,7 @@ import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../../../config/sessions/legacy-sqlite-marker.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
@@ -79,6 +80,14 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
       sessionPromptState.sessionTarget &&
       resolveAgentIdFromSessionKey(sessionFileUsed) === sessionPromptState.sessionTarget.agentId
     ) {
+      const keyedEntry = loadSessionEntry({
+        agentId: sessionPromptState.sessionTarget.agentId,
+        sessionKey: sessionFileUsed,
+        storePath: sessionPromptState.sessionTarget.storePath,
+      });
+      if (!keyedEntry?.sessionId || keyedEntry.sessionId !== sessionIdUsed) {
+        throw new Error("Legacy context-engine successor identity is inconsistent");
+      }
       nextSessionTarget = {
         ...sessionPromptState.sessionTarget,
         sessionId: sessionIdUsed,

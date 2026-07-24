@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 /**
  * CLI turn compaction lifecycle.
@@ -292,6 +293,14 @@ async function resolveCliContextCompactionSuccess(params: {
       params.storePath && !resultSessionTarget?.storePath ? { storePath: params.storePath } : {},
     ),
   });
+  if (
+    resolvedTarget.sessionKey !== params.sessionKey ||
+    (params.storePath && path.resolve(resolvedTarget.storePath) !== path.resolve(params.storePath))
+  ) {
+    throw new Error(
+      "CLI context compaction cannot adopt a successor outside the active session binding",
+    );
+  }
   return {
     maintenanceSessionFile: resolvedTarget.sessionKey,
     maintenanceSessionId: resolvedTarget.sessionId,

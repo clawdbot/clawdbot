@@ -37,8 +37,7 @@ import {
 } from "../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  loadTranscriptEventsSync,
-  loadTranscriptTailEventsSync,
+  readRecentSessionTranscriptActiveEvents,
   readTranscriptStatsSync,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -473,18 +472,7 @@ function readSqliteSessionLogSnapshot(
       snapshot.byteSize = readTranscriptStatsSync(scope).sizeBytes;
     }
     if (options.includeUsage) {
-      let events = loadTranscriptTailEventsSync(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);
-      if (selectSessionTranscriptLeafControlledPath(events) === undefined) {
-        // A bounded tail can contain a leaf control whose target predates the
-        // window. Resolve that uncommon branch switch from the full transcript
-        // before scanning the bounded active tail for usage.
-        const activeEvents = selectSessionTranscriptLeafControlledPath(
-          loadTranscriptEventsSync(scope),
-        );
-        if (activeEvents) {
-          events = activeEvents.slice(-SQLITE_USAGE_TAIL_MAX_EVENTS);
-        }
-      }
+      const events = readRecentSessionTranscriptActiveEvents(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);
       snapshot.usage = deriveTranscriptUsageSnapshot({
         usage: readLatestNonzeroUsageFromTranscriptEvents(events),
       });

@@ -314,6 +314,36 @@ export function readSessionTranscriptActiveLeafEvents(
   });
 }
 
+/** Reads a bounded tail from the materialized active path, including control events. */
+export function readRecentSessionTranscriptActiveEvents(
+  scope: SessionTranscriptReadScope,
+  maxEvents: number,
+): TranscriptEvent[] {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const limit = Math.max(0, Math.floor(Number.isFinite(maxEvents) ? maxEvents : 0));
+    if (limit === 0) {
+      return [];
+    }
+    const db = getActiveTranscriptKysely(projection.database);
+    return executeSqliteQuerySync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select("event.event_json")
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .orderBy("active.active_position", "desc")
+        .limit(limit),
+    )
+      .rows.toReversed()
+      .map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+  });
+}
+
 /** Reads one append-stable forward page from the materialized active-message projection. */
 export function readSessionTranscriptVisibleMessageDelta(
   scope: SessionTranscriptReadScope,
