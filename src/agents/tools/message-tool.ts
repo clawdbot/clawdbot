@@ -51,6 +51,7 @@ import {
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
+import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import {
   parseInteractiveParam,
   parseJsonMessageParam,
@@ -1555,14 +1556,25 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
+      const requestedAccountId = readStringParam(params, "accountId");
       const scope = resolveMessageSecretScope({
         channel: params.channel,
         target: params.target,
         targets: params.targets,
         fallbackChannel: effectiveCurrentChannel.currentChannelProvider,
-        accountId: params.accountId,
+        accountId: requestedAccountId,
         fallbackAccountId: agentAccountId,
       });
+      const explicitAccountId = validateExplicitMessageAccountSelection({
+        cfg: rawConfig,
+        channel: scope.channel,
+        accountId: requestedAccountId,
+        checkResolvedAccount: false,
+      });
+      if (explicitAccountId) {
+        scope.accountId = explicitAccountId;
+        params.accountId = explicitAccountId;
+      }
       const scopedTargets = getScopedSecretTargetsForTool({
         config: rawConfig,
         channel: scope.channel,
@@ -1578,10 +1590,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         })
       ).resolvedConfig;
 
-      const accountId = readStringParam(params, "accountId") ?? agentAccountId;
-      if (accountId) {
-        params.accountId = accountId;
-      }
+      const accountId = explicitAccountId ?? agentAccountId;
       const pollVoteEchoRoute = resolvePollVoteEchoRoute({
         action,
         args: params,

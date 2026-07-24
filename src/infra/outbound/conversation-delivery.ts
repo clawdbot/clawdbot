@@ -177,7 +177,6 @@ export async function sendGatewayConversationMessage(params: {
       params: {
         channel: params.conversation.channel,
         to: params.conversation.target,
-        accountId: params.conversation.accountId,
         message: params.message,
         ...(params.conversation.threadId ? { threadId: params.conversation.threadId } : {}),
         idempotencyKey: params.operationId,

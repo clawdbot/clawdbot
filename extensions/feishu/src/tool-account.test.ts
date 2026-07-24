@@ -21,6 +21,11 @@ describe("resolveFeishuToolAccount", () => {
             appId: "work-app-id",
             appSecret: "work-app-secret", // pragma: allowlist secret
           },
+          disabled: {
+            enabled: false,
+            appId: "disabled-app-id",
+            appSecret: "disabled-app-secret", // pragma: allowlist secret
+          },
         },
       },
     },
@@ -41,5 +46,27 @@ describe("resolveFeishuToolAccount", () => {
     });
 
     expect(resolved.accountId).toBe("ops");
+  });
+
+  it("allows an explicit configured account", () => {
+    const resolved = resolveFeishuToolAccount({
+      api: { config: cfg },
+      executeParams: { accountId: "WORK" },
+    });
+
+    expect(resolved.accountId).toBe("work");
+  });
+
+  it.each([
+    { name: "malformed", accountId: "!!!", error: "Invalid Feishu account ID" },
+    { name: "unknown", accountId: "missing", error: "Unknown Feishu account" },
+    { name: "disabled", accountId: "disabled", error: "is disabled" },
+  ])("rejects an explicit $name account", (testCase) => {
+    expect(() =>
+      resolveFeishuToolAccount({
+        api: { config: cfg },
+        executeParams: { accountId: testCase.accountId },
+      }),
+    ).toThrow(testCase.error);
   });
 });

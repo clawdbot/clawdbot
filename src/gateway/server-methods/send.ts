@@ -28,6 +28,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import {
   hydrateAttachmentParamsForAction,
   resolveAttachmentMediaPolicy,
@@ -53,7 +54,7 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, normalizeOptionalAccountId } from "../../routing/session-key.js";
 import {
   isAgentHarnessSessionKey,
   resolveMissingAgentHarnessSessionError,
@@ -159,6 +160,7 @@ function resolveGatewayInflightRequest(params: {
   idempotencyKey: string;
   respond: RespondFn;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  requestScope?: string;
 }):
   | {
       kind: "ready";
@@ -171,16 +173,33 @@ function resolveGatewayInflightRequest(params: {
       done: Promise<void>;
     } {
   const idem = params.idempotencyKey;
-  const dedupeKey =
-    params.prefix === "message.action"
-      ? `${params.prefix}:${params.conversationReadOrigin ?? "delegated"}:${idem}`
-      : `${params.prefix}:${idem}`;
+  const authorityScope =
+    params.prefix === "message.action" ? `:${params.conversationReadOrigin ?? "delegated"}` : "";
+  const requestScope = params.requestScope ? `:${params.requestScope}` : "";
+  const dedupeKey = `${params.prefix}${authorityScope}${requestScope}:${idem}`;
   return resolveIdempotentGatewayRequest({
     context: params.context,
     dedupeKey,
     idempotencyKey: idem,
     respond: params.respond,
   });
+}
+
+function resolveMessageOperationDedupeScope(params: {
+  channel?: unknown;
+  accountIds: readonly unknown[];
+}): string {
+  const normalizeAccountScope = (value: unknown): string | null => {
+    const raw = normalizeOptionalString(value);
+    if (!raw) {
+      return null;
+    }
+    return normalizeOptionalAccountId(raw) ?? `invalid:${raw}`;
+  };
+  return JSON.stringify([
+    normalizeOptionalLowercaseString(params.channel) ?? null,
+    ...params.accountIds.map(normalizeAccountScope),
+  ]);
 }
 
 async function resolveRequestedChannel(params: {
@@ -499,6 +518,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       idempotencyKey: request.idempotencyKey,
       respond,
       conversationReadOrigin,
+      requestScope: resolveMessageOperationDedupeScope({
+        channel: request.channel,
+        accountIds: [request.accountId, request.params.accountId],
+      }),
     });
     if (inflight.kind === "handled") {
       await inflight.done;
@@ -533,7 +556,25 @@ export const sendHandlers: GatewayRequestHandlers = {
         const agentId =
           normalizeOptionalString(request.agentId) ??
           (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
-        const accountId = normalizeOptionalString(request.accountId) ?? undefined;
+        const envelopeAccountId = validateExplicitMessageAccountSelection({
+          cfg,
+          channel,
+          accountId: request.accountId,
+          plugin,
+        });
+        const nestedAccountId = validateExplicitMessageAccountSelection({
+          cfg,
+          channel,
+          accountId: request.params.accountId,
+          plugin,
+        });
+        if (envelopeAccountId && nestedAccountId && envelopeAccountId !== nestedAccountId) {
+          throw new Error("message.action accountId does not match params.accountId");
+        }
+        const accountId = envelopeAccountId ?? nestedAccountId;
+        if (accountId) {
+          request.params.accountId = accountId;
+        }
         if (request.action === "send") {
           await hydrateAttachmentParamsForAction({
             cfg,
@@ -660,6 +701,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       prefix: "send",
       idempotencyKey: request.idempotencyKey,
       respond,
+      requestScope: resolveMessageOperationDedupeScope({
+        channel: request.channel,
+        accountIds: [request.accountId],
+      }),
     });
     if (inflight.kind === "handled") {
       await inflight.done;
@@ -683,7 +728,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const accountId = normalizeOptionalString(request.accountId);
+    const requestedAccountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
 
@@ -703,6 +748,12 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
 
       try {
+        const accountId = validateExplicitMessageAccountSelection({
+          cfg,
+          channel,
+          accountId: requestedAccountId,
+          plugin,
+        });
         const resolvedTarget = resolveGatewayOutboundTarget({
           channel: outboundChannel,
           to,
@@ -906,6 +957,10 @@ export const sendHandlers: GatewayRequestHandlers = {
       prefix: "poll",
       idempotencyKey: request.idempotencyKey,
       respond,
+      requestScope: resolveMessageOperationDedupeScope({
+        channel: request.channel,
+        accountIds: [request.accountId],
+      }),
     });
     if (inflight.kind === "handled") {
       await inflight.done;
@@ -954,7 +1009,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         durationHours: request.durationHours,
       };
       const threadId = normalizeOptionalString(request.threadId);
-      const accountId = normalizeOptionalString(request.accountId);
       try {
         if (!outbound?.sendPoll) {
           const error = errorShape(
@@ -963,6 +1017,12 @@ export const sendHandlers: GatewayRequestHandlers = {
           );
           return { ok: false, error };
         }
+        const accountId = validateExplicitMessageAccountSelection({
+          cfg,
+          channel,
+          accountId: request.accountId,
+          plugin,
+        });
         const resolvedTarget = resolveGatewayOutboundTarget({
           channel,
           to: request.to.trim(),

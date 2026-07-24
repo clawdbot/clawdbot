@@ -389,6 +389,7 @@ function createChannelPlugin(params: {
   toolSchema?: MessageToolSchema | ((params: MessageToolDiscoveryContext) => MessageToolSchema);
   describeMessageTool?: DescribeMessageTool;
   messageActionTargetAliases?: NonNullable<ChannelPlugin["actions"]>["messageActionTargetAliases"];
+  config?: Partial<ChannelPlugin["config"]>;
   message?: ChannelMessageAdapterShape;
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {
@@ -406,6 +407,7 @@ function createChannelPlugin(params: {
     config: {
       listAccountIds: () => ["default"],
       resolveAccount: () => ({}),
+      ...params.config,
     },
     ...(params.message ? { message: params.message } : {}),
     ...(params.messaging ? { messaging: params.messaging } : {}),
@@ -566,6 +568,9 @@ describe("poll vote echo guard", () => {
             docsPath: "/channels/imessage",
             blurb: "iMessage test plugin",
             actions: ["poll-vote"],
+            config: {
+              listAccountIds: () => ["primary", "secondary"],
+            },
             messageActionTargetAliases: {
               "poll-vote": {
                 aliases: ["chatGuid"],
@@ -1447,7 +1452,7 @@ describe("message tool secret scoping", () => {
     });
 
     expect(input?.defaultAccountId).toBe("ops");
-    expect(input?.params?.accountId).toBe("ops");
+    expect(input?.params?.accountId).toBeUndefined();
     expect(input?.toolContext?.currentChannelProvider).toBe("discord");
     expect(input?.toolContext?.currentChannelId).toBe("user:123456789");
 
@@ -1484,7 +1489,7 @@ describe("message tool secret scoping", () => {
     });
 
     expect(input?.defaultAccountId).toBe("direct");
-    expect(input?.params?.accountId).toBe("direct");
+    expect(input?.params?.accountId).toBeUndefined();
     expect(input?.toolContext?.currentChannelProvider).toBe("discord");
     expect(input?.toolContext?.currentChannelId).toBe("user:123456789");
 
@@ -1589,6 +1594,55 @@ describe("message tool secret scoping", () => {
     expect(secretResolveCall.allowedPaths).toEqual(
       new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
     );
+  });
+
+  it.each([
+    { name: "malformed", accountId: "!!!", error: "Invalid account ID" },
+    { name: "unknown", accountId: "missing", error: "Unknown account" },
+    { name: "disabled", accountId: "disabled", error: "disabled" },
+  ])("rejects an explicit $name account before resolving secrets", async (testCase) => {
+    const plugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+      actions: ["send"],
+      config: {
+        listAccountIds: () => ["default", "sut", "disabled"],
+        resolveAccount: (_cfg, accountId) => ({ enabled: accountId !== "disabled" }),
+      },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "slack", source: "test", plugin }]));
+    const tool = createMessageTool({
+      config: {
+        channels: {
+          slack: {
+            accounts: {
+              default: { botToken: "default-token" },
+              sut: { botToken: "sut-token" },
+              disabled: { enabled: false, botToken: "disabled-token" },
+            },
+          },
+        },
+      } as never,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:current",
+      agentAccountId: "sut",
+      resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await expect(
+      tool.execute("1", {
+        action: "send",
+        target: "channel:current",
+        accountId: testCase.accountId,
+        message: "hi",
+      }),
+    ).rejects.toThrow(testCase.error);
+
+    expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 
   it("resolves scoped channel SecretRefs even when constructed with a config snapshot", async () => {

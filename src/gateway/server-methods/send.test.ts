@@ -668,10 +668,118 @@ describe("gateway send mirroring", () => {
       details: { action: "handled" },
     });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
-    mocks.getChannelPlugin.mockReturnValue({
+    mocks.getChannelPlugin.mockImplementation((channel: string) => ({
+      id: channel,
       actions: { handleAction: true },
       outbound: { sendPoll: mocks.sendPoll },
+      config: {
+        listAccountIds: (cfg: { channels?: Record<string, { accounts?: object }> }) => {
+          const accountIds = Object.keys(cfg.channels?.[channel]?.accounts ?? {});
+          return accountIds.length > 0 ? accountIds : ["default"];
+        },
+        resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId, enabled: true }),
+      },
+    }));
+  });
+
+  it.each([
+    {
+      name: "message.action with an unknown account",
+      accountId: "missing",
+      invoke: () =>
+        runMessageActionRequest({
+          channel: "slack",
+          action: "send",
+          params: { target: "channel:current", message: "hi" },
+          accountId: "missing",
+          idempotencyKey: "account-message-action",
+        }),
+      expectedError: "Unknown account",
+      providerCall: mocks.dispatchChannelMessageAction,
+    },
+    {
+      name: "message.action with an unknown nested account",
+      accountId: "missing",
+      invoke: () =>
+        runMessageActionRequest({
+          channel: "slack",
+          action: "send",
+          params: {
+            target: "channel:current",
+            message: "hi",
+            accountId: "missing",
+          },
+          idempotencyKey: "account-message-action-nested",
+        }),
+      expectedError: "Unknown account",
+      providerCall: mocks.dispatchChannelMessageAction,
+    },
+    {
+      name: "message.action with conflicting account fields",
+      accountId: "sut",
+      invoke: () =>
+        runMessageActionRequest({
+          channel: "slack",
+          action: "send",
+          params: {
+            target: "channel:current",
+            message: "hi",
+            accountId: "default",
+          },
+          accountId: "sut",
+          idempotencyKey: "account-message-action-conflict",
+        }),
+      expectedError: "does not match",
+      providerCall: mocks.dispatchChannelMessageAction,
+    },
+    {
+      name: "send with a malformed account",
+      accountId: "!!!",
+      invoke: () =>
+        runSend({
+          channel: "slack",
+          to: "channel:current",
+          message: "hi",
+          accountId: "!!!",
+          idempotencyKey: "account-send",
+        }),
+      expectedError: "Invalid account ID",
+      providerCall: mocks.deliverOutboundPayloads,
+    },
+    {
+      name: "poll with a disabled account",
+      accountId: "disabled",
+      invoke: () =>
+        runPoll({
+          channel: "slack",
+          to: "channel:current",
+          question: "Choose",
+          options: ["A", "B"],
+          accountId: "disabled",
+          idempotencyKey: "account-poll",
+        }),
+      expectedError: "disabled",
+      providerCall: mocks.sendPoll,
+    },
+  ])("rejects $name before provider code", async (testCase) => {
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "slack",
+      actions: { handleAction: true },
+      outbound: { sendPoll: mocks.sendPoll },
+      config: {
+        listAccountIds: () => ["default", "sut", "disabled"],
+        resolveAccount: (_cfg: unknown, accountId: string) => ({
+          enabled: accountId !== "disabled",
+        }),
+      },
     });
+
+    const { respond } = await testCase.invoke();
+
+    const response = firstRespondCall(respond);
+    expect(response[0]).toBe(false);
+    expect(JSON.stringify(response[2])).toContain(testCase.expectedError);
+    expect(testCase.providerCall).not.toHaveBeenCalled();
   });
 
   it("uses the resolved runtime config for message.action when the source snapshot matches", async () => {
@@ -904,6 +1012,58 @@ describe("gateway send mirroring", () => {
     expect(firstRespondCall(directRespond)?.[1]).toEqual({ action: "direct" });
     expect(firstRespondCall(delegatedRespond)?.[1]).toEqual({ action: "delegated" });
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not share message.action idempotency results across account selections", async () => {
+    const context = makeContext();
+    const validRespond = vi.fn();
+    const invalidRespond = vi.fn();
+    const actionDeferred = createDeferred<{ details: { action: string } }>();
+    mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
+
+    const validRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        accountId: "default",
+        idempotencyKey: "idem-action-mixed-account",
+      } as never,
+      respond: validRespond,
+      context,
+      req: { type: "req", id: "valid", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+    const invalidRequest = expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "slack",
+        action: "send",
+        params: { target: "channel:current", message: "hi" },
+        accountId: "missing",
+        idempotencyKey: "idem-action-mixed-account",
+      } as never,
+      respond: invalidRespond,
+      context,
+      req: { type: "req", id: "invalid", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    await invalidRequest;
+    expect(firstRespondCall(invalidRespond)?.[0]).toBe(false);
+    expect(JSON.stringify(firstRespondCall(invalidRespond)?.[2])).toContain("Unknown account");
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+
+    actionDeferred.resolve({ details: { action: "handled" } });
+    await validRequest;
+    expect(firstRespondCall(validRespond)?.[0]).toBe(true);
   });
 
   it("keeps an agent runtime delegated even with a direct-operator marker", async () => {

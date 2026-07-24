@@ -19,6 +19,7 @@ import { parsePositiveIntOrUndefined } from "../cli/program/helpers.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
+import { validateExplicitMessageAccountSelection } from "../infra/outbound/message-account-selection.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
@@ -66,6 +67,16 @@ export async function messageCommand(
     targets: opts.targets,
     accountId: opts.accountId,
   });
+  const explicitAccountId = validateExplicitMessageAccountSelection({
+    cfg: loadedRaw,
+    channel: scope.channel,
+    accountId: opts.accountId,
+    checkResolvedAccount: false,
+  });
+  if (explicitAccountId) {
+    scope.accountId = explicitAccountId;
+    opts.accountId = explicitAccountId;
+  }
   const scopedTargets = getScopedChannelsCommandSecretTargets({
     config: loadedRaw,
     channel: scope.channel,

@@ -189,6 +189,13 @@ async function runMessageCommand(opts: Record<string, unknown> = {}) {
 }
 
 describe("messageCommand", () => {
+  it("rejects a malformed explicit account before resolving secrets", async () => {
+    await expect(runMessageCommand({ accountId: "!!!" })).rejects.toThrow("Invalid account ID");
+
+    expect(resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(runMessageActionMock).not.toHaveBeenCalled();
+  });
+
   it("threads resolved SecretRef config into message actions", async () => {
     const rawConfig = createTelegramSecretRawConfig();
     const resolvedConfig = createTelegramResolvedTokenConfig("12345:resolved-token");
