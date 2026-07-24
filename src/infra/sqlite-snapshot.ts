@@ -16,6 +16,7 @@ import {
 } from "./node-sqlite.js";
 import { resolveSystemBin } from "./resolve-system-bin.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { syncSqliteDirectoryForDurability } from "./sqlite-path-durability.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
 const SQLITE_DIRECTORY_MODE = 0o700;
@@ -651,12 +652,12 @@ export async function publishVerifiedSqliteFile(
     target ??= await fs.open(options.targetPath, "r");
     await assertOpenFileIdentity(target, options.targetPath, initialPublishedIdentity);
     ownershipPinned = true;
-    await syncDirectoryBestEffort(targetDirectory);
+    await syncSqliteDirectoryForDurability(targetDirectory);
     await fs.unlink(stagedPath);
     const expectedIdentity = await target.stat();
     publishedIdentity = expectedIdentity;
     await fs.rmdir(stagingDir);
-    await syncDirectoryBestEffort(targetDirectory);
+    await syncSqliteDirectoryForDurability(targetDirectory);
     const linkedContent = await hashOpenPublishedFile(target, options.targetPath, expectedIdentity);
     assertExpectedContent(linkedContent, expectedContent, options.targetPath);
     await target.close();
