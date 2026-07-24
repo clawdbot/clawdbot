@@ -25,6 +25,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
@@ -536,21 +537,31 @@ function createUnsafeSchemaMetaIndexDrift(databasePath: string): void {
 }
 
 function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir: string }): {
+  committedRowsAfterRecovery: number;
+  immutableDirtyRowsBeforeKill: number;
   integrity: string;
+  journalExistsAfterReadOnly: boolean;
   journalExistsAfterRecovery: boolean;
-  value: string;
+  readOnly: {
+    error: string | null;
+    opened: boolean;
+    uncommittedRows: number | null;
+  };
 } {
   const probeSource = `
     import { spawn } from "node:child_process";
     import fs from "node:fs";
     import path from "node:path";
     import { DatabaseSync } from "node:sqlite";
+    import { pathToFileURL } from "node:url";
 
     const moduleUrl = ${JSON.stringify(params.moduleUrl)};
     const databasePath = path.join(${JSON.stringify(params.rootDir)}, "hot-journal.sqlite");
     const readyPath = path.join(${JSON.stringify(params.rootDir)}, "writer-ready");
+    const rowCount = 256;
     const {
       closeOpenClawStateDatabaseForTest,
+      openExistingOpenClawStateDatabaseReadOnly,
       openOpenClawStateDatabase,
     } = await import(moduleUrl);
 
@@ -558,9 +569,16 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
     initial.db.exec(\`
       CREATE TABLE hot_journal_probe (
         id INTEGER PRIMARY KEY,
-        value TEXT NOT NULL
+        value TEXT NOT NULL,
+        payload BLOB NOT NULL
       );
-      INSERT INTO hot_journal_probe (id, value) VALUES (1, 'committed');
+      WITH RECURSIVE rows(id) AS (
+        SELECT 1
+        UNION ALL
+        SELECT id + 1 FROM rows WHERE id < \${rowCount}
+      )
+      INSERT INTO hot_journal_probe (id, value, payload)
+      SELECT id, 'committed', zeroblob(8192) FROM rows;
     \`);
     closeOpenClawStateDatabaseForTest();
 
@@ -573,10 +591,14 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
       import { DatabaseSync } from "node:sqlite";
 
       const database = new DatabaseSync(process.env.OPENCLAW_HOT_JOURNAL_DATABASE_PATH);
-      database.exec("PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; BEGIN IMMEDIATE;");
-      database
-        .prepare("UPDATE hot_journal_probe SET value = ? WHERE id = 1")
-        .run("uncommitted");
+      database.exec(
+        "PRAGMA journal_mode = DELETE; " +
+        "PRAGMA synchronous = FULL; " +
+        "PRAGMA cache_size = 2; " +
+        "PRAGMA cache_spill = ON; " +
+        "BEGIN IMMEDIATE; " +
+        "UPDATE hot_journal_probe SET value = 'uncommitted';",
+      );
       fs.writeFileSync(process.env.OPENCLAW_HOT_JOURNAL_READY_PATH, "ready");
       setInterval(() => {}, 1_000);
     \`;
@@ -616,22 +638,57 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
       if (!fs.existsSync(journalPath) || fs.statSync(journalPath).size === 0) {
         throw new Error("writer did not leave a rollback journal");
       }
+      const immutable = new DatabaseSync(
+        \`\${pathToFileURL(databasePath).href}?mode=ro&immutable=1\`,
+        { readOnly: true },
+      );
+      const immutableDirty = immutable
+        .prepare("SELECT COUNT(*) AS count FROM hot_journal_probe WHERE value = 'uncommitted'")
+        .get();
+      immutable.close();
+      const immutableDirtyRowsBeforeKill = Number(immutableDirty?.count ?? 0);
+      if (immutableDirtyRowsBeforeKill === 0) {
+        throw new Error("writer did not spill uncommitted pages into the main database");
+      }
       writer.kill("SIGKILL");
       const outcome = await writerClosed;
       if (outcome.signal !== "SIGKILL") {
         throw new Error(\`writer was not killed: \${JSON.stringify(outcome)} \${writerStderr}\`);
       }
 
+      let readOnly;
+      try {
+        const database = openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
+        const readOnlyRow = database?.db
+          .prepare("SELECT COUNT(*) AS count FROM hot_journal_probe WHERE value = 'uncommitted'")
+          .get();
+        database?.walMaintenance.close();
+        readOnly = {
+          error: null,
+          opened: true,
+          uncommittedRows: Number(readOnlyRow?.count ?? 0),
+        };
+      } catch (error) {
+        readOnly = {
+          error: error instanceof Error ? error.message : String(error),
+          opened: false,
+          uncommittedRows: null,
+        };
+      }
+      const journalExistsAfterReadOnly = fs.existsSync(journalPath);
       const reopened = openOpenClawStateDatabase({ path: databasePath });
       const row = reopened.db
-        .prepare("SELECT value FROM hot_journal_probe WHERE id = 1")
+        .prepare("SELECT COUNT(*) AS count FROM hot_journal_probe WHERE value = 'committed'")
         .get();
       const integrity = reopened.db.prepare("PRAGMA integrity_check").get();
       closeOpenClawStateDatabaseForTest();
       console.log(JSON.stringify({
+        committedRowsAfterRecovery: Number(row?.count ?? 0),
+        immutableDirtyRowsBeforeKill,
         integrity: integrity?.integrity_check,
+        journalExistsAfterReadOnly,
         journalExistsAfterRecovery: fs.existsSync(journalPath),
-        value: row?.value,
+        readOnly,
       }));
     } finally {
       if (writer.exitCode === null && writer.signalCode === null) {
@@ -651,9 +708,16 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
     throw new Error("hot rollback journal recovery probe produced no result");
   }
   return JSON.parse(resultLine) as {
+    committedRowsAfterRecovery: number;
+    immutableDirtyRowsBeforeKill: number;
     integrity: string;
+    journalExistsAfterReadOnly: boolean;
     journalExistsAfterRecovery: boolean;
-    value: string;
+    readOnly: {
+      error: string | null;
+      opened: boolean;
+      uncommittedRows: number | null;
+    };
   };
 }
 
@@ -2228,6 +2292,51 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
+  it("rejects noncanonical indexes from read-only state without rewriting them", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    try {
+      drifted.exec(`
+        DROP INDEX idx_task_runs_status;
+        CREATE INDEX idx_task_runs_status ON task_runs(task_id);
+      `);
+    } finally {
+      drifted.close();
+    }
+
+    expect(() => openExistingOpenClawStateDatabaseReadOnly(options)).toThrow(
+      /missing or drifted index idx_task_runs_status/iu,
+    );
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        preserved
+          .prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_task_runs_status'")
+          .get(),
+      ).toEqual({
+        sql: "CREATE INDEX idx_task_runs_status ON task_runs(task_id)",
+      });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("rejects physical canonical-index corruption from read-only state", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    createTaskRunStatusIndexPhysicalDrift(databasePath);
+
+    expect(() =>
+      openExistingOpenClawStateDatabaseReadOnly({
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toThrow(/integrity_check failed.*idx_task_runs_status/iu);
+  });
+
   it("rejects unrelated current-schema index corruption before exposure", () => {
     const stateDir = createTempStateDir();
     const databasePath = createCanonicalAuditStateDatabase(stateDir);
@@ -2328,18 +2437,26 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
   });
 
   it.skipIf(process.platform === "win32")(
-    "recovers a hot rollback journal before checking integrity",
+    "refuses a hot rollback journal read-only before writable recovery",
     () => {
-      expect(
-        runHotRollbackJournalRecoveryProbe({
-          moduleUrl: new URL("./openclaw-state-db.ts", import.meta.url).href,
-          rootDir: createTempStateDir(),
-        }),
-      ).toEqual({
-        integrity: "ok",
-        journalExistsAfterRecovery: false,
-        value: "committed",
+      const result = runHotRollbackJournalRecoveryProbe({
+        moduleUrl: new URL("./openclaw-state-db.ts", import.meta.url).href,
+        rootDir: createTempStateDir(),
       });
+
+      expect(result.readOnly).toEqual({
+        error: expect.stringMatching(/readonly|read-only|rollback/iu),
+        opened: false,
+        uncommittedRows: null,
+      });
+      expect(result).toMatchObject({
+        committedRowsAfterRecovery: 256,
+        immutableDirtyRowsBeforeKill: expect.any(Number),
+        integrity: "ok",
+        journalExistsAfterReadOnly: true,
+        journalExistsAfterRecovery: false,
+      });
+      expect(result.immutableDirtyRowsBeforeKill).toBeGreaterThan(0);
     },
   );
 

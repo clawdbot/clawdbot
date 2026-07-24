@@ -7,7 +7,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase, resolveNodeSqliteReadOnlyLocation } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
@@ -42,6 +42,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import {
+  assertOpenClawStateDatabaseForMaintenance,
   assertSupportedSchemaVersion,
   createOpenClawDatabaseVerificationError,
   resolveDatabasePath,
@@ -294,16 +295,38 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
 export function openExistingOpenClawStateDatabaseReadOnly(
   options: OpenClawStateDatabaseOptions = {},
 ): OpenClawStateDatabase | undefined {
+  const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   if (!existsSync(pathname)) {
     return undefined;
   }
-  const hasWalSidecars = existsSync(`${pathname}-wal`) || existsSync(`${pathname}-shm`);
-  const db = openNodeSqliteDatabase(resolveNodeSqliteReadOnlyLocation(pathname, hasWalSidecars), {
+  const terminalFailure = terminalOpenLatch.get(pathname);
+  if (terminalFailure) {
+    throw terminalFailure;
+  }
+  try {
+    const quarantine = readOpenClawDatabaseQuarantine(pathname, { env });
+    if (quarantine) {
+      throw createOpenClawDatabaseVerificationError("state", pathname, quarantine.reason);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "SqliteIntegrityError") {
+      throw error;
+    }
+    // A broken quarantine store must not brick read-only diagnostics.
+  }
+  // This is live shared state, so immutable=1 would disable the locking and
+  // journal detection required to avoid exposing uncommitted crash residue.
+  const db = openNodeSqliteDatabase(pathname, {
     readOnly: true,
   });
   try {
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);
+    assertSqliteIntegrity(db, pathname);
+    if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+      assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+    }
   } catch (error) {
     db.close();
     throw error;

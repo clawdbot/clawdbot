@@ -118,14 +118,14 @@ describe("OpenClaw database paths on Windows", () => {
           },
         }),
       ).toEqual({ incompatible: [], indeterminate: [] });
-      const immutableState = openExistingOpenClawStateDatabaseReadOnly({ env });
-      expect(immutableState?.path).toBe(statePath);
+      const readOnlyState = openExistingOpenClawStateDatabaseReadOnly({ env });
+      expect(readOnlyState?.path).toBe(statePath);
       expect(
-        immutableState?.db
+        readOnlyState?.db
           .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
       ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-      immutableState?.walMaintenance.close();
+      readOnlyState?.walMaintenance.close();
 
       await expect(runDoctorStateSqliteCompact({ env })).resolves.toMatchObject({
         integrityCheck: "ok",
