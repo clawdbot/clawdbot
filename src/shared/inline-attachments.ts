@@ -1,3 +1,4 @@
+import { isUnsafeDeviceReadPath } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type InlineAttachment = {
@@ -44,8 +45,6 @@ export const DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS = {
 export const MAX_INLINE_ATTACHMENT_BASENAME_BYTES = 255;
 
 const PORTABLE_ATTACHMENT_NAME_FORBIDDEN = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*"]);
-const WINDOWS_RESERVED_ATTACHMENT_STEM =
-  /^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])$/u;
 
 export type InlineAttachmentSnapshotLimits = {
   maxTotalBytes: number;
@@ -127,13 +126,14 @@ function validateInlineAttachmentName(name: string): void {
   if (/[. ]$/u.test(name)) {
     throw new Error(`attachments_invalid_name (${name})`);
   }
-  const filesystemKey = name.toUpperCase();
+  const filesystemKey = name.toUpperCase().normalize("NFC");
   const preExtensionStem = (filesystemKey.split(".", 1)[0] ?? "").replace(/[. ]+$/u, "");
   if (
     name === "." ||
     name === ".." ||
     filesystemKey === ".MANIFEST.JSON" ||
-    WINDOWS_RESERVED_ATTACHMENT_STEM.test(preExtensionStem)
+    isUnsafeDeviceReadPath(name, { platform: "win32" }) ||
+    isUnsafeDeviceReadPath(preExtensionStem, { platform: "win32" })
   ) {
     throw new Error(`attachments_invalid_name (${name})`);
   }
@@ -183,7 +183,7 @@ export function prepareInlineAttachmentSnapshots(params: {
     const encoding = item.encoding ?? "utf8";
     const mimeType = normalizeOptionalString(item.mimeType) ?? "";
     validateInlineAttachmentName(name);
-    const canonicalNameKey = name.toUpperCase();
+    const canonicalNameKey = name.toUpperCase().normalize("NFC");
     if (seen.has(canonicalNameKey)) {
       throw new Error(`attachments_duplicate_name (${name})`);
     }

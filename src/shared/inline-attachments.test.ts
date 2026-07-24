@@ -38,6 +38,16 @@ describe("inline attachment snapshots", () => {
     expect(() =>
       prepareInlineAttachmentSnapshots({
         attachments: [
+          { name: "ΐ.txt", content: "first" },
+          { name: "Ϊ́.txt", content: "second" },
+        ],
+        limits: DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
+      }),
+    ).toThrow("attachments_duplicate_name");
+
+    expect(() =>
+      prepareInlineAttachmentSnapshots({
+        attachments: [
           { name: "Σ.txt", content: "first" },
           { name: "ς.txt", content: "second" },
         ],
@@ -55,6 +65,10 @@ describe("inline attachment snapshots", () => {
       "CON .txt",
       "CONIN$.txt",
       "CONOUT$.txt",
+      "CLOCK$",
+      "CLOCK$.txt",
+      "CLOCK$ .txt",
+      "clock$.TXT",
       "PRN.txt",
       "AUX.txt",
       "NUL.txt",

@@ -140,6 +140,10 @@ describe("spawnSubagentDirect filename validation", () => {
     ["Windows device stem with pre-extension space", "CON .txt"],
     ["Windows console input device", "CONIN$.txt"],
     ["Windows console output device", "CONOUT$.txt"],
+    ["Windows clock device", "CLOCK$"],
+    ["Windows clock device extension", "CLOCK$.txt"],
+    ["Windows clock device spacing", "CLOCK$ .txt"],
+    ["Windows clock device case", "clock$.TXT"],
     ["Windows portable forbidden character", "handoff?.txt"],
     ["lone surrogate", "\uD800"],
     ["replacement character", "\uFFFD"],
@@ -200,6 +204,22 @@ describe("spawnSubagentDirect filename validation", () => {
         attachments: [
           { name: "Σ.txt", content: validContent, encoding: "base64" },
           { name: "ς.txt", content: validContent, encoding: "base64" },
+        ],
+      },
+      ctx,
+    );
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_duplicate_name/);
+  });
+
+  it("uppercase-then-NFC aliases return attachments_duplicate_name", async () => {
+    const { spawnSubagentDirect } = subagentSpawnModule;
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [
+          { name: "ΐ.txt", content: validContent, encoding: "base64" },
+          { name: "Ϊ́.txt", content: validContent, encoding: "base64" },
         ],
       },
       ctx,
