@@ -33,6 +33,35 @@ describe("Gateway startup plugin quarantine", () => {
     }
   });
 
+  it("opts into canonical runtime conditions only when readiness is configured", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    const gateway = {
+      mode: "local" as const,
+      bind: "loopback" as const,
+      auth: { mode: "none" as const },
+    };
+
+    await writeConfigFile({ gateway });
+    let port = await getFreePort();
+    server = await startGatewayServer(port, { auth: { mode: "none" } });
+    const legacyResponse = await fetch(`http://127.0.0.1:${port}/readyz`);
+    expect(legacyResponse.status).toBe(200);
+    const legacy = (await legacyResponse.json()) as { conditions?: Array<{ type: string }> };
+    expect(legacy.conditions?.map((condition) => condition.type)).not.toContain("ConfigLoaded");
+
+    await server.close();
+    server = undefined;
+    await writeConfigFile({ gateway: { ...gateway, readiness: {} } });
+    port = await getFreePort();
+    server = await startGatewayServer(port, { auth: { mode: "none" } });
+    const canonicalResponse = await fetch(`http://127.0.0.1:${port}/readyz`);
+    expect(canonicalResponse.status).toBe(200);
+    const canonical = (await canonicalResponse.json()) as {
+      conditions?: Array<{ type: string }>;
+    };
+    expect(canonical.conditions?.map((condition) => condition.type)).toContain("ConfigLoaded");
+  });
+
   it("reaches readiness without importing one broken configured plugin", async () => {
     const pluginId = "broken-payload";
     const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-quarantined-plugin-"));

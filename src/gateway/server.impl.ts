@@ -166,7 +166,7 @@ import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
 import {
   createReadinessChecker,
-  evaluateCanonicalGatewayReadiness,
+  evaluateConfiguredGatewayReadiness,
   type CanonicalGatewayReadinessResult,
 } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
@@ -1313,7 +1313,8 @@ export async function startGatewayServer(
     throw new Error("Readiness runtime changed while it was being evaluated.");
   };
   const getReadiness = (): Promise<CanonicalGatewayReadinessResult> =>
-    evaluateCanonicalGatewayReadiness({
+    evaluateConfiguredGatewayReadiness({
+      config: readinessRuntimeSnapshot.config,
       evaluateGateway: getGatewayReadiness,
       evaluateRuntime: evaluateRuntimeReadiness,
     });
