@@ -185,16 +185,18 @@ export function registerSlackSocketModeTransportActivity(params: {
 
   const pingChannel = getDiagnosticsChannel(UNDICI_WEBSOCKET_PING_CHANNEL);
   const pongChannel = getDiagnosticsChannel(UNDICI_WEBSOCKET_PONG_CHANNEL);
+  // Undici ping/pong is process-wide via diagnostics_channel. Only count frames
+  // for this Socket Mode client's WebSocket. If the handle is not resolvable yet,
+  // ignore undici diagnostics and rely on Slack client `connected`/`ws_message`
+  // (already scoped to this emitter) so foreign WebSockets cannot mask a dead socket.
   const pingPongListener = (message: unknown) => {
     if (!isUndiciPingPongMessage(message)) {
       return;
     }
     const ownedWebSocket = resolveUndiciWebSocket(params.app);
-    if (ownedWebSocket && message.websocket !== ownedWebSocket) {
+    if (!ownedWebSocket || message.websocket !== ownedWebSocket) {
       return;
     }
-    // When the undici socket handle is not yet exposed, still accept ping/pong
-    // while this Socket Mode client exists (single-socket and test harnesses).
     noteActivity();
   };
 

@@ -1,4 +1,5 @@
 // Slack tests cover provider.reconnect plugin behavior.
+import { channel } from "node:diagnostics_channel";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   gracefulStopSlackApp,
@@ -363,6 +364,38 @@ describe("slack socket reconnect helpers", () => {
     client.emit("ws_message", Buffer.from("binary"), true);
     expect(onTransportActivity).not.toHaveBeenCalled();
     unregister();
+  });
+
+  it("ignores undici ping/pong from foreign WebSockets and unscoped handles", () => {
+    const ownedUndici = { id: "owned-slack-ws" };
+    const foreignUndici = { id: "other-process-ws" };
+    const client = Object.assign(new FakeEmitter(), {
+      websocket: { websocket: ownedUndici },
+    });
+    const onTransportActivity = vi.fn();
+    const unregister = registerSlackSocketModeTransportActivity({
+      app: { receiver: { client } },
+      onTransportActivity,
+    });
+
+    const pong = channel("undici:websocket:pong");
+    pong.publish({ websocket: foreignUndici, payload: Buffer.from("pong") });
+    expect(onTransportActivity).not.toHaveBeenCalled();
+
+    pong.publish({ websocket: ownedUndici, payload: Buffer.from("pong") });
+    expect(onTransportActivity).toHaveBeenCalledTimes(1);
+
+    const unscopedClient = new FakeEmitter();
+    const unscopedActivity = vi.fn();
+    const unregisterUnscoped = registerSlackSocketModeTransportActivity({
+      app: { receiver: { client: unscopedClient } },
+      onTransportActivity: unscopedActivity,
+    });
+    pong.publish({ websocket: ownedUndici, payload: Buffer.from("pong") });
+    expect(unscopedActivity).not.toHaveBeenCalled();
+
+    unregister();
+    unregisterUnscoped();
   });
 
   it("resolves disconnect waiter on transport idle when no disconnect event fires", async () => {
