@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { getCodexAppServerClientInstanceId } from "./client.js";
+import { isUnrestrictedCodexToolsAllow } from "./dynamic-tool-build.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -62,8 +63,15 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const contextEngineBinding = lifecycleTiming.measureSync("context-engine-binding", () =>
     buildContextEngineBinding(params.params, params.contextEngineProjection),
   );
+  // Native user-MCP attachment is wildcard-only. On a scoped-allowlist turn the
+  // referenced static servers are instead exposed through the dynamic-tool
+  // bridge (run-attempt-tool-setup), so the native patch is omitted entirely —
+  // otherwise those servers would be double-surfaced (native + dynamic). The
+  // omitted patch also drops from userMcpServersFingerprint, rebinding the
+  // thread away from any prior native attachment.
   const userMcpServersConfigPatch =
-    params.userMcpServersEnabled === false
+    params.userMcpServersEnabled === false ||
+    !isUnrestrictedCodexToolsAllow(params.params.toolsAllow)
       ? undefined
       : await buildCodexUserMcpServersThreadConfigPatchForRuntime(params.params.config, {
           agentId: params.agentId ?? params.params.agentId,

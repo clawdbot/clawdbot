@@ -24,6 +24,7 @@ import type {
 import { revokeMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
   buildMcpRequesterRuntimeCacheKey,
+  buildMcpStaticHarnessRuntimeCacheKey,
   partitionMcpServersByConnectionScope,
 } from "./mcp-connection-resolver.js";
 
@@ -295,6 +296,57 @@ export function createSessionMcpRuntimeManager(
         await lifecycle.enforceRequesterRuntimeCap(params.sessionId, runtimeKey);
       }
       return scopedRuntime;
+    },
+    async getOrCreateStaticScoped(params) {
+      // Static-only path for shared-thread harnesses on a scoped-allowlist turn:
+      // open just the named static servers under a dedicated key so we never
+      // create or dispose the bare-sessionId static runtime (`getOrCreate`).
+      const includeServerNames = params.includeServerNames;
+      if (!includeServerNames || includeServerNames.size === 0) {
+        return undefined;
+      }
+      const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs();
+      await lifecycle.sweepIdleRuntimes();
+      if (idleTtlMs > 0) {
+        lifecycle.ensureIdleSweepTimer();
+      }
+      if (params.sessionKey) {
+        store.sessionIdBySessionKey.set(params.sessionKey, params.sessionId);
+      }
+      const fullConfig = loadSessionMcpConfig({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        logDiagnostics: false,
+        manifestRegistry: params.manifestRegistry,
+      });
+      // Never open a requester-scoped server here (those stay on their own path).
+      const { staticServers } = partitionMcpServersByConnectionScope(fullConfig.loaded.mcpServers);
+      const declaredStatic = new Set(Object.keys(staticServers));
+      const openServerNames = new Set(
+        [...includeServerNames].filter((serverName) => declaredStatic.has(serverName)),
+      );
+      if (openServerNames.size === 0) {
+        return undefined;
+      }
+      // Safe names from the FULL declared set so tool names match the live runtime.
+      const safeServerNamesByServer = assignSafeServerNames(
+        Object.keys(fullConfig.loaded.mcpServers),
+      );
+      return await install.getOrCreateRuntimeEntry({
+        runtimeKey: buildMcpStaticHarnessRuntimeCacheKey({
+          sessionId: params.sessionId,
+          serverNames: openServerNames,
+        }),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        cfg: params.cfg,
+        manifestRegistry: params.manifestRegistry,
+        idleTtlMs,
+        includeServerNames: openServerNames,
+        safeServerNamesByServer,
+      });
     },
     rememberAdvertisedScopedCatalog: lifecycle.rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog: lifecycle.getAdvertisedScopedCatalog,

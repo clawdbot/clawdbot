@@ -3184,6 +3184,109 @@ describe("requester-scoped MCP connection resolution", () => {
     await manager.disposeAll();
   });
 
+  it("getOrCreateStaticScoped opens only named static servers under the static-harness key", async () => {
+    const { buildMcpStaticHarnessRuntimeCacheKey } = await import("./mcp-connection-resolver.js");
+    const created: Array<{ sessionId: string; include?: string[]; exclude?: string[] }> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push({
+        sessionId: params.sessionId,
+        include: params.includeServerNames ? [...params.includeServerNames].toSorted() : undefined,
+        exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
+      });
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: { servers: { opik: { command: "true" }, notion: { command: "true" } } },
+    };
+
+    // Empty include set resolves to undefined and creates nothing.
+    await expect(
+      manager.getOrCreateStaticScoped({
+        sessionId: "session-static",
+        workspaceDir: "/workspace",
+        cfg: cfg as never,
+        includeServerNames: new Set(),
+      }),
+    ).resolves.toBeUndefined();
+    expect(created).toHaveLength(0);
+
+    const runtime = await manager.getOrCreateStaticScoped({
+      sessionId: "session-static",
+      sessionKey: "agent:test:session-static",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      includeServerNames: new Set(["opik"]),
+    });
+
+    expect(runtime).toBeDefined();
+    // Only opik is opened; notion is excluded from the harness runtime.
+    expect(created).toEqual([
+      { sessionId: "session-static", include: ["opik"], exclude: undefined },
+    ]);
+    // Runtime lives under the dedicated static-harness key, never the bare sessionId.
+    const staticKey = buildMcpStaticHarnessRuntimeCacheKey({
+      sessionId: "session-static",
+      serverNames: ["opik"],
+    });
+    expect(manager.listRuntimeKeys()).toEqual([staticKey]);
+    expect(manager.listRuntimeKeys()).not.toContain("session-static");
+    // The key still maps back to its session for disposal/lookup.
+    expect(manager.listSessionIds()).toEqual(["session-static"]);
+
+    await manager.disposeAll();
+  });
+
+  it("getOrCreateStaticScoped keys by server set so a different scope does not evict a leased runtime", async () => {
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      const included = params.includeServerNames ? [...params.includeServerNames].toSorted() : [];
+      const label = included.join(",");
+      return {
+        ...makeRuntime([{ toolName: "probe", description: "probe" }]),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: `fingerprint:${label}`,
+        dispose: async () => {
+          disposed.push(label);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const cfg = {
+      mcp: { servers: { opik: { command: "true" }, notion: { command: "true" } } },
+    };
+
+    // Turn A scopes to opik and leases the runtime (an in-flight dynamic call).
+    const opikRuntime = await manager.getOrCreateStaticScoped({
+      sessionId: "session-scope",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      includeServerNames: new Set(["opik"]),
+    });
+    opikRuntime!.acquireLease?.();
+
+    // Overlapping turn B scopes to notion: a distinct key, so opik is NOT disposed.
+    const notionRuntime = await manager.getOrCreateStaticScoped({
+      sessionId: "session-scope",
+      workspaceDir: "/workspace",
+      cfg: cfg as never,
+      includeServerNames: new Set(["notion"]),
+    });
+
+    expect(notionRuntime).toBeDefined();
+    expect(disposed).toEqual([]);
+    expect(manager.listRuntimeKeys()).toHaveLength(2);
+
+    await manager.disposeAll();
+  });
+
   it("keeps the tools.effective config summary in fingerprint parity with the peeked runtime", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     const { resolveSessionMcpConfigSummary } = await import("./agent-bundle-mcp-tools.js");

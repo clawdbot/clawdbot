@@ -39,6 +39,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     startupEnvApiKeyCacheKey,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled,
+    userMcpServersEnabled,
     nativeProviderWebSearchSupport,
     sandboxExecServerEnabled,
   } = runtime;
@@ -98,6 +99,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
+      userMcpServersEnabled,
       nativeProviderWebSearchSupport,
       sandboxExecServerEnabled,
       sandbox,

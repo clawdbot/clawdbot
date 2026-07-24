@@ -27,6 +27,12 @@ const mocks = vi.hoisted(() => {
         requesterSenderId?: string | null;
       }) => Promise<Runtime | undefined>)
     | undefined;
+  let staticResolveImpl:
+    | ((params: {
+        sessionId: string;
+        includeServerNames: ReadonlySet<string>;
+      }) => Promise<Runtime | undefined>)
+    | undefined;
 
   return {
     advertised,
@@ -34,10 +40,21 @@ const mocks = vi.hoisted(() => {
     setResolveImpl(impl?: typeof resolveImpl) {
       resolveImpl = impl;
     },
+    setStaticResolveImpl(impl?: typeof staticResolveImpl) {
+      staticResolveImpl = impl;
+    },
     getOrCreateRequesterScopedMcpRuntime: vi.fn(
       async (params: { sessionId: string; requesterSenderId?: string | null }) => {
         if (resolveImpl) {
           return resolveImpl(params);
+        }
+        return undefined;
+      },
+    ),
+    getOrCreateStaticScopedMcpRuntime: vi.fn(
+      async (params: { sessionId: string; includeServerNames: ReadonlySet<string> }) => {
+        if (staticResolveImpl) {
+          return staticResolveImpl(params);
         }
         return undefined;
       },
@@ -52,6 +69,7 @@ const mocks = vi.hoisted(() => {
       advertised.clear();
       runtimes.clear();
       resolveImpl = undefined;
+      staticResolveImpl = undefined;
     },
   };
 });
@@ -61,6 +79,7 @@ vi.mock("./agent-bundle-mcp-runtime.js", async (importOriginal) => {
   return {
     ...actual,
     getOrCreateRequesterScopedMcpRuntime: mocks.getOrCreateRequesterScopedMcpRuntime,
+    getOrCreateStaticScopedMcpRuntime: mocks.getOrCreateStaticScopedMcpRuntime,
     rememberAdvertisedScopedMcpCatalog: mocks.rememberAdvertisedScopedMcpCatalog,
     getAdvertisedScopedMcpCatalog: mocks.getAdvertisedScopedMcpCatalog,
   };
@@ -134,9 +153,65 @@ function makeRuntime(params: { sessionId: string; requesterSenderId: string }): 
   };
 }
 
+function makeStaticRuntime(sessionId: string): SessionMcpRuntime {
+  const serverName = "opik";
+  const toolNames = ["read", "list"];
+  const catalog = {
+    version: 1,
+    generatedAt: 0,
+    servers: {
+      [serverName]: { serverName, launchSummary: serverName, toolCount: toolNames.length },
+    },
+    tools: toolNames.map((toolName) => ({
+      serverName,
+      safeServerName: serverName,
+      toolName,
+      description: `opik ${toolName}`,
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: `opik ${toolName}`,
+    })),
+  };
+  let lastUsedAt = Date.now();
+  let activeLeases = 0;
+  return {
+    sessionId,
+    workspaceDir: "/workspace",
+    configFingerprint: "fp-static",
+    createdAt: Date.now(),
+    get lastUsedAt() {
+      return lastUsedAt;
+    },
+    get activeLeases() {
+      return activeLeases;
+    },
+    acquireLease: () => {
+      activeLeases += 1;
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        activeLeases -= 1;
+      };
+    },
+    markUsed: () => {
+      lastUsedAt = Date.now();
+    },
+    peekCatalog: () => catalog,
+    getCatalog: async () => catalog,
+    callTool: async (_server, toolName) => ({
+      content: [{ type: "text", text: `static:${toolName}` }],
+      isError: false,
+    }),
+    dispose: async () => {},
+  };
+}
+
 beforeEach(() => {
   mocks.reset();
   mocks.getOrCreateRequesterScopedMcpRuntime.mockClear();
+  mocks.getOrCreateStaticScopedMcpRuntime.mockClear();
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
   mocks.getAdvertisedScopedMcpCatalog.mockClear();
 });
@@ -240,5 +315,67 @@ describe("materializeRequesterScopedMcpToolsForHarnessRun", () => {
 
     await alice!.dispose();
     await bob!.dispose();
+  });
+
+  it("materializes allowlisted static servers as dynamic tools and applies the allowlist", async () => {
+    mocks.setResolveImpl(async () => undefined);
+    mocks.setStaticResolveImpl(async (params) =>
+      params.includeServerNames.has("opik") ? makeStaticRuntime(params.sessionId) : undefined,
+    );
+
+    const result = await materializeRequesterScopedMcpToolsForHarnessRun({
+      sessionId: "session-static",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: { opik: { command: "true" } } } } as never,
+      requesterSenderId: "authed",
+      exposeAllowlistedStaticServers: true,
+      toolsAllow: ["opik__read"],
+    });
+
+    expect(result).toBeDefined();
+    // list is dropped by the allowlist; read survives on both surfaces.
+    expect(result!.advertisedTools.map((tool) => tool.name)).toEqual(["opik__read"]);
+    expect(result!.tools.map((tool) => tool.name)).toEqual(["opik__read"]);
+    // Static tools never enter the session advertised cache.
+    expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
+
+    const live = await result!.tools[0]!.execute("c1", {});
+    expect(live.content[0]).toMatchObject({ type: "text", text: "static:read" });
+    await result!.dispose();
+  });
+
+  it("leaks no stale static stub when the later turn is unrestricted", async () => {
+    mocks.setResolveImpl(async (params) =>
+      makeRuntime({ sessionId: params.sessionId, requesterSenderId: "authed" }),
+    );
+    mocks.setStaticResolveImpl(async (params) =>
+      params.includeServerNames.has("opik") ? makeStaticRuntime(params.sessionId) : undefined,
+    );
+    const cfg = { mcp: { servers: { opik: { command: "true" } } } } as never;
+
+    // Turn A: scoped-allowlist turn exposes the static server as dynamic tools.
+    const scopedTurn = await materializeRequesterScopedMcpToolsForHarnessRun({
+      sessionId: "session-toggle",
+      workspaceDir: "/workspace",
+      cfg,
+      requesterSenderId: "authed",
+      exposeAllowlistedStaticServers: true,
+      toolsAllow: ["opik__read", "opik__list", "user-mail__inbox"],
+    });
+    expect(scopedTurn!.advertisedTools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["opik__read", "opik__list", "user-mail__inbox"]),
+    );
+    await scopedTurn!.dispose();
+
+    // Turn B: wildcard turn (static back to native attachment) does not expose static.
+    const wildcardTurn = await materializeRequesterScopedMcpToolsForHarnessRun({
+      sessionId: "session-toggle",
+      workspaceDir: "/workspace",
+      cfg,
+      requesterSenderId: "authed",
+    });
+    expect(wildcardTurn).toBeDefined();
+    // Only the requester-scoped server remains; no stale opik stub survives.
+    expect(wildcardTurn!.advertisedTools.map((tool) => tool.name)).toEqual(["user-mail__inbox"]);
   });
 });

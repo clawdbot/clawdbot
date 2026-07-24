@@ -7,6 +7,7 @@ import {
 import {
   buildDynamicTools,
   formatCodexDynamicToolBuildStageSummary,
+  isUnrestrictedCodexToolsAllow,
   resolveCodexMessageToolProvider,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
@@ -26,6 +27,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     runtimeParams,
     effectiveRuntimeModelId,
     nativeToolSurfaceEnabled,
+    userMcpServersEnabled,
     nativeProviderWebSearchSupport,
     hookChannelId,
   } = runtime;
@@ -145,7 +147,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ignoreRuntimePlan: true,
   });
   // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
-  // Specs come from the session advertised-catalog cache so fingerprints stay stable.
+  // Requester-scoped specs come from the session advertised-catalog cache so
+  // fingerprints stay stable. On a scoped-allowlist turn the allowlist-referenced
+  // static servers are ALSO exposed here as dynamic tools instead of native
+  // attachment (thread-lifecycle-run omits them from the native user-MCP patch on
+  // the same condition); wildcard/unrestricted turns keep native attachment.
+  const exposeAllowlistedStaticServers =
+    userMcpServersEnabled !== false && !isUnrestrictedCodexToolsAllow(params.toolsAllow);
   const scopedMcpTools = await materializeRequesterScopedMcpToolsForHarnessRun({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -159,6 +167,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       ...tools.map((tool) => tool.name),
       ...registeredTools.map((tool) => tool.name),
     ],
+    exposeAllowlistedStaticServers,
     toolsAllow: params.toolsAllow,
     policyContext: {
       config: params.config,

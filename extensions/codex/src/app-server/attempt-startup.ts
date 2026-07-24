@@ -156,6 +156,9 @@ export async function startCodexAttemptThread(params: {
   nativeHookRelayGeneration?: string;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   nativeToolSurfaceEnabled: boolean;
+  // Attaching user MCP servers is gated separately from native code mode, so a
+  // scoped allowlist can keep MCP servers while native tools stay fail-closed.
+  userMcpServersEnabled?: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sandboxExecServerEnabled: boolean;
   sandbox: CodexSandboxContext;
@@ -470,7 +473,8 @@ export async function startCodexAttemptThread(params: {
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-                userMcpServersEnabled: params.nativeToolSurfaceEnabled,
+                userMcpServersEnabled:
+                  params.userMcpServersEnabled ?? params.nativeToolSurfaceEnabled,
                 mcpServersFingerprint: params.bundleMcpThreadConfig.fingerprint,
                 mcpServersFingerprintEvaluated: params.bundleMcpThreadConfig.evaluated,
                 environmentSelection: startupEnvironmentSelection,

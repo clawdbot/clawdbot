@@ -840,6 +840,52 @@ function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
 function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
   return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
+/**
+ * True when the turn's allowlist imposes no server-level restriction: either
+ * absent, or a literal `*`. On such turns user MCP servers keep today's native
+ * harness attachment; a narrower (scoped) allowlist instead exposes the
+ * allowlist-referenced static servers through the dynamic-tool bridge.
+ */
+export function isUnrestrictedCodexToolsAllow(toolsAllow: string[] | undefined): boolean {
+  return toolsAllow === undefined || hasWildcardCodexToolsAllow(toolsAllow);
+}
+/**
+ * Returns true when user-configured MCP servers may be attached to the Codex
+ * app-server thread for this turn.
+ *
+ * Deliberately decoupled from `shouldEnableCodexAppServerNativeToolSurface`.
+ * Native code mode (Codex's built-in shell/filesystem/apply_patch surface) is a
+ * sandbox-sensitive capability that must stay fail-closed on anything narrower
+ * than a literal `*`. Attaching user MCP servers is a separate, narrower
+ * capability: which servers (and tools) actually become reachable is decided
+ * downstream by the allowlist-aware projection
+ * (`buildCodexUserMcpServersThreadConfigPatch`), so this gate only answers the
+ * orthogonal question "is it safe to attach external MCP servers at all this
+ * turn?" — i.e. not a memory-flush run, and OpenClaw sandboxing (if active) can
+ * be honored. Conflating the two dropped every user MCP server whenever a
+ * scoped allowlist disabled native code mode, even when the allowlist named a
+ * specific server.
+ */
+export function shouldEnableUserMcpServersForCodexAppServer(
+  params: EmbeddedRunAttemptParams,
+  sandbox?: OpenClawSandboxContext,
+  options: {
+    agentId?: string;
+    runtimeSessionKey?: string;
+    sandboxExecServerEnabled?: boolean;
+  } = {},
+): boolean {
+  if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  // `disableTools` is the explicit all-tools-disabled contract; user MCP servers
+  // must stay detached on such runs (Codex would otherwise register every MCP
+  // tool for a server projected without an `enabled_tools` filter).
+  if (params.disableTools) {
+    return false;
+  }
+  return canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options);
+}
 /** Forces message delivery through the message tool when the source channel requires it. */
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
   return (

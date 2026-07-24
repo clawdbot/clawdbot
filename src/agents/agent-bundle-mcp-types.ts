@@ -162,6 +162,21 @@ export type SessionMcpRuntimeManager = {
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   }) => Promise<SessionMcpRuntime | undefined>;
   /**
+   * Named static partition only, under a dedicated harness key — never the
+   * bare-sessionId static runtime. Shared-thread harnesses use this to expose
+   * static servers as dynamic tools on a scoped-allowlist turn. Undefined when
+   * the include set is empty or names no declared static server.
+   */
+  getOrCreateStaticScoped: (params: {
+    sessionId: string;
+    sessionKey?: string;
+    workspaceDir: string;
+    agentDir?: string;
+    cfg?: OpenClawConfig;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+    includeServerNames: ReadonlySet<string>;
+  }) => Promise<SessionMcpRuntime | undefined>;
+  /**
    * Session-stable advertised catalog for scoped servers. Used by shared-thread
    * harnesses so dynamic tool specs do not rotate per sender.
    */

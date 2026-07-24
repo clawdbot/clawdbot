@@ -57,6 +57,23 @@ export async function getOrCreateRequesterScopedMcpRuntime(params: {
   return await getSessionMcpRuntimeManager().getOrCreateRequesterScoped(params);
 }
 
+/**
+ * Named static MCP runtime for a shared-thread harness (scoped-allowlist turn).
+ * Opens only the given static servers under a dedicated key; never the bare
+ * static runtime. Undefined when the set is empty or names no static server.
+ */
+export async function getOrCreateStaticScopedMcpRuntime(params: {
+  sessionId: string;
+  sessionKey?: string;
+  workspaceDir: string;
+  agentDir?: string;
+  cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  includeServerNames: ReadonlySet<string>;
+}): Promise<SessionMcpRuntime | undefined> {
+  return await getSessionMcpRuntimeManager().getOrCreateStaticScoped(params);
+}
+
 export function rememberAdvertisedScopedMcpCatalog(
   sessionId: string,
   catalog: McpToolCatalog,

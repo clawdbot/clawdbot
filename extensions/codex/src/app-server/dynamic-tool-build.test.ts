@@ -14,10 +14,12 @@ import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   buildDynamicTools,
   disableCodexPluginThreadConfig,
+  isUnrestrictedCodexToolsAllow,
   resolveCodexAppServerExecutionCwd,
   resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexMessageToolProvider,
   shouldEnableCodexAppServerNativeToolSurface,
+  shouldEnableUserMcpServersForCodexAppServer,
 } from "./dynamic-tool-build.js";
 import {
   filterCodexDynamicTools,
@@ -1558,6 +1560,73 @@ describe("Codex app-server dynamic tool build", () => {
 
     params.toolsAllow = ["message"];
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("decouples user MCP server attachment from the native code-mode surface", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+
+    // A scoped allowlist keeps the native shell/file surface fail-closed, but must
+    // no longer drop user MCP servers wholesale — the per-server decision is left to
+    // the allowlist-aware projection (covered in bundle-mcp-codex tests).
+    for (const toolsAllow of [["*"], ["opik__*"], ["opik__list"], ["message"], []] as string[][]) {
+      params.toolsAllow = toolsAllow;
+      expect(shouldEnableUserMcpServersForCodexAppServer(params)).toBe(true);
+    }
+    // Native surface stays wildcard-only regardless of the MCP gate.
+    params.toolsAllow = ["opik__*"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    params.toolsAllow = ["*"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+
+    // No restriction keeps both available.
+    params.toolsAllow = undefined;
+    expect(shouldEnableUserMcpServersForCodexAppServer(params)).toBe(true);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
+  });
+
+  it("does not attach user MCP servers on memory-flush runs", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.trigger = "memory";
+    params.memoryFlushWritePath = "memory/2026-05-22.md";
+    params.toolsAllow = ["opik__*"];
+    expect(shouldEnableUserMcpServersForCodexAppServer(params)).toBe(false);
+  });
+
+  it("does not attach user MCP servers when all tools are disabled", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = true;
+    params.toolsAllow = ["opik__*"];
+    expect(shouldEnableUserMcpServersForCodexAppServer(params)).toBe(false);
+  });
+
+  it("keeps user MCP attachment fail-closed under active OpenClaw sandboxing", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.toolsAllow = ["opik__*"];
+    // An active sandbox without the exec-server integration owns shell/file/MCP
+    // execution, so native MCP attachment must stay off (same rule the native
+    // surface honors).
+    expect(shouldEnableUserMcpServersForCodexAppServer(params, { enabled: true } as never)).toBe(
+      false,
+    );
+  });
+
+  it("treats only an absent or wildcard allowlist as unrestricted", () => {
+    // Unrestricted: static servers keep native attachment.
+    expect(isUnrestrictedCodexToolsAllow(undefined)).toBe(true);
+    expect(isUnrestrictedCodexToolsAllow(["*"])).toBe(true);
+    expect(isUnrestrictedCodexToolsAllow(["read", "*"])).toBe(true);
+    // Scoped: referenced static servers move to the dynamic-tool bridge instead.
+    expect(isUnrestrictedCodexToolsAllow([])).toBe(false);
+    expect(isUnrestrictedCodexToolsAllow(["opik__*"])).toBe(false);
+    expect(isUnrestrictedCodexToolsAllow(["opik__read"])).toBe(false);
+    expect(isUnrestrictedCodexToolsAllow(["group:plugins"])).toBe(false);
   });
 
   it("disables Codex native tool surfaces when all tools are disabled", () => {

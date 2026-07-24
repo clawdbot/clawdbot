@@ -370,6 +370,26 @@ export function buildMcpRequesterRuntimeCacheKey(params: {
   });
 }
 
+/**
+ * Dedicated key for a shared-thread harness that opens named static servers on
+ * a scoped-allowlist turn. Kept distinct from the bare-sessionId static runtime
+ * (`getOrCreate`) so the harness-owned transports never share or dispose the
+ * native static runtime. The selected server set is part of the key so two
+ * overlapping turns that scope to different servers get separate runtimes
+ * instead of the second turn disposing the first turn's (still-leased) one.
+ * `parseRuntimeCacheSessionId` recovers the sessionId from the leading `{`.
+ */
+export function buildMcpStaticHarnessRuntimeCacheKey(params: {
+  sessionId: string;
+  serverNames: Iterable<string>;
+}): string {
+  return JSON.stringify({
+    sessionId: params.sessionId,
+    scope: "static-harness",
+    servers: [...params.serverNames].toSorted((a, b) => a.localeCompare(b)),
+  });
+}
+
 export const testing = {
   setMcpServerConnectionResolversForTest(
     resolvers?: Iterable<OpenClawPluginMcpServerConnectionResolver & { pluginId?: string }> | null,

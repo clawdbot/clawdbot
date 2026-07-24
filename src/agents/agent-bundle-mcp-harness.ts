@@ -1,6 +1,8 @@
 /**
  * Harness-facing materialization of requester-scoped MCP tools.
- * Static MCP stays harness-native; this path never opens static transports.
+ * Static MCP stays harness-native by default; on a scoped-allowlist turn the
+ * caller may pass `staticServerNames` to expose those named static servers as
+ * dynamic tools instead (per-turn only, never written to the session cache).
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -12,8 +14,10 @@ import {
 import {
   getAdvertisedScopedMcpCatalog,
   getOrCreateRequesterScopedMcpRuntime,
+  getOrCreateStaticScopedMcpRuntime,
   rememberAdvertisedScopedMcpCatalog,
 } from "./agent-bundle-mcp-runtime.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
 import {
   resolveConversationCapabilityProfile,
   type ConversationCapabilityProfileParams,
@@ -21,6 +25,7 @@ import {
 } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { selectAllowlistedStaticMcpServerNames } from "./mcp-allowlist-server-select.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type RequesterScopedHarnessMcpTools = {
@@ -45,6 +50,14 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   agentAccountId?: string | null;
   messageChannel?: string | null;
   reservedToolNames?: Iterable<string>;
+  /**
+   * Scoped-allowlist turns: also expose the static servers the `toolsAllow`
+   * references as dynamic tools. They are materialized live from their own
+   * catalog and merged for this turn only — never remembered in the session
+   * advertised cache, so a later wildcard turn (where they return to native
+   * attachment) sees no stale stub. No-op when `toolsAllow` is unrestricted.
+   */
+  exposeAllowlistedStaticServers?: boolean;
   toolsAllow?: string[];
   /** When set, applies the same final effective tool policy as the embedded runner. */
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
@@ -96,13 +109,20 @@ function applyHarnessToolPolicy(
 }
 
 /**
- * Materialize requester-scoped MCP tools for a harness run (e.g. Codex dynamic tools).
- * Updates the session advertised-catalog cache when a requester resolves a catalog.
- * Before any requester resolves in the session, returns undefined (nothing to advertise).
+ * Materialize requester-scoped (and, on a scoped turn, named static) MCP tools
+ * for a harness run (e.g. Codex dynamic tools). Requester-scoped servers update
+ * the session advertised-catalog cache so specs stay stable per sender; static
+ * servers are materialized live for this turn only and are NOT cached. Returns
+ * undefined when neither surface has anything to advertise.
  */
 export async function materializeRequesterScopedMcpToolsForHarnessRun(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
+  const reservedToolNames = params.reservedToolNames
+    ? Array.from(params.reservedToolNames)
+    : undefined;
+
+  // Requester-scoped: session-cached advertised surface (identical per sender).
   const scopedRuntime = await getOrCreateRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -119,27 +139,70 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
   if (scopedRuntime) {
     liveRuntime = await materializeBundleMcpToolsForRun({
       runtime: scopedRuntime,
-      reservedToolNames: params.reservedToolNames,
+      reservedToolNames,
     });
     const catalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());
     rememberAdvertisedScopedMcpCatalog(params.sessionId, catalog);
   }
+  const requesterAdvertisedCatalog = getAdvertisedScopedMcpCatalog(params.sessionId);
 
-  const advertisedCatalog = getAdvertisedScopedMcpCatalog(params.sessionId);
-  if (!advertisedCatalog || advertisedCatalog.tools.length === 0) {
-    await liveRuntime?.dispose();
-    return undefined;
+  // Static-scoped: live catalog drives the advertised specs directly, for this
+  // turn only. Static server names are sender-independent, so the live catalog
+  // is already session-stable; keeping it out of the session cache is what
+  // prevents a later wildcard turn from inheriting a stale not-connected stub.
+  let staticLiveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+  let staticAdvertisedCatalog: McpToolCatalog | undefined;
+  const staticServerNames = params.exposeAllowlistedStaticServers
+    ? selectAllowlistedStaticMcpServerNames({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        manifestRegistry: params.manifestRegistry,
+        toolsAllow: params.toolsAllow,
+      })
+    : undefined;
+  if (staticServerNames && staticServerNames.size > 0) {
+    const staticRuntime = await getOrCreateStaticScopedMcpRuntime({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      cfg: params.cfg,
+      manifestRegistry: params.manifestRegistry,
+      includeServerNames: staticServerNames,
+    });
+    if (staticRuntime) {
+      staticLiveRuntime = await materializeBundleMcpToolsForRun({
+        runtime: staticRuntime,
+        reservedToolNames,
+      });
+      staticAdvertisedCatalog = staticRuntime.peekCatalog() ?? (await staticRuntime.getCatalog());
+    }
   }
 
-  const reservedToolNames = params.reservedToolNames
-    ? Array.from(params.reservedToolNames)
-    : undefined;
-  const advertisedTools = buildBundleMcpToolsFromCatalog({
-    catalog: advertisedCatalog,
-    reservedToolNames,
-    createExecute: (tool) => async () => notConnectedToolResult(tool.serverName, tool.toolName),
-  });
-  const liveByName = new Map((liveRuntime?.tools ?? []).map((tool) => [tool.name, tool]));
+  const buildNotConnected = (catalog: McpToolCatalog) =>
+    buildBundleMcpToolsFromCatalog({
+      catalog,
+      reservedToolNames,
+      createExecute: (tool) => async () => notConnectedToolResult(tool.serverName, tool.toolName),
+    });
+  const advertisedTools: AnyAgentTool[] = [];
+  if (requesterAdvertisedCatalog && requesterAdvertisedCatalog.tools.length > 0) {
+    advertisedTools.push(...buildNotConnected(requesterAdvertisedCatalog));
+  }
+  if (staticAdvertisedCatalog && staticAdvertisedCatalog.tools.length > 0) {
+    advertisedTools.push(...buildNotConnected(staticAdvertisedCatalog));
+  }
+  if (advertisedTools.length === 0) {
+    await liveRuntime?.dispose();
+    await staticLiveRuntime?.dispose();
+    return undefined;
+  }
+  const liveByName = new Map(
+    [...(liveRuntime?.tools ?? []), ...(staticLiveRuntime?.tools ?? [])].map((tool) => [
+      tool.name,
+      tool,
+    ]),
+  );
   // Live tools supply execution; advertised catalog supplies the stable name/schema surface.
   const tools = advertisedTools.map((tool) => liveByName.get(tool.name) ?? tool);
 
@@ -159,6 +222,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
       }
       disposed = true;
       await liveRuntime?.dispose();
+      await staticLiveRuntime?.dispose();
     },
   };
 }

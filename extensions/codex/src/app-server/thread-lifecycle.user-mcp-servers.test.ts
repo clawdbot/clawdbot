@@ -384,6 +384,47 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(startParams?.config?.mcp_servers).toBeUndefined();
   });
 
+  it("omits the native mcp_servers patch on a scoped-allowlist turn (dynamic-bridge exposure)", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: {
+        ...createParams(sessionFile, workspaceDir, {
+          mcp: {
+            servers: {
+              notes: {
+                transport: "stdio",
+                command: "node",
+                args: ["/opt/notes-mcp/dist/index.js"],
+              },
+            },
+          },
+        } as unknown as EmbeddedRunAttemptParams["config"]),
+        disableTools: false,
+        // Scoped allowlist: notes moves to the dynamic-tool bridge, so the native
+        // patch must be omitted (otherwise notes would be double-surfaced).
+        toolsAllow: ["notes__read"],
+      } as EmbeddedRunAttemptParams,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: true,
+    });
+
+    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+  });
+
   it("starts a new thread when an existing binding lacks the matching user MCP fingerprint", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
