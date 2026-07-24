@@ -234,7 +234,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       try {
         await appendSessionAudit({
           cfg,
-          target: current,
+          target: { ...current, sessionKey: current.canonicalKey },
           text: `${actor.label ?? actor.id} changed session visibility from ${previous} to ${visibility}.`,
           now,
         });
@@ -366,7 +366,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       try {
         await appendSessionAudit({
           cfg,
-          target: current,
+          target: { ...current, sessionKey: current.canonicalKey },
           text: `${actor.label ?? actor.id} added ${params.identityId} as a session member.`,
           now,
         });
@@ -437,7 +437,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       try {
         await appendSessionAudit({
           cfg,
-          target: current,
+          target: { ...current, sessionKey: current.canonicalKey },
           text: `${actor.label ?? actor.id} removed ${params.identityId} from session members.`,
           now,
         });

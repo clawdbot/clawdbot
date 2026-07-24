@@ -2,6 +2,7 @@
  * LLM-based slug generator for session memory filenames
  */
 
+import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -79,7 +80,7 @@ export async function generateSlugViaLLM(params: {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     const agentDir = resolveAgentDir(params.cfg, agentId);
 
-    const sessionId = `slug-generator-${Date.now()}`;
+    const sessionId = `slug-generator-${randomUUID()}`;
     const sessionKey = `agent:${agentId}:helper:incognito-${sessionId}`;
 
     const prompt = `Based on this conversation, generate a short 1-2 word filename slug (lowercase, hyphen-separated, no file extension).

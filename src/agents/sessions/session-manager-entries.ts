@@ -193,6 +193,13 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (params.targetId !== null && !this.byId.has(params.targetId)) {
       throw new Error(`Entry ${params.targetId} not found`);
     }
+    if (
+      params.appendParentId !== null &&
+      !this.byId.has(params.appendParentId) &&
+      !this.opaqueParentsById.has(params.appendParentId)
+    ) {
+      throw new Error(`Append parent ${params.appendParentId} not found`);
+    }
     const previousLeafId = this.leafId;
     this.leafId = params.targetId;
     const entry = this.createLeafControl(

@@ -1,6 +1,5 @@
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export async function appendSessionAudit(params: {
@@ -8,6 +7,7 @@ export async function appendSessionAudit(params: {
   target: {
     agentId: string;
     entry: Pick<SessionEntry, "sessionId">;
+    sessionKey: string;
     storePath: string;
   };
   text: string;
@@ -18,11 +18,7 @@ export async function appendSessionAudit(params: {
     sessionId: params.target.entry.sessionId,
     storePath: params.target.storePath,
   };
-  const sessionKey = resolveTranscriptSessionKeyBySessionId(identity);
-  if (!sessionKey) {
-    return;
-  }
-  SessionManager.open({ ...identity, sessionKey }).appendMessage(
+  SessionManager.open({ ...identity, sessionKey: params.target.sessionKey }).appendMessage(
     {
       role: "custom",
       customType: "openclaw.system-note",

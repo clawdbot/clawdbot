@@ -214,6 +214,12 @@ describe("SessionManager.open", () => {
     const thirdId = manager.appendMessage({ role: "user", content: "third", timestamp: 3 });
 
     expect(manager.getBranch().map((entry) => entry.id)).toEqual([firstId, thirdId]);
+    expect(() =>
+      manager.appendLeafControl({
+        targetId: thirdId,
+        appendParentId: "missing-parent",
+      }),
+    ).toThrow("Append parent missing-parent not found");
   });
 
   it("refreshes cwd when switching persisted targets and rejects identity reset", async () => {
