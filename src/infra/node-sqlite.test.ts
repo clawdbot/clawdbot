@@ -103,20 +103,34 @@ describe("node SQLite locations", () => {
 
   it("keeps UNC and namespaced Windows paths out of SQLite URI authority parsing", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const resolveSpy = vi.spyOn(path, "resolve").mockImplementation((pathname) => pathname);
+    const resolvedPaths = new Map([
+      [
+        String.raw`\\server\share\state\openclaw.sqlite`,
+        String.raw`\\server\share\state\openclaw.sqlite`,
+      ],
+      ["//server/share/state/openclaw.sqlite", String.raw`\\server\share\state\openclaw.sqlite`],
+      ["relative/openclaw.sqlite", String.raw`\\server\share\workdir\relative\openclaw.sqlite`],
+      [
+        String.raw`\\?\C:\deep\state\openclaw.sqlite`,
+        String.raw`\\?\C:\deep\state\openclaw.sqlite`,
+      ],
+      [
+        String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
+        String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
+      ],
+    ]);
+    const resolveSpy = vi.spyOn(path, "resolve").mockImplementation((pathname) => {
+      return resolvedPaths.get(pathname) ?? pathname;
+    });
     const namespacedSpy = vi
       .spyOn(path, "toNamespacedPath")
       .mockImplementation((pathname) => pathname);
 
-    for (const pathname of [
-      String.raw`\\server\share\state\openclaw.sqlite`,
-      String.raw`\\?\C:\deep\state\openclaw.sqlite`,
-      String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
-    ]) {
-      expect(resolveNodeSqliteReadOnlyLocation(pathname, false)).toBe(pathname);
+    for (const [pathname, resolvedPath] of resolvedPaths) {
+      expect(resolveNodeSqliteReadOnlyLocation(pathname, false)).toBe(resolvedPath);
     }
-    expect(resolveSpy).toHaveBeenCalledTimes(3);
-    expect(namespacedSpy).toHaveBeenCalledTimes(3);
+    expect(resolveSpy).toHaveBeenCalledTimes(resolvedPaths.size);
+    expect(namespacedSpy).toHaveBeenCalledTimes(resolvedPaths.size);
   });
 });
 

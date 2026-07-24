@@ -29,10 +29,17 @@ export function resolveNodeSqliteReadOnlyLocation(
   pathname: string,
   hasWalSidecars: boolean,
 ): string {
-  // SQLite URI authorities reject UNC hosts, while ordinary Windows paths
-  // preserve UNC and already-namespaced locations through the Windows VFS.
-  if (hasWalSidecars || (process.platform === "win32" && pathname.startsWith("\\\\"))) {
-    return resolveNodeSqliteLocation(pathname);
+  if (process.platform === "win32") {
+    const resolvedPath = path.resolve(pathname);
+    // SQLite URI authorities reject UNC hosts, while ordinary Windows paths
+    // preserve UNC and already-namespaced locations through the Windows VFS.
+    if (hasWalSidecars || resolvedPath.startsWith("\\\\")) {
+      return path.toNamespacedPath(resolvedPath);
+    }
+    return `${pathToFileURL(resolvedPath).href}?mode=ro&immutable=1`;
+  }
+  if (hasWalSidecars) {
+    return pathname;
   }
   return `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
 }
