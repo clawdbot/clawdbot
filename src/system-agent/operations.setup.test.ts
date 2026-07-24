@@ -7,43 +7,20 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
   executeSystemAgentOperation,
-  isPersistentSystemAgentOperation,
   type SystemAgentCommandDeps,
 } from "./operations.js";
-import { createSystemAgentTestRuntime } from "./system-agent.test-helpers.js";
+import {
+  createSystemAgentTestRuntime,
+  expectSystemAgentAuditRecord as expectAuditRecord,
+  expectTestRecordFields as expectRecordFields,
+  readLastSystemAgentAuditEntry as readLastAuditEntry,
+  requireTestRecord as requireRecord,
+} from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
-
-function readLastAuditEntry(): unknown {
-  return listSystemAgentAuditEntriesForTests().at(-1)?.value;
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function expectAuditRecord(
-  audit: unknown,
-  fields: Record<string, unknown>,
-  detailFields: Record<string, unknown>,
-) {
-  const auditRecord = requireRecord(audit, "audit record");
-  expectRecordFields(auditRecord, fields);
-  expectRecordFields(requireRecord(auditRecord.details, "audit details"), detailFields);
-}
 
 const mockConfig = vi.hoisted(() => {
   const initial = { agents: { entries: { main: { default: true } } } };
@@ -1016,93 +993,5 @@ describe("parseSystemAgentOperation", () => {
     expect(work?.model).toEqual({
       primary: "openai/gpt-5.5",
     });
-  });
-
-  it("refuses doctor repairs before any write or audit", async () => {
-    const tempDir = opTempDirs.make("openclaw-doctor-fix-refused-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runDoctor = vi.fn(async () => {});
-
-    const result = await executeSystemAgentOperation({ kind: "doctor-fix" }, runtime, {
-      approved: true,
-      deps: { runDoctor },
-      auditDetails: { rescue: true },
-    });
-    expect(result).toEqual({ applied: false });
-    expect(isPersistentSystemAgentOperation({ kind: "doctor-fix" })).toBe(false);
-    expect(runDoctor).not.toHaveBeenCalled();
-    expect(lines.join("\n")).toContain("Exit OpenClaw");
-    expect(lines.join("\n")).toContain("openclaw doctor --fix");
-    expect(lines.join("\n")).not.toContain("[openclaw] running: doctor.fix");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
-  it("returns from the agent TUI back to OpenClaw", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({
-      exitReason: "return-to-system-agent" as const,
-      systemAgentMessage: "restart gateway",
-    }));
-
-    const result = await executeSystemAgentOperation(
-      { kind: "open-tui", agentId: "work" },
-      runtime,
-      {
-        deps: { runTui },
-      },
-    );
-
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      session: "agent:work:main",
-      deliver: false,
-      historyLimit: 200,
-    });
-    expectRecordFields(result as unknown as Record<string, unknown>, {
-      applied: false,
-      returnToShell: true,
-      nextInput: "restart gateway",
-    });
-    expect(lines.join("\n")).toContain(
-      "[openclaw] returned from agent with request: restart gateway",
-    );
-  });
-
-  it("seeds a fresh hatch into the agent TUI", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
-
-    await executeSystemAgentOperation(
-      { kind: "open-tui", agentId: "work", agentDraft: "hatch" },
-      runtime,
-      { deps: { runTui } },
-    );
-
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      session: "agent:work:main",
-      deliver: false,
-      historyLimit: 200,
-      message: "Wake up, my friend!",
-    });
-  });
-
-  it("re-enters the OpenClaw shell when the agent TUI returns without a request", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({
-      exitReason: "return-to-system-agent" as const,
-    }));
-
-    const result = await executeSystemAgentOperation({ kind: "open-tui" }, runtime, {
-      deps: { runTui },
-    });
-
-    expectRecordFields(result as unknown as Record<string, unknown>, {
-      applied: false,
-      returnToShell: true,
-    });
-    expect((result as { nextInput?: string }).nextInput).toBeUndefined();
-    expect(lines.join("\n")).toContain("[openclaw] returned from agent");
   });
 });
