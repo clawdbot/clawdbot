@@ -64,11 +64,19 @@ function swapFirstAsciiLetterCase(value: string): string | undefined {
 }
 
 function areAsciiCaseVariants(left: string | undefined, right: string | undefined): boolean {
+  const isAscii = (value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      if (value.charCodeAt(index) > 0x7f) {
+        return false;
+      }
+    }
+    return true;
+  };
   return (
     left !== undefined &&
     right !== undefined &&
-    /^[\x00-\x7F]*$/u.test(left) &&
-    /^[\x00-\x7F]*$/u.test(right) &&
+    isAscii(left) &&
+    isAscii(right) &&
     left.toLowerCase() === right.toLowerCase()
   );
 }

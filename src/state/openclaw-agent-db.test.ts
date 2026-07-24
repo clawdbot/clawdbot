@@ -73,16 +73,6 @@ function createTempStateDir(): string {
   return makeTempDir(agentDbTempDirs, "openclaw-agent-db-");
 }
 
-function swapFirstAsciiLetterCase(value: string): string | undefined {
-  const index = value.search(/[A-Za-z]/u);
-  if (index < 0) {
-    return undefined;
-  }
-  const letter = value[index]!;
-  const swapped = letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase();
-  return `${value.slice(0, index)}${swapped}${value.slice(index + 1)}`;
-}
-
 const tempVolumeIsCaseInsensitive = (() => {
   const probeDir = fs.realpathSync(createTempStateDir());
   const probePath = path.join(probeDir, "CaseProbe");
