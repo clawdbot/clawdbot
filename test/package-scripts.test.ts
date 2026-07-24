@@ -181,6 +181,12 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs shared test-state cleanup coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/test-utils/openclaw-test-state.test.ts",
+    );
+  });
+
   it("runs cross-OS installer behavior coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/openclaw-cross-os-installer.windows.test.ts",

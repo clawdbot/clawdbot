@@ -547,6 +547,17 @@ export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; stor
     );
 }
 
+/** List process-held agent databases without opening or inspecting fixture state. */
+export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; path: string }> {
+  return [...cachedDatabases.values()]
+    .filter((database) => database.db.isOpen)
+    .map((database) => ({ agentId: database.agentId, path: database.path }))
+    .toSorted(
+      (left, right) =>
+        left.agentId.localeCompare(right.agentId) || left.path.localeCompare(right.path),
+    );
+}
+
 /** Close one cached agent database identified by its exact resolved pathname. */
 export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
   // Cache keys are lexical resolved paths. Do not realpath aliases here: a
