@@ -139,6 +139,9 @@ export function resolveAgentIdFromSessionKey(
   if (parsed?.agentId) {
     return normalizeAgentId(parsed.agentId);
   }
+  if (classifySessionKeyShape(sessionKey) === "malformed_agent") {
+    throw new Error("Malformed agent session key; refusing default-agent resolution.");
+  }
   const configuredDefault = configuredDefaultAgentId?.trim();
   if (configuredDefault) {
     return normalizeAgentId(configuredDefault);

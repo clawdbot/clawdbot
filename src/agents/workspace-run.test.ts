@@ -3,7 +3,11 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveRunWorkspaceDir } from "./workspace-run.js";
+import {
+  resolveRunWorkspaceDir,
+  RunWorkspaceAgentNotConfiguredError,
+  RunWorkspaceRosterRequiredError,
+} from "./workspace-run.js";
 
 vi.unmock("./agent-scope-config.js");
 
@@ -91,7 +95,7 @@ describe("resolveRunWorkspaceDir", () => {
         config: undefined,
         env: { ...process.env, OPENCLAW_WORKSPACE_DIR: workspaceDir },
       }),
-    ).toThrow("No agents configured");
+    ).toThrow(RunWorkspaceRosterRequiredError);
   });
 
   it("throws for malformed agent session keys", () => {
@@ -119,7 +123,31 @@ describe("resolveRunWorkspaceDir", () => {
         config: undefined,
         env,
       }),
-    ).toThrow("No agents configured");
+    ).toThrow(RunWorkspaceRosterRequiredError);
+  });
+
+  it("rejects an explicit agent when the supplied config has no roster", () => {
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: undefined,
+        agentId: "research",
+        config: {},
+      }),
+    ).toThrow(RunWorkspaceRosterRequiredError);
+  });
+
+  it.each([
+    { agentId: "research", sessionKey: undefined },
+    { agentId: undefined, sessionKey: "agent:research:subagent:test" },
+  ])("rejects an unconfigured workspace owner for $sessionKey", ({ agentId, sessionKey }) => {
+    expect(() =>
+      resolveRunWorkspaceDir({
+        workspaceDir: undefined,
+        agentId,
+        sessionKey,
+        config: { agents: { entries: { ops: { default: true } } } },
+      }),
+    ).toThrow(RunWorkspaceAgentNotConfiguredError);
   });
 
   it("throws for malformed agent session keys even when config has a default agent", () => {

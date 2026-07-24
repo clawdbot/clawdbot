@@ -73,6 +73,29 @@ function createTempStateDir(): string {
   return makeTempDir(agentDbTempDirs, "openclaw-agent-db-");
 }
 
+function swapFirstAsciiLetterCase(value: string): string | undefined {
+  const index = value.search(/[A-Za-z]/u);
+  if (index < 0) {
+    return undefined;
+  }
+  const letter = value[index]!;
+  const swapped = letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase();
+  return `${value.slice(0, index)}${swapped}${value.slice(index + 1)}`;
+}
+
+const tempVolumeIsCaseInsensitive = (() => {
+  const probeDir = fs.realpathSync(createTempStateDir());
+  const probePath = path.join(probeDir, "CaseProbe");
+  fs.writeFileSync(probePath, "probe");
+  try {
+    const probe = fs.lstatSync(probePath, { bigint: true });
+    const alias = fs.lstatSync(path.join(probeDir, "caseProbe"), { bigint: true });
+    return probe.dev === alias.dev && probe.ino === alias.ino;
+  } catch {
+    return false;
+  }
+})();
+
 function downgradeCurrentAgentDatabaseToV13(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
@@ -1693,6 +1716,46 @@ describe("openclaw agent database", () => {
       registerOpenClawAgentDatabase({ agentId: "worker", env, path: aliasPath });
     },
   );
+
+  it.runIf(tempVolumeIsCaseInsensitive)(
+    "matches missing database leaf aliases using case-insensitive volume semantics",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          path.join(stateDir, "Worker.sqlite"),
+          path.join(stateDir, "worker.sqlite"),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.runIf(!tempVolumeIsCaseInsensitive)(
+    "does not mistake distinct hard-link spellings for case-insensitive lookup",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      const probePath = path.join(stateDir, "CaseProbe");
+      fs.writeFileSync(probePath, "probe");
+      fs.linkSync(probePath, path.join(stateDir, "caseProbe"));
+
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          path.join(stateDir, "Worker.sqlite"),
+          path.join(stateDir, "worker.sqlite"),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("does not equate Unicode paths through JavaScript case folding", () => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    expect(
+      isSameOpenClawAgentDatabasePath(
+        path.join(stateDir, "İ.sqlite"),
+        path.join(stateDir, "i\u0307.sqlite"),
+      ),
+    ).toBe(false);
+  });
 
   it("does not refresh global registry metadata on cached opens", () => {
     const stateDir = createTempStateDir();

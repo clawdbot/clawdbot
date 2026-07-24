@@ -124,6 +124,21 @@ export function listKnownSessionStoreAgentIds(
   const env = params.env ?? process.env;
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const ids = new Set(listConfiguredSessionStoreAgentIds(cfg));
+  if (!isPerAgentSessionStoreConfig(cfg.session?.store)) {
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: defaultAgentId, env });
+    const durableTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: defaultAgentId,
+      defaultAgentId,
+      env,
+    });
+    // Fixed stores can outlive their registry row. Preserve the database-recorded
+    // owner so combined views and reapers do not drop a retired agent's live sessions.
+    if (durableTarget.unsuffixedOwnerAgentId) {
+      ids.add(normalizeAgentId(durableTarget.unsuffixedOwnerAgentId));
+    } else if (durableTarget.ownerSource === "database-path" && durableTarget.agentId) {
+      ids.add(normalizeAgentId(durableTarget.agentId));
+    }
+  }
   for (const registered of listOpenClawRegisteredAgentDatabases({ env })) {
     const agentId = normalizeAgentId(registered.agentId);
     const storePath = resolveStorePath(cfg.session?.store, { agentId, env });

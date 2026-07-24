@@ -35,6 +35,9 @@ describe("agent id session-key boundary", () => {
     expect(() => resolveAgentIdFromSessionKey("main", "   ")).toThrow("configured default agent");
     expect(resolveAgentIdFromSessionKey("main", "primary")).toBe("primary");
     expect(resolveAgentIdFromSessionKey("agent:worker:main", "primary")).toBe("worker");
+    expect(() => resolveAgentIdFromSessionKey("agent::secret", "primary")).toThrow(
+      "Malformed agent session key",
+    );
   });
 });
 

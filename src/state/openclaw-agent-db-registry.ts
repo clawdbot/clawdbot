@@ -1,4 +1,15 @@
-import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import path from "node:path";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -36,13 +47,132 @@ type AgentDatabasePathIdentity = {
   inode?: bigint | number;
   parentDevice?: bigint | number;
   parentInode?: bigint | number;
+  parentRealPath?: string;
   unresolvedSuffix?: string;
 };
+
+const parentCaseSemanticsCache = new Map<string, boolean>();
+
+function swapFirstAsciiLetterCase(value: string): string | undefined {
+  const index = value.search(/[A-Za-z]/u);
+  if (index < 0) {
+    return undefined;
+  }
+  const letter = value[index]!;
+  const swapped = letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase();
+  return `${value.slice(0, index)}${swapped}${value.slice(index + 1)}`;
+}
+
+function areAsciiCaseVariants(left: string | undefined, right: string | undefined): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    /^[\x00-\x7F]*$/u.test(left) &&
+    /^[\x00-\x7F]*$/u.test(right) &&
+    left.toLowerCase() === right.toLowerCase()
+  );
+}
+
+function isParentFilesystemCaseInsensitive(params: {
+  device: bigint | number;
+  inode: bigint | number;
+  realPath: string;
+}): boolean | undefined {
+  const cacheKey = `${params.device}:${params.inode}:${params.realPath}`;
+  const cached = parentCaseSemanticsCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let entries: string[];
+  try {
+    entries = readdirSync(params.realPath);
+  } catch {
+    return undefined;
+  }
+  const entryNames = new Set(entries);
+  for (const entry of entries) {
+    const alternateName = swapFirstAsciiLetterCase(entry);
+    if (!alternateName) {
+      continue;
+    }
+    const entryPath = path.join(params.realPath, entry);
+    const alternatePath = path.join(params.realPath, alternateName);
+    if (entryNames.has(alternateName)) {
+      // Both spellings are distinct directory entries. Even if hard-linked, the
+      // directory itself is case-sensitive and missing leaves must stay distinct.
+      parentCaseSemanticsCache.set(cacheKey, false);
+      return false;
+    }
+    let entryStat: ReturnType<typeof lstatSync>;
+    try {
+      entryStat = lstatSync(entryPath, { bigint: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    try {
+      const alternateStat = lstatSync(alternatePath, { bigint: true });
+      const caseInsensitive =
+        alternateStat.dev === entryStat.dev && alternateStat.ino === entryStat.ino;
+      parentCaseSemanticsCache.set(cacheKey, caseInsensitive);
+      return caseInsensitive;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      parentCaseSemanticsCache.set(cacheKey, false);
+      return false;
+    }
+  }
+
+  // Empty directories offer no existing spelling to probe. Use an atomic,
+  // process-owned leaf and remove it immediately; failure to probe stays unknown.
+  const probeName = `.openclaw-case-probe-${randomUUID()}`;
+  const alternateProbeName = swapFirstAsciiLetterCase(probeName);
+  if (!alternateProbeName) {
+    return undefined;
+  }
+  const probePath = path.join(params.realPath, probeName);
+  const alternateProbePath = path.join(params.realPath, alternateProbeName);
+  let created = false;
+  try {
+    const descriptor = openSync(probePath, "wx", 0o600);
+    created = true;
+    closeSync(descriptor);
+    const probeStat = lstatSync(probePath, { bigint: true });
+    try {
+      const alternateStat = lstatSync(alternateProbePath, { bigint: true });
+      const caseInsensitive =
+        alternateStat.dev === probeStat.dev && alternateStat.ino === probeStat.ino;
+      parentCaseSemanticsCache.set(cacheKey, caseInsensitive);
+      return caseInsensitive;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      parentCaseSemanticsCache.set(cacheKey, false);
+      return false;
+    }
+  } catch {
+    return undefined;
+  } finally {
+    if (created) {
+      try {
+        unlinkSync(probePath);
+      } catch {
+        // Best-effort cleanup of the process-owned probe; comparison already failed closed.
+      }
+    }
+  }
+}
 
 function resolveCanonicalPathFromExistingParent(lexicalPath: string): {
   realPath: string;
   parentDevice: bigint;
   parentInode: bigint;
+  parentRealPath: string;
   unresolvedSuffix: string;
 } {
   const missingSegments: string[] = [];
@@ -50,10 +180,12 @@ function resolveCanonicalPathFromExistingParent(lexicalPath: string): {
   while (true) {
     try {
       const stat = statSync(current, { bigint: true });
+      const parentRealPath = realpathSync.native(current);
       return {
-        realPath: path.join(realpathSync.native(current), ...missingSegments),
+        realPath: path.join(parentRealPath, ...missingSegments),
         parentDevice: stat.dev,
         parentInode: stat.ino,
+        parentRealPath,
         unresolvedSuffix: missingSegments.join(path.sep),
       };
     } catch (error) {
@@ -153,16 +285,31 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
   if (leftIdentity.realPath && leftIdentity.realPath === rightIdentity.realPath) {
     return true;
   }
+  const parentDevice = leftIdentity.parentDevice;
+  const parentInode = leftIdentity.parentInode;
+  const sameMissingParent =
+    parentDevice !== undefined &&
+    parentInode !== undefined &&
+    parentDevice === rightIdentity.parentDevice &&
+    parentInode === rightIdentity.parentInode;
+  const sameMissingSuffix =
+    leftIdentity.unresolvedSuffix === rightIdentity.unresolvedSuffix ||
+    (sameMissingParent &&
+      parentDevice !== undefined &&
+      parentInode !== undefined &&
+      leftIdentity.parentRealPath !== undefined &&
+      areAsciiCaseVariants(leftIdentity.unresolvedSuffix, rightIdentity.unresolvedSuffix) &&
+      isParentFilesystemCaseInsensitive({
+        device: parentDevice,
+        inode: parentInode,
+        realPath: leftIdentity.parentRealPath,
+      }) === true);
   return (
     (leftIdentity.device !== undefined &&
       leftIdentity.inode !== undefined &&
       leftIdentity.device === rightIdentity.device &&
       leftIdentity.inode === rightIdentity.inode) ||
-    (leftIdentity.parentDevice !== undefined &&
-      leftIdentity.parentInode !== undefined &&
-      leftIdentity.parentDevice === rightIdentity.parentDevice &&
-      leftIdentity.parentInode === rightIdentity.parentInode &&
-      leftIdentity.unresolvedSuffix === rightIdentity.unresolvedSuffix)
+    (sameMissingParent && sameMissingSuffix)
   );
 }
 
