@@ -2,6 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../test/helpers/infra/delivery-recovery.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { upsertDeliveryQueueEntry } from "./delivery-queue-sqlite.js";
 const RECOVERY_REPLAY_SPACING_MS = 250;
@@ -10,6 +11,7 @@ const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 import {
+  buildPostCompactionDelegateDeliveryPayload,
   deferSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
@@ -31,6 +33,22 @@ describe("session-delivery queue recovery", () => {
     sleepMock.mockReset();
     sleepMock.mockResolvedValue(undefined);
   });
+
+  function readSessionQueueRow(
+    tempDir: string,
+    id: string,
+  ): { status: string; entry_json: string } | undefined {
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+    });
+    return db
+      .prepare(
+        `SELECT status, entry_json
+           FROM delivery_queue_entries
+          WHERE queue_name = 'session' AND id = ?`,
+      )
+      .get(id) as { status: string; entry_json: string } | undefined;
+  }
 
   it("replays and acks pending entries on recovery", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
@@ -141,6 +159,50 @@ describe("session-delivery queue recovery", () => {
       expect(second.recovered).toBe(1);
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(onSettled).toHaveBeenCalledTimes(2);
+      expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+    });
+  });
+
+  it("scrubs post-compaction snapshots before retrying settlement cleanup", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const secret = "POST_COMPACTION_SETTLEMENT_SECRET";
+      const id = await enqueueSessionDelivery(
+        buildPostCompactionDelegateDeliveryPayload({
+          sessionKey: "agent:main:main",
+          delegate: {
+            task: "deliver the durable snapshot",
+            createdAt: 123,
+            attachments: [{ name: "brief.md", content: secret }],
+            attachAs: { mountPath: "handoff" },
+          },
+          sequence: 0,
+        }),
+        tempDir,
+      );
+      const deliver = vi.fn(async () => undefined);
+      let failCleanup = true;
+      const onSettled = vi.fn(async () => {
+        if (failCleanup) {
+          failCleanup = false;
+          throw new Error("cleanup interrupted");
+        }
+      });
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      await recoverPendingSessionDeliveries({ deliver, onSettled, stateDir: tempDir, log });
+
+      const [pending] = await loadPendingSessionDeliveries(tempDir);
+      expect(pending).toMatchObject({
+        id,
+        settlementOutcome: "recovered",
+        acknowledgedAt: expect.any(Number),
+      });
+      expect(pending).not.toHaveProperty("attachments");
+      expect(pending).not.toHaveProperty("attachAs");
+      expect(readSessionQueueRow(tempDir, id)?.entry_json).not.toContain(secret);
+
+      await recoverPendingSessionDeliveries({ deliver, onSettled, stateDir: tempDir, log });
+      expect(deliver).toHaveBeenCalledTimes(1);
       expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
     });
   });
@@ -690,6 +752,56 @@ describe("session-delivery queue recovery", () => {
       expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
     });
   });
+
+  it.each(["runtime", "startup"] as const)(
+    "scrubs post-compaction snapshots after %s retry exhaustion",
+    async (mode) => {
+      await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+        const secret = `POST_COMPACTION_EXHAUSTED_${mode}`;
+        const payload = buildPostCompactionDelegateDeliveryPayload({
+          sessionKey: "agent:main:main",
+          delegate: {
+            task: `exhaust ${mode} delivery`,
+            createdAt: 123,
+            attachments: [{ name: "brief.md", content: secret }],
+            attachAs: { mountPath: "handoff" },
+          },
+          sequence: 0,
+        });
+        const id = await enqueueSessionDelivery({ ...payload, maxRetries: 1 }, tempDir);
+        await failSessionDelivery(id, "busy", tempDir);
+
+        const deliver = vi.fn(async () => undefined);
+        if (mode === "runtime") {
+          await drainPendingSessionDeliveries({
+            drainKey: "post-compaction-exhaustion",
+            logLabel: "post-compaction exhaustion",
+            deliver,
+            stateDir: tempDir,
+            log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+            selectEntry: (entry) => ({ match: entry.id === id, bypassBackoff: true }),
+          });
+        } else {
+          await recoverPendingSessionDeliveries({
+            deliver,
+            stateDir: tempDir,
+            log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          });
+        }
+
+        expect(deliver).not.toHaveBeenCalled();
+        const row = readSessionQueueRow(tempDir, id);
+        expect(row?.status).toBe("failed");
+        expect(row?.entry_json).not.toContain(secret);
+        if (!row) {
+          throw new Error(`Expected failed session delivery row ${id}`);
+        }
+        const failedEntry = JSON.parse(row.entry_json) as Record<string, unknown>;
+        expect(failedEntry).not.toHaveProperty("attachments");
+        expect(failedEntry).not.toHaveProperty("attachAs");
+      });
+    },
+  );
 
   it.each(["runtime", "startup"] as const)(
     "reconciles an accepted agent turn before %s retry exhaustion",

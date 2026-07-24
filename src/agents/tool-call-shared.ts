@@ -4,10 +4,11 @@
  * before routing them to any tool execution surface.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
-const REDACTED_CONTINUE_DELEGATE_ATTACHMENT_CONTENT = "__OPENCLAW_REDACTED__";
+const CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS = ["name", "encoding", "mimeType"] as const;
 
 /** Normalize an optional iterable of allowed tool names for lookup. */
 export function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
@@ -54,22 +55,68 @@ function redactContinueDelegateAttachmentContent(value: unknown): unknown {
     return value;
   }
   const input = value as Record<string, unknown>;
-  if (!Array.isArray(input.attachments)) {
+  if (!Object.hasOwn(input, "attachments")) {
     return value;
+  }
+  if (!Array.isArray(input.attachments)) {
+    const redacted = { ...input };
+    delete redacted.attachments;
+    return redacted;
   }
   let changed = false;
   const attachments = input.attachments.map((attachment) => {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-      return attachment;
-    }
-    const item = attachment as Record<string, unknown>;
-    if (!("content" in item)) {
+    if (isRedactedContinueDelegateAttachment(attachment)) {
       return attachment;
     }
     changed = true;
-    return { ...item, content: REDACTED_CONTINUE_DELEGATE_ATTACHMENT_CONTENT };
+    return redactContinueDelegateAttachment(attachment);
   });
   return changed ? { ...input, attachments } : value;
+}
+
+function isRedactedContinueDelegateAttachment(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const attachment = value as Record<string, unknown>;
+  if (attachment.content !== REDACTED_SENTINEL) {
+    return false;
+  }
+  for (const key of Object.keys(attachment)) {
+    if (key === "content") {
+      continue;
+    }
+    if (!(CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
+      return false;
+    }
+    const metadata = attachment[key];
+    if (typeof metadata !== "string" || metadata.trim().length === 0) {
+      return false;
+    }
+    if (key === "encoding" && metadata !== "utf8" && metadata !== "base64") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function redactContinueDelegateAttachment(value: unknown): Record<string, unknown> {
+  const redacted: Record<string, unknown> = { content: REDACTED_SENTINEL };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return redacted;
+  }
+  const attachment = value as Record<string, unknown>;
+  for (const key of CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS) {
+    const metadata = attachment[key];
+    if (typeof metadata !== "string" || metadata.trim().length === 0) {
+      continue;
+    }
+    if (key === "encoding" && metadata !== "utf8" && metadata !== "base64") {
+      continue;
+    }
+    redacted[key] = metadata;
+  }
+  return redacted;
 }
 
 /** Normalize a transcript tool-call name and redact continuation snapshot bytes. */

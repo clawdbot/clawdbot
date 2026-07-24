@@ -121,6 +121,45 @@ describe("installSessionToolResultGuard", () => {
     expect(serialized).toContain("use durable input");
   });
 
+  it("does not persist malformed continue_delegate attachment secrets", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm);
+    const primitiveSecret = "PERSISTED_PRIMITIVE_SECRET";
+    const unknownFieldSecret = "PERSISTED_UNKNOWN_FIELD_SECRET";
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_delegate_malformed",
+            name: "continue_delegate",
+            arguments: {
+              task: "use malformed durable input",
+              attachments: [
+                primitiveSecret,
+                {
+                  name: "brief.md",
+                  content: "PERSISTED_CONTENT_SECRET",
+                  extra: unknownFieldSecret,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+
+    const serialized = JSON.stringify(getPersistedMessages(sm));
+    expect(serialized).not.toContain(primitiveSecret);
+    expect(serialized).not.toContain(unknownFieldSecret);
+    expect(serialized).not.toContain("PERSISTED_CONTENT_SECRET");
+    expect(serialized).not.toContain('"extra"');
+    expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
+    expect(serialized).toContain('"name":"brief.md"');
+  });
+
   it("inserts synthetic toolResult before non-tool message when pending", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

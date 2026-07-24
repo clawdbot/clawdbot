@@ -56,6 +56,27 @@ describe("session-delivery queue storage", () => {
       .get(id) as { status: string; entry_json: string; last_error: string | null } | undefined;
   }
 
+  function rewriteSessionQueueEntry(
+    tempDir: string,
+    id: string,
+    update: (entry: Record<string, unknown>) => void,
+  ): void {
+    const current = readSessionQueueRow(tempDir, id);
+    if (!current) {
+      throw new Error(`Expected session delivery row ${id}`);
+    }
+    const entry = JSON.parse(current.entry_json) as Record<string, unknown>;
+    update(entry);
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+    });
+    db.prepare(
+      `UPDATE delivery_queue_entries
+          SET entry_json = ?
+        WHERE queue_name = 'session' AND id = ?`,
+    ).run(JSON.stringify(entry), id);
+  }
+
   it("dedupes entries when an idempotency key is reused", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const firstId = await enqueueSessionDelivery(
@@ -315,6 +336,75 @@ describe("session-delivery queue storage", () => {
         last_error: "invalid postCompactionDelegate delivery payload: invalid shape",
       });
       expect(row?.entry_json).not.toContain(secret);
+    });
+  });
+
+  it("dead-letters post-compaction rows that violate live queue semantics", async () => {
+    const corruptions: Array<{
+      name: string;
+      mutate: (entry: Record<string, unknown>, secret: string) => void;
+    }> = [
+      {
+        name: "empty task",
+        mutate: (entry) => {
+          entry.task = "   ";
+        },
+      },
+      {
+        name: "contradictory targeting",
+        mutate: (entry) => {
+          entry.targetSessionKey = "agent:main:target";
+          entry.fanoutMode = "all";
+        },
+      },
+      {
+        name: "invalid retry budget",
+        mutate: (entry) => {
+          entry.maxRetries = -1;
+        },
+      },
+      {
+        name: "unknown fields",
+        mutate: (entry, secret) => {
+          entry.untrusted = secret;
+        },
+      },
+    ];
+
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      for (const [sequence, corruption] of corruptions.entries()) {
+        const secret = `CORRUPT_QUEUE_SECRET_${sequence}`;
+        const id = await enqueuePostCompactionDelegateDelivery(
+          {
+            sessionKey: "agent:main:main",
+            delegate: {
+              task: `recover ${corruption.name}`,
+              createdAt: 123 + sequence,
+              attachments: [{ name: "brief.md", content: secret }],
+            },
+            sequence,
+          },
+          tempDir,
+        );
+        rewriteSessionQueueEntry(tempDir, id, (entry) => corruption.mutate(entry, secret));
+
+        await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toBeNull();
+        const row = readSessionQueueRow(tempDir, id);
+        expect(row).toMatchObject({
+          status: "failed",
+          last_error: "invalid postCompactionDelegate delivery payload: invalid shape",
+        });
+        if (!row) {
+          throw new Error(`Expected failed session delivery row ${id}`);
+        }
+        expect(row.entry_json).not.toContain(secret);
+        expect(JSON.parse(row.entry_json)).toEqual({
+          id,
+          enqueuedAt: expect.any(Number),
+          retryCount: 0,
+          lastError: "invalid postCompactionDelegate delivery payload: invalid shape",
+        });
+      }
     });
   });
 

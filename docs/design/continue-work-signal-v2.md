@@ -389,7 +389,7 @@ In OpenClaw, `continue_work()` is the first primitive that lets an agent say “
 
 The implementation hooks into existing gateway layers rather than adding a parallel runner.
 
-1. **Token parsing:** `parseContinuationSignal()` and `stripContinuationSignal()` in `src/auto-reply/tokens.ts` detect and remove continuation tokens from displayed output.
+1. **Token parsing:** `parseContinuationSignal()` and `stripContinuationSignal()` in `src/auto-reply/continuation/signal.ts` detect and remove continuation tokens from displayed output.
 2. **Signal detection:** the main reply runner, follow-up runner, and spawn-init attempt path inspect finalized payloads and typed tool callbacks with `extractContinuationSignal()`, so typed `continue_work()` and `CONTINUE_WORK[:N]` fallback produce the same work signal.
 3. **Same-session work scheduling:** `scheduleContinuationWork()` persists a `continuation_work` TaskFlow row and advances continuation chain state after the current turn completes. The row, not the timer handle, is the durable election.
 4. **Same-session work dispatch:** `dispatchPendingContinuationWork()` consumes matured rows, enqueues `[continuation:wake]`, checks that the elected session is present and not already active, then calls `getReplyFromConfig()` directly for that same `SessionKey`. Busy sessions are requeued instead of orphaned.
@@ -1838,7 +1838,7 @@ The key property is **pre-run inclusion**: the event is enqueued and then draine
 | Continuation attachment durability               | `src/auto-reply/continuation/delegate-flow-store.ts`, `src/auto-reply/continuation/delegate-store.ts`, `src/infra/session-delivery-queue-storage.ts` + colocated tests            |
 | Text-only continuation return seam (#666)        | `src/agents/subagent-announce-output.ts`, `src/agents/subagent-announce.ts`, `src/agents/subagent-announce.continuation-return.ts`, `src/auto-reply/continuation/targeting.ts`    |
 | Return-target resolution and delivery            | `src/auto-reply/continuation/targeting.ts` + `src/auto-reply/continuation/cross-session-targeting.test.ts`                                                                        |
-| Response-token fallback parsing                  | `src/auto-reply/tokens.ts` + `src/auto-reply/tokens.continuation.test.ts`                                                                                                         |
+| Response-token fallback parsing                  | `src/auto-reply/continuation/signal.ts` + `src/auto-reply/continuation/signal-parser.test.ts`                                                                                     |
 | Pending and staged delegate persistence          | `src/auto-reply/continuation/delegate-store.ts` + `src/auto-reply/continuation/delegate-store.test.ts`                                                                            |
 | Post-compaction delegate release                 | `src/auto-reply/continuation/post-compaction-release.ts` + `src/auto-reply/continuation/post-compaction-release.test.ts`                                                          |
 | Context-pressure warnings                        | `src/auto-reply/continuation/context-pressure.ts` + `src/auto-reply/continuation/context-pressure.test.ts`                                                                        |

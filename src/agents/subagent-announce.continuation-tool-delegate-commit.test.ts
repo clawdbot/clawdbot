@@ -209,6 +209,38 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
     expect(mockedMarkPendingDelegateFailed).not.toHaveBeenCalled();
   });
 
+  it("forwards typed inputs from a recovered nested delegate into the grandchild spawn", async () => {
+    const attachments = [
+      {
+        name: "brief.md",
+        content: "nested continuation input",
+        encoding: "utf8" as const,
+        mimeType: "text/markdown",
+      },
+    ];
+    mockedConsumePendingDelegates.mockReturnValueOnce([
+      {
+        task: "continue with recovered inputs",
+        delayMs: 30_000,
+        attachments,
+        attachAs: { mountPath: "inputs" },
+        flowId: "flow-tool-attachments",
+        expectedRevision: 4,
+      },
+    ]);
+    failSharedDelegateDispatchOnce();
+
+    await runSubagentAnnounceFlow(buildToolDelegateParams());
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(spawnSpy).toHaveBeenCalledTimes(1);
+    const spawnArgs = spawnSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(spawnArgs.attachments).toEqual(attachments);
+    expect(spawnArgs.attachMountPath).toBe("inputs");
+  });
+
   it("does not commit the flow when the spawn is rejected", async () => {
     mockedConsumePendingDelegates.mockReturnValueOnce([
       { task: "continue next step", flowId: "flow-tool-c2-reject", expectedRevision: 1 },

@@ -553,6 +553,10 @@ export async function coordinateSubagentContinuation(params: {
             continuationChainState: accounting.buildChildContinuationSpawnState(nextHop),
             ...(delegate.flowId ? { continuationDelegateFlowId: delegate.flowId } : {}),
             ...(delegate.model ? { model: delegate.model } : {}),
+            ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
+            ...(delegate.attachAs?.mountPath
+              ? { attachMountPath: delegate.attachAs.mountPath }
+              : {}),
           },
           {
             agentSessionKey: params.targetRequesterSessionKey,

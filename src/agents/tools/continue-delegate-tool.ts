@@ -201,6 +201,9 @@ function readAttachAsParam(params: Record<string, unknown>): InlineAttachmentMou
     throw new ToolInputError("attachAs must be an object.");
   }
   const mountPath = readSnakeCaseParamRaw(raw as Record<string, unknown>, "mountPath");
+  if (mountPath !== undefined && typeof mountPath !== "string") {
+    throw new ToolInputError("attachAs.mountPath must be a string.");
+  }
   const parsed = parseInlineAttachmentMountPath(mountPath);
   if (parsed.status === "invalid") {
     throw new ToolInputError("attachAs.mountPath contains unsupported characters.");

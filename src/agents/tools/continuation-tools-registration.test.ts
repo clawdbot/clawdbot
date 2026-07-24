@@ -133,12 +133,15 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
   //   cross-session return targeting fields.
   //
   // The canonical advertised keys are:
-  //   - task         (required)
-  //   - delaySeconds (optional)
-  //   - mode         (optional, enum)
+  //   - task              (required)
+  //   - delaySeconds      (optional)
+  //   - mode              (optional, enum)
+  //   - attachments       (optional)
+  //   - attachAs          (optional)
   //   - targetSessionKey  (optional)
   //   - targetSessionKeys (optional)
   //   - fanoutMode        (optional, enum)
+  //   - model             (optional)
   // Diagnostic trace context is runtime-owned and intentionally not model-facing.
   //
   // Extension to the mode-only trap, not duplication: it lives in
@@ -168,6 +171,8 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
       "task",
       "delaySeconds",
       "mode",
+      "attachments",
+      "attachAs",
       "targetSessionKey",
       "targetSessionKeys",
       "fanoutMode",
@@ -176,7 +181,7 @@ describe("continuation tool registration", { timeout: 240000 }, () => {
     const actualKeys = Object.keys(properties).toSorted();
     expect(
       actualKeys,
-      `continue_delegate descriptor must advertise exactly [task, delaySeconds, mode, targetSessionKey, targetSessionKeys, fanoutMode, model]; got [${actualKeys.join(", ")}]`,
+      `continue_delegate descriptor must advertise exactly [${expectedKeys.join(", ")}]; got [${actualKeys.join(", ")}]`,
     ).toEqual(expectedKeys);
 
     // task is required (model-facing contract).

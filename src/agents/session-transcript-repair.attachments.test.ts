@@ -174,4 +174,141 @@ describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
     expect(serialized).toContain('"mimeType":"text/markdown"');
     expect(serialized).toContain("use the input snapshot");
   });
+
+  it("replaces malformed members and drops unknown attachment fields", () => {
+    const primitiveSecret = "CONTINUE_PRIMITIVE_SECRET";
+    const unknownFieldSecret = "CONTINUE_UNKNOWN_FIELD_SECRET";
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_malformed",
+            name: "continue_delegate",
+            arguments: {
+              task: "reject malformed snapshot metadata",
+              attachments: [
+                primitiveSecret,
+                {
+                  name: "brief.md",
+                  content: "CONTINUE_CONTENT_SECRET",
+                  encoding: "utf8",
+                  mimeType: "text/markdown",
+                  extra: unknownFieldSecret,
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain(primitiveSecret);
+    expect(serialized).not.toContain(unknownFieldSecret);
+    expect(serialized).not.toContain("CONTINUE_CONTENT_SECRET");
+    expect(serialized).not.toContain('"extra"');
+    expect(serialized).toContain('"content":"__OPENCLAW_REDACTED__"');
+    expect(serialized).toContain('"name":"brief.md"');
+    expect(serialized).toContain('"encoding":"utf8"');
+    expect(serialized).toContain('"mimeType":"text/markdown"');
+  });
+
+  it("removes malformed non-array attachments without retaining nested content", () => {
+    const secret = "CONTINUE_NON_ARRAY_SECRET";
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_non_array",
+            name: "continue_delegate",
+            arguments: {
+              task: "reject a malformed attachment collection",
+              attachments: { content: secret, nested: { content: secret } },
+            },
+          },
+        ],
+      },
+    ]);
+
+    const serialized = JSON.stringify(sanitizeToolCallInputs(input));
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain('"attachments"');
+    expect(serialized).toContain("reject a malformed attachment collection");
+  });
+
+  it("drops a signed-thinking turn when non-array attachments require sanitization", () => {
+    const secret = "CONTINUE_SIGNED_NON_ARRAY_SECRET";
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Use the malformed continuation snapshot.",
+            thinkingSignature: "sig_continue_delegate_malformed",
+          },
+          {
+            type: "toolUse",
+            id: "call_continue_signed_non_array",
+            name: "continue_delegate",
+            input: {
+              task: "reject a signed malformed attachment collection",
+              attachments: { content: secret },
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["continue_delegate"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([]);
+    expect(JSON.stringify(out)).not.toContain(secret);
+  });
+
+  it("preserves an already-redacted signed-thinking turn byte-for-byte", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Use the already-sanitized continuation snapshot.",
+            thinkingSignature: "sig_continue_delegate",
+          },
+          {
+            type: "toolUse",
+            id: "call_continue_redacted",
+            name: "continue_delegate",
+            input: {
+              task: "use the sanitized snapshot",
+              attachments: [
+                {
+                  content: "__OPENCLAW_REDACTED__",
+                  name: "brief.md",
+                  encoding: "utf8",
+                  mimeType: "text/markdown",
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["continue_delegate"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toBe(input);
+  });
 });

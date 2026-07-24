@@ -246,6 +246,12 @@ describe("continue_delegate tool", () => {
       }),
     ).rejects.toThrow("attachAs must be an object");
     await expect(
+      tool.execute("call-invalid-mount-type", {
+        task: "invalid mount type",
+        attachAs: { mountPath: 42 },
+      }),
+    ).rejects.toThrow("attachAs.mountPath must be a string");
+    await expect(
       tool.execute("call-invalid-mount", {
         task: "invalid mount hint",
         attachAs: { mountPath: "unsafe\npath" },
