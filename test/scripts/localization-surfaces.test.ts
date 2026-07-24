@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -228,5 +228,23 @@ describe("localization surface dispositions", () => {
         catalogRegistryPath: "catalogs.json",
       }),
     ).rejects.toThrow("must stay below, not replace, a declared root");
+  });
+
+  it("rejects a symbolic link used as a declared owner root", async () => {
+    await rm(path.join(root, "product"), { recursive: true, force: true });
+    await writeJson("linked-product/en.json", { messages: {} });
+    await symlink(
+      path.join(root, "linked-product"),
+      path.join(root, "product"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    await expect(
+      checkSurfaceDispositions({
+        root,
+        registryPath: "registry.json",
+        catalogRegistryPath: "catalogs.json",
+      }),
+    ).rejects.toThrow("declared root traverses symbolic link product");
   });
 });

@@ -1,4 +1,4 @@
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -257,10 +257,37 @@ async function discoverRoot(
   }
 }
 
+async function assertRootDirectory(
+  root: string,
+  repoPath: string,
+  adapterId: string,
+): Promise<void> {
+  let currentPath = path.resolve(root);
+  for (const segment of repoPath.split("/")) {
+    currentPath = path.join(currentPath, segment);
+    let stats;
+    try {
+      stats = await lstat(currentPath);
+    } catch (error) {
+      throw new Error(`adapter ${adapterId} cannot read declared root ${repoPath}`, {
+        cause: error,
+      });
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error(`adapter ${adapterId} declared root traverses symbolic link ${repoPath}`);
+    }
+  }
+  const rootStats = await lstat(currentPath);
+  if (!rootStats.isDirectory()) {
+    throw new Error(`adapter ${adapterId} declared root is not a directory: ${repoPath}`);
+  }
+}
+
 async function discoverSurfaces(root: string, adapters: readonly SurfaceAdapter[]) {
   const discovered = new Map<string, string>();
   for (const adapter of adapters) {
     for (const rootPath of adapter.roots) {
+      await assertRootDirectory(root, rootPath, adapter.id);
       await discoverRoot(root, rootPath, adapter, discovered);
     }
   }
