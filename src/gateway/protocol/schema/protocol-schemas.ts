@@ -65,6 +65,11 @@ import {
   ArtifactsListResultSchema,
 } from "./artifacts.js";
 import {
+  AiExecuteParamsSchema,
+  AiExecuteResultSchema,
+  AiExecutionAttemptSchema,
+} from "./ai-intelligence.js";
+import {
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
@@ -282,6 +287,9 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  AiExecuteParams: AiExecuteParamsSchema,
+  AiExecutionAttempt: AiExecutionAttemptSchema,
+  AiExecuteResult: AiExecuteResultSchema,
   EnvironmentStatus: EnvironmentStatusSchema,
   EnvironmentSummary: EnvironmentSummarySchema,
   EnvironmentsListParams: EnvironmentsListParamsSchema,
