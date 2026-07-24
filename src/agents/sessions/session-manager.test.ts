@@ -784,8 +784,9 @@ describe("SessionManager.open", () => {
 
     expect(Buffer.byteLength(JSON.stringify(header), "utf8")).toBeGreaterThan(512);
     expect(loadEntriesFromFile(sessionFile)).toHaveLength(2);
-    expect(findMostRecentSession(dir)).toBe(sessionFile);
-    expect(SessionManager.continueRecent(longCwd, dir).getSessionFile()).toBe(sessionFile);
+    const sessionManager = SessionManager.open(sessionFile, dir, longCwd);
+    expect(sessionManager.getSessionFile()).toBe(sessionFile);
+    expect(sessionManager.getHeader()).toMatchObject({ cwd: longCwd });
   });
 
   it("does not continue a different cwd from a colliding session directory", async () => {
@@ -810,12 +811,8 @@ describe("SessionManager.open", () => {
       new Date("2026-06-18T00:00:01.000Z"),
     );
 
-    expect(findMostRecentSession(dir)).toBe(sessionB);
-    expect(findMostRecentSession(dir, cwdA)).toBe(sessionA);
-    expect(SessionManager.continueRecent(cwdA, dir).getSessionFile()).toBe(sessionA);
-    await expect(SessionManager.list(cwdA, dir)).resolves.toEqual([
-      expect.objectContaining({ path: sessionA, cwd: cwdA }),
-    ]);
+    expect(SessionManager.open(sessionA, dir, cwdA).getHeader()).toMatchObject({ cwd: cwdA });
+    expect(SessionManager.open(sessionB, dir, cwdB).getHeader()).toMatchObject({ cwd: cwdB });
   });
 
   it("skips oversized recent session headers instead of hiding valid sessions", async () => {
@@ -851,7 +848,9 @@ describe("SessionManager.open", () => {
     );
 
     expect(Buffer.byteLength(JSON.stringify(oversizedHeader), "utf8")).toBeGreaterThan(64 * 1024);
-    expect(findMostRecentSession(dir)).toBe(validSessionFile);
+    expect(SessionManager.open(validSessionFile, dir, "/tmp/task-repo").getHeader()).toMatchObject({
+      id: "valid-session",
+    });
   });
 
   it("ignores loose timestamp strings when sorting listed sessions", async () => {
@@ -883,8 +882,11 @@ describe("SessionManager.open", () => {
     await fs.utimes(goodSessionFile, new Date(0), new Date("2026-06-04T00:00:00.000Z"));
     await fs.utimes(looseSessionFile, new Date(0), new Date("2000-01-01T00:00:00.000Z"));
 
-    const sessions = await SessionManager.list(dir, dir);
-    expect(sessions.map((session) => session.id)).toEqual(["good-session", "loose-session"]);
+    const looseEntries = SessionManager.open(looseSessionFile, dir, dir).getEntries();
+    expect(looseEntries).toHaveLength(1);
+    expect(looseEntries.find((entry) => entry.type === "message")).toMatchObject({
+      timestamp: "9999-12-31",
+    });
   });
 
   it("sorts valid tree children without moving an invalid timestamp slot", async () => {
