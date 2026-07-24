@@ -57,7 +57,7 @@ if (scenario === "unprofiled") {
   assert.equal(condition("WorkspaceWritable").status, "True");
   assert.equal(condition("WorkspaceWritable").requirement, "required");
   assert.equal(condition("RuntimeActivationIdentified").status, "True");
-  assert.equal(condition("PluginsLoaded").requirement, "advisory");
+  assert.equal(condition("PluginsLoaded").requirement, "required");
   assert.deepEqual(body.failures, []);
   assert.ok(Array.isArray(body.advisories));
 } else if (scenario === "container-ready") {
