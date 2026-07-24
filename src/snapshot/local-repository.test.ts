@@ -330,16 +330,18 @@ describe("local SQLite snapshot repository", () => {
     const originalOpen = fs.open.bind(fs);
     let syncFailed = false;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      if (
-        !syncFailed &&
-        flags === "r" &&
-        path.resolve(String(filePath)) === canonicalTempDir &&
-        fsSync.existsSync(repositoryPath)
-      ) {
-        syncFailed = true;
-        throw Object.assign(new Error("repository parent sync failed"), { code: "EIO" });
+      const handle = await originalOpen(filePath, flags, mode);
+      if (flags === "r" && path.resolve(String(filePath)) === canonicalTempDir) {
+        const originalSync = handle.sync.bind(handle);
+        vi.spyOn(handle, "sync").mockImplementation(async () => {
+          if (!syncFailed && fsSync.existsSync(repositoryPath)) {
+            syncFailed = true;
+            throw Object.assign(new Error("repository parent sync failed"), { code: "EIO" });
+          }
+          await originalSync();
+        });
       }
-      return await originalOpen(filePath, flags, mode);
+      return handle;
     });
 
     try {
@@ -371,17 +373,22 @@ describe("local SQLite snapshot repository", () => {
     const originalOpen = fs.open.bind(fs);
     let syncFailed = false;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      if (
-        !syncFailed &&
-        flags === "r" &&
-        path.resolve(String(filePath)) === canonicalTempDir &&
-        fsSync.existsSync(path.dirname(restorePath)) &&
-        !fsSync.existsSync(restorePath)
-      ) {
-        syncFailed = true;
-        throw Object.assign(new Error("restore parent sync failed"), { code: "EIO" });
+      const handle = await originalOpen(filePath, flags, mode);
+      if (flags === "r" && path.resolve(String(filePath)) === canonicalTempDir) {
+        const originalSync = handle.sync.bind(handle);
+        vi.spyOn(handle, "sync").mockImplementation(async () => {
+          if (
+            !syncFailed &&
+            fsSync.existsSync(path.dirname(restorePath)) &&
+            !fsSync.existsSync(restorePath)
+          ) {
+            syncFailed = true;
+            throw Object.assign(new Error("restore parent sync failed"), { code: "EIO" });
+          }
+          await originalSync();
+        });
       }
-      return await originalOpen(filePath, flags, mode);
+      return handle;
     });
 
     try {

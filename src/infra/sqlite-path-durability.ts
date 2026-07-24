@@ -1,4 +1,4 @@
-import { type Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
