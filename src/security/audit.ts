@@ -1401,7 +1401,6 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(
       ...(await auditNonDeep.collectStateDeepFilesystemFindings({
         cfg,
-        sourceConfig: context.sourceConfig,
         env,
         stateDir,
         platform,

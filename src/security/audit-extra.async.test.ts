@@ -349,7 +349,7 @@ Read the requested file and summarize it.
     }
   });
 
-  it("does not treat the legacy main auth store as active for an explicit named roster", async () => {
+  it("audits legacy main auth permissions for an explicit named roster", async () => {
     const stateDir = await makeTmpDir("audit-auth-sqlite-perms");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     await fs.mkdir(agentDir, { recursive: true });
@@ -366,7 +366,6 @@ Read the requested file and summarize it.
 
     const findings = await collectStateDeepFilesystemFindings({
       cfg: { agents: { list: [{ id: "ops", default: true }] } } as OpenClawConfig,
-      sourceConfig: { agents: { list: [{ id: "ops", default: true }] } } as OpenClawConfig,
       env: {},
       stateDir,
       platform: "linux",
@@ -375,7 +374,14 @@ Read the requested file and summarize it.
     const readableAuthTargets = findings
       .filter((finding) => finding.checkId === "fs.auth_profiles.perms_readable")
       .map((finding) => finding.detail);
-    expect(readableAuthTargets).toEqual([]);
+    expect(readableAuthTargets).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("openclaw-agent.sqlite"),
+        expect.stringContaining("openclaw-agent.sqlite-wal"),
+        expect.stringContaining("openclaw-agent.sqlite-shm"),
+        expect.stringContaining("openclaw-agent.sqlite-journal"),
+      ]),
+    );
   });
 
   it("audits the legacy main auth store for a rosterless compatibility config", async () => {
@@ -388,7 +394,6 @@ Read the requested file and summarize it.
 
     const findings = await collectStateDeepFilesystemFindings({
       cfg: { agents: { entries: { main: { default: true } } } },
-      sourceConfig: {},
       env: {},
       stateDir,
       platform: "linux",

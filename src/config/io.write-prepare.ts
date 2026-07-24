@@ -33,6 +33,15 @@ class DuplicateAgentRosterIdError extends Error {
   }
 }
 
+class UnresolvedAgentRosterIdError extends Error {
+  constructor(authoredId: string) {
+    super(
+      `Config write cannot safely resolve an explicitly replaced agent list slot for id "${authoredId}"; use a resolved literal id before writing the roster.`,
+    );
+    this.name = "UnresolvedAgentRosterIdError";
+  }
+}
+
 function assertUniqueNormalizedLegacyRosterIds(value: readonly unknown[]): void {
   const normalizedIds = new Set<string>();
   for (const entry of value) {
@@ -1283,6 +1292,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
                 ? resolvedId
                 : entry.id;
             if (typeof id !== "string") {
+              if (structurallyExplicitLegacyIndexes.has(index) && typeof entry.id === "string") {
+                throw new UnresolvedAgentRosterIdError(entry.id);
+              }
               return [];
             }
             const { id: _explicitId, ...config } = entry;

@@ -279,6 +279,42 @@ describe("config io write prepare", () => {
     });
   });
 
+  it("rejects a whole-list write with an unmappable new env-backed id", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          agents: { entries: { main: { default: true } } },
+        },
+        sourceConfig: {
+          agents: { entries: { main: { default: true } } },
+        },
+        sourceConfigBeforeMigrations: {
+          agents: { list: [{ id: "main", default: true }] },
+        },
+        rootAuthoredConfig: {
+          agents: { list: [{ id: "main", default: true }] },
+        },
+        nextConfig: {
+          agents: {
+            entries: {
+              main: { default: true },
+              worker: { workspace: "/resolved/worker" },
+            },
+          },
+        },
+        explicitSetPaths: [["agents", "list"]],
+        explicitSetValueSource: {
+          agents: {
+            list: [
+              { id: "main", default: true },
+              { id: "${WORKER_ID}", workspace: "${WORKER_DIR}" },
+            ],
+          },
+        },
+      }),
+    ).toThrow("cannot safely resolve an explicitly replaced agent list slot");
+  });
+
   it("keeps explicit legacy-list reorders keyed by each new item id", () => {
     const main = { id: "main", default: true, workspace: "/srv/main" };
     const ops = { id: "ops", workspace: "/srv/ops" };
