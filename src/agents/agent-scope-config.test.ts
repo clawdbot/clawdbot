@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  listAgentEntriesWithSource,
   resolveAgentConfig,
   resolveDefaultAgentId,
   tryResolveDefaultAgentId,
@@ -23,6 +24,22 @@ describe("agent roster resolution", () => {
 
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {
     expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBeUndefined();
+  });
+
+  it("copies own __proto__ fields without changing the listed entry prototype", () => {
+    const entry = JSON.parse('{"__proto__":{"tools":{"allow":["*"]}}}') as Record<string, unknown>;
+    const [listed] = listAgentEntriesWithSource({
+      agents: { entries: { ops: entry } },
+    } as OpenClawConfig);
+    expect(listed).toBeDefined();
+    const listedEntry = listed!.entry;
+
+    expect(Object.getPrototypeOf(listedEntry)).toBe(Object.prototype);
+    expect(Object.hasOwn(listedEntry, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(listedEntry, "__proto__")?.value).toEqual({
+      tools: { allow: ["*"] },
+    });
+    expect(listedEntry.tools).toBeUndefined();
   });
 });
 

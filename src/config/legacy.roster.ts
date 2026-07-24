@@ -110,7 +110,7 @@ export function migratePersistedImplicitMainRoster(raw: unknown): {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
         return [id, entry];
       }
-      const next = Object.assign({}, entry as Record<string, unknown>);
+      const next = { ...(entry as Record<string, unknown>) };
       if (id === effectiveId) {
         next.default = true;
       } else {

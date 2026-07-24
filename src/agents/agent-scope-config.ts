@@ -67,7 +67,7 @@ export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntr
   const roster = readAgentRosterProperty(cfg);
   if (roster?.kind === "entries" && roster.value && typeof roster.value === "object") {
     return Object.entries(roster.value).map(([id, entry]) => ({
-      entry: Object.assign({ id }, entry),
+      entry: { ...(entry as Omit<AgentEntry, "id">), id },
       source: { kind: "entries", key: id },
     }));
   }

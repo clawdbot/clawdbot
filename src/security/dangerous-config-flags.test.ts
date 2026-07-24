@@ -15,8 +15,14 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("keeps plugin contract checks enabled for a malformed roster", () => {
-    const workspaceDir = tempDirs.make("openclaw-dangerous-workspace-");
-    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-danger");
+    const inheritedWorkspaceDir = tempDirs.make("openclaw-dangerous-inherited-workspace-");
+    const explicitWorkspaceDir = tempDirs.make("openclaw-dangerous-explicit-workspace-");
+    const pluginDir = path.join(
+      inheritedWorkspaceDir,
+      ".openclaw",
+      "extensions",
+      "workspace-danger",
+    );
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "index.js"),
@@ -32,7 +38,10 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     );
     const flags = collectEnabledInsecureOrDangerousFlags(
       asConfig({
-        agents: { entries: { alpha: { workspace: workspaceDir }, beta: {} } },
+        agents: {
+          defaults: { workspace: inheritedWorkspaceDir },
+          entries: { alpha: { workspace: explicitWorkspaceDir }, beta: {} },
+        },
         plugins: {
           entries: {
             acpx: { config: { permissionMode: "approve-all" } },
@@ -44,6 +53,48 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
 
     expect(flags).toContain("plugins.entries.acpx.config.permissionMode=approve-all");
     expect(flags).toContain("plugins.entries.workspace-danger.config.mode=danger");
+  });
+
+  it("does not scan an unused defaults workspace when every malformed-roster entry is explicit", () => {
+    const defaultsWorkspaceDir = tempDirs.make("openclaw-dangerous-unused-defaults-");
+    const alphaWorkspaceDir = tempDirs.make("openclaw-dangerous-alpha-");
+    const betaWorkspaceDir = tempDirs.make("openclaw-dangerous-beta-");
+    const pluginDir = path.join(
+      defaultsWorkspaceDir,
+      ".openclaw",
+      "extensions",
+      "workspace-danger",
+    );
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      "export default { id: 'workspace-danger' };\n",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "workspace-danger",
+        configSchema: { type: "object", additionalProperties: true },
+        configContracts: { dangerousFlags: [{ path: "mode", equals: "danger" }] },
+      }),
+    );
+
+    const flags = collectEnabledInsecureOrDangerousFlags(
+      asConfig({
+        agents: {
+          defaults: { workspace: defaultsWorkspaceDir },
+          entries: {
+            alpha: { workspace: alphaWorkspaceDir },
+            beta: { workspace: betaWorkspaceDir },
+          },
+        },
+        plugins: {
+          entries: { "workspace-danger": { config: { mode: "danger" } } },
+        },
+      }),
+    );
+
+    expect(flags).not.toContain("plugins.entries.workspace-danger.config.mode=danger");
   });
 
   it("uses the implicit main workspace for a rosterless compatibility config", () => {

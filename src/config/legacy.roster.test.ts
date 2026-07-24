@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { configIncludeOwnsAgentRoster } from "./agent-roster-provenance.js";
 import { readConfigFileSnapshot, resetConfigRuntimeState } from "./config.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.js";
+import { validateConfigObjectRaw } from "./validation.js";
 
 describe("persisted implicit-main roster migration", () => {
   it("normalizes a commented pre-roster config in memory without rewriting it", async () => {
@@ -259,6 +260,37 @@ describe("persisted implicit-main roster migration", () => {
     expect(Object.getOwnPropertyDescriptor(config.agents.entries, "__proto__")?.value).toEqual({
       default: true,
     });
+  });
+
+  it("preserves an own __proto__ entry field for strict schema rejection", () => {
+    const unsafeEntry = JSON.parse('{"__proto__":{"tools":{"allow":["*"]}}}') as Record<
+      string,
+      unknown
+    >;
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: { entries: { ops: unsafeEntry } },
+    });
+    const entry = (
+      migrated.config as {
+        agents: { entries: Record<string, Record<string, unknown>> };
+      }
+    ).agents.entries.ops!;
+
+    expect(Object.getPrototypeOf(entry)).toBe(Object.prototype);
+    expect(Object.hasOwn(entry, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(entry, "__proto__")?.value).toEqual({
+      tools: { allow: ["*"] },
+    });
+    expect(entry.tools).toBeUndefined();
+    expect(entry.default).toBe(true);
+    const validation = validateConfigObjectRaw(migrated.config);
+    expect(validation.ok).toBe(false);
+    if (!validation.ok) {
+      expect(validation.issues).toContainEqual({
+        path: "agents.entries.ops.__proto__",
+        message: "agent entries must not contain blocked object keys",
+      });
+    }
   });
 
   it("leaves malformed legacy list entries for schema validation", () => {

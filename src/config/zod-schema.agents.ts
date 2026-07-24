@@ -1,10 +1,27 @@
 // Defines agent-related Zod schema fragments for config parsing.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
-const AgentEntryConfigSchema = AgentEntrySchema.omit({ id: true });
+const AgentEntryConfigSchema = z
+  .unknown()
+  .superRefine((value, ctx) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    for (const key of Object.getOwnPropertyNames(value)) {
+      if (isBlockedObjectKey(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: "agent entries must not contain blocked object keys",
+        });
+      }
+    }
+  })
+  .pipe(AgentEntrySchema.omit({ id: true }));
 
 export const AgentsSchema = z
   .object({

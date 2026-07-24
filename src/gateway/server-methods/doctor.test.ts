@@ -35,7 +35,11 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentEntries: (cfg: OpenClawConfig) =>
     cfg.agents?.entries
-      ? Object.entries(cfg.agents.entries).map(([id, entry]) => Object.assign({ id }, entry))
+      ? Object.entries(cfg.agents.entries).map(([id, entry]) => {
+          const copy = structuredClone(entry) as Record<string, unknown>;
+          copy.id = id;
+          return copy;
+        })
       : cfg.agents?.list
         ? cfg.agents.list
         : [{ id: "main", default: true }],

@@ -48,14 +48,22 @@ export function collectEnabledInsecureOrDangerousFlags(
           : resolveDefaultAgentWorkspaceDir(process.env),
       );
     } else {
+      let hasInheritedWorkspace = false;
       for (const entry of roster) {
         const workspace = resolveAgentConfig(cfg, entry.id)?.workspace?.trim();
         if (workspace) {
           workspaceDirs.add(resolveUserPath(workspace, process.env));
+        } else {
+          hasInheritedWorkspace = true;
         }
       }
-      if (workspaceDirs.size === 0) {
-        workspaceDirs.add(undefined);
+      if (hasInheritedWorkspace) {
+        const inheritedWorkspace = cfg.agents?.defaults?.workspace?.trim();
+        workspaceDirs.add(
+          inheritedWorkspace
+            ? resolveUserPath(inheritedWorkspace, process.env)
+            : resolveDefaultAgentWorkspaceDir(process.env),
+        );
       }
     }
   }
