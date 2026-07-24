@@ -8,10 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import {
-  executeSystemAgentOperation,
-  type SystemAgentCommandDeps,
-} from "./operations.js";
+import { executeSystemAgentOperation, type SystemAgentCommandDeps } from "./operations.js";
 import {
   createSystemAgentTestRuntime,
   expectSystemAgentAuditRecord as expectAuditRecord,
