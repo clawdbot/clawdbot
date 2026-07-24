@@ -22,6 +22,8 @@ import { formatActiveContinuationTraceparent } from "../../infra/continuation-tr
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import {
+  MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES,
+  MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES,
   parseInlineAttachmentMountPath,
   type InlineAttachment,
   type InlineAttachmentMount,
@@ -97,7 +99,7 @@ const ContinueDelegateToolSchema = Type.Object({
         name: Type.String(),
         content: Type.String(),
         encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
-        mimeType: Type.Optional(Type.String()),
+        mimeType: Type.Optional(Type.String({ maxLength: MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES })),
       }),
       {
         maxItems: 50,
@@ -111,6 +113,7 @@ const ContinueDelegateToolSchema = Type.Object({
       {
         mountPath: Type.Optional(
           Type.String({
+            maxLength: MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES,
             description:
               "Workspace-relative mount hint. The attachment receipt remains under the child workspace.",
           }),

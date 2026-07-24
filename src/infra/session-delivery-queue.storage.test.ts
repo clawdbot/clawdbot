@@ -424,6 +424,41 @@ describe("session-delivery queue storage", () => {
     });
   });
 
+  it("rejects oversized serialized snapshot metadata before queue persistence", async () => {
+    const invalidDelegates = [
+      {
+        attachments: [{ name: "brief.bin", content: "Z g==", encoding: "base64" as const }],
+      },
+      {
+        attachments: [{ name: "brief.txt", content: "snapshot", mimeType: "m".repeat(257) }],
+      },
+      {
+        attachments: [{ name: "brief.txt", content: "snapshot" }],
+        attachAs: { mountPath: "a".repeat(1025) },
+      },
+    ];
+
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      for (const [sequence, invalid] of invalidDelegates.entries()) {
+        await expect(
+          enqueuePostCompactionDelegateDelivery(
+            {
+              sessionKey: "agent:main:main",
+              delegate: {
+                task: "reject serialized attachment expansion",
+                createdAt: 650 + sequence,
+                ...invalid,
+              },
+              sequence,
+            },
+            tempDir,
+          ),
+        ).rejects.toThrow("invalid postCompactionDelegate delivery payload: invalid shape");
+      }
+      await expect(loadPendingSessionDeliveries(tempDir)).resolves.toEqual([]);
+    });
+  });
+
   it("dead-letters invalid post-compaction JSON without retaining raw bytes", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueuePostCompactionDelegateDelivery(

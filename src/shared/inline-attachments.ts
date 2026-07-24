@@ -1,5 +1,4 @@
 import { isUnsafeDeviceReadPath } from "@openclaw/fs-safe/advanced";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type InlineAttachment = {
   name: string;
@@ -17,11 +16,17 @@ export type InlineAttachmentMountPathResult =
   | { status: "valid"; mountPath: string }
   | { status: "invalid" };
 
+export const MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES = 1024;
+export const MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES = 256;
+
 export function parseInlineAttachmentMountPath(value: unknown): InlineAttachmentMountPathResult {
   if (value === undefined || value === null) {
     return { status: "absent" };
   }
   if (typeof value !== "string") {
+    return { status: "invalid" };
+  }
+  if (Buffer.byteLength(value, "utf8") > MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES) {
     return { status: "invalid" };
   }
   const mountPath = value.trim();
@@ -61,21 +66,16 @@ export type PreparedInlineAttachmentSnapshot = {
 
 function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
   const maxEncodedBytes = Math.ceil(maxDecodedBytes / 3) * 4;
-  if (value.length > maxEncodedBytes * 2) {
+  if (!value || value.length > maxEncodedBytes || value.length % 4 !== 0) {
     return null;
   }
-  const normalized = value.replace(/\s+/g, "");
-  if (!normalized || normalized.length % 4 !== 0) {
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
     return null;
   }
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
-    return null;
-  }
-  if (normalized.length > maxEncodedBytes) {
-    return null;
-  }
-  const decoded = Buffer.from(normalized, "base64");
-  return decoded.byteLength <= maxDecodedBytes ? decoded : null;
+  const decoded = Buffer.from(value, "base64");
+  return decoded.byteLength <= maxDecodedBytes && decoded.toString("base64") === value
+    ? decoded
+    : null;
 }
 
 function isWellFormedAttachmentName(value: string): boolean {
@@ -170,6 +170,15 @@ export function prepareInlineAttachmentSnapshots(params: {
     if (item.mimeType !== undefined && typeof item.mimeType !== "string") {
       throw new Error("attachments_invalid_member (mimeType must be a string)");
     }
+    const rawMimeType = item.mimeType ?? "";
+    if (
+      Buffer.byteLength(rawMimeType, "utf8") > MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES ||
+      rawMimeType.trim() !== rawMimeType ||
+      /\p{Cc}/u.test(rawMimeType) ||
+      !isWellFormedAttachmentName(rawMimeType)
+    ) {
+      throw new Error("attachments_invalid_member (invalid mimeType metadata)");
+    }
 
     const rawName = item.name;
     if (!isWellFormedAttachmentName(rawName) || rawName.includes("\uFFFD")) {
@@ -181,7 +190,7 @@ export function prepareInlineAttachmentSnapshots(params: {
     const name = rawName.normalize("NFC");
     const content = item.content;
     const encoding = item.encoding ?? "utf8";
-    const mimeType = normalizeOptionalString(item.mimeType) ?? "";
+    const mimeType = rawMimeType;
     validateInlineAttachmentName(name);
     const canonicalNameKey = name.toUpperCase().normalize("NFC");
     if (seen.has(canonicalNameKey)) {

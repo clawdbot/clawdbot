@@ -13,7 +13,11 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import type { InlineAttachment } from "../../shared/inline-attachments.js";
+import {
+  MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES,
+  MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES,
+  type InlineAttachment,
+} from "../../shared/inline-attachments.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -197,7 +201,9 @@ function createSessionsSpawnToolSchema(params: {
           name: Type.String(),
           content: Type.String(),
           encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
-          mimeType: Type.Optional(Type.String()),
+          mimeType: Type.Optional(
+            Type.String({ maxLength: MAX_INLINE_ATTACHMENT_MIME_TYPE_BYTES }),
+          ),
         }),
         { maxItems: 50, description: "Inline snapshots; unavailable with visible=true." },
       ),
@@ -207,7 +213,9 @@ function createSessionsSpawnToolSchema(params: {
         {
           // Where the spawned agent should look for attachments.
           // Kept as a hint; implementation materializes into the child workspace.
-          mountPath: Type.Optional(Type.String()),
+          mountPath: Type.Optional(
+            Type.String({ maxLength: MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES }),
+          ),
         },
         { description: "Attachment mount hint; unavailable with visible=true." },
       ),

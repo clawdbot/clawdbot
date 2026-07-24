@@ -352,6 +352,36 @@ describe("continue_delegate tool", () => {
     expect(consumePendingDelegates("test-session")).toEqual([]);
   });
 
+  it("rejects oversized serialized attachment metadata before TaskFlow staging", async () => {
+    setRuntimeConfigSnapshot({
+      tools: { sessions_spawn: { attachments: { enabled: true } } },
+    });
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+    const invalidInputs = [
+      {
+        attachments: [{ name: "handoff.bin", content: "Z g==", encoding: "base64" }],
+      },
+      {
+        attachments: [{ name: "handoff.txt", content: "data", mimeType: "m".repeat(257) }],
+      },
+      {
+        attachments: [{ name: "handoff.txt", content: "data" }],
+        attachAs: { mountPath: "a".repeat(1025) },
+      },
+    ];
+
+    for (const [index, input] of invalidInputs.entries()) {
+      await expect(
+        tool.execute(`call-invalid-serialized-${index}`, {
+          task: "must fail before durable TaskFlow staging",
+          mode: "post-compaction",
+          ...input,
+        }),
+      ).rejects.toThrow();
+    }
+    expect(consumeStagedPostCompactionDelegates("test-session")).toEqual([]);
+  });
+
   it("resets the per-turn budget at the provider-turn boundary for the same tool instance", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { maxDelegatesPerTurn: 2 } } },
