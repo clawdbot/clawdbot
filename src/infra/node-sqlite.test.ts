@@ -1,8 +1,9 @@
 // Covers the SQLite WAL-reset corruption safety floor.
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveNodeSqliteLocation } from "./node-sqlite.js";
+import { resolveNodeSqliteLocation, resolveNodeSqliteReadOnlyLocation } from "./node-sqlite.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
@@ -84,6 +85,38 @@ describe("node SQLite locations", () => {
     );
     expect(resolveSpy).toHaveBeenCalledWith("relative/openclaw.sqlite");
     expect(namespacedSpy).toHaveBeenCalledWith("resolved-openclaw.sqlite");
+  });
+
+  it("uses immutable URIs for local databases without WAL sidecars", () => {
+    const pathname =
+      process.platform === "win32"
+        ? String.raw`C:\Users\OpenClaw\.openclaw\state\openclaw.sqlite`
+        : "/var/lib/openclaw/state/openclaw.sqlite";
+
+    expect(resolveNodeSqliteReadOnlyLocation(pathname, false)).toBe(
+      `${pathToFileURL(pathname).href}?mode=ro&immutable=1`,
+    );
+    expect(resolveNodeSqliteReadOnlyLocation(pathname, true)).toBe(
+      resolveNodeSqliteLocation(pathname),
+    );
+  });
+
+  it("keeps UNC and namespaced Windows paths out of SQLite URI authority parsing", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const resolveSpy = vi.spyOn(path, "resolve").mockImplementation((pathname) => pathname);
+    const namespacedSpy = vi
+      .spyOn(path, "toNamespacedPath")
+      .mockImplementation((pathname) => pathname);
+
+    for (const pathname of [
+      String.raw`\\server\share\state\openclaw.sqlite`,
+      String.raw`\\?\C:\deep\state\openclaw.sqlite`,
+      String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
+    ]) {
+      expect(resolveNodeSqliteReadOnlyLocation(pathname, false)).toBe(pathname);
+    }
+    expect(resolveSpy).toHaveBeenCalledTimes(3);
+    expect(namespacedSpy).toHaveBeenCalledTimes(3);
   });
 });
 

@@ -2,13 +2,16 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
+import {
+  requireNodeSqlite,
+  resolveNodeSqliteLocation,
+  resolveNodeSqliteReadOnlyLocation,
+} from "../infra/node-sqlite.js";
 import {
   repairCanonicalSqliteUniqueIndexes,
   type CanonicalSqliteUniqueIndex,
@@ -297,18 +300,6 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
   }
 }
 
-export function resolveOpenClawStateReadOnlyLocation(
-  pathname: string,
-  hasWalSidecars: boolean,
-): string {
-  // SQLite URI authorities reject UNC hosts, while ordinary Windows paths
-  // preserve UNC and already-namespaced locations through the Windows VFS.
-  if (hasWalSidecars || (process.platform === "win32" && pathname.startsWith("\\\\"))) {
-    return pathname;
-  }
-  return `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
-}
-
 /** Open existing shared state without creating, migrating, chmodding, or configuring it. */
 export function openExistingOpenClawStateDatabaseReadOnly(
   options: OpenClawStateDatabaseOptions = {},
@@ -319,10 +310,9 @@ export function openExistingOpenClawStateDatabaseReadOnly(
   }
   const sqlite = requireNodeSqlite();
   const hasWalSidecars = existsSync(`${pathname}-wal`) || existsSync(`${pathname}-shm`);
-  const db = new sqlite.DatabaseSync(
-    resolveNodeSqliteLocation(resolveOpenClawStateReadOnlyLocation(pathname, hasWalSidecars)),
-    { readOnly: true },
-  );
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteReadOnlyLocation(pathname, hasWalSidecars), {
+    readOnly: true,
+  });
   try {
     assertSupportedSchemaVersion(db, pathname);
   } catch (error) {

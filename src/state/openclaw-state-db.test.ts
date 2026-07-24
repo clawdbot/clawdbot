@@ -4,7 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
@@ -29,7 +28,6 @@ import {
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
-  resolveOpenClawStateReadOnlyLocation,
   runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
@@ -885,30 +883,6 @@ afterEach(() => {
 });
 
 describe("openclaw state database", () => {
-  it("uses immutable URIs for local databases without WAL sidecars", () => {
-    const pathname =
-      process.platform === "win32"
-        ? String.raw`C:\Users\OpenClaw\.openclaw\state\openclaw.sqlite`
-        : "/var/lib/openclaw/state/openclaw.sqlite";
-
-    expect(resolveOpenClawStateReadOnlyLocation(pathname, false)).toBe(
-      `${pathToFileURL(pathname).href}?mode=ro&immutable=1`,
-    );
-    expect(resolveOpenClawStateReadOnlyLocation(pathname, true)).toBe(pathname);
-  });
-
-  it("keeps UNC and namespaced Windows state paths out of SQLite URI authority parsing", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
-    for (const pathname of [
-      String.raw`\\server\share\state\openclaw.sqlite`,
-      String.raw`\\?\C:\deep\state\openclaw.sqlite`,
-      String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
-    ]) {
-      expect(resolveOpenClawStateReadOnlyLocation(pathname, false)).toBe(pathname);
-    }
-  });
-
   it("resolves under the shared state database directory", () => {
     const stateDir = createTempStateDir();
 

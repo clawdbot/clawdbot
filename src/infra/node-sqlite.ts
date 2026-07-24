@@ -1,6 +1,7 @@
 // Loads node:sqlite with OpenClaw warning handling.
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
@@ -22,6 +23,18 @@ export function resolveNodeSqliteLocation(location: string): string {
     return location;
   }
   return resolveSqliteFilesystemPath(location);
+}
+
+export function resolveNodeSqliteReadOnlyLocation(
+  pathname: string,
+  hasWalSidecars: boolean,
+): string {
+  // SQLite URI authorities reject UNC hosts, while ordinary Windows paths
+  // preserve UNC and already-namespaced locations through the Windows VFS.
+  if (hasWalSidecars || (process.platform === "win32" && pathname.startsWith("\\\\"))) {
+    return resolveNodeSqliteLocation(pathname);
+  }
+  return `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
 }
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
