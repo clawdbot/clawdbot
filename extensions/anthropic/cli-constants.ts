@@ -27,6 +27,16 @@ export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
   `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-6`,
 ] as const;
 
+/**
+ * Claude CLI model ids probed when detecting an existing CLI route, canonical
+ * default first. Route detection must not depend on which model is currently
+ * the default: existing configs route older Claude models, so probing only the
+ * default would stop advertising session creation after a default bump.
+ */
+export const CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
+  ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1),
+);
+
 /** User-facing Claude CLI model aliases normalized before execution. */
 export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
   opus: "opus",
