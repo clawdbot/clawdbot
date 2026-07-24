@@ -246,6 +246,15 @@ Docs: https://docs.openclaw.ai
 - **Network and resource matching:** share canonical NO_PROXY behavior and honor nested ignore patterns plus escaped literal exclamation marks. (#107711, #106258) Thanks @moguangyu5-design.
 - **Markdown frontmatter:** preserve coerced fallback values when YAML nodes cannot be represented directly.
 
+### Upcoming deprecations
+
+- **July 25 — `agent-harness-sdk-alias`:** no replacement is available yet; removal remains blocked pending a new externally documented migration decision, so continue using the shipped `openclaw/plugin-sdk/agent-harness` and `openclaw/plugin-sdk/agent-harness-runtime` surfaces until that window is published. [Compatibility policy](https://docs.openclaw.ai/plugins/compatibility)
+- **July 30 — `plugin-sdk-agent-media-payload-public-demotion`:** migrate to typed outbound payload planning through `openclaw/plugin-sdk/channel-outbound`; the facade remains while operator-supplied local-media root resolution gets a focused public seam. [Channel plugin SDK](https://docs.openclaw.ai/plugins/sdk-channel-plugins)
+- **July 30 — `plugin-sdk-media-understanding-public-demotion`:** migrate to `api.registerMediaUnderstandingProvider(...)` with provider-owned helpers and `openclaw/plugin-sdk/plugin-entry` types. [Plugin architecture](https://docs.openclaw.ai/plugins/architecture)
+- **July 30 — `plugin-sdk-memory-host-core-public-demotion`:** migrate to host-prepared memory prompts through `openclaw/plugin-sdk/core` and injected memory-capability registration; the facade remains until companion-plugin artifact discovery has a focused read seam. [Context engine plugins](https://docs.openclaw.ai/plugins/architecture-internals#context-engine-plugins)
+- **July 30 — `plugin-sdk-plugin-config-runtime-public-demotion`:** migrate to `api.pluginConfig`, runtime tool-context config, and the focused `config-contracts`, `runtime-config-snapshot`, or `config-mutation` subpaths. [Plugin SDK runtime](https://docs.openclaw.ai/plugins/sdk-runtime)
+- **July 30 — `plugin-sdk-tool-plugin-public-demotion`:** retain `openclaw/plugin-sdk/tool-plugin` until plugin authoring has a nonexecuting static-metadata replacement for `defineToolPlugin`. [Tool plugins](https://docs.openclaw.ai/plugins/tool-plugins)
+
 ### Complete contribution record
 
 This audited record covers the complete a5b2e4167de860fe3fe3da7284cd5f36883560c8..2a64c35486b67d114048a3db97e1a7dbe143feeb history: 5197 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
