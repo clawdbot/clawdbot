@@ -1,7 +1,5 @@
 import pandas as pd
 import os
-import sys
-import mysql.connector
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 load_dotenv()
