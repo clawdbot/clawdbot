@@ -35,6 +35,12 @@ async function createTempDir(): Promise<string> {
   return tempDir;
 }
 
+function isDirectoryOpen(flags: string | number): boolean {
+  return (
+    flags === "r" || (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0)
+  );
+}
+
 function createGenericDatabase(
   databasePath: string,
   options: { userVersion?: number; values?: string[]; wal?: boolean } = {},
@@ -331,7 +337,7 @@ describe("local SQLite snapshot repository", () => {
     let syncFailed = false;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
       const handle = await originalOpen(filePath, flags, mode);
-      if (flags === "r" && path.resolve(String(filePath)) === canonicalTempDir) {
+      if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === canonicalTempDir) {
         const originalSync = handle.sync.bind(handle);
         vi.spyOn(handle, "sync").mockImplementation(async () => {
           if (!syncFailed && fsSync.existsSync(repositoryPath)) {
@@ -374,7 +380,7 @@ describe("local SQLite snapshot repository", () => {
     let syncFailed = false;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
       const handle = await originalOpen(filePath, flags, mode);
-      if (flags === "r" && path.resolve(String(filePath)) === canonicalTempDir) {
+      if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === canonicalTempDir) {
         const originalSync = handle.sync.bind(handle);
         vi.spyOn(handle, "sync").mockImplementation(async () => {
           if (
@@ -460,13 +466,13 @@ describe("local SQLite snapshot repository", () => {
             events.push("pending-sync");
             await originalSync();
           });
-        } else if (flags === "r" && snapshotDir && resolvedPath === snapshotDir) {
+        } else if (isDirectoryOpen(flags) && snapshotDir && resolvedPath === snapshotDir) {
           const originalSync = handle.sync.bind(handle);
           vi.spyOn(handle, "sync").mockImplementation(async () => {
             events.push("snapshot-sync");
             await originalSync();
           });
-        } else if (flags === "r" && resolvedPath === repositoryPath) {
+        } else if (isDirectoryOpen(flags) && resolvedPath === repositoryPath) {
           const originalSync = handle.sync.bind(handle);
           vi.spyOn(handle, "sync").mockImplementation(async () => {
             events.push("repository-sync");
@@ -1146,7 +1152,7 @@ describe("local SQLite snapshot repository", () => {
     });
     const originalOpen = fs.open.bind(fs);
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      if (path.resolve(String(filePath)) === restoreParentPath && flags === "r") {
+      if (path.resolve(String(filePath)) === restoreParentPath && isDirectoryOpen(flags)) {
         const entries = await fs.readdir(restoreParentPath);
         if (
           entries.includes(path.basename(restorePath)) &&

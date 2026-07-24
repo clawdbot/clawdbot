@@ -19,6 +19,7 @@ import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   ensureDurableSqliteDirectory,
+  openSqliteDirectoryForDurability,
   syncSqliteDirectoryForDurability,
   type DurableSqliteDirectoryReceipt,
 } from "../infra/sqlite-path-durability.js";
@@ -326,7 +327,10 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       publishedIdentity = await fs.lstat(snapshotDir);
       applyPrivateModeSync(snapshotDir, SNAPSHOT_DIRECTORY_MODE);
       await assertPrivateStagingDirectory(publishedIdentity, snapshotDir);
-      publishedDirectory = await fs.open(snapshotDir, "r");
+      publishedDirectory = await openSqliteDirectoryForDurability(
+        { path: snapshotDir, identity: publishedIdentity },
+        "SQLite snapshot directory",
+      );
       await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
       const pendingPath = path.join(snapshotDir, SNAPSHOT_PENDING_FILENAME);
       const pendingHandle = await fs.open(pendingPath, "wx+", SNAPSHOT_FILE_MODE);

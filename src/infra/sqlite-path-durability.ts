@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import type { Stats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +19,21 @@ type OpenSqliteDirectoryReceipt = {
   handle: FileHandle;
   receipt: SqlitePathIdentityReceipt;
 };
+
+function sqliteDirectoryOpenFlags(): string | number {
+  if (process.platform === "win32") {
+    return "r";
+  }
+  // The identity checks close ordinary rename races after open. These flags
+  // also prevent a substituted symlink or FIFO from redirecting or blocking it.
+  return (
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK
+  );
+}
+
+async function openDirectoryHandle(directoryPath: string): Promise<FileHandle> {
+  return await fs.open(directoryPath, sqliteDirectoryOpenFlags());
+}
 
 function isWindowsDirectorySyncUnsupported(error: unknown): boolean {
   if (process.platform !== "win32") {
@@ -66,11 +82,11 @@ async function assertOpenDirectoryCurrent(
   await assertDirectoryReceiptCurrent(receipt, label);
 }
 
-async function openCurrentDirectory(
+export async function openSqliteDirectoryForDurability(
   receipt: SqlitePathIdentityReceipt,
   label: string,
 ): Promise<FileHandle> {
-  const handle = await fs.open(receipt.path, "r");
+  const handle = await openDirectoryHandle(receipt.path);
   try {
     await assertOpenDirectoryCurrent(handle, receipt, label);
     return handle;
@@ -84,7 +100,7 @@ async function openDirectoryPath(
   directoryPath: string,
   label: string,
 ): Promise<OpenSqliteDirectoryReceipt> {
-  const handle = await fs.open(directoryPath, "r");
+  const handle = await openDirectoryHandle(directoryPath);
   try {
     const identity = await handle.stat();
     const receipt = { path: directoryPath, identity };
@@ -128,7 +144,7 @@ export async function syncSqliteDirectoryForDurability(
 
   let handle: FileHandle;
   try {
-    handle = await fs.open(receipt.path, "r");
+    handle = await openDirectoryHandle(receipt.path);
   } catch (error) {
     if (!isWindowsDirectorySyncUnsupported(error)) {
       throw error;
@@ -176,7 +192,7 @@ export async function ensureDurableSqliteDirectory(params: {
   const ancestor = await findExistingAncestorReceipt(directoryPath, params.label);
   // Keep the preexisting anchor open while the creator runs. Otherwise a
   // remove/recreate race can recycle its inode and hide an unsynced new edge.
-  const ancestorHandle = await openCurrentDirectory(ancestor, params.label);
+  const ancestorHandle = await openSqliteDirectoryForDurability(ancestor, params.label);
   const openedReceipts: OpenSqliteDirectoryReceipt[] = [
     { handle: ancestorHandle, receipt: ancestor },
   ];

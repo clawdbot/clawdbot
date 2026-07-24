@@ -1,7 +1,9 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runExec } from "../process/exec.js";
 import {
   ensureDurableSqliteDirectory,
   syncSqliteDirectoryForDurability,
@@ -13,6 +15,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function isDirectoryOpen(flags: string | number): boolean {
+  return (
+    flags === "r" || (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0)
+  );
+}
+
 describe("SQLite path durability", () => {
   it.runIf(process.platform !== "win32")(
     "syncs every newly created parent edge through the nearest existing ancestor",
@@ -23,7 +31,7 @@ describe("SQLite path durability", () => {
       const originalOpen = fs.open.bind(fs);
       vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
         const handle = await originalOpen(filePath, flags, mode);
-        if (flags === "r") {
+        if (isDirectoryOpen(flags)) {
           const resolvedPath = path.resolve(String(filePath));
           const originalSync = handle.sync.bind(handle);
           vi.spyOn(handle, "sync").mockImplementation(async () => {
@@ -57,7 +65,7 @@ describe("SQLite path durability", () => {
     const originalOpen = fs.open.bind(fs);
     vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
       const handle = await originalOpen(filePath, flags, mode);
-      if (flags === "r" && path.resolve(String(filePath)) === rootPath) {
+      if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === rootPath) {
         vi.spyOn(handle, "sync").mockImplementation(async () => {
           throw Object.assign(new Error("parent sync failed"), { code: "EIO" });
         });
@@ -87,7 +95,10 @@ describe("SQLite path durability", () => {
       let replaced = false;
       vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
         const handle = await originalOpen(filePath, flags, mode);
-        if (flags === "r" && path.resolve(String(filePath)) === path.join(rootPath, "one")) {
+        if (
+          isDirectoryOpen(flags) &&
+          path.resolve(String(filePath)) === path.join(rootPath, "one")
+        ) {
           const originalSync = handle.sync.bind(handle);
           vi.spyOn(handle, "sync").mockImplementation(async () => {
             replaced = true;
@@ -123,7 +134,11 @@ describe("SQLite path durability", () => {
       let replaced = false;
       let createCalled = false;
       vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-        if (!replaced && flags === "r" && path.resolve(String(filePath)) === directoryPath) {
+        if (
+          !replaced &&
+          isDirectoryOpen(flags) &&
+          path.resolve(String(filePath)) === directoryPath
+        ) {
           replaced = true;
           await fs.rename(directoryPath, displacedPath);
           await fs.mkdir(directoryPath);
@@ -146,6 +161,51 @@ describe("SQLite path durability", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "rejects a FIFO swapped into a directory path without blocking",
+    async () => {
+      const directoryPath = await fs.realpath(tempDirs.make("openclaw-sqlite-durable-fifo-race-"));
+      const displacedPath = `${directoryPath}.displaced`;
+      const originalOpen = fs.open.bind(fs);
+      let replaced = false;
+      let createCalled = false;
+      vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        if (
+          !replaced &&
+          isDirectoryOpen(flags) &&
+          path.resolve(String(filePath)) === directoryPath
+        ) {
+          expect(typeof flags).toBe("number");
+          const numericFlags = flags as number;
+          expect(numericFlags & fsSync.constants.O_DIRECTORY).toBe(fsSync.constants.O_DIRECTORY);
+          expect(numericFlags & fsSync.constants.O_NOFOLLOW).toBe(fsSync.constants.O_NOFOLLOW);
+          expect(numericFlags & fsSync.constants.O_NONBLOCK).toBe(fsSync.constants.O_NONBLOCK);
+          replaced = true;
+          await fs.rename(directoryPath, displacedPath);
+          await runExec("mkfifo", [directoryPath], { logOutput: false });
+        }
+        return await originalOpen(filePath, flags, mode);
+      });
+
+      try {
+        await expect(
+          ensureDurableSqliteDirectory({
+            directoryPath,
+            label: "test directory",
+            create: async () => {
+              createCalled = true;
+            },
+          }),
+        ).rejects.toBeDefined();
+        expect(replaced).toBe(true);
+        expect(createCalled).toBe(false);
+      } finally {
+        await fs.unlink(directoryPath).catch(() => undefined);
+        await fs.rename(displacedPath, directoryPath).catch(() => undefined);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "syncs the pinned parent when its path is transiently replaced",
     async () => {
       const rootPath = await fs.realpath(tempDirs.make("openclaw-sqlite-durable-parent-race-"));
@@ -157,7 +217,7 @@ describe("SQLite path durability", () => {
       let swapped = false;
       vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
         const handle = await originalOpen(filePath, flags, mode);
-        if (flags === "r" && path.resolve(String(filePath)) === parentPath) {
+        if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === parentPath) {
           const originalSync = handle.sync.bind(handle);
           vi.spyOn(handle, "sync").mockImplementation(async () => {
             swapped = true;
