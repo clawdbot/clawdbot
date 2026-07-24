@@ -4,7 +4,7 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
-export type SqliteDirectorySyncOutcome = "synced" | "unsupported";
+type SqliteDirectorySyncOutcome = "synced" | "unsupported";
 
 export type SqlitePathIdentityReceipt = {
   path: string;
