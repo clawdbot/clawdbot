@@ -624,7 +624,7 @@ export const es: TranslationMap = {
     filters: "Filtros",
     createdBy: "Creado por {name}",
     archivedBy: "Archivado por {name}",
-    filterByCreator: "Filtrar por creador",
+    people: "Personas",
     allCreators: "Todas las personas",
     filterControls: "Filtros de sesión",
     sourceFilters: "Filtros de origen de sesión",
@@ -1419,6 +1419,11 @@ export const es: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Preferencias de chat locales del navegador.",
+      messageWidth: "Ancho del mensaje",
+      messageWidthHint:
+        "Ancho CSS opcional para la transcripción centrada, como 960px, 82% o min(1280px, 82%).",
+      messageWidthInvalid:
+        "Introduce un ancho CSS como 960px, 82%, min(1280px, 82%) o calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Barra lateral",
@@ -1709,6 +1714,7 @@ export const es: TranslationMap = {
     blockedAgentFilter: "bloqueado por filtro de agente",
   },
   nav: {
+    account: "Cuenta",
     back: "Atrás",
     forward: "Adelante",
     chat: "Chat",
@@ -3889,6 +3895,23 @@ export const es: TranslationMap = {
       noPeople: "No se encontraron personas vinculadas.",
       readOnlyNotice:
         "Solo el propietario del hilo y los miembros pueden realizar acciones en este hilo.",
+    },
+    sessionSuggestions: {
+      suggest: "Sugerir",
+      suggestMessage: "Sugerir mensaje",
+      attachmentsUnsupported:
+        "Elimina los archivos adjuntos antes de enviar una sugerencia de texto.",
+      sendNow: "Enviar ahora la sugerencia de {author}",
+      queue: "Poner en cola la sugerencia de {author}",
+      edit: "Editar la sugerencia de {author}",
+      dismiss: "Descartar la sugerencia de {author}",
+      typing: "{name} está escribiendo…",
+      typingMany: "{names} están escribiendo…",
+      state: {
+        pending: "Pendiente",
+        accepted: "Aceptada",
+        dismissed: "Descartada",
+      },
     },
     loadOlder: "Cargar anteriores",
     sessionHeader: {

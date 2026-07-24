@@ -631,7 +631,7 @@ export const fr: TranslationMap = {
     filters: "Filtres",
     createdBy: "Créé par {name}",
     archivedBy: "Archivé par {name}",
-    filterByCreator: "Filtrer par créateur",
+    people: "Personnes",
     allCreators: "Toutes les personnes",
     filterControls: "Filtres de session",
     sourceFilters: "Filtres de source de session",
@@ -1425,6 +1425,11 @@ export const fr: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Préférences de chat locales au navigateur.",
+      messageWidth: "Largeur des messages",
+      messageWidthHint:
+        "Largeur CSS facultative pour la transcription centrée, par exemple 960px, 82% ou min(1280px, 82%).",
+      messageWidthInvalid:
+        "Saisissez une largeur CSS telle que 960px, 82%, min(1280px, 82%) ou calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Barre latérale",
@@ -1717,6 +1722,7 @@ export const fr: TranslationMap = {
     blockedAgentFilter: "bloqué par le filtre d'agent",
   },
   nav: {
+    account: "Compte",
     back: "Retour",
     forward: "Suivant",
     chat: "Chat",
@@ -3923,6 +3929,23 @@ export const fr: TranslationMap = {
       selected: "Membre",
       noPeople: "Aucune personne associée trouvée.",
       readOnlyNotice: "Seuls le propriétaire du fil et les membres peuvent agir dans ce fil.",
+    },
+    sessionSuggestions: {
+      suggest: "Suggérer",
+      suggestMessage: "Suggérer un message",
+      attachmentsUnsupported:
+        "Supprimez les pièces jointes avant d’envoyer une suggestion de texte.",
+      sendNow: "Envoyer maintenant la suggestion de {author}",
+      queue: "Mettre en file d’attente la suggestion de {author}",
+      edit: "Modifier la suggestion de {author}",
+      dismiss: "Ignorer la suggestion de {author}",
+      typing: "{name} est en train d’écrire…",
+      typingMany: "{names} sont en train d’écrire…",
+      state: {
+        pending: "En attente",
+        accepted: "Acceptée",
+        dismissed: "Ignorée",
+      },
     },
     loadOlder: "Charger les plus anciens",
     sessionHeader: {

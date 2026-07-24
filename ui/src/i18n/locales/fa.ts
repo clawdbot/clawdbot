@@ -617,7 +617,7 @@ export const fa: TranslationMap = {
     filters: "فیلترها",
     createdBy: "ایجاد شده توسط {name}",
     archivedBy: "بایگانی‌شده توسط {name}",
-    filterByCreator: "فیلتر بر اساس سازنده",
+    people: "افراد",
     allCreators: "همه افراد",
     filterControls: "فیلترهای نشست",
     sourceFilters: "فیلترهای منبع جلسه",
@@ -1403,6 +1403,11 @@ export const fa: TranslationMap = {
     chatPrefs: {
       title: "گفت‌وگو",
       hint: "تنظیمات برگزیدهٔ گفت‌وگوی محلی مرورگر.",
+      messageWidth: "عرض پیام",
+      messageWidthHint:
+        "عرض اختیاری CSS برای متن گفت‌وگوی تراز‌شده در مرکز، مانند 960px، 82% یا min(1280px, 82%).",
+      messageWidthInvalid:
+        "یک عرض CSS مانند 960px، 82%، min(1280px, 82%) یا calc(100% - 2rem) وارد کنید.",
     },
     sidebarPrefs: {
       title: "نوار کناری",
@@ -1690,6 +1695,7 @@ export const fa: TranslationMap = {
     blockedAgentFilter: "مسدودشده توسط فیلتر عامل",
   },
   nav: {
+    account: "حساب",
     back: "بازگشت",
     forward: "جلو",
     chat: "چت",
@@ -3837,6 +3843,22 @@ export const fa: TranslationMap = {
       selected: "عضو",
       noPeople: "هیچ فرد جفت‌شده‌ای یافت نشد.",
       readOnlyNotice: "فقط مالک رشته و اعضا می‌توانند در این رشته اقدام کنند.",
+    },
+    sessionSuggestions: {
+      suggest: "پیشنهاد",
+      suggestMessage: "پیشنهاد پیام",
+      attachmentsUnsupported: "پیش از ارسال پیشنهاد متنی، پیوست‌ها را حذف کنید.",
+      sendNow: "پیشنهاد {author} را اکنون ارسال کنید",
+      queue: "پیشنهاد {author} را در صف قرار دهید",
+      edit: "پیشنهاد {author} را ویرایش کنید",
+      dismiss: "پیشنهاد {author} را رد کنید",
+      typing: "{name} در حال نوشتن است…",
+      typingMany: "{names} در حال نوشتن هستند…",
+      state: {
+        pending: "در انتظار",
+        accepted: "پذیرفته‌شده",
+        dismissed: "ردشده",
+      },
     },
     loadOlder: "بارگیری قدیمی‌ترها",
     sessionHeader: {

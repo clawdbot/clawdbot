@@ -610,7 +610,7 @@ export const ar: TranslationMap = {
     filters: "عوامل التصفية",
     createdBy: "أنشأها {name}",
     archivedBy: "تمت الأرشفة بواسطة {name}",
-    filterByCreator: "تصفية حسب المُنشئ",
+    people: "الأشخاص",
     allCreators: "كل الأشخاص",
     filterControls: "عوامل تصفية الجلسات",
     sourceFilters: "عوامل تصفية مصدر الجلسة",
@@ -1393,6 +1393,11 @@ export const ar: TranslationMap = {
     chatPrefs: {
       title: "الدردشة",
       hint: "تفضيلات الدردشة المحلية للمتصفح.",
+      messageWidth: "عرض الرسالة",
+      messageWidthHint:
+        "عرض CSS اختياري للنص المعروض في المنتصف، مثل 960px أو 82% أو min(1280px, 82%).",
+      messageWidthInvalid:
+        "أدخل عرض CSS مثل 960px أو 82% أو min(1280px, 82%) أو calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "الشريط الجانبي",
@@ -1678,6 +1683,7 @@ export const ar: TranslationMap = {
     blockedAgentFilter: "محظور بواسطة عامل تصفية الوكيل",
   },
   nav: {
+    account: "الحساب",
     back: "رجوع",
     forward: "تقدّم",
     chat: "الدردشة",
@@ -3800,6 +3806,22 @@ export const ar: TranslationMap = {
       selected: "عضو",
       noPeople: "لم يتم العثور على أشخاص مقترنين.",
       readOnlyNotice: "لا يمكن اتخاذ إجراءات في هذه المحادثة إلا من قِبل مالكها وأعضائها.",
+    },
+    sessionSuggestions: {
+      suggest: "اقتراح",
+      suggestMessage: "اقتراح رسالة",
+      attachmentsUnsupported: "أزل المرفقات قبل إرسال اقتراح نصي.",
+      sendNow: "إرسال اقتراح {author} الآن",
+      queue: "إضافة اقتراح {author} إلى قائمة الانتظار",
+      edit: "تعديل اقتراح {author}",
+      dismiss: "تجاهل اقتراح {author}",
+      typing: "{name} يكتب الآن…",
+      typingMany: "{names} يكتبون الآن…",
+      state: {
+        pending: "قيد الانتظار",
+        accepted: "مقبول",
+        dismissed: "مرفوض",
+      },
     },
     loadOlder: "تحميل الأقدم",
     sessionHeader: {

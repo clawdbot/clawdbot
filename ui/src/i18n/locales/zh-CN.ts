@@ -592,7 +592,7 @@ export const zh_CN: TranslationMap = {
     filters: "筛选",
     createdBy: "由 {name} 创建",
     archivedBy: "由 {name} 归档",
-    filterByCreator: "按创建者筛选",
+    people: "成员",
     allCreators: "所有人",
     filterControls: "会话筛选器",
     sourceFilters: "会话来源筛选器",
@@ -1371,6 +1371,10 @@ export const zh_CN: TranslationMap = {
     chatPrefs: {
       title: "聊天",
       hint: "浏览器本地聊天偏好设置。",
+      messageWidth: "消息宽度",
+      messageWidthHint: "居中对话记录的可选 CSS 宽度，例如 960px、82% 或 min(1280px, 82%)。",
+      messageWidthInvalid:
+        "请输入 CSS 宽度，例如 960px、82%、min(1280px, 82%) 或 calc(100% - 2rem)。",
     },
     sidebarPrefs: {
       title: "侧边栏",
@@ -1648,6 +1652,7 @@ export const zh_CN: TranslationMap = {
     blockedAgentFilter: "被代理过滤器阻止",
   },
   nav: {
+    account: "账户",
     back: "后退",
     forward: "前进",
     chat: "聊天",
@@ -3735,6 +3740,22 @@ export const zh_CN: TranslationMap = {
       selected: "成员",
       noPeople: "未找到已配对的人员。",
       readOnlyNotice: "只有会话串所有者和成员才能在此会话串中执行操作。",
+    },
+    sessionSuggestions: {
+      suggest: "建议",
+      suggestMessage: "建议消息",
+      attachmentsUnsupported: "提交文本建议前，请移除附件。",
+      sendNow: "立即发送 {author} 的建议",
+      queue: "将 {author} 的建议加入队列",
+      edit: "编辑 {author} 的建议",
+      dismiss: "忽略 {author} 的建议",
+      typing: "{name} 正在输入…",
+      typingMany: "{names} 正在输入…",
+      state: {
+        pending: "待处理",
+        accepted: "已接受",
+        dismissed: "已忽略",
+      },
     },
     loadOlder: "加载更早内容",
     sessionHeader: {

@@ -616,7 +616,7 @@ export const id: TranslationMap = {
     filters: "Filter",
     createdBy: "Dibuat oleh {name}",
     archivedBy: "Diarsipkan oleh {name}",
-    filterByCreator: "Filter berdasarkan pembuat",
+    people: "Orang",
     allCreators: "Semua orang",
     filterControls: "Filter sesi",
     sourceFilters: "Filter sumber sesi",
@@ -1403,6 +1403,11 @@ export const id: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Preferensi chat lokal di browser.",
+      messageWidth: "Lebar pesan",
+      messageWidthHint:
+        "Lebar CSS opsional untuk transkrip yang dipusatkan, seperti 960px, 82%, atau min(1280px, 82%).",
+      messageWidthInvalid:
+        "Masukkan lebar CSS seperti 960px, 82%, min(1280px, 82%), atau calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Bilah Samping",
@@ -1691,6 +1696,7 @@ export const id: TranslationMap = {
     blockedAgentFilter: "diblokir oleh filter agen",
   },
   nav: {
+    account: "Akun",
     back: "Kembali",
     forward: "Maju",
     chat: "Chat",
@@ -3842,6 +3848,22 @@ export const id: TranslationMap = {
       selected: "Anggota",
       noPeople: "Tidak ada orang yang dipasangkan.",
       readOnlyNotice: "Hanya pemilik utas dan anggota yang dapat bertindak dalam utas ini.",
+    },
+    sessionSuggestions: {
+      suggest: "Sarankan",
+      suggestMessage: "Sarankan pesan",
+      attachmentsUnsupported: "Hapus lampiran sebelum mengirimkan saran teks.",
+      sendNow: "Kirim saran {author} sekarang",
+      queue: "Antrekan saran {author}",
+      edit: "Edit saran {author}",
+      dismiss: "Abaikan saran {author}",
+      typing: "{name} sedang mengetik…",
+      typingMany: "{names} sedang mengetik…",
+      state: {
+        pending: "Tertunda",
+        accepted: "Diterima",
+        dismissed: "Diabaikan",
+      },
     },
     loadOlder: "Muat yang lebih lama",
     sessionHeader: {
