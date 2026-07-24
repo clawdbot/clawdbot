@@ -1,11 +1,12 @@
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 // Emits reset hooks and cleanup work around session reset commands.
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { DEFAULT_AGENT_ID, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -120,20 +121,28 @@ export async function emitResetCommandHooks(params: {
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
     const agentId =
-      params.agentId ?? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+      parseAgentSessionKey(params.sessionKey)?.agentId ?? params.agentId ?? DEFAULT_AGENT_ID;
+    const storePath =
+      agentId && params.storePath
+        ? resolveSessionStorePathForScope({
+            agentId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          })
+        : params.storePath;
     const beforeResetTranscript = await loadBeforeResetTranscript({
       agentId,
       sessionFile:
-        agentId && prevEntry?.sessionId && params.storePath
+        agentId && prevEntry?.sessionId && storePath
           ? formatSqliteSessionFileMarker({
               agentId,
               sessionId: prevEntry.sessionId,
-              storePath: params.storePath,
+              storePath,
             })
           : params.sessionKey,
       sessionId: prevEntry?.sessionId,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      storePath,
     });
     void (async () => {
       try {

@@ -6,7 +6,9 @@ import {
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -97,9 +99,17 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
 
   if (hookRunner.hasHooks("session_end")) {
+    const storePath =
+      agentId && params.storePath
+        ? resolveSessionStorePathForScope({
+            agentId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          })
+        : params.storePath;
     const transcript = resolveStableSessionEndTranscript({
       sessionId: params.previousEntry.sessionId,
-      storePath: params.storePath,
+      storePath,
       agentId,
     });
     const payload = buildSessionEndHookPayload({
@@ -107,7 +117,15 @@ function emitCompactionSessionLifecycleHooks(params: {
       sessionKey: params.sessionKey,
       cfg: params.cfg,
       reason: "compaction",
-      sessionFile: transcript.sessionFile,
+      sessionFile:
+        transcript.sessionFile ??
+        (agentId && storePath
+          ? formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: params.previousEntry.sessionId,
+              storePath,
+            })
+          : undefined),
       transcriptArchived: transcript.transcriptArchived,
       nextSessionId: params.nextEntry.sessionId,
     });

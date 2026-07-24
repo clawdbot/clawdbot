@@ -69,7 +69,7 @@ export class SessionManagerCore {
     target: SessionManagerPersistenceTarget | undefined,
     entries: FileEntry[],
   ): void {
-    this.persistenceTarget = target;
+    this.persistenceTarget = target ? { ...target } : undefined;
     const partitioned = partitionSessionFileEntries(entries);
     if (partitioned.fileEntries.length === 0) {
       this.initializeSession({ id: target?.sessionId });
@@ -538,6 +538,6 @@ export class SessionManagerCore {
   }
 
   getSessionTarget(): SessionManagerPersistenceTarget | undefined {
-    return this.persistenceTarget;
+    return this.persistenceTarget ? { ...this.persistenceTarget } : undefined;
   }
 }
