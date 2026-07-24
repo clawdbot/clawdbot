@@ -827,9 +827,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         output.content = [];
       }
       output.stopReason = requestOptions?.signal?.aborted ? "aborted" : "error";
-      // Stream teardown must never throw: a bare JSON.stringify here dies on the
-      // circular error objects HTTP/socket layers raise, stranding the run with no
-      // terminal error event. formatProviderError is the shared total formatter.
+      // A bare JSON.stringify here dies on the circular error objects HTTP/socket
+      // layers raise, and the throw escapes this catch so stream.end() never runs
+      // and the consumer hangs. formatProviderError guards that conversion, matching
+      // the other provider terminal paths.
       output.errorMessage = formatProviderError(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();

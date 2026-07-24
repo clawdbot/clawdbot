@@ -1776,7 +1776,35 @@ describe("Anthropic provider", () => {
 
     expect(eventTypes).toEqual(["error"]);
     expect(result.stopReason).toBe("error");
-    expect(typeof result.errorMessage).toBe("string");
+    // Must be a usable diagnostic, not just "a string" — an empty message would
+    // still leave the operator with nothing to act on.
+    expect(result.errorMessage).toBeTruthy();
+    expect(result.errorMessage).toBe("[object Object]");
+  });
+
+  it("keeps the message for Anthropic errors that carry no HTTP body", async () => {
+    // formatProviderError only substitutes status+body when a body is present, so
+    // ordinary Error rejections must still surface error.message — retry
+    // classification in src/llm/utils/retry.ts parses this string.
+    const asResponse = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("Overloaded"), { status: 529 }));
+    const client = {
+      messages: {
+        create: vi.fn(() => ({ asResponse })),
+      },
+    };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    for await (const _event of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(result.errorMessage).toBe("Overloaded");
   });
 
   it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
