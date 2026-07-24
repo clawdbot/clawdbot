@@ -446,23 +446,24 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
       "qa/scenarios/runtime/long-context-progress-watchdog.yaml",
     );
-    const gatewayRestartFlow = readQaScenarioById("gateway-restart-inflight-run").execution.flow;
+    const gatewayRestartScenario = readQaScenarioById("gateway-restart-inflight-run");
+    const gatewayRestartFlow = gatewayRestartScenario.execution.flow;
     const gatewayRestartContract = JSON.stringify(gatewayRestartFlow);
+    expect(gatewayRestartScenario.runtimePairLane).toBeUndefined();
     expect(
       JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch),
     ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
     expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
     expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
-    expect(gatewayRestartContract).toContain('"sendInbound"');
-    expect(gatewayRestartContract).not.toContain('"taskTracking"');
+    expect(gatewayRestartContract).toContain('"taskTracking":false');
     expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
-    expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
-    expect(gatewayRestartContract).toContain("restartNotices.length === 0");
+    expect(gatewayRestartContract).toContain("finalMarkerCount === 1");
+    expect(gatewayRestartContract).toContain("recoveryRequestCount === 1");
+    expect(gatewayRestartContract).toContain("recoveryDispatchCount === 1");
     expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
     expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
     expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
-    expect(gatewayRestartContract).toContain("transport.buildAgentDelivery");
-    expect(gatewayRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
+    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
     const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
     const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
