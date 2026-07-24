@@ -5457,11 +5457,12 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     // message_tool_only.  Both message_tool_only gates in followup-runner are exempted
     // when nonDeliverableTerminalTurn=true.
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const call = onBlockReply.mock.calls[0]?.[0] as { text?: string; isError?: boolean };
-    expect(call).toMatchObject({
-      text: "The agent run failed before producing a reply.",
-      isError: true,
-    });
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "The agent run failed before producing a reply.",
+        isError: true,
+      }),
+    );
   });
 
   it("keeps message-tool-only suppression intact for normal (non-terminal) turns", async () => {
