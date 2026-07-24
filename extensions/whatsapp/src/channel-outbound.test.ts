@@ -282,8 +282,7 @@ describe("whatsappChannelOutbound", () => {
     },
     {
       name: "id header changes",
-      rewrite: (text: string) =>
-        text.replace("**ID:** exec-visible-mismatch", "**ID:** other-id"),
+      rewrite: (text: string) => text.replace("**ID:** exec-visible-mismatch", "**ID:** other-id"),
     },
     {
       name: "id header disappears",

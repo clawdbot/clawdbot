@@ -328,7 +328,9 @@ function buildApprovalReactionPromptText(params: {
         ["**Command analysis:**", ...warningLines.map((line) => `- ${line}`)].join("\n"),
       );
     }
-    sections.push(["**Pending command:**", formatFencedCodeBlock(view.commandText, "sh")].join("\n"));
+    sections.push(
+      ["**Pending command:**", formatFencedCodeBlock(view.commandText, "sh")].join("\n"),
+    );
     const info: string[] = [];
     if (view.cwd) {
       info.push(`**CWD:** ${formatApprovalDisplayPath(sanitizeForPromptLiteral(view.cwd))}`);
