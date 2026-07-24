@@ -99,6 +99,9 @@ export const pluginSdkDocMetadata = {
   "reply-payload": {
     category: "utilities",
   },
+  "media-local-roots": {
+    category: "utilities",
+  },
 } as const satisfies Record<string, PluginSdkDocMetadata>;
 
 export type PluginSdkDocEntrypoint = keyof typeof pluginSdkDocMetadata;
