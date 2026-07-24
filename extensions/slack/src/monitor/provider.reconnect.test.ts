@@ -366,8 +366,57 @@ describe("slack socket reconnect helpers", () => {
     unregister();
   });
 
+  it("marks transport activity from owned WebSocket ping/pong keepalives", () => {
+    const ownedWs = new FakeEmitter();
+    const client = Object.assign(new FakeEmitter(), {
+      websocket: { websocket: ownedWs },
+    });
+    const onTransportActivity = vi.fn();
+    const unregister = registerSlackSocketModeTransportActivity({
+      app: { receiver: { client } },
+      onTransportActivity,
+    });
+
+    ownedWs.emit("ping", Buffer.from("ping"));
+    ownedWs.emit("pong", Buffer.from("pong"));
+    expect(onTransportActivity).toHaveBeenCalledTimes(2);
+
+    unregister();
+    ownedWs.emit("pong", Buffer.from("pong"));
+    expect(onTransportActivity).toHaveBeenCalledTimes(2);
+    expect(ownedWs.listenerCount("ping")).toBe(0);
+    expect(ownedWs.listenerCount("pong")).toBe(0);
+  });
+
+  it("rebinds owned WebSocket keepalives on reconnect", () => {
+    const firstWs = new FakeEmitter();
+    const secondWs = new FakeEmitter();
+    const slackWebSocket = { websocket: firstWs as FakeEmitter | null };
+    const client = Object.assign(new FakeEmitter(), {
+      websocket: slackWebSocket,
+    });
+    const onTransportActivity = vi.fn();
+    const unregister = registerSlackSocketModeTransportActivity({
+      app: { receiver: { client } },
+      onTransportActivity,
+    });
+
+    firstWs.emit("pong", Buffer.from("pong"));
+    expect(onTransportActivity).toHaveBeenCalledTimes(1);
+
+    slackWebSocket.websocket = secondWs;
+    client.emit("connected");
+    expect(onTransportActivity).toHaveBeenCalledTimes(2);
+    expect(firstWs.listenerCount("pong")).toBe(0);
+
+    secondWs.emit("pong", Buffer.from("pong"));
+    expect(onTransportActivity).toHaveBeenCalledTimes(3);
+
+    unregister();
+  });
+
   it("ignores undici ping/pong from foreign WebSockets and unscoped handles", () => {
-    const ownedUndici = { id: "owned-slack-ws" };
+    const ownedUndici = Object.assign(new FakeEmitter(), { id: "owned-slack-ws" });
     const foreignUndici = { id: "other-process-ws" };
     const client = Object.assign(new FakeEmitter(), {
       websocket: { websocket: ownedUndici },

@@ -80,7 +80,12 @@ function getSocketEmitter(app: unknown): EmitterLike | null {
   };
 }
 
-function resolveUndiciWebSocket(app: unknown): object | null {
+/**
+ * Resolve the process-level WebSocket owned by this Socket Mode client.
+ * `@slack/socket-mode` wraps it as `client.websocket.websocket` (`ws` today;
+ * Undici-compatible shapes use the same nested handle).
+ */
+function resolveOwnedWebSocket(app: unknown): object | null {
   const client = getSocketClient(app);
   if (!client) {
     return null;
@@ -89,8 +94,8 @@ function resolveUndiciWebSocket(app: unknown): object | null {
   if (!slackWebSocket || typeof slackWebSocket !== "object") {
     return null;
   }
-  const undiciWebSocket = Reflect.get(slackWebSocket, "websocket");
-  return undiciWebSocket && typeof undiciWebSocket === "object" ? undiciWebSocket : null;
+  const ownedWebSocket = Reflect.get(slackWebSocket, "websocket");
+  return ownedWebSocket && typeof ownedWebSocket === "object" ? ownedWebSocket : null;
 }
 
 function isUndiciPingPongMessage(
@@ -102,6 +107,54 @@ function isUndiciPingPongMessage(
   const websocket = Reflect.get(message, "websocket");
   const payload = Reflect.get(message, "payload");
   return Boolean(websocket && typeof websocket === "object" && Buffer.isBuffer(payload));
+}
+
+type EventTargetLike = {
+  on: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  off: (event: string, listener: (...args: unknown[]) => void) => unknown;
+};
+
+function asEventTarget(value: object): EventTargetLike | null {
+  const on = Reflect.get(value, "on");
+  const off = Reflect.get(value, "off") ?? Reflect.get(value, "removeListener");
+  if (typeof on !== "function" || typeof off !== "function") {
+    return null;
+  }
+  return {
+    on: (event, listener) =>
+      (
+        on as (this: unknown, event: string, listener: (...args: unknown[]) => void) => unknown
+      ).call(value, event, listener),
+    off: (event, listener) =>
+      (
+        off as (this: unknown, event: string, listener: (...args: unknown[]) => void) => unknown
+      ).call(value, event, listener),
+  };
+}
+
+/**
+ * Bind WebSocket protocol ping/pong on the owned socket only.
+ * Slack Socket Mode keepalives are protocol frames (`ws` `ping`/`pong`), not
+ * `ws_message` payloads — so idle recovery must observe these directly.
+ */
+function bindOwnedWebSocketKeepalive(app: unknown, onTransportActivity: () => void): () => void {
+  const ownedWebSocket = resolveOwnedWebSocket(app);
+  if (!ownedWebSocket) {
+    return () => {};
+  }
+  const target = asEventTarget(ownedWebSocket);
+  if (!target) {
+    return () => {};
+  }
+  const listener = () => {
+    onTransportActivity();
+  };
+  target.on("ping", listener);
+  target.on("pong", listener);
+  return () => {
+    target.off("ping", listener);
+    target.off("pong", listener);
+  };
 }
 
 function getDiagnosticsChannel(name: string): DiagnosticsChannelLike | null {
@@ -157,7 +210,8 @@ export function formatSlackSocketModeSharedConnectionWarning(activeConnections: 
 }
 
 /**
- * Observe Socket Mode transport liveness (connect/hello/ws frames + undici ping/pong).
+ * Observe Socket Mode transport liveness:
+ * connect/hello/`ws_message` plus owned-socket WebSocket ping/pong keepalives.
  * App inbound events are intentionally excluded — those update lastEventAt/lastInboundAt.
  */
 export function registerSlackSocketModeTransportActivity(params: {
@@ -173,6 +227,12 @@ export function registerSlackSocketModeTransportActivity(params: {
     params.onTransportActivity(Date.now());
   };
 
+  let unbindOwnedKeepalive: (() => void) | undefined;
+  const rebindOwnedKeepalive = () => {
+    unbindOwnedKeepalive?.();
+    unbindOwnedKeepalive = bindOwnedWebSocketKeepalive(params.app, noteActivity);
+  };
+
   const wsMessageListener = (_message: unknown, isBinary?: unknown) => {
     if (isBinary === true) {
       return;
@@ -180,20 +240,23 @@ export function registerSlackSocketModeTransportActivity(params: {
     noteActivity();
   };
   const connectedListener = () => {
+    // Slack recreates the underlying WebSocket on each connect — rebind keepalives.
+    rebindOwnedKeepalive();
     noteActivity();
   };
 
   const pingChannel = getDiagnosticsChannel(UNDICI_WEBSOCKET_PING_CHANNEL);
   const pongChannel = getDiagnosticsChannel(UNDICI_WEBSOCKET_PONG_CHANNEL);
-  // Undici ping/pong is process-wide via diagnostics_channel. Only count frames
-  // for this Socket Mode client's WebSocket. If the handle is not resolvable yet,
-  // ignore undici diagnostics and rely on Slack client `connected`/`ws_message`
-  // (already scoped to this emitter) so foreign WebSockets cannot mask a dead socket.
+  // Undici ping/pong (if present) is process-wide via diagnostics_channel. Only
+  // count frames for this Socket Mode client's WebSocket. If the handle is not
+  // resolvable yet, ignore undici diagnostics so foreign WebSockets cannot mask
+  // a dead socket. Primary keepalive for `@slack/socket-mode` is the owned
+  // `ws` ping/pong binding above.
   const pingPongListener = (message: unknown) => {
     if (!isUndiciPingPongMessage(message)) {
       return;
     }
-    const ownedWebSocket = resolveUndiciWebSocket(params.app);
+    const ownedWebSocket = resolveOwnedWebSocket(params.app);
     if (!ownedWebSocket || message.websocket !== ownedWebSocket) {
       return;
     }
@@ -204,8 +267,12 @@ export function registerSlackSocketModeTransportActivity(params: {
   emitter.on("connected", connectedListener);
   pingChannel?.subscribe(pingPongListener);
   pongChannel?.subscribe(pingPongListener);
+  // Already-connected monitors still need keepalive binding.
+  rebindOwnedKeepalive();
 
   return () => {
+    unbindOwnedKeepalive?.();
+    unbindOwnedKeepalive = undefined;
     emitter.off("ws_message", wsMessageListener);
     emitter.off("connected", connectedListener);
     pingChannel?.unsubscribe(pingPongListener);
