@@ -54,8 +54,10 @@ function expectPersistedOpenAICodexProfile(
 // production branch refuses a mismatched accountId.
 
 vi.mock("../../llm/oauth.js", () => ({
-  getOAuthApiKey: vi.fn(async () => null),
-  getOAuthProviders: () => [{ id: "openai" }, { id: "anthropic" }],
+  getOAuthProviders: () => [
+    { id: "openai", refreshToken: vi.fn() },
+    { id: "anthropic", refreshToken: vi.fn() },
+  ],
 }));
 
 describe("OAuth credential adoption is identity-gated", () => {

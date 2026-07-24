@@ -664,7 +664,7 @@ export class AuthStorage {
   }
 
   /**
-   * Get all credentials (for passing to getOAuthApiKey).
+   * Get all credentials (for passing to the OAuth provider registry).
    */
   getAll(): AuthStorageData {
     return { ...this.data };

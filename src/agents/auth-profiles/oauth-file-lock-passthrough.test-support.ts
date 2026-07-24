@@ -6,6 +6,10 @@
 import { afterAll, vi } from "vitest";
 
 const fileLockPassthroughMock = vi.hoisted(() => ({
+  // Mirror the real module constant so refresh-failure paths that classify the
+  // cause (e.g. createRedactedOAuthRefreshCause / lock-timeout checks) resolve it
+  // instead of hitting a "no export defined" mock error.
+  FILE_LOCK_TIMEOUT_ERROR_CODE: "file_lock_timeout",
   drainFileLockStateForTest: async () => undefined,
   resetFileLockStateForTest: () => undefined,
   withFileLock: async <T>(_filePath: string, _options: unknown, run: () => Promise<T>) => run(),

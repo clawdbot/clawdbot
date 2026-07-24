@@ -19,12 +19,24 @@ vi.mock("../model-auth-env-vars.js", async (importOriginal) => ({
   }),
 }));
 
-vi.mock("../../llm/oauth.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../llm/oauth.js")>()),
-  getOAuthApiKey: vi.fn(async () => {
-    throw new Error("invalid_grant");
-  }),
-}));
+function withFailingRefresh<T extends object>(provider: T): T {
+  return {
+    ...provider,
+    refreshToken: async () => {
+      throw new Error("invalid_grant");
+    },
+  };
+}
+
+vi.mock("../../llm/oauth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../llm/oauth.js")>();
+  return {
+    ...actual,
+    // Keep the real provider set/ids but make the built-in refresh fail so the
+    // OAuth refresh-failure fallthrough is exercised without a live token call.
+    getOAuthProviders: () => actual.getOAuthProviders().map(withFailingRefresh),
+  };
+});
 
 const platformModel = {
   id: "gpt-5.5",

@@ -48,8 +48,7 @@ async function loadOAuthModuleForTest() {
 }
 
 vi.mock("../../llm/oauth.js", () => ({
-  getOAuthApiKey: vi.fn(async () => null),
-  getOAuthProviders: () => [{ id: "openai" }],
+  getOAuthProviders: () => [{ id: "openai", refreshToken: vi.fn() }],
 }));
 
 async function runConcurrentRefreshCase(): Promise<ConcurrentRefreshResult> {

@@ -56,16 +56,10 @@ function requireOAuthCredential(store: AuthProfileStore, profileId: string): OAu
 }
 
 vi.mock("../../llm/oauth.js", () => ({
-  getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai" }],
-  getOAuthApiKey: vi.fn(async (provider: string, credentials: Record<string, OAuthCredential>) => {
-    const credential = credentials[provider];
-    return credential
-      ? {
-          apiKey: credential.access,
-          newCredentials: credential,
-        }
-      : null;
-  }),
+  getOAuthProviders: () => [
+    { id: "anthropic", refreshToken: vi.fn() },
+    { id: "openai", refreshToken: vi.fn() },
+  ],
 }));
 
 describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => {
@@ -505,7 +499,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     saveAuthProfileStore(createExpiredOauthStore({ profileId, provider, accountId }), mainAgentDir);
 
     // Plugin returns a truthy refreshed credential — this takes the plugin
-    // branch instead of falling through to getOAuthApiKey.
+    // branch instead of falling through to the built-in provider refresh.
     refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
       async () =>
         ({

@@ -33,8 +33,7 @@ const {
 } = getOAuthProviderRuntimeMocks();
 
 vi.mock("../../llm/oauth.js", () => ({
-  getOAuthApiKey: vi.fn(async () => null),
-  getOAuthProviders: () => [{ id: "openai" }],
+  getOAuthProviders: () => [{ id: "openai", refreshToken: vi.fn() }],
 }));
 
 describe("OAuth refresh in-process queue", () => {

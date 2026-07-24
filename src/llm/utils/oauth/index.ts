@@ -87,37 +87,8 @@ export class OAuthProviderRegistry {
 }
 
 /**
- * Get a built-in OAuth provider by ID.
- */
-function getOAuthProvider(id: OAuthProviderId): OAuthProviderInterface | undefined {
-  return BUILT_IN_OAUTH_PROVIDERS.find((provider) => provider.id === id);
-}
-
-/**
  * Get all built-in OAuth providers.
  */
 export function getOAuthProviders(): OAuthProviderInterface[] {
   return [...BUILT_IN_OAUTH_PROVIDERS];
-}
-
-// ============================================================================
-// High-level built-in provider API
-// ============================================================================
-
-/**
- * Get API key for a provider from OAuth credentials.
- * Automatically refreshes expired tokens.
- *
- * @returns API key string and updated credentials, or null if no credentials
- * @throws Error if refresh fails
- */
-export async function getOAuthApiKey(
-  providerId: OAuthProviderId,
-  credentials: Record<string, OAuthCredentials>,
-): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
-  const provider = getOAuthProvider(providerId);
-  if (!provider) {
-    throw new Error(`Unknown OAuth provider: ${providerId}`);
-  }
-  return resolveOAuthApiKey(provider, credentials);
 }

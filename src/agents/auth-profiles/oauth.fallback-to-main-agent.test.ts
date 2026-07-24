@@ -18,18 +18,20 @@ import {
   saveAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
-const { getOAuthApiKeyMock } = vi.hoisted(() => {
+const { refreshTokenMock } = vi.hoisted(() => {
   vi.resetModules();
   return {
-    getOAuthApiKeyMock: vi.fn(async () => {
+    refreshTokenMock: vi.fn(async () => {
       throw new Error("invalid_grant");
     }),
   };
 });
 
 vi.mock("../../llm/oauth.js", () => ({
-  getOAuthApiKey: getOAuthApiKeyMock,
-  getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai" }],
+  getOAuthProviders: () => [
+    { id: "anthropic", refreshToken: refreshTokenMock },
+    { id: "openai", refreshToken: refreshTokenMock },
+  ],
 }));
 
 vi.mock("../cli-credentials.js", () => ({
@@ -70,8 +72,8 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
   beforeEach(async () => {
     resetFileLockStateForTest();
-    getOAuthApiKeyMock.mockReset();
-    getOAuthApiKeyMock.mockImplementation(async () => {
+    refreshTokenMock.mockReset();
+    refreshTokenMock.mockImplementation(async () => {
       throw new Error("invalid_grant");
     });
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-fallback-test-"));
@@ -390,7 +392,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       }),
     );
 
-    getOAuthApiKeyMock
+    refreshTokenMock
       .mockImplementationOnce(async () => {
         throw new Error("refresh_token_reused");
       })

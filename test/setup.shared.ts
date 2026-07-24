@@ -7,7 +7,6 @@ type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
 };
 
 vi.mock("../src/llm/oauth.js", () => ({
-  getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
   refreshOpenAICodexToken: vi.fn((...args: unknown[]) =>

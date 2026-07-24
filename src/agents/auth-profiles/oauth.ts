@@ -9,12 +9,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  getOAuthApiKey,
-  getOAuthProviders,
-  type OAuthCredentials,
-  type OAuthProviderId,
-} from "../../llm/oauth.js";
+import { getOAuthProviders, type OAuthCredentials, type OAuthProviderId } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
@@ -210,14 +205,25 @@ async function refreshOAuthCredential(
     return await refreshChutesTokens({ credential });
   }
 
-  const oauthProvider = resolveOAuthProvider(credential.provider);
-  if (!oauthProvider || typeof getOAuthApiKey !== "function") {
+  const providerId = resolveOAuthProvider(credential.provider);
+  const provider = providerId
+    ? getOAuthProviders().find((candidate) => candidate.id === providerId)
+    : undefined;
+  if (!provider) {
     return null;
   }
-  const result = await getOAuthApiKey(oauthProvider, {
-    [credential.provider]: credential,
-  });
-  return result?.newCredentials ?? null;
+  try {
+    // The manager only delegates here after its own pre-expiry margin gate
+    // already decided a refresh is due, so rotate the token directly. The prior
+    // built-in path applied a second, unmargined raw-expiry check that no-oped
+    // inside the margin window and silently handed back the same near-expiry
+    // credential the manager could not tell apart from a real refresh (#103846).
+    return await provider.refreshToken(credential);
+  } catch (error) {
+    // Surface refresh failures (including forced doctor/CLI refreshes) instead of
+    // hiding them behind a stale credential; wrap to match the previous error.
+    throw new Error(`Failed to refresh OAuth token for ${credential.provider}`, { cause: error });
+  }
 }
 
 /** Refresh one OAuth credential and merge provider-returned token fields. */
