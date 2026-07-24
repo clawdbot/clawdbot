@@ -739,6 +739,43 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("preserves a trusted canonical sibling for a typed external current target", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            actionhub: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "actionhub",
+          target: "channel:current",
+          messageId: "om_123",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "actionhub:current",
+          currentChannelProvider: "actionhub",
+          currentChatType: "channel",
+        },
+        dryRun: false,
+      });
+
+      const call = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(call, "params", "normalized plugin params"),
+        {
+          target: "actionhub:current",
+          to: "actionhub:current",
+        },
+        "normalized plugin params",
+      );
+    });
+
     it("preserves no-context owner Discord admin actions through the shared runner", async () => {
       const handleDiscordAction = vi.fn(async (ctx: ChannelMessageActionContext) => {
         const currentProvider = ctx.toolContext?.currentChannelProvider?.trim().toLowerCase();
