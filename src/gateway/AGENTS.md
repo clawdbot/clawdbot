@@ -21,6 +21,14 @@ runtime when they only need plugin-owned static descriptors.
 - Keep schedulers, pollers, and background loops disabled in manual-RPC tests
   unless the test is specifically proving automatic scheduling or lifecycle
   behavior.
+- Keep Gateway error codes, reasons, and canonical English messages stable.
+  Localizable errors must use an explicitly reviewed descriptor from
+  `@openclaw/gateway-protocol`; do not derive catalog keys from arbitrary error
+  text or translate inside Gateway business logic.
+- When adding a descriptor, update the producer, protocol allowlist, rendering
+  owner catalog, discriminator-mismatch tests, canonical-English fallback, and
+  confirm the rendering catalog source has a `localization/surfaces.json`
+  disposition in the same bounded owner slice.
 
 ## Run Authority And Worker Upgrades
 

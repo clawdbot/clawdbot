@@ -19,6 +19,8 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - `pnpm release:prep` runs the locale sync before release freeze, then `pnpm ui:i18n:check` remains the strict generated-output/release gate with zero fallbacks.
 - Prioritization report: `pnpm ui:i18n:report [--surface <name>] [--locale <locale>] [--top <n>]` shows current hardcoded-copy focus areas and locale fallback metadata. It is not a drift gate; use `pnpm ui:i18n:check` for that.
 - If locale outputs drift, let the workflow reconcile them or run release prep. Do not manually translate, merge, or hand-maintain generated translation memory or locale metadata.
+- Gateway error localization is allowlisted presentation metadata, not a general error translator. Require the reviewed message key plus exact Gateway code and reason tuple, keep the canonical server message as fallback, and preserve operational parameters literally.
+- Keep Control UI catalog source files registered in `localization/surfaces.json`; every new source file needs a disposition. Use the existing Control UI verification and refresh pipeline rather than adding another per-feature gate or translator.
 
 ## CSS / Template Linting
 
