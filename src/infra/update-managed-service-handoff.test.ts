@@ -672,19 +672,22 @@ describe("managed service update handoff", () => {
     expect(result.command).toContain("--channel extended-stable");
   });
 
-  it("starts the managed gateway service when the update command fails after handoff", async () => {
-    const { binDir, recordPath } = await writeFakeSystemctl();
-    const result = await runHelperWithCommand({
-      commandArgv: [process.execPath, "-e", "process.exit(7)"],
-      serviceRecovery: { kind: "systemd", unit: "openclaw-gateway.service" },
-      pathPrepend: binDir,
-    });
+  it.runIf(process.platform !== "win32")(
+    "starts the managed gateway service when the update command fails after handoff",
+    async () => {
+      const { binDir, recordPath } = await writeFakeSystemctl();
+      const result = await runHelperWithCommand({
+        commandArgv: [process.execPath, "-e", "process.exit(7)"],
+        serviceRecovery: { kind: "systemd", unit: "openclaw-gateway.service" },
+        pathPrepend: binDir,
+      });
 
-    expect(result.code).toBe(7);
-    await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
-      "--user start openclaw-gateway.service\n",
-    );
-  });
+      expect(result.code).toBe(7);
+      await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
+        "--user start openclaw-gateway.service\n",
+      );
+    },
+  );
 
   it("leaves the gateway service alone when the update command succeeds", async () => {
     const { binDir, recordPath } = await writeFakeSystemctl();
@@ -698,30 +701,33 @@ describe("managed service update handoff", () => {
     await expect(pathExists(recordPath)).resolves.toBe(false);
   });
 
-  it("retries launchd start when bootstrap reports an already-loaded label", async () => {
-    const { binDir, recordPath } = await writeFakeLaunchctl();
-    const result = await runHelperWithCommand({
-      commandArgv: [process.execPath, "-e", "process.exit(7)"],
-      serviceRecovery: {
-        kind: "launchd",
-        uid: 501,
-        label: "com.example.openclaw",
-        plistPath: "/Users/test/Library/LaunchAgents/com.example.openclaw.plist",
-      },
-      pathPrepend: binDir,
-    });
+  it.runIf(process.platform !== "win32")(
+    "retries launchd start when bootstrap reports an already-loaded label",
+    async () => {
+      const { binDir, recordPath } = await writeFakeLaunchctl();
+      const result = await runHelperWithCommand({
+        commandArgv: [process.execPath, "-e", "process.exit(7)"],
+        serviceRecovery: {
+          kind: "launchd",
+          uid: 501,
+          label: "com.example.openclaw",
+          plistPath: "/Users/test/Library/LaunchAgents/com.example.openclaw.plist",
+        },
+        pathPrepend: binDir,
+      });
 
-    expect(result.code).toBe(7);
-    await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
-      [
-        "kickstart gui/501/com.example.openclaw",
-        "enable gui/501/com.example.openclaw",
-        "bootstrap gui/501 /Users/test/Library/LaunchAgents/com.example.openclaw.plist",
-        "kickstart gui/501/com.example.openclaw",
-        "",
-      ].join("\n"),
-    );
-  });
+      expect(result.code).toBe(7);
+      await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
+        [
+          "kickstart gui/501/com.example.openclaw",
+          "enable gui/501/com.example.openclaw",
+          "bootstrap gui/501 /Users/test/Library/LaunchAgents/com.example.openclaw.plist",
+          "kickstart gui/501/com.example.openclaw",
+          "",
+        ].join("\n"),
+      );
+    },
+  );
 
   it("passes a gateway service recovery descriptor for each supervisor", async () => {
     const { startManagedServiceUpdateHandoff } =
@@ -734,7 +740,12 @@ describe("managed service update handoff", () => {
           kind: "launchd",
           uid: typeof process.getuid === "function" ? process.getuid() : 501,
           label: "com.example.openclaw.test",
-          plistPath: "/Users/test/Library/LaunchAgents/com.example.openclaw.test.plist",
+          plistPath: path.join(
+            "/Users/test",
+            "Library",
+            "LaunchAgents",
+            "com.example.openclaw.test.plist",
+          ),
         },
       },
       {
