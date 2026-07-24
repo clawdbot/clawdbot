@@ -180,6 +180,7 @@ class ChatControllerUsageStreamTest {
       )
 
       controller.handleGatewayEvent("seqGap", null)
+      assertNull(controller.selectedActiveRunPresentation.value.outputTokens)
       runCurrent()
 
       assertEquals(1, controller.pendingRunCount.value)

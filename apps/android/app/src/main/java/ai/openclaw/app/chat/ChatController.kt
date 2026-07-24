@@ -3060,6 +3060,7 @@ class ChatController internal constructor(
         resetSwarmProgress()
         if (isSwarmEnabled()) refreshSwarmSessions()
         invalidateIncompleteRunTelemetry()
+        publishRunPresentation()
         clearLiveRunUi()
         refreshQuestions()
         refreshHistoryForRecovery()
