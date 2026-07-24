@@ -18,6 +18,7 @@ import {
 } from "./protocol/startup-unavailable.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { agentHandlers } from "./server-methods/agent.js";
+import { aiIntelligenceHandlers } from "./server-methods/ai-intelligence.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { artifactsHandlers } from "./server-methods/artifacts.js";
 import { channelsHandlers } from "./server-methods/channels.js";
@@ -97,6 +98,7 @@ function authorizeGatewayMethod(
 }
 
 export const coreGatewayHandlers: GatewayRequestHandlers = {
+  ...aiIntelligenceHandlers,
   ...connectHandlers,
   ...logsHandlers,
   ...voicewakeHandlers,
