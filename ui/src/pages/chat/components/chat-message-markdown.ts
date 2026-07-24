@@ -103,7 +103,7 @@ function renderExpandButton(
   `;
 }
 
-export type MessageActionDetails = {
+type MessageActionDetails = {
   markdown?: string;
   messageId?: string;
   replyTarget?: MessageReplyTarget;
