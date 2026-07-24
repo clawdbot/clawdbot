@@ -1,8 +1,8 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   buildFallbackSlashCommands,
