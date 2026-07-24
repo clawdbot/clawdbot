@@ -1755,11 +1755,12 @@ describe("Anthropic provider", () => {
     // JSON.stringify in stream teardown throws and strands the run (#106568).
     const circular: Record<string, unknown> = { code: "ECONNRESET" };
     circular.self = circular;
+    // Transport layers reject with plain objects, not Error instances, which is
+    // what sends the formatter down the JSON.stringify branch.
+    const asResponse = vi.fn().mockRejectedValue(circular);
     const client = {
       messages: {
-        create: vi.fn(() => ({
-          asResponse: () => Promise.reject(circular),
-        })),
+        create: vi.fn(() => ({ asResponse })),
       },
     };
     const stream = streamAnthropic(
