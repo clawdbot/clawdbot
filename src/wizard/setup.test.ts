@@ -654,6 +654,7 @@ describe("runSetupWizard", () => {
       raw: "{}",
       parsed: {},
       resolved: {},
+      sourceConfigBeforeMigrations: {},
       valid: true,
       config: { agents: { entries: { main: { default: true } } } },
       issues: [],
@@ -716,6 +717,7 @@ describe("runSetupWizard", () => {
       raw: "{}",
       parsed: {},
       resolved: {},
+      sourceConfigBeforeMigrations: {},
       valid: false,
       config: {},
       issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
@@ -796,6 +798,7 @@ describe("runSetupWizard", () => {
       raw: "{}",
       parsed: {},
       resolved: {},
+      sourceConfigBeforeMigrations: {},
       valid: true,
       config: {
         gateway: {
@@ -852,6 +855,7 @@ describe("runSetupWizard", () => {
       raw: "{}",
       parsed: {},
       resolved: {},
+      sourceConfigBeforeMigrations: {},
       valid: true,
       config: {
         gateway: {
@@ -1037,6 +1041,7 @@ describe("runSetupWizard", () => {
       raw: "{}",
       parsed: {},
       resolved: {},
+      sourceConfigBeforeMigrations: {},
       valid: true,
       config: {
         wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
@@ -1437,6 +1442,7 @@ describe("runSetupWizard", () => {
       raw: "{}",
       parsed: {},
       resolved: {},
+      sourceConfigBeforeMigrations: {},
       valid: true,
       config: {
         agents: { entries: { main: { default: true } } },
@@ -1548,6 +1554,7 @@ describe("runSetupWizard", () => {
       raw: "{}",
       parsed: {},
       resolved: {},
+      sourceConfigBeforeMigrations: {},
       valid: true,
       config: {
         wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
@@ -2090,6 +2097,7 @@ describe("runSetupWizard", () => {
       raw: "{}",
       parsed: {},
       resolved: {},
+      sourceConfigBeforeMigrations: {},
       valid: true,
       config: {
         agents: { entries: { main: { default: true } } },
@@ -2145,6 +2153,7 @@ describe("runSetupWizard", () => {
       raw: "{}",
       parsed: {},
       resolved: {},
+      sourceConfigBeforeMigrations: {},
       valid: true,
       config: {
         agents: { entries: { main: { default: true } } },

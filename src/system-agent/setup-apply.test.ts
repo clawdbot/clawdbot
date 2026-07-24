@@ -574,7 +574,11 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.ensureWorkspace).not.toHaveBeenCalled();
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    runtimeConfig: OpenClawConfig;
+    error: string;
+  }>([
     {
       name: "default agent",
       runtimeConfig: {
@@ -596,7 +600,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       error: "default model changed",
     },
   ])("rechecks the probed $name inside the final transform", async ({ runtimeConfig, error }) => {
-    mocks.state.commitSnapshot = snapshot("probe", runtimeConfig as OpenClawConfig);
+    mocks.state.commitSnapshot = snapshot("probe", runtimeConfig);
 
     await expect(
       applySystemAgentSetup(
