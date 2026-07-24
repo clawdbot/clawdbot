@@ -38,6 +38,9 @@ describe("buildAgentSystemPrompt — continuation section branching", () => {
     it("teaches the `continue_delegate` tool", () => {
       expect(prompt).toContain("`continue_delegate` tool");
       expect(prompt).toContain("background sub-agents");
+      expect(prompt).toContain(
+        "The typed `continue_delegate` tool can carry inline attachments into its new child workspace.",
+      );
     });
 
     it("teaches the `request_compaction` tool", () => {
@@ -71,6 +74,9 @@ describe("buildAgentSystemPrompt — continuation section branching", () => {
     it("teaches bracket syntax for delegation", () => {
       expect(prompt).toContain("End your response with [[CONTINUE_DELEGATE: task description]]");
       expect(prompt).toContain("[[CONTINUE_DELEGATE: task +30s | silent-wake]]");
+      expect(prompt).toContain(
+        "Bracket `[[CONTINUE_DELEGATE: ...]]` syntax cannot carry attachment blobs",
+      );
     });
 
     it("does NOT present `continue_work` as a tool", () => {
@@ -97,6 +103,9 @@ describe("buildAgentSystemPrompt — continuation section branching", () => {
 
       expect(prompt).toContain("`continue_work` tool");
       expect(prompt).toContain("End your response with [[CONTINUE_DELEGATE: task description]]");
+      expect(prompt).toContain(
+        "Bracket `[[CONTINUE_DELEGATE: ...]]` syntax cannot carry attachment blobs",
+      );
       expect(prompt).not.toContain("`continue_delegate` tool");
       expect(prompt).not.toContain("Use `request_compaction` to trigger compaction");
     });
@@ -110,6 +119,9 @@ describe("buildAgentSystemPrompt — continuation section branching", () => {
 
       expect(prompt).toContain("End your response with CONTINUE_WORK to request another turn");
       expect(prompt).toContain("`continue_delegate` tool");
+      expect(prompt).toContain(
+        "The typed `continue_delegate` tool can carry inline attachments into its new child workspace.",
+      );
       expect(prompt).not.toContain("`continue_work` tool");
     });
   });

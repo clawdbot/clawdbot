@@ -1452,7 +1452,11 @@ export function buildAgentSystemPrompt(params: {
       "### When to use CONTINUE_DELEGATE vs sessions_spawn",
       "Use sessions_spawn for immediate, explicit workers you want to manage directly, for ACP",
       "runtime spawns, or when the shard needs explicit spawn-time controls such as cwd or threads.",
-      "The typed `continue_delegate` tool can carry inline attachments into its new child workspace.",
+      ...(availableTools.has("continue_delegate")
+        ? [
+            "The typed `continue_delegate` tool can carry inline attachments into its new child workspace.",
+          ]
+        : []),
       "Bracket `[[CONTINUE_DELEGATE: ...]]` syntax cannot carry attachment blobs; it may reference",
       "a file that already exists in the workspace.",
       "Use `continue_delegate` (or `[[CONTINUE_DELEGATE:]]` bracket syntax) when you need:",
