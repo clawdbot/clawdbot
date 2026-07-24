@@ -71,16 +71,6 @@ function renderReviewedGatewayError(
   return localized && localized !== reviewed.localization.messageKey ? localized : null;
 }
 
-/** Returns localized text only for a reviewed key and discriminator tuple. */
-export function tryResolveLocalizedGatewayErrorMessage(
-  error: unknown,
-  translate: GatewayErrorTranslate = t,
-  hasTranslation: GatewayErrorHasTranslation = (key) => i18n.hasTranslation(key),
-): string | null {
-  const reviewed = readReviewedGatewayError(error);
-  return reviewed ? renderReviewedGatewayError(reviewed, translate, hasTranslation) : null;
-}
-
 /** Localizes a reviewed descriptor or returns its canonical server English. */
 export function resolveReviewedGatewayErrorMessage(
   error: unknown,
@@ -94,17 +84,5 @@ export function resolveReviewedGatewayErrorMessage(
   return (
     renderReviewedGatewayError(reviewed, translate, hasTranslation) ??
     fallbackErrorMessage(reviewed.error)
-  );
-}
-
-/** Generic formatter retaining canonical error text when no localization applies. */
-export function resolveGatewayErrorMessage(
-  error: unknown,
-  translate: GatewayErrorTranslate = t,
-  hasTranslation?: GatewayErrorHasTranslation,
-): string {
-  return (
-    resolveReviewedGatewayErrorMessage(error, translate, hasTranslation) ??
-    fallbackErrorMessage(error)
   );
 }

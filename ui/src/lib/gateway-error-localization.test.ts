@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
-import {
-  resolveGatewayErrorMessage,
-  resolveReviewedGatewayErrorMessage,
-  tryResolveLocalizedGatewayErrorMessage,
-} from "./gateway-error-localization.ts";
+import { resolveReviewedGatewayErrorMessage } from "./gateway-error-localization.ts";
 
 function localizedError(overrides: { code?: string; reason?: string; key?: string } = {}) {
   return new GatewayRequestError({
@@ -20,30 +16,42 @@ function localizedError(overrides: { code?: string; reason?: string; key?: strin
 describe("Gateway error localization", () => {
   it("renders a reviewed descriptor when the active locale owns the key", () => {
     const translate = vi.fn(() => "审批请求不存在或已过期。");
-    expect(resolveGatewayErrorMessage(localizedError(), translate, () => true)).toBe(
+    expect(resolveReviewedGatewayErrorMessage(localizedError(), translate, () => true)).toBe(
       "审批请求不存在或已过期。",
     );
     expect(translate).toHaveBeenCalledWith("gateway.approval.notFound", undefined);
   });
 
-  it("preserves canonical English for missing, unknown, and mismatched descriptors", () => {
+  it("preserves canonical English for a reviewed descriptor without a catalog entry", () => {
     const translate = vi.fn(() => "untrusted translation");
-    expect(resolveGatewayErrorMessage(localizedError(), translate, () => false)).toBe(
+    expect(resolveReviewedGatewayErrorMessage(localizedError(), translate, () => false)).toBe(
       "unknown or expired approval id",
     );
+  });
+
+  it("rejects unknown and mismatched descriptors", () => {
+    const translate = vi.fn(() => "untrusted translation");
     expect(
-      resolveGatewayErrorMessage(
+      resolveReviewedGatewayErrorMessage(
         localizedError({ key: "gateway.unreviewed" }),
         translate,
         () => true,
       ),
-    ).toBe("unknown or expired approval id");
+    ).toBeNull();
     expect(
-      resolveGatewayErrorMessage(localizedError({ reason: "OTHER" }), translate, () => true),
-    ).toBe("unknown or expired approval id");
+      resolveReviewedGatewayErrorMessage(
+        localizedError({ reason: "OTHER" }),
+        translate,
+        () => true,
+      ),
+    ).toBeNull();
     expect(
-      resolveGatewayErrorMessage(localizedError({ code: "UNAVAILABLE" }), translate, () => true),
-    ).toBe("unknown or expired approval id");
+      resolveReviewedGatewayErrorMessage(
+        localizedError({ code: "UNAVAILABLE" }),
+        translate,
+        () => true,
+      ),
+    ).toBeNull();
   });
 
   it("returns canonical English only for a reviewed untranslated descriptor", () => {
@@ -60,6 +68,6 @@ describe("Gateway error localization", () => {
   });
 
   it("returns null when no reviewed localized message can be rendered", () => {
-    expect(tryResolveLocalizedGatewayErrorMessage(new Error("network unavailable"))).toBeNull();
+    expect(resolveReviewedGatewayErrorMessage(new Error("network unavailable"))).toBeNull();
   });
 });
