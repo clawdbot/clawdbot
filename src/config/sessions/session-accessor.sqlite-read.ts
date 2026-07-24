@@ -68,10 +68,13 @@ export function loadSqliteTranscriptTailEventsSync(
   scope: SessionTranscriptReadScope,
   maxEvents: number,
 ): TranscriptEvent[] {
+  const limit = Number.isFinite(maxEvents) ? Math.max(0, Math.floor(maxEvents)) : 0;
+  if (limit === 0) {
+    return [];
+  }
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const db = getSessionKysely(database.db);
-  const limit = Math.max(1, Math.floor(maxEvents));
   return executeSqliteQuerySync(
     database.db,
     db

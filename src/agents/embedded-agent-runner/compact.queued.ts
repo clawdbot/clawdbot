@@ -25,6 +25,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
@@ -686,7 +687,8 @@ async function compactResolvedContextEngine(
             : undefined;
           if (
             delegatedSessionFile.startsWith("agent:") &&
-            (!keyedEntry?.sessionId ||
+            (resolveAgentIdFromSessionKey(delegatedSessionFile) !== runtimeTarget.agentId ||
+              !keyedEntry?.sessionId ||
               (delegatedSessionId && keyedEntry.sessionId !== delegatedSessionId))
           ) {
             throw new Error("Legacy context-engine successor identity is inconsistent");
