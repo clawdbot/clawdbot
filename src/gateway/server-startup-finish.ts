@@ -11,6 +11,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  isReadinessCriterionSelected,
+  MODEL_ROUTE_READY_CRITERION_ID,
+} from "../readiness/activation.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
@@ -523,6 +527,9 @@ export async function finishGatewayStartup(params: {
           waitForPostReadyWork: params.waitForPostReadyWork,
           providerAuthPrewarm: {
             getConfig: getRuntimeConfig,
+            ...(isReadinessCriterionSelected(cfgAtStart, MODEL_ROUTE_READY_CRITERION_ID)
+              ? { enabled: true }
+              : {}),
           },
         }),
     ),

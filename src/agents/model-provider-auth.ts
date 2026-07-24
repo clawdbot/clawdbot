@@ -36,6 +36,7 @@ import {
   hasRuntimeAvailableProviderAuth,
   type RuntimeProviderAuthLookup,
 } from "./model-auth.js";
+import { buildDefaultModelRouteAuthEvidence } from "./model-provider-auth-default-route.js";
 import {
   cancelCurrentProviderAuthWarmWorker,
   claimCurrentProviderAuthStateGeneration,
@@ -349,11 +350,17 @@ function serializeProviderAuthStates(
   states: ReadonlyMap<string, PreparedProviderAuthState>,
 ): ProviderAuthWarmSnapshot {
   return {
-    agents: [...states.values()].map((state) => ({
-      agentId: state.agentId,
-      configFingerprint: state.configFingerprint,
-      providers: [...state.providers.entries()],
-    })),
+    agents: [...states.values()].map((state) => {
+      const serialized: ProviderAuthWarmSnapshot["agents"][number] = {
+        agentId: state.agentId,
+        configFingerprint: state.configFingerprint,
+        providers: [...state.providers.entries()],
+      };
+      if (state.defaultModelRoute) {
+        serialized.defaultModelRoute = state.defaultModelRoute;
+      }
+      return serialized;
+    }),
   };
 }
 
@@ -448,6 +455,16 @@ export async function buildCurrentProviderAuthStateSnapshot(
           config: cfg,
           externalCli,
         });
+    const defaultModelRoute = buildDefaultModelRouteAuthEvidence({
+      cfg,
+      agentId,
+      agentDir,
+      workspaceDir,
+      authStore: store,
+      runtimeAuthLookup,
+      metadataSnapshot: preparedOwner.metadataSnapshot,
+      modelCatalog: preparedOwner.modelCatalog,
+    });
     const state = new Map<string, boolean>();
     for (const provider of providers) {
       if (isWarmStale()) {
@@ -478,6 +495,7 @@ export async function buildCurrentProviderAuthStateSnapshot(
       agentId,
       configFingerprint,
       providers: state,
+      ...(defaultModelRoute ? { defaultModelRoute } : {}),
     });
   }
   return serializeProviderAuthStates(states);
@@ -514,7 +532,13 @@ function isProviderAuthWarmSnapshot(value: unknown): value is ProviderAuthWarmSn
           entry.length === 2 &&
           typeof entry[0] === "string" &&
           typeof entry[1] === "boolean",
-      ),
+      ) &&
+      (agent.defaultModelRoute === undefined ||
+        (agent.defaultModelRoute !== null &&
+          typeof agent.defaultModelRoute === "object" &&
+          typeof agent.defaultModelRoute.provider === "string" &&
+          typeof agent.defaultModelRoute.modelId === "string" &&
+          typeof agent.defaultModelRoute.available === "boolean")),
   );
 }
 

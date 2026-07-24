@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { createActivationReadinessResolver } from "./activation.js";
 import {
   WORKSPACE_WRITABLE_CRITERION_ID,
   type ReadinessCondition,
@@ -61,6 +62,7 @@ function withRequirement(
 export function createSelectedReadinessResolver() {
   const resolveWorkspace = createWorkspaceReadinessEvidenceResolver();
   const resolvePlugins = createPluginReadinessResolver();
+  const resolveActivation = createActivationReadinessResolver();
 
   return async (params: {
     config: OpenClawConfig;
@@ -82,8 +84,18 @@ export function createSelectedReadinessResolver() {
         : Promise.resolve(undefined),
       resolvePlugins({ registry: params.registry, config: params.config, criterionIds: pluginIds }),
     ]);
+    // Owner snapshots are synchronous and sampled last so no asynchronous provider work can
+    // publish a replacement generation between activation observation and result assembly.
+    const activationConditions = resolveActivation({
+      config: params.config,
+      criterionIds: selectedIds,
+      env: params.env,
+    });
 
     const conditions = new Map<string, ReadinessCondition>();
+    for (const [id, condition] of activationConditions) {
+      conditions.set(id, condition);
+    }
     if (workspaceEvidence) {
       conditions.set(
         WORKSPACE_WRITABLE_CRITERION_ID,

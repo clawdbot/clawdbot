@@ -88,6 +88,24 @@ describe("createSelectedReadinessResolver", () => {
     }
   });
 
+  it("maps activation selector ids and preserves the selected requirement", async () => {
+    const resolve = createSelectedReadinessResolver();
+
+    await expect(
+      resolve({
+        config: { gateway: { readiness: { requiredCriteria: ["openclaw.config-current"] } } },
+        registry: { readinessCriteria: [] },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        type: "ConfigCurrent",
+        status: "Unknown",
+        requirement: "required",
+        reason: "ConfigGenerationUnavailable",
+      }),
+    ]);
+  });
+
   it("fails closed for an unregistered required criterion", async () => {
     const resolve = createSelectedReadinessResolver();
 

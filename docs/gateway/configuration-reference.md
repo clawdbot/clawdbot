@@ -563,7 +563,7 @@ See [Plugins](/tools/plugin).
   gateway: {
     readiness: {
       requiredCriteria: ["openclaw.workspace-writable", "plugin.storage.backend"],
-      advisoryCriteria: ["plugin.metrics.exporter"],
+      advisoryCriteria: ["openclaw.config-current", "openclaw.secrets-ready"],
     },
   },
 }
@@ -578,8 +578,8 @@ empty object enables canonical evaluation without selecting extra criteria.
 
 The Gateway's lifecycle conditions always apply. Explicit criteria add to that
 baseline and do not require a hosting profile. See [Health checks](/gateway/health#selected-readiness-criteria)
-for evaluation semantics and the [Plugin SDK](/plugins/sdk-overview#infrastructure)
-for plugin registration.
+for the core selector catalog and evaluation semantics, and the
+[Plugin SDK](/plugins/sdk-overview#infrastructure) for plugin registration.
 
 ## Gateway
 
