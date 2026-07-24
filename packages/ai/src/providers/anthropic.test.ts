@@ -1799,11 +1799,13 @@ describe("Anthropic provider", () => {
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       { apiKey: "sk-ant-provider", client: client as never },
     );
-    for await (const _event of stream) {
-      // drain
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
     }
     const result = await stream.result();
 
+    expect(eventTypes).toEqual(["error"]);
     expect(result.errorMessage).toBe("Overloaded");
   });
 
