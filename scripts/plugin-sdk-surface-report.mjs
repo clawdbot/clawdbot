@@ -147,8 +147,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // +1: session-discussion binds one external discussion provider to sessions.
+      // +1: number-runtime is shared by official external plugin packages.
       // +1: focused media-local-roots replacement for the legacy agent-media facade.
-      141,
+      142,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -167,7 +168,6 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      // +33: public numeric coercion, timer bound, and timestamp helpers.
       // +3: typed channel partial-delivery error, creator, and structural guard.
       // +1: closed attempt-terminal merge, normalization, and projection helper.
       // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
@@ -175,7 +175,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: canonical session delivery normalization, access, and projection helpers.
       // +5: focused media-local-roots helpers and typed hook media contracts.
       // +1: model-independent agent-harness preflight failure contract.
-      4717,
+      4750,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -193,13 +193,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: plugin approval detail truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      // +29: public numeric coercion, timer bound, and timestamp helpers.
       // +2: channel partial-delivery error creator and structural guard.
       // +1: harness-native MCP App preview helper.
       // +1: canonical unknown-value to Error coercion.
       // +6: canonical session delivery normalization, access, and projection helpers.
       // +2: focused media-local-roots helpers.
-      2857,
+      2886,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
