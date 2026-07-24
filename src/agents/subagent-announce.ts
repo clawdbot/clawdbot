@@ -608,8 +608,14 @@ export async function runSubagentAnnounceFlow(params: {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
-    // Patch label after all writes complete
-    if (params.label) {
+    // Patch label after all writes complete — but only when it actually changed.
+    // The child's label is already set at spawn, so re-asserting the same value
+    // is redundant and, when a sibling ephemeral session shares the same fixed
+    // label, makes sessions.patch raise a spurious "label already in use"
+    // INVALID_REQUEST (the uniqueness check rejects the whole patch). Skipping the
+    // no-op re-patch avoids that confusing error and a needless gateway round-trip
+    // on every labeled subagent completion. See #113331.
+    if (params.label && loadSessionEntryByKey(params.childSessionKey)?.label !== params.label) {
       try {
         await subagentAnnounceDeps.callGateway({
           method: "sessions.patch",

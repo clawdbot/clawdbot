@@ -337,6 +337,59 @@ describe("subagent announce seam flow", () => {
     });
   });
 
+  it("skips the completion label re-patch when the child already carries that label (#113331)", async () => {
+    loadSessionStoreMock.mockReset().mockImplementation(() => ({
+      "agent:main:subagent:sat": { sessionId: "sat-1", label: "SAT" },
+    }));
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:sat",
+      childRunId: "run-label-noop",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+      label: "SAT",
+    });
+
+    // No redundant sessions.patch: re-asserting the label the child already holds
+    // would raise a spurious "label already in use" against a sibling sharing it.
+    const labelPatches = callGatewayMock.mock.calls
+      .map((call) => call[0] as { method?: string; params?: { label?: unknown } })
+      .filter((req) => req.method === "sessions.patch" && req.params?.label !== undefined);
+    expect(labelPatches).toHaveLength(0);
+  });
+
+  it("re-patches the completion label when the child's stored label differs (#113331)", async () => {
+    loadSessionStoreMock.mockReset().mockImplementation(() => ({
+      "agent:main:subagent:sat": { sessionId: "sat-1", label: "OLD" },
+    }));
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:sat",
+      childRunId: "run-label-change",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+      label: "SAT",
+    });
+
+    const labelPatches = callGatewayMock.mock.calls
+      .map((call) => call[0] as { method?: string; params?: { key?: string; label?: unknown } })
+      .filter((req) => req.method === "sessions.patch" && req.params?.label === "SAT");
+    expect(labelPatches).toHaveLength(1);
+    expect(labelPatches[0]?.params?.key).toBe("agent:main:subagent:sat");
+  });
+
   it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
