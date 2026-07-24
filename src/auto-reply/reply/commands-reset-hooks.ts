@@ -1,3 +1,4 @@
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 // Emits reset hooks and cleanup work around session reset commands.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
@@ -67,6 +68,7 @@ async function loadBeforeResetTranscript(params: {
 
 export async function emitResetCommandHooks(params: {
   action: ResetCommandAction;
+  agentId?: string;
   ctx: HandleCommandsParams["ctx"];
   cfg: HandleCommandsParams["cfg"];
   command: Pick<
@@ -117,10 +119,18 @@ export async function emitResetCommandHooks(params: {
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
-    const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+    const agentId =
+      params.agentId ?? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
     const beforeResetTranscript = await loadBeforeResetTranscript({
       agentId,
-      sessionFile: params.sessionKey,
+      sessionFile:
+        agentId && prevEntry?.sessionId && params.storePath
+          ? formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: prevEntry.sessionId,
+              storePath: params.storePath,
+            })
+          : params.sessionKey,
       sessionId: prevEntry?.sessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,

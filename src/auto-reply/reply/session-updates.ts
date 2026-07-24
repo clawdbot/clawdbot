@@ -70,12 +70,14 @@ async function persistSessionEntryUpdate(params: {
 }
 
 function emitCompactionSessionLifecycleHooks(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   sessionKey: string;
   storePath?: string;
   previousEntry: SessionEntry;
   nextEntry: SessionEntry;
 }) {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   if (params.previousEntry.sessionId) {
     forgetActiveSessionForShutdown(params.previousEntry.sessionId);
   }
@@ -86,7 +88,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       sessionId: params.nextEntry.sessionId,
       storePath: params.storePath,
       sessionFile: params.sessionKey,
-      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      agentId,
     });
   }
   const hookRunner = getGlobalHookRunner();
@@ -98,7 +100,7 @@ function emitCompactionSessionLifecycleHooks(params: {
     const transcript = resolveStableSessionEndTranscript({
       sessionId: params.previousEntry.sessionId,
       storePath: params.storePath,
-      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+      agentId,
     });
     const payload = buildSessionEndHookPayload({
       sessionId: params.previousEntry.sessionId,
@@ -287,6 +289,7 @@ export async function ensureSkillSnapshot(params: {
 
 /** Increments compaction count and persists the updated session entry. */
 export async function incrementCompactionCount(params: {
+  agentId?: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -300,6 +303,7 @@ export async function incrementCompactionCount(params: {
   newSessionId?: string;
 }): Promise<number | undefined> {
   const {
+    agentId,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -357,6 +361,7 @@ export async function incrementCompactionCount(params: {
   }
   if (sessionIdChanged && cfg) {
     emitCompactionSessionLifecycleHooks({
+      agentId,
       cfg,
       sessionKey,
       storePath,
