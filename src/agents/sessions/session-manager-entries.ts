@@ -213,6 +213,8 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.leafId = params.targetId;
     this.appendParentId = params.appendParentId;
     this.appendMode = params.appendMode;
+    this.promptReleasedSideBranchParentId =
+      params.appendMode === "side" ? params.appendParentId : undefined;
     return entry;
   }
 

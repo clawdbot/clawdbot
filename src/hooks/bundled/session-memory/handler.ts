@@ -173,7 +173,14 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
         ? context.workspaceDir
         : undefined;
-    const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
+    const agentId =
+      typeof context.agentId === "string" && context.agentId.trim()
+        ? context.agentId.trim()
+        : resolveAgentIdFromSessionKey(event.sessionKey);
+    const contextStorePath =
+      typeof context.storePath === "string" && context.storePath.trim()
+        ? context.storePath.trim()
+        : undefined;
     const workspaceDir =
       contextWorkspaceDir ||
       (cfg
@@ -224,7 +231,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
           agentId,
           sessionId: currentSessionId,
           sessionKey: event.sessionKey,
-          storePath: resolveStorePath(cfg?.session?.store, { agentId }),
+          storePath: contextStorePath ?? resolveStorePath(cfg?.session?.store, { agentId }),
         },
         messageCount,
       );

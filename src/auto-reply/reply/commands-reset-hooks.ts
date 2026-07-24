@@ -82,12 +82,24 @@ export async function emitResetCommandHooks(params: {
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
   workspaceDir: string;
 }): Promise<{ routedReply: boolean }> {
+  const hookAgentId =
+    parseAgentSessionKey(params.sessionKey)?.agentId ?? params.agentId ?? DEFAULT_AGENT_ID;
+  const hookStorePath =
+    hookAgentId && params.storePath
+      ? resolveSessionStorePathForScope({
+          agentId: hookAgentId,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        })
+      : params.storePath;
   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
+    agentId: hookAgentId,
     sessionEntry: params.sessionEntry,
     previousSessionEntry: params.previousSessionEntry,
     commandSource: params.command.surface,
     senderId: params.command.senderId,
     workspaceDir: params.workspaceDir,
+    storePath: hookStorePath,
     cfg: params.cfg,
   });
   await triggerInternalHook(hookEvent);
@@ -120,16 +132,8 @@ export async function emitResetCommandHooks(params: {
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
-    const agentId =
-      parseAgentSessionKey(params.sessionKey)?.agentId ?? params.agentId ?? DEFAULT_AGENT_ID;
-    const storePath =
-      agentId && params.storePath
-        ? resolveSessionStorePathForScope({
-            agentId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-          })
-        : params.storePath;
+    const agentId = hookAgentId;
+    const storePath = hookStorePath;
     const beforeResetTranscript = await loadBeforeResetTranscript({
       agentId,
       sessionFile:
