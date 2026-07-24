@@ -802,6 +802,7 @@ export function runAgentAttempt(params: {
             chatId: params.runContext.chatId,
             channelContext: params.runContext.channelContext,
             currentThreadTs: params.runContext.currentThreadTs,
+            currentMessageId: params.opts.requestMessageId,
             currentInboundAudio: params.runContext.currentInboundAudio,
             approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
             agentAccountId: params.runContext.accountId,

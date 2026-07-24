@@ -1886,8 +1886,8 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("forwards separate user trigger, channel, and provider context to CLI runs", async () => {
-    const sessionKey = "agent:main:direct:claude-channel-context";
+  it("forwards the exact authenticated Slack target to CLI runs", async () => {
+    const sessionKey = "agent:main:slack:channel:c0ausu28nd7:thread:1784900605.553019";
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-channel",
       updatedAt: Date.now(),
@@ -1913,19 +1913,21 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-cli-channel-context",
       opts: {
-        messageProvider: "discord-voice",
+        messageProvider: "slack",
+        requestMessageId: "1784900605.553019",
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {
-        currentChannelId: "channel:voice-room",
-        chatId: "voice-room",
+        currentChannelId: "C0AUSU28ND7",
+        currentThreadTs: "1784900605.553019",
+        chatId: "C0AUSU28ND7",
         channelContext: {
-          sender: { id: "sender-voice", unionId: "sender-union" },
-          chat: { id: "voice-room" },
+          sender: { id: "U028EKM2A", unionId: "sender-union" },
+          chat: { id: "C0AUSU28ND7" },
         },
-        senderId: "sender-voice",
+        senderId: "U028EKM2A",
       } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
-      messageChannel: "discord",
+      messageChannel: "slack",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
@@ -1939,15 +1941,17 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expectMockArgFields(runCliAgentMock, {
       trigger: "user",
-      messageChannel: "discord",
-      messageProvider: "discord-voice",
-      currentChannelId: "channel:voice-room",
-      chatId: "voice-room",
+      messageChannel: "slack",
+      messageProvider: "slack",
+      currentChannelId: "C0AUSU28ND7",
+      currentMessageId: "1784900605.553019",
+      currentThreadTs: "1784900605.553019",
+      chatId: "C0AUSU28ND7",
       channelContext: {
-        sender: { id: "sender-voice", unionId: "sender-union" },
-        chat: { id: "voice-room" },
+        sender: { id: "U028EKM2A", unionId: "sender-union" },
+        chat: { id: "C0AUSU28ND7" },
       },
-      senderId: "sender-voice",
+      senderId: "U028EKM2A",
     });
   });
 
