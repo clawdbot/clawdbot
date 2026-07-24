@@ -37,6 +37,31 @@ describe("buildAgentHookContextChannelFields", () => {
       senderId: undefined,
     });
   });
+
+  it("preserves the exact live transport target for a threaded external-user replay", () => {
+    expect(
+      buildAgentHookContextChannelFields({
+        sessionKey: "agent:main:slack:channel:c0ausu28nd7:thread:1784896784.051849",
+        messageChannel: "slack",
+        messageProvider: "slack",
+        agentAccountId: "agfunder",
+        currentChannelId: "C0AUSU28ND7",
+        currentMessageId: "1784896784.051849",
+        currentThreadTs: "1784896784.051849",
+        messageThreadId: "stale-thread",
+        senderId: "U028EKM2A",
+      }),
+    ).toEqual({
+      accountId: "agfunder",
+      channel: "slack",
+      messageProvider: "slack",
+      channelId: "C0AUSU28ND7",
+      chatId: "C0AUSU28ND7",
+      messageId: "1784896784.051849",
+      senderId: "U028EKM2A",
+      threadId: "1784896784.051849",
+    });
+  });
 });
 
 describe("buildAgentHookContextIdentityFields", () => {

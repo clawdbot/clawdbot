@@ -2470,6 +2470,15 @@ describe("CLI attempt execution", () => {
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
   });
 
+  it("forwards the trusted ingress request id as the embedded current message", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { requestMessageId: "1784896784.051849" },
+      runId: "trusted-request-message",
+    });
+
+    expect(embeddedArg.currentMessageId).toBe("1784896784.051849");
+  });
+
   it("forwards Gateway plugin runtime binding to embedded runs", async () => {
     const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
       opts: { allowGatewaySubagentBinding: true },
