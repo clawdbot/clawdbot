@@ -1231,6 +1231,80 @@ describe("local SQLite snapshot repository", () => {
     }
   });
 
+  it("rejects an artifact changed after removing the commit marker", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const originalUnlink = fsSync.unlinkSync.bind(fsSync);
+    let mutated = false;
+    const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
+      originalUnlink(filePath);
+      if (!mutated && path.basename(String(filePath)) === ".pending") {
+        fsSync.appendFileSync(
+          path.join(path.dirname(String(filePath)), SNAPSHOT_SQLITE_FILENAME),
+          "changed-after-commit-marker",
+        );
+        mutated = true;
+      }
+    });
+
+    try {
+      await expect(
+        provider.create({
+          path: sourcePath,
+          identity: { role: "generic", id: "post-commit-artifact-race" },
+        }),
+      ).rejects.toThrow(/size mismatch/u);
+    } finally {
+      unlinkSpy.mockRestore();
+    }
+    expect(mutated).toBe(true);
+    await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a snapshot directory restored after commit-marker removal",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const repositoryPath = path.join(tempDir, "snapshots");
+      createGenericDatabase(sourcePath);
+      const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+      const originalUnlink = fsSync.unlinkSync.bind(fsSync);
+      let raced = false;
+      const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
+        if (raced || path.basename(String(filePath)) !== ".pending") {
+          originalUnlink(filePath);
+          return;
+        }
+        const snapshotDir = path.dirname(String(filePath));
+        const displacedDir = `${snapshotDir}.displaced`;
+        fsSync.renameSync(snapshotDir, displacedDir);
+        fsSync.mkdirSync(snapshotDir, { mode: 0o700 });
+        fsSync.writeFileSync(path.join(snapshotDir, ".pending"), "", { mode: 0o600 });
+        originalUnlink(filePath);
+        fsSync.rmdirSync(snapshotDir);
+        fsSync.renameSync(displacedDir, snapshotDir);
+        raced = true;
+      });
+
+      try {
+        await expect(
+          provider.create({
+            path: sourcePath,
+            identity: { role: "generic", id: "post-commit-directory-race" },
+          }),
+        ).rejects.toThrow(/unexpected entry/u);
+      } finally {
+        unlinkSpy.mockRestore();
+      }
+      expect(raced).toBe(true);
+      await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+    },
+  );
+
   it("cleans a linked entry when post-link inspection fails", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");

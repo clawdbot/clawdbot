@@ -388,14 +388,28 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         throw new Error(`SQLite snapshot pending marker changed: ${pendingPath}`);
       }
       await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
-      await publishedDirectory.close();
-      publishedDirectory = undefined;
       fsSync.unlinkSync(pendingPath);
-      publishedEntries.delete(SNAPSHOT_PENDING_FILENAME);
       await syncSqliteDirectoryForDurability({
         path: snapshotDir,
         identity: publishedIdentity,
       });
+      await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
+      const committedManifest = await readSnapshotManifest(snapshotDir, snapshotId);
+      if (!isDeepStrictEqual(committedManifest, manifest)) {
+        throw new Error(`SQLite snapshot manifest changed after commit: ${snapshotDir}`);
+      }
+      const committedArtifact = await hashSnapshotArtifact(snapshotDir);
+      assertArtifactMatchesManifest(
+        path.join(snapshotDir, SNAPSHOT_SQLITE_FILENAME),
+        committedArtifact,
+        committedManifest,
+      );
+      await assertExactSnapshotContents(snapshotDir);
+      await assertOpenDirectoryIdentity(publishedDirectory, snapshotDir, publishedIdentity);
+      await assertDirectoryIdentity(trustedRepositoryPath, repositoryIdentity);
+      publishedEntries.delete(SNAPSHOT_PENDING_FILENAME);
+      await publishedDirectory.close();
+      publishedDirectory = undefined;
       return { ref: { path: snapshotRefPath }, manifest };
     } catch (error) {
       await publishedDirectory?.close().catch(() => undefined);
