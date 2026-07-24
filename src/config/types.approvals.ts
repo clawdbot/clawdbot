@@ -3,6 +3,8 @@ export type NativeExecApprovalEnableMode = boolean | "auto";
 
 export type ExecApprovalForwardingMode = "session" | "targets" | "both";
 
+export type ExecApprovalForwardingOutcome = "message" | "none";
+
 export type ExecApprovalForwardTarget = {
   /** Channel id (e.g. "discord", "slack", or plugin channel id). */
   channel: string;
@@ -25,6 +27,8 @@ export type ExecApprovalForwardingConfig = {
   sessionFilter?: string[];
   /** Explicit delivery targets (used when mode includes targets). */
   targets?: ExecApprovalForwardTarget[];
+  /** How to publish the approval outcome. Default: "message". */
+  outcome?: ExecApprovalForwardingOutcome;
 };
 
 export type ApprovalsConfig = {

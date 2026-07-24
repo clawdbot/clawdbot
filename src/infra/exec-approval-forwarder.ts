@@ -689,10 +689,49 @@ function createApprovalHandlers<
   };
 
   const handleResolved = async (resolved: TResolved) => {
-    const settled = pending.settle(params.strategy.getResolvedId(resolved), (entry) =>
-      deliverResolved(resolved, entry.value),
-    );
-    if (settled.status === "queued") {
+    const resolvedId = params.strategy.getResolvedId(resolved);
+    const entry = pending.get(resolvedId);
+    if (entry?.timeoutId) {
+      clearTimeout(entry.timeoutId);
+    }
+    if (entry) {
+      pending.delete(resolvedId);
+    }
+
+    const cfg = params.getConfig();
+    const forwardingConfig = params.strategy.config(cfg);
+    const outcome = forwardingConfig?.outcome ?? "message";
+    if (outcome === "none") {
+      return;
+    }
+
+    let targets = entry?.targets;
+    if (!targets) {
+      const routeRequest = params.strategy.getRouteRequestFromResolved(resolved);
+      if (routeRequest) {
+        const config = params.strategy.config(cfg);
+        targets = [
+          ...(shouldForwardRoute({ config, routeRequest })
+            ? await resolveForwardTargets({
+                cfg,
+                config,
+                approvalKind: params.strategy.kind,
+                routeRequest,
+                resolveSessionTarget: params.resolveSessionTarget,
+              })
+            : []),
+        ].filter(
+          (target) =>
+            !shouldSkipForwardingFallback({
+              approvalKind: params.strategy.kind,
+              target,
+              cfg,
+              routeRequest,
+            }),
+        );
+      }
+    }
+    if (!targets?.length) {
       return;
     }
     if (settled.status === "taken") {
