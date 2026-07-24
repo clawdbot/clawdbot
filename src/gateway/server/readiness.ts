@@ -476,11 +476,15 @@ function projectLegacyGatewayReadiness(
 export async function evaluateConfiguredGatewayReadiness(params: {
   config: OpenClawConfig;
   identity: ReadinessIdentity;
+  canonicalEvaluationEnabled?: boolean;
   evaluateGateway: ReadinessChecker;
   evaluateRuntime: () => Promise<CanonicalReadinessResult>;
   timeoutMs?: number;
 }): Promise<CanonicalGatewayReadinessResult> {
-  if (params.config.gateway?.readiness === undefined) {
+  if (
+    params.canonicalEvaluationEnabled !== true &&
+    params.config.gateway?.readiness === undefined
+  ) {
     try {
       return projectLegacyGatewayReadiness(await params.evaluateGateway(), params.identity);
     } catch (error) {
