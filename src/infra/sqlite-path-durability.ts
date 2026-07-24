@@ -14,6 +14,11 @@ export type DurableSqliteDirectoryReceipt = SqlitePathIdentityReceipt & {
   parentSync: SqliteDirectorySyncOutcome | "not-needed";
 };
 
+type OpenSqliteDirectoryReceipt = {
+  handle: FileHandle;
+  receipt: SqlitePathIdentityReceipt;
+};
+
 function isWindowsDirectorySyncUnsupported(error: unknown): boolean {
   if (process.platform !== "win32") {
     return false;
@@ -75,6 +80,40 @@ async function openCurrentDirectory(
   }
 }
 
+async function openDirectoryPath(
+  directoryPath: string,
+  label: string,
+): Promise<OpenSqliteDirectoryReceipt> {
+  const handle = await fs.open(directoryPath, "r");
+  try {
+    const identity = await handle.stat();
+    const receipt = { path: directoryPath, identity };
+    await assertOpenDirectoryCurrent(handle, receipt, label);
+    return { handle, receipt };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function syncOpenDirectoryForDurability(
+  handle: FileHandle,
+  receipt: SqlitePathIdentityReceipt,
+): Promise<SqliteDirectorySyncOutcome> {
+  await assertOpenDirectoryCurrent(handle, receipt, "SQLite durability directory");
+  try {
+    await handle.sync();
+  } catch (error) {
+    if (!isWindowsDirectorySyncUnsupported(error)) {
+      throw error;
+    }
+    await assertOpenDirectoryCurrent(handle, receipt, "SQLite durability directory");
+    return "unsupported";
+  }
+  await assertOpenDirectoryCurrent(handle, receipt, "SQLite durability directory");
+  return "synced";
+}
+
 export async function syncSqliteDirectoryForDurability(
   directory: string | SqlitePathIdentityReceipt,
 ): Promise<SqliteDirectorySyncOutcome> {
@@ -99,18 +138,7 @@ export async function syncSqliteDirectoryForDurability(
   }
 
   try {
-    await assertOpenDirectoryCurrent(handle, receipt, "SQLite durability directory");
-    try {
-      await handle.sync();
-    } catch (error) {
-      if (!isWindowsDirectorySyncUnsupported(error)) {
-        throw error;
-      }
-      await assertOpenDirectoryCurrent(handle, receipt, "SQLite durability directory");
-      return "unsupported";
-    }
-    await assertOpenDirectoryCurrent(handle, receipt, "SQLite durability directory");
-    return "synced";
+    return await syncOpenDirectoryForDurability(handle, receipt);
   } finally {
     await handle.close();
   }
@@ -149,34 +177,34 @@ export async function ensureDurableSqliteDirectory(params: {
   // Keep the preexisting anchor open while the creator runs. Otherwise a
   // remove/recreate race can recycle its inode and hide an unsynced new edge.
   const ancestorHandle = await openCurrentDirectory(ancestor, params.label);
+  const openedReceipts: OpenSqliteDirectoryReceipt[] = [
+    { handle: ancestorHandle, receipt: ancestor },
+  ];
   try {
     await assertOpenDirectoryCurrent(ancestorHandle, ancestor, params.label);
     await params.create(directoryPath);
     await assertOpenDirectoryCurrent(ancestorHandle, ancestor, params.label);
 
-    const receipts = [ancestor];
     let currentPath = ancestor.path;
     for (const segment of path
       .relative(ancestor.path, directoryPath)
       .split(path.sep)
       .filter(Boolean)) {
       currentPath = path.join(currentPath, segment);
-      const identity = await fs.lstat(currentPath);
-      assertDirectory(identity, currentPath, params.label);
-      receipts.push({ path: currentPath, identity });
+      openedReceipts.push(await openDirectoryPath(currentPath, params.label));
     }
 
     let parentSync: DurableSqliteDirectoryReceipt["parentSync"] = "not-needed";
-    for (let index = receipts.length - 1; index > 0; index -= 1) {
-      const parent = receipts[index - 1];
-      const child = receipts[index];
+    for (let index = openedReceipts.length - 1; index > 0; index -= 1) {
+      const parent = openedReceipts[index - 1];
+      const child = openedReceipts[index];
       if (!parent || !child) {
         throw new Error(`${params.label} directory receipt chain is incomplete.`);
       }
-      await assertDirectoryReceiptCurrent(parent, params.label);
-      await assertDirectoryReceiptCurrent(child, params.label);
+      await assertOpenDirectoryCurrent(parent.handle, parent.receipt, params.label);
+      await assertOpenDirectoryCurrent(child.handle, child.receipt, params.label);
       try {
-        const outcome = await syncSqliteDirectoryForDurability(parent);
+        const outcome = await syncOpenDirectoryForDurability(parent.handle, parent.receipt);
         if (outcome === "unsupported") {
           parentSync = "unsupported";
         } else if (parentSync === "not-needed") {
@@ -184,15 +212,15 @@ export async function ensureDurableSqliteDirectory(params: {
         }
       } catch (error) {
         throw new Error(
-          `${params.label} could not sync created directory edge ${child.path} through ${parent.path}`,
+          `${params.label} could not sync created directory edge ${child.receipt.path} through ${parent.receipt.path}`,
           { cause: error },
         );
       }
-      await assertDirectoryReceiptCurrent(parent, params.label);
-      await assertDirectoryReceiptCurrent(child, params.label);
+      await assertOpenDirectoryCurrent(parent.handle, parent.receipt, params.label);
+      await assertOpenDirectoryCurrent(child.handle, child.receipt, params.label);
     }
 
-    const finalReceipt = receipts.at(-1);
+    const finalReceipt = openedReceipts.at(-1)?.receipt;
     if (!finalReceipt) {
       throw new Error(`${params.label} directory receipt is missing.`);
     }
@@ -200,6 +228,6 @@ export async function ensureDurableSqliteDirectory(params: {
     await assertDirectoryReceiptCurrent(finalReceipt, params.label);
     return { ...finalReceipt, parentSync };
   } finally {
-    await ancestorHandle.close();
+    await Promise.all(openedReceipts.toReversed().map(({ handle }) => handle.close()));
   }
 }
