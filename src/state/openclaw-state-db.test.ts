@@ -36,7 +36,7 @@ import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
   normalizeSqliteSchemaShapeSql,
-  replaceNamedUniqueIndexesWithOrdinaryIndexes,
+  replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
 
 type StateDbTestDatabase = Pick<
@@ -475,6 +475,42 @@ function createUnsafeIndexDrift(databasePath: string): void {
       .run();
     const schemaVersion = readSqliteNumberPragma(database, "schema_version");
     database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
+  } finally {
+    database.close();
+  }
+}
+
+function createTaskRunStatusIndexPhysicalDrift(databasePath: string): void {
+  const { DatabaseSync } = requireNodeSqlite();
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      INSERT INTO task_runs (
+        task_id, runtime, owner_key, scope_kind, task, status,
+        delivery_status, notify_policy, created_at
+      ) VALUES (
+        'task-index-repair', 'subagent', 'owner', 'session', 'repair index',
+        'running', 'pending', 'summary', 1
+      );
+      DROP INDEX idx_task_runs_status;
+      CREATE INDEX idx_task_runs_status ON task_runs(task_id);
+    `);
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        "UPDATE sqlite_schema SET sql = 'CREATE INDEX idx_task_runs_status ON task_runs(status)' WHERE name = 'idx_task_runs_status'",
+      )
+      .run();
+    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
+    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
+    expect(database.prepare("PRAGMA integrity_check('task_runs')").all()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          integrity_check: expect.stringMatching(/idx_task_runs_status/),
+        }),
+      ]),
+    );
   } finally {
     database.close();
   }
@@ -1624,7 +1660,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).not.toThrow();
   });
 
-  it("repairs every canonical shared-state named unique index", () => {
+  it("repairs every canonical shared-state named index", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const created = openOpenClawStateDatabase({ env });
@@ -1635,7 +1671,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
     try {
-      expect(replaceNamedUniqueIndexesWithOrdinaryIndexes(drifted)).toHaveLength(3);
+      expect(replaceNamedIndexesWithNoncanonicalIndexes(drifted).length).toBeGreaterThan(100);
       expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
         integrity_check: "ok",
       });
@@ -1647,6 +1683,26 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
       canonicalShape,
     );
+  });
+
+  it("repairs physical ordinary-index drift before cold-open reads", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    closeOpenClawStateDatabaseForTest();
+    createTaskRunStatusIndexPhysicalDrift(databasePath);
+
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_status WHERE status = 'running'",
+        )
+        .all(),
+    ).toEqual([{ task_id: "task-index-repair" }]);
   });
 
   it("migrates the released audit ledger to message-compatible attribution exactly once", () => {
@@ -2172,14 +2228,15 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
-  it("defers unrelated current-schema index corruption but keeps doctor scans full", () => {
+  it("rejects unrelated current-schema index corruption before exposure", () => {
     const stateDir = createTempStateDir();
     const databasePath = createCanonicalAuditStateDatabase(stateDir);
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     createUnsafeIndexDrift(databasePath);
 
-    expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
-    closeOpenClawStateDatabaseForTest();
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+    );
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [],
       warnings: [
@@ -2233,7 +2290,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
-  it("defers current-schema foreign-key violations but keeps doctor scans full", () => {
+  it("rejects current-schema foreign-key violations before exposure", () => {
     const stateDir = createTempStateDir();
     const databasePath = createCanonicalAuditStateDatabase(stateDir);
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -2258,8 +2315,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     const failure =
       /foreign_key_check failed.*task_delivery_state row 1 references task_runs \(foreign key 0\)/iu;
-    expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
-    closeOpenClawStateDatabaseForTest();
+    expect(() => openOpenClawStateDatabase(options)).toThrow(failure);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [],
       warnings: [expect.stringMatching(failure)],
@@ -2551,7 +2607,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       path: databasePath,
     });
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: ["Migrated shared state operator approvals → OpenClaw system changes"],
+      changes: [
+        "Migrated shared state operator approvals → OpenClaw system changes",
+        expect.stringMatching(/^Rebuilt canonical shared-state SQLite indexes \(\d+\)$/u),
+      ],
       warnings: [],
     });
 

@@ -5,6 +5,7 @@ import {
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteSchemaContains,
   type SqliteSchemaCompatibility,
@@ -91,7 +92,7 @@ export function assertOpenClawAgentDatabaseForMaintenance(
   );
 }
 
-/** Upgrade a supported older owned schema before strict offline maintenance. */
+/** Upgrade or repair a supported owned schema before strict offline maintenance. */
 export function migrateOpenClawAgentDatabaseForMaintenance(options: {
   agentId: string;
   pathname: string;
@@ -109,6 +110,9 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
     assertSupportedAgentSchemaVersion(database, options.pathname);
     const userVersion = readSqliteUserVersion(database);
     const metadataVersion = metadata.schemaVersion;
+    const hasCurrentVersion =
+      userVersion === OPENCLAW_AGENT_SCHEMA_VERSION &&
+      metadataVersion === OPENCLAW_AGENT_SCHEMA_VERSION;
     const hasSupportedOlderVersion =
       userVersion >= 1 &&
       userVersion < OPENCLAW_AGENT_SCHEMA_VERSION &&
@@ -116,7 +120,11 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
       metadataVersion === userVersion &&
       metadataVersion >= 1 &&
       metadataVersion < OPENCLAW_AGENT_SCHEMA_VERSION;
-    if (!hasSupportedOlderVersion) {
+    if (!hasCurrentVersion && !hasSupportedOlderVersion) {
+      return;
+    }
+    if (hasCurrentVersion) {
+      repairCanonicalSqliteIndexes(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
       return;
     }
     ensureOpenClawAgentDatabaseSchema(database, {
