@@ -358,9 +358,16 @@ function trimTranscriptEntriesThroughLeaf(
 }
 
 export async function readSessionLeafStateFromTranscriptAsync(
-  sessionFile: string,
+  sessionFile: string | SessionTranscriptRuntimeTarget,
   maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
 ): Promise<{ entryId: string; leafId: string | null } | null> {
+  if (typeof sessionFile !== "string") {
+    const records = loadTranscriptEventsSync(sessionFile).filter(
+      (event): event is Record<string, unknown> =>
+        Boolean(event) && typeof event === "object" && !Array.isArray(event),
+    );
+    return readSessionLeafStateFromRecords(records);
+  }
   const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
   if (sqliteMarker) {
     const records = loadTranscriptEventsSync(sqliteMarker).filter(

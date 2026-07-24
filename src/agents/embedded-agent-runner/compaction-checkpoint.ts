@@ -32,9 +32,9 @@ export async function persistCompactionCheckpoint(params: {
     return false;
   }
   try {
-    const transcriptState = params.sessionTarget
-      ? null
-      : await readSessionLeafStateFromTranscriptAsync(params.sessionFile);
+    const transcriptState = await readSessionLeafStateFromTranscriptAsync(
+      params.sessionTarget ?? params.sessionFile,
+    );
     const checkpointPosition = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: params.leafId,
       transcriptState,

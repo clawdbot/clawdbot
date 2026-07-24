@@ -480,4 +480,32 @@ describe("session-compaction-checkpoints", () => {
       leafId: "active-tail",
     });
   });
+
+  test("reads leaf state from a structured SQLite transcript target", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-target-leaf-"));
+    tempDirs.push(dir);
+    const target = {
+      agentId: "main",
+      sessionId: "structured-leaf-session",
+      sessionKey: "agent:main:structured-leaf-session",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await appendTranscriptEvent(target, {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: target.sessionId,
+      timestamp: "2026-06-15T00:00:00.000Z",
+      cwd: dir,
+    });
+    const appended = await appendTranscriptMessage(target, {
+      message: { role: "assistant", content: "active", timestamp: 1 } as AssistantMessage,
+      now: Date.parse("2026-06-15T00:00:01.000Z"),
+    });
+
+    await expect(readSessionLeafStateFromTranscriptAsync(target)).resolves.toEqual({
+      entryId: appended.messageId,
+      leafId: appended.messageId,
+    });
+  });
 });

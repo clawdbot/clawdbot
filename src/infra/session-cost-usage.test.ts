@@ -168,6 +168,27 @@ describe("session cost usage", () => {
           sessionId,
         }),
       ).toBe(legacyJsonl);
+
+      const sessionTarget = {
+        agentId: "main",
+        sessionId,
+        sessionKey: "agent:main:empty-sqlite-cost",
+        storePath,
+      };
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionId: "other-session",
+          sessionTarget,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "other",
+          sessionId,
+          sessionTarget,
+        }),
+      ).toBeUndefined();
     });
   });
 
