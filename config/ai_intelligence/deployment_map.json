@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "updated": "2026-07-24",
+  "assignment_statuses": [
+    "configured",
+    "observed",
+    "recommended",
+    "disabled"
+  ],
+  "components": [
+    {
+      "id": "ranchbrain",
+      "display_name": "RanchBrain",
+      "description": "Private knowledge retrieval, personal wiki, asset knowledge, and conversational access.",
+      "privacy_tier": "local",
+      "primary_model": "ollama-hermes3-8b",
+      "fallback_models": [
+        "ollama-gemma3-12b",
+        "ollama-llama3.2-3b"
+      ],
+      "task_type": "private_property_data",
+      "assignment_status": "configured",
+      "configuration_source": "OpenClaw RanchBrain configuration",
+      "verification_status": "needs-runtime-verification"
+    },
+    {
+      "id": "property_manager",
+      "display_name": "PropertyManager",
+      "description": "Property tasks, maintenance records, assets, parts, costs, and task completion.",
+      "privacy_tier": "local",
+      "primary_model": "ollama-hermes3-8b",
+      "fallback_models": [
+        "ollama-gemma3-12b",
+        "ollama-llama3.2-3b"
+      ],
+      "task_type": "private_property_data",
+      "assignment_status": "configured",
+      "configuration_source": "PropertyManager AI fallback configuration",
+      "verification_status": "needs-runtime-verification"
+    },
+    {
+      "id": "telegram_ranch_bot",
+      "display_name": "Telegram Ranch Bot",
+      "description": "Telegram commands, task queries, briefings, and AI fallback conversations.",
+      "privacy_tier": "local",
+      "primary_model": "ollama-hermes3-8b",
+      "fallback_models": [
+        "ollama-llama3.2-3b",
+        "ollama-gemma3-12b"
+      ],
+      "task_type": "routine_local_query",
+      "assignment_status": "configured",
+      "configuration_source": "Telegram polling and router configuration",
+      "verification_status": "needs-runtime-verification"
+    },
+    {
+      "id": "home_assistant",
+      "display_name": "Home Assistant Integration",
+      "description": "Automation assistance, entity troubleshooting, YAML, sensors, and smart-home engineering.",
+      "privacy_tier": "mixed",
+      "primary_model": "ollama-hermes3-8b",
+      "fallback_models": [
+        "ollama-gemma3-12b",
+        "openai-frontier"
+      ],
+      "task_type": "home_assistant",
+      "assignment_status": "configured",
+      "configuration_source": "OpenClaw Home Assistant integration",
+      "verification_status": "needs-runtime-verification"
+    },
+    {
+      "id": "daily_executive_briefing",
+      "display_name": "Daily Executive Briefing",
+      "description": "Summarizes local system, backup, storage, PropertyManager, and AI health reports.",
+      "privacy_tier": "local",
+      "primary_model": "ollama-hermes3-8b",
+      "fallback_models": [
+        "ollama-gemma3-12b",
+        "ollama-llama3.2-3b"
+      ],
+      "task_type": "routine_local_query",
+      "assignment_status": "configured",
+      "configuration_source": "Daily Executive Briefing service",
+      "verification_status": "needs-runtime-verification"
+    },
+    {
+      "id": "openclaw_engineering",
+      "display_name": "OpenClaw Engineering",
+      "description": "Linux, Docker, PostgreSQL, Python, architecture, debugging, and repository engineering.",
+      "privacy_tier": "mixed",
+      "primary_model": "openai-frontier",
+      "fallback_models": [
+        "ollama-gemma3-12b"
+      ],
+      "task_type": "linux_admin",
+      "assignment_status": "configured",
+      "configuration_source": "AI Intelligence routing policy",
+      "verification_status": "needs-runtime-verification"
+    },
+    {
+      "id": "swift_property_manager",
+      "display_name": "Swift PropertyManager App",
+      "description": "Swift, SwiftUI, iPhone, iPad, and PropertyManager client development.",
+      "privacy_tier": "external-approved",
+      "primary_model": "openai-frontier",
+      "fallback_models": [
+        "ollama-gemma3-12b"
+      ],
+      "task_type": "swift",
+      "assignment_status": "configured",
+      "configuration_source": "AI Intelligence routing policy",
+      "verification_status": "needs-runtime-verification"
+    },
+    {
+      "id": "knowledge_ingestion",
+      "display_name": "Knowledge Ingestion",
+      "description": "Processes manuals, notes, foundational documentation, and RanchBrain source material.",
+      "privacy_tier": "local",
+      "primary_model": "ollama-gemma3-12b",
+      "fallback_models": [
+        "ollama-hermes3-8b"
+      ],
+      "task_type": "long_context_engineering",
+      "assignment_status": "configured",
+      "configuration_source": "RanchBrain ingestion configuration",
+      "verification_status": "needs-runtime-verification"
+    },
+    {
+      "id": "embedding_service",
+      "display_name": "Embedding Service",
+      "description": "Creates vector embeddings for RanchBrain PostgreSQL and pgvector retrieval.",
+      "privacy_tier": "local",
+      "primary_model": "nomic-embed-text",
+      "fallback_models": [],
+      "task_type": "embedding",
+      "assignment_status": "configured",
+      "configuration_source": "Ollama embedding configuration",
+      "verification_status": "needs-runtime-verification",
+      "registry_exception": true
+    },
+    {
+      "id": "ranchbrain_dashboard",
+      "display_name": "RanchBrain Dashboard",
+      "description": "Displays scorecards, recommendations, deployment assignments, evidence, and health.",
+      "privacy_tier": "local",
+      "primary_model": null,
+      "fallback_models": [],
+      "task_type": "presentation",
+      "assignment_status": "configured",
+      "configuration_source": "Dashboard application",
+      "verification_status": "not-model-serving"
+    }
+  ]
+}
