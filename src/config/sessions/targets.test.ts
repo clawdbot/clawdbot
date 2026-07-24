@@ -13,6 +13,7 @@ import { resolveStorePath } from "./paths.js";
 import { listSessionEntriesReadOnly, replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
+  dedupeSessionStoreTargetsBySqliteTarget,
   listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -275,6 +276,125 @@ describe("resolveSessionStoreTargets", () => {
     });
   });
 
+  it("keeps a promoted default on its registered suffixed database", async () => {
+    await withTempHome(async (home) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      const storePath = path.join(home, "shared.json");
+      await replaceSessionEntry(
+        {
+          agentId: "worker",
+          defaultAgentId: "main",
+          env,
+          storePath,
+          sessionKey: "agent:worker:main",
+        },
+        { model: "before-promotion", sessionId: "worker-session", updatedAt: 1 },
+      );
+      const beforePromotionPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "worker",
+        defaultAgentId: "main",
+        env,
+      }).path;
+
+      await replaceSessionEntry(
+        {
+          agentId: "worker",
+          defaultAgentId: "worker",
+          env,
+          storePath,
+          sessionKey: "agent:worker:main",
+        },
+        { model: "after-promotion", sessionId: "worker-session", updatedAt: 2 },
+      );
+      const afterPromotionPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "worker",
+        defaultAgentId: "worker",
+        env,
+      }).path;
+
+      expect(afterPromotionPath).toBe(beforePromotionPath);
+      expect(afterPromotionPath).toBe(path.join(home, "shared.worker.sqlite"));
+      await expect(fs.stat(path.join(home, "shared.sqlite"))).rejects.toThrow();
+      expect(
+        listSessionEntriesReadOnly({
+          agentId: "worker",
+          defaultAgentId: "worker",
+          env,
+          storePath,
+        }),
+      ).toEqual([
+        {
+          sessionKey: "agent:worker:main",
+          entry: expect.objectContaining({
+            model: "after-promotion",
+            sessionId: "worker-session",
+          }),
+        },
+      ]);
+    });
+  });
+
+  it("does not let durable metadata override ambiguous suffix registration", async () => {
+    await withTempHome(async (home) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      const storePath = path.join(home, "shared.json");
+      await replaceSessionEntry(
+        {
+          agentId: "worker",
+          defaultAgentId: "main",
+          env,
+          storePath,
+          sessionKey: "agent:worker:main",
+        },
+        { sessionId: "worker-session", updatedAt: 1 },
+      );
+      const occupiedPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "worker",
+        defaultAgentId: "main",
+        env,
+      }).path;
+      registerOpenClawAgentDatabase({ agentId: "ops", env, path: occupiedPath });
+
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "worker",
+          defaultAgentId: "main",
+          env,
+        }).path,
+      ).toBe(path.join(home, "shared.worker.2.sqlite"));
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "deduplicates aliased SQLite locators by physical identity",
+    async () => {
+      await withTempHome(async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+        const realDir = path.join(home, "real-stores");
+        const aliasDir = path.join(home, "alias-stores");
+        await fs.mkdir(realDir, { recursive: true });
+        await fs.symlink(realDir, aliasDir, "dir");
+        const diagnostics: string[] = [];
+
+        expect(
+          dedupeSessionStoreTargetsBySqliteTarget(
+            [
+              { agentId: "main", storePath: path.join(realDir, "shared.sqlite") },
+              { agentId: "ops", storePath: path.join(aliasDir, "shared.sqlite") },
+            ],
+            {
+              defaultAgentId: "main",
+              env,
+              onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.message),
+            },
+          ),
+        ).toEqual([{ agentId: "main", storePath: path.join(realDir, "shared.sqlite") }]);
+        expect(diagnostics).toContainEqual(expect.stringContaining('ignored owner(s): "ops"'));
+      });
+    },
+  );
+
   it("honors a registered owner over the configured default for a fixed-store collision", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
@@ -386,7 +506,7 @@ describe("resolveSessionStoreTargets", () => {
     });
   });
 
-  it("falls back to the configured default when registry ownership is ambiguous", async () => {
+  it("keeps ambiguous registry ownership off the unsuffixed target", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -405,7 +525,7 @@ describe("resolveSessionStoreTargets", () => {
         { agentId: "ops", storePath },
       ]);
       expect(diagnostics).toContainEqual(
-        expect.stringContaining('owner "main" selected by configured-default'),
+        expect.stringContaining("registry ownership is ambiguous"),
       );
     });
   });

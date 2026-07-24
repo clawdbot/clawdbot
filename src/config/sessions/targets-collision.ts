@@ -2,8 +2,14 @@
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  isSameOpenClawAgentDatabasePath,
+  listOpenClawRegisteredAgentDatabases,
+} from "../../state/openclaw-agent-db-registry.js";
+import {
+  resolveSqliteTargetFromSessionStorePath,
+  resolveUnsuffixedSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target.js";
 
 /** One session store path paired with its owning agent id. */
 export type SessionStoreTarget = {
@@ -16,7 +22,13 @@ export type SessionStoreTargetCollisionDiagnostic = {
   sqlitePath: string;
   ownerAgentId?: string;
   ignoredAgentIds: string[];
-  ownerSource: "database-registry" | "database-path" | "configured-default" | "ambiguous-registry";
+  ownerSource:
+    | "database-registry"
+    | "database-path"
+    | "registered-suffixed"
+    | "occupied-unsuffixed"
+    | "configured-default"
+    | "ambiguous-registry";
 };
 
 const log = createSubsystemLogger("sessions/targets");
@@ -44,30 +56,27 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       unsuffixedOwnerAgentId?: string;
     }>
   >();
+  const resolvePhysicalGroupKey = <T>(groups: ReadonlyMap<string, T>, pathname: string) =>
+    [...groups.keys()].find((candidate) => isSameOpenClawAgentDatabasePath(candidate, pathname)) ??
+    path.resolve(pathname);
   for (const target of targets) {
-    const unsuffixedPath = path.resolve(
-      resolveSqliteTargetFromSessionStorePath(target.storePath, {
-        defaultAgentId: options.defaultAgentId,
-        env: options.env,
-        registeredOwnerAgentIds: [],
-      }).path ?? target.storePath,
+    const resolvedUnsuffixedPath = path.resolve(
+      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path ?? target.storePath,
     );
-    const registeredOwnerAgentIds = registeredDatabases
-      .filter((entry) => path.resolve(entry.path) === unsuffixedPath)
-      .map((entry) => entry.agentId);
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
       defaultAgentId: options.defaultAgentId,
       env: options.env,
-      registeredOwnerAgentIds,
+      registeredDatabases,
     });
-    const sqlitePath = path.resolve(resolved.path ?? target.storePath);
+    const sqlitePath = resolvePhysicalGroupKey(grouped, resolved.path ?? target.storePath);
     const group = grouped.get(sqlitePath) ?? [];
     group.push({
       target,
       ...(resolved.agentId ? { databaseOwnerAgentId: normalizeAgentId(resolved.agentId) } : {}),
     });
     grouped.set(sqlitePath, group);
+    const unsuffixedPath = resolvePhysicalGroupKey(logicalGroups, resolvedUnsuffixedPath);
     const logicalGroup = logicalGroups.get(unsuffixedPath) ?? [];
     logicalGroup.push({
       target,
@@ -91,7 +100,11 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     const diagnostic: SessionStoreTargetCollisionDiagnostic = {
       message: ownerAgentId
         ? `Session store target collision at ${sqlitePath}: owner "${ownerAgentId}" selected by ${ownerSource}; suffixed owner(s): ${ignoredAgentIds.map((id) => `"${id}"`).join(", ")}.`
-        : `Session store target collision at ${sqlitePath}: registry ownership is ambiguous; all claimant(s) use suffixed targets: ${ignoredAgentIds.map((id) => `"${id}"`).join(", ")}.`,
+        : ownerSource === "registered-suffixed"
+          ? `Session store target collision at ${sqlitePath}: configured default retains its registered suffixed target; all claimant(s) use suffixed targets: ${ignoredAgentIds.map((id) => `"${id}"`).join(", ")}.`
+          : ownerSource === "occupied-unsuffixed"
+            ? `Session store target collision at ${sqlitePath}: unsuffixed target is occupied without a durable owner; all claimant(s) use suffixed targets: ${ignoredAgentIds.map((id) => `"${id}"`).join(", ")}.`
+            : `Session store target collision at ${sqlitePath}: registry ownership is ambiguous; all claimant(s) use suffixed targets: ${ignoredAgentIds.map((id) => `"${id}"`).join(", ")}.`,
       sqlitePath,
       ...(ownerAgentId ? { ownerAgentId } : {}),
       ignoredAgentIds,
@@ -111,7 +124,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     const registeredOwners = [
       ...new Set(
         registeredDatabases
-          .filter((entry) => path.resolve(entry.path) === sqlitePath)
+          .filter((entry) => isSameOpenClawAgentDatabasePath(entry.path, sqlitePath))
           .map((entry) => normalizeAgentId(entry.agentId)),
       ),
     ];

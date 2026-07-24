@@ -10,7 +10,10 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
+import {
+  isSameOpenClawAgentDatabasePath,
+  listOpenClawRegisteredAgentDatabases,
+} from "../../state/openclaw-agent-db-registry.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
@@ -132,7 +135,7 @@ export function listKnownSessionStoreAgentIds(
       defaultAgentId,
       env,
     }).path;
-    if (path.resolve(registered.path) === path.resolve(expectedPath)) {
+    if (isSameOpenClawAgentDatabasePath(registered.path, expectedPath)) {
       ids.add(agentId);
     }
   }

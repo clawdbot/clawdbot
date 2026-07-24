@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, statSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -28,6 +28,93 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
+
+type AgentDatabasePathIdentity = {
+  lexicalPath: string;
+  realPath?: string;
+  device?: bigint | number;
+  inode?: bigint | number;
+  parentDevice?: bigint | number;
+  parentInode?: bigint | number;
+  unresolvedSuffix?: string;
+};
+
+function resolveCanonicalPathFromExistingParent(lexicalPath: string): {
+  realPath: string;
+  parentDevice: bigint;
+  parentInode: bigint;
+  unresolvedSuffix: string;
+} {
+  const missingSegments: string[] = [];
+  let current = lexicalPath;
+  while (true) {
+    try {
+      const stat = statSync(current, { bigint: true });
+      return {
+        realPath: path.join(realpathSync.native(current), ...missingSegments),
+        parentDevice: stat.dev,
+        parentInode: stat.ino,
+        unresolvedSuffix: missingSegments.join(path.sep),
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error(`Cannot resolve an existing parent for ${lexicalPath}.`);
+    }
+    missingSegments.unshift(path.basename(current));
+    current = parent;
+  }
+}
+
+function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathIdentity {
+  const lexicalPath = path.resolve(pathname);
+  try {
+    const stat = statSync(lexicalPath, { bigint: true });
+    return {
+      lexicalPath,
+      realPath: realpathSync.native(lexicalPath),
+      device: stat.dev,
+      inode: stat.ino,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    // Preserve symlink/alias identity before the leaf exists by canonicalizing its nearest parent.
+    const parentIdentity = resolveCanonicalPathFromExistingParent(lexicalPath);
+    return {
+      lexicalPath,
+      ...parentIdentity,
+    };
+  }
+}
+
+/** Compare two database locators by canonical filesystem identity when available. */
+export function isSameOpenClawAgentDatabasePath(left: string, right: string): boolean {
+  const leftIdentity = resolveAgentDatabasePathIdentity(left);
+  const rightIdentity = resolveAgentDatabasePathIdentity(right);
+  if (leftIdentity.lexicalPath === rightIdentity.lexicalPath) {
+    return true;
+  }
+  if (leftIdentity.realPath && leftIdentity.realPath === rightIdentity.realPath) {
+    return true;
+  }
+  return (
+    (leftIdentity.device !== undefined &&
+      leftIdentity.inode !== undefined &&
+      leftIdentity.device === rightIdentity.device &&
+      leftIdentity.inode === rightIdentity.inode) ||
+    (leftIdentity.parentDevice !== undefined &&
+      leftIdentity.parentInode !== undefined &&
+      leftIdentity.parentDevice === rightIdentity.parentDevice &&
+      leftIdentity.parentInode === rightIdentity.parentInode &&
+      leftIdentity.unresolvedSuffix === rightIdentity.unresolvedSuffix)
+  );
+}
 
 export function registerOpenClawAgentDatabase(params: {
   agentId: string;
@@ -199,7 +286,7 @@ export function resolveOpenClawRegisteredAgentDatabaseOwners(
   return [
     ...new Set(
       listOpenClawRegisteredAgentDatabases(options)
-        .filter((entry) => path.resolve(entry.path) === resolvedPath)
+        .filter((entry) => isSameOpenClawAgentDatabasePath(entry.path, resolvedPath))
         .map((entry) => normalizeAgentId(entry.agentId)),
     ),
   ];

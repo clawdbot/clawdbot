@@ -29,7 +29,9 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
+  isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
+  resolveOpenClawRegisteredAgentDatabaseOwners,
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
@@ -1641,6 +1643,33 @@ describe("openclaw agent database", () => {
         .map((entry) => entry.path),
     ).toEqual([defaultDatabase.path, relocated.path].toSorted());
   });
+
+  it.runIf(process.platform !== "win32")(
+    "resolves registered owners through symlinked database paths",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const realDir = path.join(stateDir, "real-databases");
+      const aliasDir = path.join(stateDir, "alias-databases");
+      fs.mkdirSync(realDir, { recursive: true });
+      fs.symlinkSync(realDir, aliasDir, "dir");
+      const realPath = path.join(realDir, "worker.sqlite");
+      const aliasPath = path.join(aliasDir, "worker.sqlite");
+      expect(fs.existsSync(realPath)).toBe(false);
+      expect(isSameOpenClawAgentDatabasePath(realPath, aliasPath)).toBe(true);
+      const loopPath = path.join(stateDir, "database-loop.sqlite");
+      fs.symlinkSync(loopPath, loopPath);
+      expect(() => isSameOpenClawAgentDatabasePath(loopPath, realPath)).toThrow(
+        expect.objectContaining({ code: "ELOOP" }),
+      );
+      const database = openOpenClawAgentDatabase({ agentId: "worker", env, path: realPath });
+      unregisterOpenClawAgentDatabase({ agentId: "worker", env, path: database.path });
+      registerOpenClawAgentDatabase({ agentId: "worker", env, path: aliasPath });
+
+      expect(resolveOpenClawRegisteredAgentDatabaseOwners(realPath, { env })).toEqual(["worker"]);
+      expect(resolveOpenClawRegisteredAgentDatabaseOwners(aliasPath, { env })).toEqual(["worker"]);
+    },
+  );
 
   it("does not refresh global registry metadata on cached opens", () => {
     const stateDir = createTempStateDir();

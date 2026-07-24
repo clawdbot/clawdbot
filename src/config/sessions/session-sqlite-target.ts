@@ -1,141 +1,246 @@
-import { existsSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveOpenClawRegisteredAgentDatabaseOwners } from "../../state/openclaw-agent-db-registry.js";
+import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import {
+  isSameOpenClawAgentDatabasePath,
+  listOpenClawRegisteredAgentDatabases,
+} from "../../state/openclaw-agent-db-registry.js";
 import { inspectOpenClawAgentDatabaseOwner } from "../../state/openclaw-agent-db.js";
 
 /** SQLite database target resolved from a legacy session store path. */
 type ResolvedSqliteStoreTarget = {
   agentId?: string;
-  ownerSource?: "database-registry" | "database-path" | "configured-default" | "ambiguous-registry";
+  ownerSource?:
+    | "database-registry"
+    | "database-path"
+    | "registered-suffixed"
+    | "occupied-unsuffixed"
+    | "configured-default"
+    | "ambiguous-registry";
   path: string;
   unsuffixedOwnerAgentId?: string;
 };
 
-function resolveCustomStoreSqlitePath(params: {
+type ResolveSqliteStoreTargetOptions = {
   agentId?: string;
   defaultAgentId?: string;
   env?: NodeJS.ProcessEnv;
-  registeredOwnerAgentIds?: readonly string[];
-  sqliteBaseName?: string;
-  storePath: string;
-}): ResolvedSqliteStoreTarget {
-  const resolved = path.resolve(params.storePath);
-  const sessionsDir = path.dirname(resolved);
-  const sqliteBaseName =
-    params.sqliteBaseName ?? (path.basename(resolved, path.extname(resolved)) || "openclaw-agent");
-  const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
-  const unsuffixedPath = path.join(sessionsDir, `${sqliteBaseName}.sqlite`);
-  const registeredOwners = [
+  registeredDatabases?: readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[];
+};
+
+function resolveRegisteredOwners(
+  pathname: string,
+  registeredDatabases: readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[],
+): string[] {
+  return [
     ...new Set(
-      (
-        params.registeredOwnerAgentIds ??
-        resolveOpenClawRegisteredAgentDatabaseOwners(
-          unsuffixedPath,
-          params.env ? { env: params.env } : {},
-        )
-      ).map(normalizeAgentId),
+      registeredDatabases
+        .filter((entry) => isSameOpenClawAgentDatabasePath(entry.path, pathname))
+        .map((entry) => normalizeAgentId(entry.agentId)),
     ),
   ];
-  const databaseOwner =
-    registeredOwners.length === 1 || !existsSync(unsuffixedPath)
+}
+
+function resolveDatabaseOwner(pathname: string): string | undefined {
+  if (!hasFilesystemEntry(pathname)) {
+    return undefined;
+  }
+  const owner = inspectOpenClawAgentDatabaseOwner(pathname);
+  return owner.status === "owned" ? normalizeAgentId(owner.agentId) : undefined;
+}
+
+function hasFilesystemEntry(pathname: string): boolean {
+  try {
+    lstatSync(pathname);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function resolveCustomStoreSqlitePath(params: {
+  unsuffixedPath: string;
+  options: ResolveSqliteStoreTargetOptions;
+}): ResolvedSqliteStoreTarget {
+  const unsuffixedPath = path.resolve(params.unsuffixedPath);
+  const sqliteBaseName = path.basename(unsuffixedPath, ".sqlite");
+  const sessionsDir = path.dirname(unsuffixedPath);
+  const defaultAgentId = normalizeAgentId(params.options.defaultAgentId ?? "main");
+  const agentId = normalizeAgentId(params.options.agentId ?? defaultAgentId);
+  const registeredDatabases =
+    params.options.registeredDatabases ??
+    listOpenClawRegisteredAgentDatabases(params.options.env ? { env: params.options.env } : {});
+  const resolvePersistedOwner = (candidatePath: string) => {
+    const registeredOwners = resolveRegisteredOwners(candidatePath, registeredDatabases);
+    const databaseOwner = resolveDatabaseOwner(candidatePath);
+    return {
+      effectiveOwner:
+        registeredOwners.length === 1
+          ? registeredOwners[0]
+          : registeredOwners.length === 0
+            ? databaseOwner
+            : undefined,
+      registeredOwners,
+    };
+  };
+  const registeredUnsuffixedOwners = resolveRegisteredOwners(unsuffixedPath, registeredDatabases);
+  const durableUnsuffixedOwner = resolveDatabaseOwner(unsuffixedPath);
+  const persistedUnsuffixedOwner =
+    registeredUnsuffixedOwners.length === 1
+      ? registeredUnsuffixedOwners[0]
+      : registeredUnsuffixedOwners.length === 0
+        ? durableUnsuffixedOwner
+        : undefined;
+  const suffixedPathFor = (ownerAgentId: string) =>
+    path.join(sessionsDir, `${sqliteBaseName}.${ownerAgentId}.sqlite`);
+  const resolveSuffixedTarget = (ownerAgentId: string) => {
+    const prefix = `${sqliteBaseName}.${ownerAgentId}`;
+    const parseIndex = (fileName: string): number | undefined => {
+      if (fileName === `${prefix}.sqlite`) {
+        return 1;
+      }
+      if (!fileName.startsWith(`${prefix}.`) || !fileName.endsWith(".sqlite")) {
+        return undefined;
+      }
+      const rawValue = fileName.slice(prefix.length + 1, -".sqlite".length);
+      if (!/^[1-9]\d*$/.test(rawValue)) {
+        return undefined;
+      }
+      const value = Number(rawValue);
+      return Number.isSafeInteger(value) && value >= 2 && String(value) === rawValue
+        ? value
+        : undefined;
+    };
+    const occupiedIndexes = new Set<number>();
+    for (const registered of registeredDatabases) {
+      if (!isSameOpenClawAgentDatabasePath(path.dirname(registered.path), sessionsDir)) {
+        continue;
+      }
+      const index = parseIndex(path.basename(registered.path));
+      if (index !== undefined) {
+        occupiedIndexes.add(index);
+      }
+    }
+    try {
+      for (const fileName of readdirSync(sessionsDir)) {
+        const index = parseIndex(fileName);
+        if (index !== undefined) {
+          occupiedIndexes.add(index);
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      // A missing target directory has no occupied on-disk suffixes.
+    }
+    const candidatePathAt = (index: number) =>
+      index === 1
+        ? suffixedPathFor(ownerAgentId)
+        : path.join(sessionsDir, `${prefix}.${index}.sqlite`);
+    const sortedOccupiedIndexes = [...occupiedIndexes].toSorted((left, right) => left - right);
+    for (const index of sortedOccupiedIndexes) {
+      const candidatePath = candidatePathAt(index);
+      if (resolvePersistedOwner(candidatePath).effectiveOwner === ownerAgentId) {
+        return { owned: true, path: candidatePath };
+      }
+    }
+    let firstMissingIndex = 1;
+    for (const index of sortedOccupiedIndexes) {
+      if (index === firstMissingIndex) {
+        firstMissingIndex += 1;
+      } else if (index > firstMissingIndex) {
+        break;
+      }
+    }
+    for (let index = firstMissingIndex; ; index += 1) {
+      const candidatePath = candidatePathAt(index);
+      const candidateOwner = resolvePersistedOwner(candidatePath);
+      if (candidateOwner.effectiveOwner === ownerAgentId) {
+        return { owned: true, path: candidatePath };
+      }
+      if (candidateOwner.registeredOwners.length === 0 && !hasFilesystemEntry(candidatePath)) {
+        return { owned: false, path: candidatePath };
+      }
+    }
+  };
+  const defaultSuffixedTarget = resolveSuffixedTarget(defaultAgentId);
+  const agentSuffixedTarget =
+    agentId === defaultAgentId ? defaultSuffixedTarget : resolveSuffixedTarget(agentId);
+  const defaultOwnsSuffixedPath = defaultSuffixedTarget.owned;
+  const agentOwnsSuffixedPath = agentSuffixedTarget.owned;
+  const unsuffixedAvailable =
+    registeredUnsuffixedOwners.length === 0 && !hasFilesystemEntry(unsuffixedPath);
+  const fallbackUnsuffixedOwner =
+    persistedUnsuffixedOwner || defaultOwnsSuffixedPath || !unsuffixedAvailable
       ? undefined
-      : inspectOpenClawAgentDatabaseOwner(unsuffixedPath);
-  const databaseOwnerAgentId =
-    databaseOwner?.status === "owned" ? normalizeAgentId(databaseOwner.agentId) : undefined;
-  const unsuffixedOwnerAgentId =
-    registeredOwners.length === 1
-      ? registeredOwners[0]
-      : databaseOwnerAgentId
-        ? databaseOwnerAgentId
-        : normalizeAgentId(params.defaultAgentId ?? "main");
-  const ownerSource =
-    registeredOwners.length === 1
+      : defaultAgentId;
+  const unsuffixedOwnerAgentId = persistedUnsuffixedOwner ?? fallbackUnsuffixedOwner;
+  const useUnsuffixedPath =
+    agentId === persistedUnsuffixedOwner ||
+    (!agentOwnsSuffixedPath && agentId === fallbackUnsuffixedOwner);
+  const ownerSource = persistedUnsuffixedOwner
+    ? registeredUnsuffixedOwners.length === 1
       ? "database-registry"
-      : databaseOwnerAgentId
-        ? "database-path"
-        : "configured-default";
-  // One logical fixed store must never map two agent owners to one physical DB.
-  // Registry/DB ownership wins; otherwise the configured default keeps the unsuffixed file.
-  // Filenames never infer ownership, so every other claimant is always suffixed.
-  const sqliteName =
-    !agentId || agentId === unsuffixedOwnerAgentId
-      ? sqliteBaseName
-      : `${sqliteBaseName}.${agentId}`;
-  const physicalOwnerAgentId = agentId ?? unsuffixedOwnerAgentId;
+      : "database-path"
+    : defaultOwnsSuffixedPath
+      ? "registered-suffixed"
+      : registeredUnsuffixedOwners.length > 1
+        ? "ambiguous-registry"
+        : !unsuffixedAvailable
+          ? "occupied-unsuffixed"
+          : "configured-default";
+  // Fixed-store precedence is: persisted unsuffixed owner, the agent's own persisted suffix,
+  // configured-default unsuffixed ownership, then a new suffix. Filenames never infer ownership.
+  // This keeps promotions stable and guarantees one physical SQLite target per agent.
   return {
-    ...(physicalOwnerAgentId ? { agentId: physicalOwnerAgentId } : {}),
-    path: path.join(sessionsDir, `${sqliteName}.sqlite`),
+    agentId,
+    path: useUnsuffixedPath ? unsuffixedPath : agentSuffixedTarget.path,
     ownerSource,
     ...(unsuffixedOwnerAgentId ? { unsuffixedOwnerAgentId } : {}),
+  };
+}
+
+/** Resolves only the legacy unsuffixed target, without reading ownership state. */
+export function resolveUnsuffixedSqliteTargetFromSessionStorePath(
+  storePath: string,
+): ResolvedSqliteStoreTarget {
+  const resolved = path.resolve(storePath);
+  if (path.basename(resolved) === "openclaw-agent.sqlite" || resolved.endsWith(".sqlite")) {
+    const agentId = resolveAgentIdFromSqliteDatabasePath(resolved);
+    return { path: resolved, ...(agentId ? { agentId } : {}) };
+  }
+  const sessionsDir = path.dirname(resolved);
+  if (path.basename(resolved) !== "sessions.json") {
+    const sqliteBaseName = path.basename(resolved, path.extname(resolved)) || "openclaw-agent";
+    return { path: path.join(sessionsDir, `${sqliteBaseName}.sqlite`) };
+  }
+  if (path.basename(sessionsDir) !== "sessions") {
+    return { path: path.join(sessionsDir, "openclaw-agent.sqlite") };
+  }
+  const agentDir = path.dirname(sessionsDir);
+  if (path.basename(path.dirname(agentDir)) !== "agents") {
+    return { path: path.join(sessionsDir, "openclaw-agent.sqlite") };
+  }
+  return {
+    agentId: normalizeAgentId(path.basename(agentDir)),
+    path: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
   };
 }
 
 /** Resolves the SQLite database target that owns a legacy session store path. */
 export function resolveSqliteTargetFromSessionStorePath(
   storePath: string,
-  options: {
-    agentId?: string;
-    defaultAgentId?: string;
-    env?: NodeJS.ProcessEnv;
-    registeredOwnerAgentIds?: readonly string[];
-  } = {},
+  options: ResolveSqliteStoreTargetOptions = {},
 ): ResolvedSqliteStoreTarget {
-  const resolved = path.resolve(storePath);
-  if (path.basename(resolved) === "openclaw-agent.sqlite" || resolved.endsWith(".sqlite")) {
-    const agentId = resolveAgentIdFromSqliteDatabasePath(resolved);
-    return {
-      path: resolved,
-      ...(agentId ? { agentId } : {}),
-    };
-  }
-  const sessionsDir = path.dirname(resolved);
-  if (path.basename(resolved) !== "sessions.json") {
-    return {
-      ...resolveCustomStoreSqlitePath({
-        ...(options.agentId ? { agentId: options.agentId } : {}),
-        ...(options.defaultAgentId ? { defaultAgentId: options.defaultAgentId } : {}),
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.registeredOwnerAgentIds
-          ? { registeredOwnerAgentIds: options.registeredOwnerAgentIds }
-          : {}),
-        storePath: resolved,
-      }),
-    };
-  }
-  if (path.basename(sessionsDir) !== "sessions") {
-    return {
-      ...resolveCustomStoreSqlitePath({
-        ...(options.agentId ? { agentId: options.agentId } : {}),
-        ...(options.defaultAgentId ? { defaultAgentId: options.defaultAgentId } : {}),
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.registeredOwnerAgentIds
-          ? { registeredOwnerAgentIds: options.registeredOwnerAgentIds }
-          : {}),
-        sqliteBaseName: "openclaw-agent",
-        storePath: resolved,
-      }),
-    };
-  }
-  const agentDir = path.dirname(sessionsDir);
-  if (path.basename(path.dirname(agentDir)) !== "agents") {
-    return {
-      ...resolveCustomStoreSqlitePath({
-        ...(options.agentId ? { agentId: options.agentId } : {}),
-        ...(options.defaultAgentId ? { defaultAgentId: options.defaultAgentId } : {}),
-        ...(options.env ? { env: options.env } : {}),
-        ...(options.registeredOwnerAgentIds
-          ? { registeredOwnerAgentIds: options.registeredOwnerAgentIds }
-          : {}),
-        sqliteBaseName: "openclaw-agent",
-        storePath: resolved,
-      }),
-    };
-  }
-  return {
-    agentId: normalizeAgentId(path.basename(agentDir)),
-    path: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
-  };
+  const unsuffixedTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  return unsuffixedTarget.agentId || path.resolve(storePath).endsWith(".sqlite")
+    ? unsuffixedTarget
+    : resolveCustomStoreSqlitePath({ unsuffixedPath: unsuffixedTarget.path, options });
 }
 
 /** Extracts the agent id from the canonical per-agent SQLite database path. */
