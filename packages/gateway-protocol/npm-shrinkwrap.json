@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/gateway-protocol",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/gateway-protocol",
-      "version": "2026.7.2-beta.4",
+      "version": "2026.7.2-beta.5",
       "license": "MIT",
       "dependencies": {
         "typebox": "1.3.6"

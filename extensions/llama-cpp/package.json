@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/llama-cpp-provider",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "description": "OpenClaw llama.cpp text inference and embedding provider plugin",
   "repository": {
     "type": "git",
@@ -23,10 +23,10 @@
       "minHostVersion": ">=2026.6.2"
     },
     "compat": {
-      "pluginApi": ">=2026.7.2-beta.4"
+      "pluginApi": ">=2026.7.2-beta.5"
     },
     "build": {
-      "openclawVersion": "2026.7.2-beta.4"
+      "openclawVersion": "2026.7.2-beta.5"
     },
     "release": {
       "bundleRuntimeDependencies": false,

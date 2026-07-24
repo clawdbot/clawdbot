@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/meta-provider",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/meta-provider",
-      "version": "2026.7.2-beta.4"
+      "version": "2026.7.2-beta.5"
     }
   }
 }

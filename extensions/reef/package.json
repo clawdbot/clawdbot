@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/reef",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "description": "OpenClaw Reef channel plugin — guarded end-to-end encrypted claw-to-claw messaging",
   "type": "module",
   "dependencies": {

@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/codex",
-      "version": "2026.7.2-beta.4",
+      "version": "2026.7.2-beta.5",
       "dependencies": {
         "@openai/codex": "0.145.0",
         "semver": "7.8.5",
