@@ -105,6 +105,39 @@ describe("SQLite path durability", () => {
     expect(replaced).toBe(true);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects an existing ancestor replaced before the create callback",
+    async () => {
+      const directoryPath = await fs.realpath(
+        tempDirs.make("openclaw-sqlite-durable-existing-race-"),
+      );
+      const displacedPath = `${directoryPath}.displaced`;
+      const originalOpen = fs.open.bind(fs);
+      let replaced = false;
+      let createCalled = false;
+      vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        if (!replaced && flags === "r" && path.resolve(String(filePath)) === directoryPath) {
+          replaced = true;
+          await fs.rename(directoryPath, displacedPath);
+          await fs.mkdir(directoryPath);
+        }
+        return await originalOpen(filePath, flags, mode);
+      });
+
+      await expect(
+        ensureDurableSqliteDirectory({
+          directoryPath,
+          label: "test directory",
+          create: async () => {
+            createCalled = true;
+          },
+        }),
+      ).rejects.toThrow(/handle changed during directory sync/u);
+      expect(replaced).toBe(true);
+      expect(createCalled).toBe(false);
+    },
+  );
+
   it("rejects a parent swapped out only for the directory sync", async () => {
     const rootPath = await fs.realpath(tempDirs.make("openclaw-sqlite-durable-parent-race-"));
     const directoryPath = path.join(rootPath, "one", "two");

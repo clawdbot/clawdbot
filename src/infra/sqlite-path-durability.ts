@@ -61,6 +61,20 @@ async function assertOpenDirectoryCurrent(
   await assertDirectoryReceiptCurrent(receipt, label);
 }
 
+async function openCurrentDirectory(
+  receipt: SqlitePathIdentityReceipt,
+  label: string,
+): Promise<FileHandle> {
+  const handle = await fs.open(receipt.path, "r");
+  try {
+    await assertOpenDirectoryCurrent(handle, receipt, label);
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
 export async function syncSqliteDirectoryForDurability(
   directory: string | SqlitePathIdentityReceipt,
 ): Promise<SqliteDirectorySyncOutcome> {
@@ -132,50 +146,60 @@ export async function ensureDurableSqliteDirectory(params: {
 }): Promise<DurableSqliteDirectoryReceipt> {
   const directoryPath = path.resolve(params.directoryPath);
   const ancestor = await findExistingAncestorReceipt(directoryPath, params.label);
-  await params.create(directoryPath);
+  // Keep the preexisting anchor open while the creator runs. Otherwise a
+  // remove/recreate race can recycle its inode and hide an unsynced new edge.
+  const ancestorHandle = await openCurrentDirectory(ancestor, params.label);
+  try {
+    await assertOpenDirectoryCurrent(ancestorHandle, ancestor, params.label);
+    await params.create(directoryPath);
+    await assertOpenDirectoryCurrent(ancestorHandle, ancestor, params.label);
 
-  const receipts = [ancestor];
-  let currentPath = ancestor.path;
-  for (const segment of path
-    .relative(ancestor.path, directoryPath)
-    .split(path.sep)
-    .filter(Boolean)) {
-    currentPath = path.join(currentPath, segment);
-    const identity = await fs.lstat(currentPath);
-    assertDirectory(identity, currentPath, params.label);
-    receipts.push({ path: currentPath, identity });
-  }
-
-  let parentSync: DurableSqliteDirectoryReceipt["parentSync"] = "not-needed";
-  for (let index = receipts.length - 1; index > 0; index -= 1) {
-    const parent = receipts[index - 1];
-    const child = receipts[index];
-    if (!parent || !child) {
-      throw new Error(`${params.label} directory receipt chain is incomplete.`);
+    const receipts = [ancestor];
+    let currentPath = ancestor.path;
+    for (const segment of path
+      .relative(ancestor.path, directoryPath)
+      .split(path.sep)
+      .filter(Boolean)) {
+      currentPath = path.join(currentPath, segment);
+      const identity = await fs.lstat(currentPath);
+      assertDirectory(identity, currentPath, params.label);
+      receipts.push({ path: currentPath, identity });
     }
-    await assertDirectoryReceiptCurrent(parent, params.label);
-    await assertDirectoryReceiptCurrent(child, params.label);
-    try {
-      const outcome = await syncSqliteDirectoryForDurability(parent);
-      if (outcome === "unsupported") {
-        parentSync = "unsupported";
-      } else if (parentSync === "not-needed") {
-        parentSync = "synced";
+
+    let parentSync: DurableSqliteDirectoryReceipt["parentSync"] = "not-needed";
+    for (let index = receipts.length - 1; index > 0; index -= 1) {
+      const parent = receipts[index - 1];
+      const child = receipts[index];
+      if (!parent || !child) {
+        throw new Error(`${params.label} directory receipt chain is incomplete.`);
       }
-    } catch (error) {
-      throw new Error(
-        `${params.label} could not sync created directory edge ${child.path} through ${parent.path}`,
-        { cause: error },
-      );
+      await assertDirectoryReceiptCurrent(parent, params.label);
+      await assertDirectoryReceiptCurrent(child, params.label);
+      try {
+        const outcome = await syncSqliteDirectoryForDurability(parent);
+        if (outcome === "unsupported") {
+          parentSync = "unsupported";
+        } else if (parentSync === "not-needed") {
+          parentSync = "synced";
+        }
+      } catch (error) {
+        throw new Error(
+          `${params.label} could not sync created directory edge ${child.path} through ${parent.path}`,
+          { cause: error },
+        );
+      }
+      await assertDirectoryReceiptCurrent(parent, params.label);
+      await assertDirectoryReceiptCurrent(child, params.label);
     }
-    await assertDirectoryReceiptCurrent(parent, params.label);
-    await assertDirectoryReceiptCurrent(child, params.label);
-  }
 
-  const finalReceipt = receipts.at(-1);
-  if (!finalReceipt) {
-    throw new Error(`${params.label} directory receipt is missing.`);
+    const finalReceipt = receipts.at(-1);
+    if (!finalReceipt) {
+      throw new Error(`${params.label} directory receipt is missing.`);
+    }
+    await assertOpenDirectoryCurrent(ancestorHandle, ancestor, params.label);
+    await assertDirectoryReceiptCurrent(finalReceipt, params.label);
+    return { ...finalReceipt, parentSync };
+  } finally {
+    await ancestorHandle.close();
   }
-  await assertDirectoryReceiptCurrent(finalReceipt, params.label);
-  return { ...finalReceipt, parentSync };
 }
