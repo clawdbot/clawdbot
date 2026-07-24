@@ -473,12 +473,8 @@ function readSqliteSessionLogSnapshot(
     }
     if (options.includeUsage) {
       const events = loadTranscriptTailEventsSync(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);
-      const stats = readTranscriptStatsSync(scope);
       snapshot.usage = deriveTranscriptUsageSnapshot({
-        usage:
-          stats.eventCount <= events.length
-            ? readLatestNonzeroUsageFromTranscriptEvents(events)
-            : undefined,
+        usage: readLatestNonzeroUsageFromTranscriptEvents(events),
       });
     }
   } catch {
