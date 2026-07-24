@@ -153,17 +153,15 @@ async function handleTranscriptUpdateBroadcast(
   update: InternalSessionTranscriptUpdate,
 ): Promise<void> {
   const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
-  const legacySessionKey = legacyMarker
-    ? resolveTranscriptSessionKeyBySessionId(legacyMarker)
-    : undefined;
   const storageAgentId = update.target?.agentId ?? update.agentId ?? legacyMarker?.agentId;
-  const sessionKey =
-    update.target?.sessionKey ??
-    update.sessionKey ??
-    legacySessionKey ??
-    (update.sessionFile && !legacyMarker
+  let sessionKey = update.target?.sessionKey ?? update.sessionKey;
+  if (!sessionKey && legacyMarker) {
+    sessionKey = resolveTranscriptSessionKeyBySessionId(legacyMarker);
+  }
+  sessionKey ??=
+    update.sessionFile && !legacyMarker
       ? resolveSessionKeyForTranscriptFile(update.sessionFile)
-      : undefined);
+      : undefined;
   if (!sessionKey || update.message === undefined) {
     return;
   }

@@ -3,12 +3,15 @@
  *
  * Selects models, wires built-in/custom tools, loads resources, and creates AgentSession instances.
  */
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../auto-reply/thinking.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { getAgentDir } from "../config.js";
@@ -110,7 +113,7 @@ export interface CreateAgentSessionOptions {
   /** Resource loader. When omitted, DefaultResourceLoader is used. */
   resourceLoader?: ResourceLoader;
 
-  /** Session manager. Default: SessionManager.inMemory(cwd) */
+  /** Session manager. Default: a new SQLite-backed main-agent SDK session. */
   sessionManager?: SessionManager;
 
   /** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
@@ -305,7 +308,7 @@ async function createAgentSessionImpl(
   const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
-  const sessionManager = options.sessionManager ?? SessionManager.inMemory(cwd);
+  const sessionManager = options.sessionManager ?? (await createDefaultSdkSessionManager(cwd));
 
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
@@ -567,4 +570,16 @@ async function createAgentSessionImpl(
     extensionsResult,
     modelFallbackMessage,
   };
+}
+
+async function createDefaultSdkSessionManager(cwd: string): Promise<SessionManager> {
+  const sessionId = randomUUID();
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:sdk:${sessionId}`,
+    storePath: resolveStorePath(undefined, { agentId: "main" }),
+  };
+  await upsertSessionEntry(target, { sessionId, updatedAt: Date.now() });
+  return SessionManager.open(target, cwd);
 }

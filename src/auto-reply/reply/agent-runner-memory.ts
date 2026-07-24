@@ -37,7 +37,7 @@ import {
 } from "../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  loadTranscriptEventsSync,
+  loadTranscriptTailEventsSync,
   readTranscriptStatsSync,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -372,6 +372,7 @@ type SessionTranscriptUsageSnapshot = {
 // transcript reads in time to flip memory-flush gating when needed.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
+const SQLITE_USAGE_TAIL_MAX_EVENTS = 512;
 const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
 
 function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
@@ -471,8 +472,13 @@ function readSqliteSessionLogSnapshot(
       snapshot.byteSize = readTranscriptStatsSync(scope).sizeBytes;
     }
     if (options.includeUsage) {
+      const events = loadTranscriptTailEventsSync(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);
+      const stats = readTranscriptStatsSync(scope);
       snapshot.usage = deriveTranscriptUsageSnapshot({
-        usage: readLatestNonzeroUsageFromTranscriptEvents(loadTranscriptEventsSync(scope)),
+        usage:
+          stats.eventCount <= events.length
+            ? readLatestNonzeroUsageFromTranscriptEvents(events)
+            : undefined,
       });
     }
   } catch {

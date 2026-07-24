@@ -46,6 +46,28 @@ export function loadSqliteTranscriptEventsSync(
   return loadSqliteTranscriptEventsFromDatabase(database, resolved.sessionId);
 }
 
+/** Loads a bounded newest tail in storage order for hot-path accounting. */
+export function loadSqliteTranscriptTailEventsSync(
+  scope: SessionTranscriptReadScope,
+  maxEvents: number,
+): TranscriptEvent[] {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const limit = Math.max(1, Math.floor(maxEvents));
+  return executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("event_json")
+      .where("session_id", "=", resolved.sessionId)
+      .orderBy("seq", "desc")
+      .limit(limit),
+  )
+    .rows.toReversed()
+    .map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+}
+
 /** Loads additive transcript rows after one durable sequence checkpoint. */
 export function loadSqliteTranscriptEventRowsAfterSeqSync(
   scope: SessionTranscriptReadScope,
