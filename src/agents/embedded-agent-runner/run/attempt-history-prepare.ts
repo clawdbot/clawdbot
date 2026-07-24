@@ -13,6 +13,7 @@ import type { AssembleResult } from "../../../context-engine/types.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import type { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import type { createCacheTrace } from "../../cache-trace.js";
+import { rebindCompactionBoundaryMessages } from "../../compaction-boundary.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
@@ -248,8 +249,12 @@ export async function prepareEmbeddedAttemptHistory(input: {
       const assembledMessages = input.transcriptPolicy.repairToolUseResultPairing
         ? repairAttemptToolUseResultPairing(assembled.messages, input.isOpenAIResponsesApi)
         : assembled.messages;
-      if (assembledMessages !== activeSession.messages) {
-        activeSession.agent.state.messages = assembledMessages;
+      const reboundMessages = rebindCompactionBoundaryMessages(
+        activeSession.messages,
+        assembledMessages,
+      );
+      if (reboundMessages !== activeSession.messages) {
+        activeSession.agent.state.messages = reboundMessages;
       }
       contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
       contextEngineAssemblySucceeded = true;

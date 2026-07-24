@@ -5,6 +5,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
   isWithinRetainedCompactionRange,
+  rebindCompactionBoundaryMessages,
   resolveCompactionBoundary,
 } from "./compaction-boundary.js";
 import { limitHistoryTurns } from "./embedded-agent-runner/history.js";
@@ -179,6 +180,42 @@ describe("limitHistoryTurns", () => {
       "user",
       "assistant",
     ]);
+    expect(boundary.retainedStartIndex).toBe(1);
+    expect(boundary.retainedEndIndex).toBe(1);
+    expect(isWithinRetainedCompactionRange(boundary, runtimeMessages.indexOf(freshAssistant))).toBe(
+      false,
+    );
+  });
+
+  it("rebinds retained identity after a structured context-engine clone", () => {
+    const retainedBoundary = Symbol.for("openclaw.compactionRetainedBoundary");
+    const boundaryId = "compaction-structured-clone";
+    const markRetained = (message: AgentMessage): AgentMessage => {
+      const marked = { ...message } as AgentMessage & { [retainedBoundary]?: string };
+      Object.defineProperty(marked, retainedBoundary, {
+        enumerable: true,
+        value: boundaryId,
+      });
+      return marked;
+    };
+    const summary = markRetained({
+      role: "compactionSummary",
+      summary: "Previous conversation",
+      tokensBefore: 5000,
+      retainedMessageCount: 4,
+    } as AgentMessage);
+    const retained = makeMessages(["user", "assistant", "user", "assistant"]).map(markRetained);
+    const currentTurn = makeMessages(["user", "assistant"]);
+    const limited = limitHistoryTurns([summary, ...retained, ...currentTurn], 1);
+    const cloned = structuredClone(limited) as AgentMessage[];
+    const rebound = rebindCompactionBoundaryMessages(limited, cloned);
+    const freshAssistant = assistantTextMessage("fresh response");
+    const runtimeMessages = [...rebound, userMessage("fresh prompt"), freshAssistant];
+    const boundary = expectDefined(
+      resolveCompactionBoundary(runtimeMessages),
+      "structured clone compaction boundary test invariant",
+    );
+
     expect(boundary.retainedStartIndex).toBe(1);
     expect(boundary.retainedEndIndex).toBe(1);
     expect(isWithinRetainedCompactionRange(boundary, runtimeMessages.indexOf(freshAssistant))).toBe(

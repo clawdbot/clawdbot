@@ -1,11 +1,19 @@
 // Agent Core tests cover messages behavior.
 import { describe, expect, it } from "vitest";
-import { convertToLlm, createCompactionSummaryMessage, createCustomMessage } from "./messages.js";
+import {
+  convertToLlm,
+  createBranchSummaryMessage,
+  createCompactionSummaryMessage,
+  createCustomMessage,
+} from "./messages.js";
 
 describe("harness message timestamps", () => {
-  it("rejects invalid timestamps before creating context messages", () => {
-    expect(() => createCustomMessage("note", "content", true, {}, "not-a-date")).toThrow(
-      "custom message timestamp must be a valid timestamp",
+  it("keeps invalid custom and branch timestamps non-fatal", () => {
+    expect(createCustomMessage("note", "content", true, {}, "not-a-date")).not.toHaveProperty(
+      "timestamp",
+    );
+    expect(createBranchSummaryMessage("summary", "branch", "not-a-date")).not.toHaveProperty(
+      "timestamp",
     );
   });
   it("normalizes persisted compaction summary timestamp strings", () => {

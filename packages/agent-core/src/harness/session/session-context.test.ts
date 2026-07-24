@@ -16,6 +16,35 @@ function userEntry(id: string, parentId: string | null, content: string): Sessio
 }
 
 describe("buildSessionContext", () => {
+  it("keeps invalid custom and branch timestamps non-fatal during replay", () => {
+    const entries: SessionTreeEntry[] = [
+      {
+        type: "custom_message",
+        id: "custom",
+        parentId: null,
+        timestamp: "9999-12-31",
+        customType: "note",
+        content: "custom content",
+        display: true,
+      },
+      {
+        type: "branch_summary",
+        id: "branch",
+        parentId: "custom",
+        timestamp: "01/02/03",
+        fromId: "branch-root",
+        summary: "branch content",
+      },
+    ];
+
+    expect(buildSessionContext(entries).messages).toMatchObject([
+      { role: "custom", content: "custom content" },
+      { role: "branchSummary", summary: "branch content" },
+    ]);
+    expect(buildSessionContext(entries).messages[0]).not.toHaveProperty("timestamp");
+    expect(buildSessionContext(entries).messages[1]).not.toHaveProperty("timestamp");
+  });
+
   it("replays only the retained tail and newer entries after compaction", () => {
     const entries: SessionTreeEntry[] = [
       userEntry("old", null, "discarded"),
