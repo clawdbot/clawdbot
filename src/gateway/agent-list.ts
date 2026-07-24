@@ -71,7 +71,13 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   }
 
   const allowedIds = explicitIds.size > 0 ? new Set([...explicitIds, defaultId]) : null;
-  const visibleIds = [...agentIds].filter((id) => (allowedIds ? allowedIds.has(id) : true));
+  const visibleIds = [...agentIds].filter(
+    (id) =>
+      !allowedIds ||
+      allowedIds.has(id) ||
+      // System agents are a separate negotiated surface, not authored roster members.
+      (diskIds.has(id) && ownerEntries.has(id)),
+  );
   visibleIds.sort((a, b) => a.localeCompare(b));
   const orderedIds = visibleIds.includes(defaultId)
     ? [defaultId, ...visibleIds.filter((id) => id !== defaultId)]

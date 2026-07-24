@@ -40,6 +40,7 @@ import {
   recordInboundSessionMeta,
   replaceSessionEntry,
   resetSessionEntryLifecycle,
+  SessionInitializationAgentScopeMismatchError,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionTranscriptReadTarget,
@@ -1725,6 +1726,39 @@ describe("session accessor seam", () => {
     }
     expect(committed.sessionEntry.sessionId).toBe("next-session");
     expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("next-session");
+  });
+
+  it("rejects a reply initialization key scoped to another explicit agent", () => {
+    try {
+      loadReplySessionInitializationSnapshot({
+        agentId: "main",
+        sessionKey: "agent:ops:main",
+        storePath,
+      });
+      throw new Error("expected agent scope mismatch");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SessionInitializationAgentScopeMismatchError);
+      expect(error).toMatchObject({
+        code: "SESSION_INITIALIZATION_AGENT_SCOPE_MISMATCH",
+        agentId: "main",
+        sessionKeyAgentId: "ops",
+      });
+    }
+  });
+
+  it("allows an unscoped legacy alias with an explicit agent owner", async () => {
+    await upsertSessionEntry(
+      { agentId: "ops", sessionKey: "main", storePath },
+      { sessionId: "legacy-ops-session", updatedAt: 10 },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "ops",
+      sessionKey: "main",
+      storePath,
+    });
+
+    expect(snapshot.currentEntry?.sessionId).toBe("legacy-ops-session");
   });
 
   it("rejects reply session initialization when the entry is deleted during prepare", async () => {

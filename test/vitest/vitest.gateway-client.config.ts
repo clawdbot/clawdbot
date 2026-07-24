@@ -14,10 +14,12 @@ export function createGatewayClientVitestConfig(env?: Record<string, string | un
     {
       env,
       exclude: ["src/gateway/**/*server*.test.ts", "src/gateway/server-methods/**/*.test.ts"],
+      includeAgentRosterSetup: false,
       // Gateway child projects share one include file; preserve this project's ownership.
       intersectIncludeFile: true,
       isolate: true,
       name: "gateway-client",
+      setupFiles: ["test/setup-agent-roster-config.ts"],
     },
   );
 }

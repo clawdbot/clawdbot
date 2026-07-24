@@ -1,75 +1,20 @@
-// Ordinary runtime tests receive config after load-time roster migration.
-// Keep raw-roster contract tests explicitly unmocked instead of reintroducing a production fallback.
 import { vi } from "vitest";
 import { resolveSqliteTargetFromSessionStorePath } from "../src/config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-
-function materializeRoster(cfg: OpenClawConfig): OpenClawConfig {
-  const agents = cfg.agents ?? {};
-  const rawEntries = agents.entries;
-  let roster: Array<{ id: string; default?: boolean } & Record<string, unknown>>;
-  if (rawEntries !== undefined) {
-    if (
-      !rawEntries ||
-      typeof rawEntries !== "object" ||
-      Array.isArray(rawEntries) ||
-      Object.values(rawEntries).some(
-        (entry) => !entry || typeof entry !== "object" || Array.isArray(entry),
-      )
-    ) {
-      return cfg;
-    }
-    roster = Object.entries(rawEntries).map(([id, entry]) => ({ id, ...entry }));
-  } else if (agents.list !== undefined) {
-    if (
-      !Array.isArray(agents.list) ||
-      agents.list.some(
-        (entry) =>
-          !entry ||
-          typeof entry !== "object" ||
-          Array.isArray(entry) ||
-          typeof entry.id !== "string",
-      )
-    ) {
-      return cfg;
-    }
-    roster = agents.list.map((entry) => ({ ...entry }));
-  } else {
-    roster = [];
-  }
-
-  if (roster.length === 0) {
-    return { ...cfg, agents: { ...agents, entries: { main: { default: true } } } };
-  }
-  const defaultId = roster.find((entry) => entry.default === true)?.id ?? roster[0]!.id;
-  const entries = Object.fromEntries(
-    roster.map((entry) => {
-      const { id, ...rest } = entry;
-      const next = { ...rest };
-      if (id === defaultId) {
-        next.default = true;
-      } else {
-        delete next.default;
-      }
-      return [id, next];
-    }),
-  );
-  const { list: _legacyList, ...rest } = agents;
-  return { ...cfg, agents: { ...rest, entries } };
-}
+import { materializeTestAgentRoster } from "./agent-roster-fixture.js";
 
 vi.mock("../src/agents/agent-scope-config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/agents/agent-scope-config.js")>();
 
   return {
     ...actual,
-    listAgentIds: (cfg: OpenClawConfig) => actual.listAgentIds(materializeRoster(cfg)),
+    listAgentIds: (cfg: OpenClawConfig) => actual.listAgentIds(materializeTestAgentRoster(cfg)),
     resolveDefaultAgentId: (cfg: OpenClawConfig) =>
-      actual.resolveDefaultAgentId(materializeRoster(cfg)),
+      actual.resolveDefaultAgentId(materializeTestAgentRoster(cfg)),
     resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId: string, env?: NodeJS.ProcessEnv) =>
-      actual.resolveAgentWorkspaceDir(materializeRoster(cfg), agentId, env),
+      actual.resolveAgentWorkspaceDir(materializeTestAgentRoster(cfg), agentId, env),
     resolveDefaultAgentDir: (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) =>
-      actual.resolveDefaultAgentDir(materializeRoster(cfg), env),
+      actual.resolveDefaultAgentDir(materializeTestAgentRoster(cfg), env),
   };
 });
 

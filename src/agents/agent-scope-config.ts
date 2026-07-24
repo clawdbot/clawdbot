@@ -16,10 +16,26 @@ import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
 type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
+type AgentRosterTestConfigAdapter = (cfg: OpenClawConfig) => OpenClawConfig;
+let agentRosterTestConfigAdapter: AgentRosterTestConfigAdapter | undefined;
 export type ListedAgentEntry = {
   entry: AgentEntry;
   source: { kind: "entries"; key: string } | { kind: "list"; index: number };
 };
+
+/** Installs fixture-only load-time roster materialization without mocking this hot module. */
+export function setAgentRosterTestConfigAdapter(
+  adapter: AgentRosterTestConfigAdapter | undefined,
+): void {
+  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
+    throw new Error("Agent roster test config adapter is only available during tests.");
+  }
+  agentRosterTestConfigAdapter = adapter;
+}
+
+function adaptAgentRosterConfigForTest(cfg: OpenClawConfig): OpenClawConfig {
+  return agentRosterTestConfigAdapter?.(cfg) ?? cfg;
+}
 
 /** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
@@ -121,7 +137,7 @@ export function hasAgentRosterProperty(raw: unknown): boolean {
 
 /** Lists unique configured agent ids. */
 export function listAgentIds(cfg: OpenClawConfig): string[] {
-  const agents = listAgentEntries(cfg);
+  const agents = listAgentEntries(adaptAgentRosterConfigForTest(cfg));
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const entry of agents) {
@@ -137,7 +153,7 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
 
 /** Resolves the sole configured default agent id. */
 export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
-  const agents = listAgentEntries(cfg);
+  const agents = listAgentEntries(adaptAgentRosterConfigForTest(cfg));
   if (agents.length === 0) {
     throw new Error("No agents configured. Run `openclaw onboard` or `openclaw agents add` first.");
   }
@@ -257,13 +273,14 @@ export function resolveAgentWorkspaceDir(
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
+  const effectiveCfg = adaptAgentRosterConfigForTest(cfg);
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
+  const configured = resolveAgentConfig(effectiveCfg, id)?.workspace?.trim();
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }
-  const defaultAgentId = resolveDefaultAgentId(cfg);
-  const fallback = cfg.agents?.defaults?.workspace?.trim();
+  const defaultAgentId = resolveDefaultAgentId(effectiveCfg);
+  const fallback = effectiveCfg.agents?.defaults?.workspace?.trim();
   if (id === defaultAgentId) {
     if (fallback) {
       return stripNullBytes(resolveUserPath(fallback, env));
@@ -299,5 +316,6 @@ export function resolveDefaultAgentDir(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return resolveAgentDir(cfg, resolveDefaultAgentId(cfg), env);
+  const effectiveCfg = adaptAgentRosterConfigForTest(cfg);
+  return resolveAgentDir(effectiveCfg, resolveDefaultAgentId(effectiveCfg), env);
 }

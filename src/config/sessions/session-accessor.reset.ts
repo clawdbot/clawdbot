@@ -1,4 +1,8 @@
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
   cloneSessionEntries,
@@ -30,6 +34,28 @@ type SessionEntryRetirement = {
   entry: SessionEntry;
   key: string;
 };
+
+export class SessionInitializationAgentScopeMismatchError extends Error {
+  readonly code = "SESSION_INITIALIZATION_AGENT_SCOPE_MISMATCH";
+
+  constructor(
+    readonly agentId: string,
+    readonly sessionKeyAgentId: string,
+  ) {
+    super(
+      `Session initialization agent scope mismatch: explicit agent "${agentId}" does not match session key agent "${sessionKeyAgentId}".`,
+    );
+    this.name = "SessionInitializationAgentScopeMismatchError";
+  }
+}
+
+function assertSessionInitializationAgentScope(agentId: string, sessionKey: string): void {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (sessionKeyAgentId && normalizeAgentId(sessionKeyAgentId) !== normalizedAgentId) {
+    throw new SessionInitializationAgentScopeMismatchError(normalizedAgentId, sessionKeyAgentId);
+  }
+}
 
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../../gateway/session-archive.runtime.js"),
@@ -70,6 +96,7 @@ export function loadReplySessionInitializationSnapshot(params: {
   storePath: string;
   sessionKey: string;
 }): ReplySessionInitializationSnapshot {
+  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
   const storePath = resolveSessionStorePathForScope(params);
   const store = Object.fromEntries(
     listSessionEntriesReadOnly({ agentId: params.agentId, storePath }).map(
@@ -120,6 +147,7 @@ export async function commitReplySessionInitialization(params: {
   snapshotEntry?: SessionEntry;
   storePath: string;
 }): Promise<ReplySessionInitializationCommitResult> {
+  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
   const storePath = resolveSessionStorePathForScope({
     sessionKey: params.sessionKey,
     storePath: params.storePath,

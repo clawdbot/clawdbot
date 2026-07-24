@@ -129,7 +129,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
       "tools.fs.workspaceOnly=false",
       "agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets=true",
       "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true",
-      'agents.list[id="worker"].sandbox.docker.dangerouslyAllowExternalBindSources=true',
+      "agents.list.0.sandbox.docker.dangerouslyAllowExternalBindSources=true",
     ]);
   });
 
@@ -147,7 +147,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     ).toContain("security.audit.suppressions configured (1)");
   });
 
-  it("uses stable agent ids for per-agent dangerous sandbox flags", () => {
+  it("uses legacy list indices for list-shaped dangerous sandbox flags", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
         asConfig({
@@ -168,9 +168,7 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
           },
         }),
       ),
-    ).toContain(
-      'agents.list[id="worker"].sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true',
-    );
+    ).toContain("agents.list.0.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
 
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(
@@ -192,8 +190,26 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
           },
         }),
       ),
-    ).toContain(
-      'agents.list[id="worker"].sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true',
-    );
+    ).toContain("agents.list.1.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
+  });
+
+  it("uses keyed roster paths for entries-shaped dangerous sandbox flags", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
+        asConfig({
+          agents: {
+            entries: {
+              worker: {
+                sandbox: {
+                  docker: {
+                    dangerouslyAllowContainerNamespaceJoin: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ),
+    ).toContain("agents.entries.worker.sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true");
   });
 });
