@@ -8,8 +8,7 @@ scenario:
     primary:
       - automation.isolated-cron-execution
     secondary:
-      - scheduling.cron
-      - agents.tool-fs-write
+      - agent-runtime.tool-fs-write
   gatewayConfigPatch:
     commands:
       ownerAllowFrom:

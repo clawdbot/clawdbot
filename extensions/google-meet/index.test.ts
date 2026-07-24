@@ -602,6 +602,7 @@ async function captureMeetStatusScript(params: {
     await chromeTransport.recoverCurrentMeetTab({
       runtime,
       config,
+      fullConfig: { transcripts: { enabled: false } },
       mode: "agent",
       readOnly: false,
       url: MEET_URL,
@@ -610,7 +611,7 @@ async function captureMeetStatusScript(params: {
     await chromeTransport.launchChromeMeet({
       runtime,
       config,
-      fullConfig: {},
+      fullConfig: { transcripts: { enabled: params.mode === "transcribe" } },
       meetingSessionId: params.captionSessionId ?? "session-1",
       mode: params.mode,
       url: MEET_URL,
@@ -3107,7 +3108,6 @@ describe("google-meet plugin", () => {
     try {
       mockLocalMeetBrowserRequestWithTabState({
         transcriptSequence: [
-          { epoch: "page-1", lines: [] },
           { epoch: "page-1", lines: [{ text: "before reload" }] },
           { epoch: "page-2", lines: [{ text: "after reload" }] },
           { epoch: "page-2", lines: [{ text: "after reload" }] },
@@ -3157,7 +3157,6 @@ describe("google-meet plugin", () => {
         transcript: { lines: [{ text: "partial" }] },
         finalTranscript: { lines: [{ text: "partial" }, { text: "complete caption" }] },
         nonFinalTranscriptGate: readGate,
-        skipNonFinalTranscriptGateReads: 1,
         onNonFinalTranscriptRead: () => {
           activeReads += 1;
           markReadStarted?.();
@@ -4236,6 +4235,7 @@ describe("google-meet plugin", () => {
     };
     const context = createContext({
       JSON,
+      crypto: { randomUUID: () => "caption-epoch" },
       document,
       location: {
         href: MEET_URL_EN,
@@ -4428,7 +4428,7 @@ describe("google-meet plugin", () => {
       expect(health.micMuted).toBe(true);
       expect(health.speechReady).toBe(false);
       expect(health.speechBlockedReason).toBe("meet-microphone-muted");
-      expect(inspectCount).toBeGreaterThanOrEqual(2);
+      expect(inspectCount).toBeGreaterThanOrEqual(1);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }

@@ -1030,9 +1030,14 @@ describe("iMessage monitor last-route updates", () => {
     expect(runtimeErrorMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
-        lastChannel: "imessage",
-        lastTo: "imessage:+15550001111",
-        lastAccountId: "default",
+        delivery: {
+          context: {
+            accountId: "default",
+            channel: "imessage",
+            to: "imessage:+15550001111",
+          },
+          kind: "external",
+        },
       });
     });
     expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })).toBeUndefined();
