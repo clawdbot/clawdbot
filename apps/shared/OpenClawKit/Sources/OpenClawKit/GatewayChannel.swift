@@ -47,11 +47,34 @@ public struct WebSocketTaskBox: @unchecked Sendable {
     }
 
     public func sendPing() async throws {
+        // URLSessionWebSocketTask.sendPing's pong handler can fire MORE THAN ONCE — e.g. a ping in
+        // flight when the task is cancelled or errors delivers both the pong/error and a cancellation
+        // callback. Resuming the checked continuation twice traps (EXC_BREAKPOINT). This bites during
+        // any reconnect churn (backgrounding, gateway restart, a flapping gateway). Guard so only the
+        // FIRST invocation resumes; drop the rest.
+        let resumeGuard = PingResumeGuard()
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.task.sendPing { error in
+                guard resumeGuard.claim() else { return }
                 ThrowingContinuationSupport.resumeVoid(continuation, error: error)
             }
         }
+    }
+}
+
+/// One-shot guard so a completion handler that fires more than once resumes its continuation exactly
+/// once. Reference type + lock so it's safe to capture in an `@Sendable` completion handler.
+private final class PingResumeGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    /// Returns `true` for the first caller only; `false` for every subsequent call.
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
     }
 }
 
