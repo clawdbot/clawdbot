@@ -2042,6 +2042,130 @@ openclaw-chat-page {
   min-width: 0;
 }
 
+/* Drag-to-resize composer handle: a thin bar that floats slightly ABOVE the
+   input's top edge (small gap). Absolutely positioned so it adds ZERO height to
+   the text box. The grip is invisible at rest and fades in on hover/focus; the
+   textarea height is driven directly from JS (see composer-height.ts). */
+composer-resize-handle {
+  position: absolute;
+  top: -9px;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 14px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+/* Enlarged, invisible hit zone (esp. for touch). */
+composer-resize-handle::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -4px;
+  bottom: -4px;
+}
+
+.agent-chat__composer-grip {
+  width: 44px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--border) 80%, var(--muted));
+  opacity: 0;
+  transition:
+    opacity 120ms ease-out,
+    background 120ms ease-out,
+    width 120ms ease-out;
+}
+
+.agent-chat__input:hover composer-resize-handle .agent-chat__composer-grip,
+composer-resize-handle:hover .agent-chat__composer-grip,
+composer-resize-handle:focus-visible .agent-chat__composer-grip {
+  opacity: 1;
+}
+
+composer-resize-handle:hover .agent-chat__composer-grip {
+  width: 56px;
+  background: var(--muted);
+}
+
+composer-resize-handle:focus-visible {
+  outline: none;
+}
+
+composer-resize-handle:focus-visible .agent-chat__composer-grip,
+composer-resize-handle.dragging .agent-chat__composer-grip {
+  width: 56px;
+  opacity: 1;
+  background: var(--accent);
+}
+
+/* Real focus indicator on the visible grip (not just a color change), so the
+   focused state is perceivable under high-contrast / color-vision deficiency. */
+composer-resize-handle:focus-visible .agent-chat__composer-grip {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* Reset hint: anchored above the handle's top edge, zero layout height.
+   Hidden in auto mode; in manual mode it shares the grip's active state. */
+.agent-chat__composer-reset-hint {
+  position: absolute;
+  top: -2px;
+  left: 50%;
+  transform: translate(-50%, -100%);
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 5;
+  transition: opacity 150ms ease-out;
+}
+
+composer-resize-handle.manual:hover .agent-chat__composer-reset-hint,
+composer-resize-handle.manual:focus-visible .agent-chat__composer-reset-hint,
+composer-resize-handle.manual.dragging .agent-chat__composer-reset-hint {
+  opacity: 1;
+}
+
+/* Opt-in height animation: applied only for reset / keyboard nudges (the handle
+   toggles this class). Live drag and typing autosize stay instant (1:1). */
+.agent-chat__composer-combobox > :is(textarea, input).composer-animate-height {
+  transition: height 160ms ease-out;
+}
+
+/* Respect reduced-motion: drop the grip/hint fades and the height animation. */
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__composer-grip,
+  .agent-chat__composer-reset-hint,
+  .agent-chat__composer-combobox > :is(textarea, input).composer-animate-height {
+    transition: none;
+  }
+}
+
+/* Larger touch target on coarse pointers. */
+@media (hover: none) and (pointer: coarse) {
+  composer-resize-handle {
+    height: 18px;
+  }
+  composer-resize-handle::before {
+    top: -8px;
+    bottom: -8px;
+  }
+}
+
 .agent-chat__sr-only {
   position: absolute;
   width: 1px;
@@ -2057,7 +2181,7 @@ openclaw-chat-page {
 .agent-chat__composer-combobox > :is(textarea, input) {
   width: 100%;
   min-height: 36px;
-  max-height: calc(7em + 24px);
+  max-height: 55vh;
   resize: none;
   padding: var(--chat-box-inset);
   padding-left: calc(var(--chat-box-inset) - 4px);
@@ -3114,7 +3238,7 @@ openclaw-chat-page {
 
 @media (min-width: 1600px) {
   .agent-chat__composer-combobox > :is(textarea, input) {
-    max-height: calc(7em + 12px);
+    max-height: 55vh;
   }
 
   .agent-chat__composer-footer {

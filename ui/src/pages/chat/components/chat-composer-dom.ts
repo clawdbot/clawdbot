@@ -1,3 +1,5 @@
+import { applyComposerTextareaHeight } from "../composer-height.ts";
+
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "a[href]",
   "button",
@@ -28,17 +30,16 @@ function updateTextareaOverflow(el: HTMLTextAreaElement) {
 }
 
 export function adjustTextareaHeight(el: HTMLTextAreaElement) {
-  // Hide the browser's scrollbar while measuring; restore it only when the
-  // final CSS-constrained height actually clips the draft.
-  el.style.overflowY = "hidden";
-  el.style.height = "auto";
-  // The owning surface declares its cap in CSS. Retain the historical fallback
-  // for detached/test controls whose computed max-height is not a pixel value.
-  const computedMaxHeight = getComputedStyle(el).maxHeight.trim();
-  const pixelMaxHeight = /^(\d+(?:\.\d+)?)px$/u.exec(computedMaxHeight);
-  const maxHeight = pixelMaxHeight ? Number(pixelMaxHeight[1]) : 150;
-  el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
-  updateTextareaOverflow(el);
+  // Honor the global drag-to-resize floor only for the primary composer (the one
+  // that renders the resize handle). Suggestion/secondary composers omit the
+  // handle, so they autosize normally and a manual height never leaks into them.
+  // applyComposerTextareaHeight already manages overflowY (auto/hidden) and the
+  // max-height cap (dynamic viewport ratio, 150px fallback), subsuming the prior
+  // inline autosize + updateTextareaOverflow path.
+  const hasHandle = Boolean(
+    el.closest(".agent-chat__input")?.querySelector("composer-resize-handle"),
+  );
+  applyComposerTextareaHeight(el, hasHandle ? undefined : null);
 }
 
 export function observeTextareaOverflow(el: HTMLTextAreaElement) {

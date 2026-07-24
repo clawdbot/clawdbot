@@ -161,6 +161,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             class="agent-chat__input ${props.offline ? "agent-chat__input--offline" : ""}"
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
           >
+            ${props.suggestionComposer
+              ? nothing
+              : html`<composer-resize-handle></composer-resize-handle>`}
             ${props.offline
               ? html`<div class="agent-chat__offline-hint" role="status" aria-live="polite">
                   ${props.queuedOutboxCount
