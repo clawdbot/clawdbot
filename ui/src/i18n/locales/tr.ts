@@ -620,7 +620,7 @@ export const tr: TranslationMap = {
     filters: "Filtreler",
     createdBy: "{name} tarafından oluşturuldu",
     archivedBy: "{name} tarafından arşivlendi",
-    filterByCreator: "Oluşturana göre filtrele",
+    people: "Kişiler",
     allCreators: "Tüm kişiler",
     filterControls: "Oturum filtreleri",
     sourceFilters: "Oturum kaynağı filtreleri",
@@ -1409,6 +1409,11 @@ export const tr: TranslationMap = {
     chatPrefs: {
       title: "Sohbet",
       hint: "Tarayıcıya özel yerel sohbet tercihleri.",
+      messageWidth: "Mesaj genişliği",
+      messageWidthHint:
+        "Ortalanmış konuşma dökümü için isteğe bağlı CSS genişliği; örneğin 960px, 82% veya min(1280px, 82%).",
+      messageWidthInvalid:
+        "960px, 82%, min(1280px, 82%) veya calc(100% - 2rem) gibi bir CSS genişliği girin.",
     },
     sidebarPrefs: {
       title: "Kenar Çubuğu",
@@ -1696,6 +1701,7 @@ export const tr: TranslationMap = {
     blockedAgentFilter: "aracı filtresi tarafından engellendi",
   },
   nav: {
+    account: "Hesap",
     back: "Geri",
     forward: "İleri",
     chat: "Sohbet",
@@ -3863,6 +3869,22 @@ export const tr: TranslationMap = {
       selected: "Üye",
       noPeople: "Eşleştirilmiş kişi bulunamadı.",
       readOnlyNotice: "Bu konu dizisinde yalnızca konu dizisinin sahibi ve üyeler işlem yapabilir.",
+    },
+    sessionSuggestions: {
+      suggest: "Öner",
+      suggestMessage: "Mesaj öner",
+      attachmentsUnsupported: "Metin önerisi göndermeden önce ekleri kaldırın.",
+      sendNow: "{author} adlı kişinin önerisini şimdi gönder",
+      queue: "{author} adlı kişinin önerisini sıraya al",
+      edit: "{author} adlı kişinin önerisini düzenle",
+      dismiss: "{author} adlı kişinin önerisini reddet",
+      typing: "{name} yazıyor…",
+      typingMany: "{names} yazıyor…",
+      state: {
+        pending: "Beklemede",
+        accepted: "Kabul edildi",
+        dismissed: "Reddedildi",
+      },
     },
     loadOlder: "Daha eskileri yükle",
     sessionHeader: {

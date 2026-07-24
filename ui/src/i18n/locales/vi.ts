@@ -620,7 +620,7 @@ export const vi: TranslationMap = {
     filters: "Bộ lọc",
     createdBy: "Được tạo bởi {name}",
     archivedBy: "Được lưu trữ bởi {name}",
-    filterByCreator: "Lọc theo người tạo",
+    people: "Mọi người",
     allCreators: "Tất cả mọi người",
     filterControls: "Bộ lọc phiên",
     sourceFilters: "Bộ lọc nguồn phiên",
@@ -1406,6 +1406,11 @@ export const vi: TranslationMap = {
     chatPrefs: {
       title: "Trò chuyện",
       hint: "Tùy chọn trò chuyện cục bộ trên trình duyệt.",
+      messageWidth: "Chiều rộng tin nhắn",
+      messageWidthHint:
+        "Chiều rộng CSS tùy chọn cho bản ghi hội thoại được căn giữa, chẳng hạn như 960px, 82% hoặc min(1280px, 82%).",
+      messageWidthInvalid:
+        "Nhập chiều rộng CSS như 960px, 82%, min(1280px, 82%) hoặc calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Thanh bên",
@@ -1694,6 +1699,7 @@ export const vi: TranslationMap = {
     blockedAgentFilter: "bị chặn bởi bộ lọc agent",
   },
   nav: {
+    account: "Tài khoản",
     back: "Quay lại",
     forward: "Tiến",
     chat: "Trò chuyện",
@@ -3841,6 +3847,22 @@ export const vi: TranslationMap = {
       selected: "Thành viên",
       noPeople: "Không tìm thấy người nào đã ghép nối.",
       readOnlyNotice: "Chỉ chủ sở hữu luồng và thành viên mới có thể thao tác trong luồng này.",
+    },
+    sessionSuggestions: {
+      suggest: "Đề xuất",
+      suggestMessage: "Đề xuất tin nhắn",
+      attachmentsUnsupported: "Xóa tệp đính kèm trước khi gửi đề xuất bằng văn bản.",
+      sendNow: "Gửi ngay đề xuất của {author}",
+      queue: "Xếp đề xuất của {author} vào hàng đợi",
+      edit: "Chỉnh sửa đề xuất của {author}",
+      dismiss: "Bỏ qua đề xuất của {author}",
+      typing: "{name} đang nhập…",
+      typingMany: "{names} đang nhập…",
+      state: {
+        pending: "Đang chờ",
+        accepted: "Đã chấp nhận",
+        dismissed: "Đã bỏ qua",
+      },
     },
     loadOlder: "Tải mục cũ hơn",
     sessionHeader: {

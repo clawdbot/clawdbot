@@ -622,7 +622,7 @@ export const ru: TranslationMap = {
     filters: "Фильтры",
     createdBy: "Создано {name}",
     archivedBy: "Архивировано пользователем {name}",
-    filterByCreator: "Фильтр по создателю",
+    people: "Люди",
     allCreators: "Все люди",
     filterControls: "Фильтры сессий",
     sourceFilters: "Фильтры источников сеансов",
@@ -1417,6 +1417,11 @@ export const ru: TranslationMap = {
     chatPrefs: {
       title: "Чат",
       hint: "Локальные настройки чата для этого браузера.",
+      messageWidth: "Ширина сообщения",
+      messageWidthHint:
+        "Необязательная ширина CSS для выровненной по центру переписки, например 960px, 82% или min(1280px, 82%).",
+      messageWidthInvalid:
+        "Введите ширину CSS, например 960px, 82%, min(1280px, 82%) или calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Боковая панель",
@@ -1707,6 +1712,7 @@ export const ru: TranslationMap = {
     blockedAgentFilter: "заблокировано фильтром агента",
   },
   nav: {
+    account: "Аккаунт",
     back: "Назад",
     forward: "Вперед",
     chat: "Чат",
@@ -3874,6 +3880,22 @@ export const ru: TranslationMap = {
       selected: "Участник",
       noPeople: "Связанные пользователи не найдены.",
       readOnlyNotice: "В этой ветке могут выполнять действия только её владелец и участники.",
+    },
+    sessionSuggestions: {
+      suggest: "Предлагать",
+      suggestMessage: "Предложить сообщение",
+      attachmentsUnsupported: "Удалите вложения перед отправкой текстового предложения.",
+      sendNow: "Отправить предложение от {author} сейчас",
+      queue: "Добавить предложение от {author} в очередь",
+      edit: "Изменить предложение от {author}",
+      dismiss: "Отклонить предложение от {author}",
+      typing: "{name} печатает…",
+      typingMany: "{names} печатают…",
+      state: {
+        pending: "Ожидает",
+        accepted: "Принято",
+        dismissed: "Отклонено",
+      },
     },
     loadOlder: "Загрузить более ранние",
     sessionHeader: {

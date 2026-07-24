@@ -624,7 +624,7 @@ export const nl: TranslationMap = {
     filters: "Filters",
     createdBy: "Gemaakt door {name}",
     archivedBy: "Gearchiveerd door {name}",
-    filterByCreator: "Filteren op maker",
+    people: "Mensen",
     allCreators: "Alle personen",
     filterControls: "Sessiefilters",
     sourceFilters: "Filters voor sessiebron",
@@ -1414,6 +1414,11 @@ export const nl: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Browserlokale chatvoorkeuren.",
+      messageWidth: "Berichtbreedte",
+      messageWidthHint:
+        "Optionele CSS-breedte voor het gecentreerde transcript, zoals 960px, 82% of min(1280px, 82%).",
+      messageWidthInvalid:
+        "Voer een CSS-breedte in, zoals 960px, 82%, min(1280px, 82%) of calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Zijbalk",
@@ -1701,6 +1706,7 @@ export const nl: TranslationMap = {
     blockedAgentFilter: "geblokkeerd door agentfilter",
   },
   nav: {
+    account: "Account",
     back: "Terug",
     forward: "Vooruit",
     chat: "Chat",
@@ -3864,6 +3870,22 @@ export const nl: TranslationMap = {
       noPeople: "Geen gekoppelde personen gevonden.",
       readOnlyNotice:
         "Alleen de eigenaar van de thread en leden kunnen acties uitvoeren in deze thread.",
+    },
+    sessionSuggestions: {
+      suggest: "Voorstellen",
+      suggestMessage: "Bericht voorstellen",
+      attachmentsUnsupported: "Verwijder bijlagen voordat je een tekstsuggestie indient.",
+      sendNow: "Suggestie van {author} nu verzenden",
+      queue: "Suggestie van {author} in de wachtrij zetten",
+      edit: "Suggestie van {author} bewerken",
+      dismiss: "Suggestie van {author} negeren",
+      typing: "{name} is aan het typen…",
+      typingMany: "{names} zijn aan het typen…",
+      state: {
+        pending: "In afwachting",
+        accepted: "Geaccepteerd",
+        dismissed: "Genegeerd",
+      },
     },
     loadOlder: "Oudere laden",
     sessionHeader: {
