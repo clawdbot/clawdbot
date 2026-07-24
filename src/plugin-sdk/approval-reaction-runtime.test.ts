@@ -150,8 +150,8 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
       nowMs: 1_000,
     });
 
-    expect(payload.text).toContain("Exec approval required\nID: exec-approval-123");
-    expect(payload.text).toContain("Pending command:\n```sh\ntouch /tmp/foo\n```");
+    expect(payload.text).toContain("**Exec approval required**\n**ID:** exec-approval-123");
+    expect(payload.text).toContain("**Pending command:**\n```sh\ntouch /tmp/foo\n```");
     expect(payload.text).toContain("React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny");
     expect(payload.text).toContain("Allow Once: /approve exec-approval-123 allow-once");
     expect(payload.text).toContain("Allow Always: /approve exec-approval-123 allow-always");

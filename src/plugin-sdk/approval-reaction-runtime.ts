@@ -305,7 +305,10 @@ function buildApprovalReactionPromptText(params: {
   const allowedDecisions = listDecisionActions(view.actions);
   const sections: string[] = [];
   if (view.approvalKind === "exec") {
-    const header = ["Exec approval required", `ID: ${view.approvalId}`];
+    // Bold headers and field labels (#85954). Channels that render markdown
+    // translate these into native styling — iMessage into attributed-body
+    // ranges — and channels that downgrade drop the markers cleanly.
+    const header = ["**Exec approval required**", `**ID:** ${view.approvalId}`];
     sections.push(header.join("\n"));
     const warningText = view.warningText?.trim();
     if (warningText) {
@@ -316,47 +319,49 @@ function buildApprovalReactionPromptText(params: {
       .filter(Boolean)
       .slice(0, 5);
     if (warningLines?.length) {
-      sections.push(["Command analysis:", ...warningLines.map((line) => `- ${line}`)].join("\n"));
+      sections.push(
+        ["**Command analysis:**", ...warningLines.map((line) => `- ${line}`)].join("\n"),
+      );
     }
-    sections.push(["Pending command:", formatFencedCodeBlock(view.commandText, "sh")].join("\n"));
+    sections.push(["**Pending command:**", formatFencedCodeBlock(view.commandText, "sh")].join("\n"));
     const info: string[] = [];
     if (view.cwd) {
-      info.push(`CWD: ${formatApprovalDisplayPath(sanitizeForPromptLiteral(view.cwd))}`);
+      info.push(`**CWD:** ${formatApprovalDisplayPath(sanitizeForPromptLiteral(view.cwd))}`);
     }
     if (view.host) {
-      info.push(`Host: ${view.host}`);
+      info.push(`**Host:** ${view.host}`);
     }
     if (view.nodeId) {
-      info.push(`Node: ${view.nodeId}`);
+      info.push(`**Node:** ${view.nodeId}`);
     }
     if (view.agentId) {
-      info.push(`Agent: ${view.agentId}`);
+      info.push(`**Agent:** ${view.agentId}`);
     }
     if (view.ask) {
-      info.push(`Ask: ${view.ask}`);
+      info.push(`**Ask:** ${view.ask}`);
     }
-    info.push(`Expires in: ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
-    info.push(`Full id: \`${view.approvalId}\``);
+    info.push(`**Expires in:** ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
+    info.push(`**Full id:** \`${view.approvalId}\``);
     sections.push(info.join("\n"));
   } else {
-    const header = ["Plugin approval required", `ID: ${view.approvalId}`];
+    const header = ["**Plugin approval required**", `**ID:** ${view.approvalId}`];
     sections.push(header.join("\n"));
-    const details = [`Title: ${view.title}`];
+    const details = [`**Title:** ${view.title}`];
     if (view.description) {
-      details.push(`Description: ${view.description}`);
+      details.push(`**Description:** ${view.description}`);
     }
-    details.push(`Severity: ${formatSeverity(view.severity)}`);
+    details.push(`**Severity:** ${formatSeverity(view.severity)}`);
     if (view.toolName) {
-      details.push(`Tool: ${view.toolName}`);
+      details.push(`**Tool:** ${view.toolName}`);
     }
     if (view.pluginId) {
-      details.push(`Plugin: ${view.pluginId}`);
+      details.push(`**Plugin:** ${view.pluginId}`);
     }
     if (view.agentId) {
-      details.push(`Agent: ${view.agentId}`);
+      details.push(`**Agent:** ${view.agentId}`);
     }
-    details.push(`Expires in: ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
-    details.push(`Full id: \`${view.approvalId}\``);
+    details.push(`**Expires in:** ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
+    details.push(`**Full id:** \`${view.approvalId}\``);
     sections.push(details.join("\n"));
   }
   if (params.reactionHint) {
