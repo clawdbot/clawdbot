@@ -420,6 +420,7 @@ function projectLegacyGatewayReadiness(gateway: ReadinessResult): CanonicalGatew
 
 export async function evaluateConfiguredGatewayReadiness(params: {
   config: OpenClawConfig;
+  canonicalEvaluationEnabled?: boolean;
   evaluateGateway: ReadinessChecker;
   evaluateRuntime: () => Promise<CanonicalReadinessResult>;
   failureMetadata?: Pick<
@@ -428,7 +429,10 @@ export async function evaluateConfiguredGatewayReadiness(params: {
   >;
   timeoutMs?: number;
 }): Promise<CanonicalGatewayReadinessResult> {
-  if (params.config.gateway?.readiness === undefined) {
+  if (
+    params.canonicalEvaluationEnabled !== true &&
+    params.config.gateway?.readiness === undefined
+  ) {
     return projectLegacyGatewayReadiness(await params.evaluateGateway());
   }
   return evaluateCanonicalGatewayReadiness(params);

@@ -1396,6 +1396,7 @@ export async function startGatewayServer(
     });
     return evaluateConfiguredGatewayReadiness({
       config: snapshot.config,
+      canonicalEvaluationEnabled: profileSelection !== undefined,
       evaluateGateway: getGatewayReadiness,
       evaluateRuntime: evaluateRuntimeReadiness,
       failureMetadata: profileSelection

@@ -687,4 +687,34 @@ describe("evaluateConfiguredGatewayReadiness", () => {
     expect(result.ready).toBe(false);
     expect(result.failures).toEqual(["ReadinessEvaluationFailed"]);
   });
+
+  it("allows a selected hosting profile to opt into canonical evaluation", async () => {
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: {},
+      canonicalEvaluationEnabled: true,
+      evaluateGateway: () => readySnapshot() as ReadinessResult,
+      evaluateRuntime: async () => {
+        throw new Error("profile runtime evaluation failed");
+      },
+      failureMetadata: {
+        profileContractVersion: 1,
+        profile: "container",
+        profileSource: "environment",
+        activation: {
+          runtimeId: "runtime-1",
+          incarnationId: "incarnation-1",
+          profile: "container",
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ready: false,
+      failures: ["ReadinessEvaluationFailed"],
+      profileContractVersion: 1,
+      profile: "container",
+      profileSource: "environment",
+      activation: { profile: "container" },
+    });
+  });
 });
