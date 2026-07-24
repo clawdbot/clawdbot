@@ -181,6 +181,7 @@ async function connectOverCdpPinnedTransport(
     const pendingMessages: object[] = [];
     let pendingCloseReason: string | undefined;
     let transportClosed = false;
+    let transportCloseScheduled = false;
     const notifyTransportClosed = (reason: string) => {
       if (transportClosed) {
         return;
@@ -191,6 +192,16 @@ async function connectOverCdpPinnedTransport(
         return;
       }
       pendingCloseReason = reason;
+    };
+    const scheduleTransportClosed = (reason: string) => {
+      if (transportClosed || transportCloseScheduled) {
+        return;
+      }
+      transportCloseScheduled = true;
+      setImmediate(() => {
+        transportCloseScheduled = false;
+        notifyTransportClosed(reason);
+      });
     };
     const closeTransportSocket = (reason = "CDP socket closed") => {
       notifyTransportClosed(reason);
@@ -261,10 +272,10 @@ async function connectOverCdpPinnedTransport(
       }
     });
     ws.on("close", () => {
-      notifyTransportClosed("CDP socket closed");
+      scheduleTransportClosed("CDP socket closed");
     });
     ws.on("error", (error) => {
-      notifyTransportClosed(formatErrorMessage(error));
+      scheduleTransportClosed(formatErrorMessage(error));
     });
     return await chromium.connectOverCDP(transport, { timeout: opts.timeout });
   } catch (error) {

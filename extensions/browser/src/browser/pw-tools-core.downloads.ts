@@ -69,12 +69,14 @@ function resolveImplicitDownloadRoot(): string {
 }
 
 /** Arms the next page file chooser and fills it with strict existing paths. */
-export async function armFileUploadViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  paths?: string[];
-  timeoutMs?: number;
-}): Promise<void> {
+export async function armFileUploadViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    paths?: string[];
+    timeoutMs?: number;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const key = opts.cdpUrl;
   const armId = bumpUploadArmId();
   pendingUploadClaims.set(key, armId);
@@ -115,7 +117,16 @@ export async function armFileUploadViaPlaywright(opts: {
           await dismissFileChooser(page);
           return;
         }
-        await fileChooser.setFiles(uploadPathsResult.paths);
+        await setFileChooserFilesViaPlaywright({
+          cdpUrl: opts.cdpUrl,
+          targetId: opts.targetId,
+          page,
+          fileChooser,
+          paths: uploadPathsResult.paths,
+          timeoutMs: timeout,
+          ssrfPolicy: opts.ssrfPolicy,
+          browserProxyMode: opts.browserProxyMode,
+        });
       })
       .catch(() => {
         // Ignore timeouts; the chooser may never appear.

@@ -73,7 +73,8 @@ vi.mock("openclaw/plugin-sdk/media-mime", () => ({
   detectMime,
 }));
 
-const { setInputFilesViaPlaywright } = await import("./pw-tools-core.interactions.js");
+const { setFileChooserFilesViaPlaywright, setInputFilesViaPlaywright } =
+  await import("./pw-tools-core.interactions.js");
 
 function seedSingleLocatorPage(): {
   setInputFiles: ReturnType<typeof vi.fn>;
@@ -93,6 +94,72 @@ function seedSingleLocatorPage(): {
   };
   return { setInputFiles, elementHandle };
 }
+
+describe("setFileChooserFilesViaPlaywright", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    page = {
+      url: vi.fn(() => "https://allowed.example/form"),
+    };
+    locator = null;
+    readFile.mockResolvedValue(Buffer.from("upload contents"));
+    stat.mockResolvedValue({ size: Buffer.byteLength("upload contents") });
+    detectMime.mockResolvedValue("text/plain");
+    resolveStrictExistingUploadPaths.mockResolvedValue({
+      ok: true,
+      paths: ["/private/tmp/openclaw/uploads/ok.txt"],
+    });
+  });
+
+  it("keeps chooser path handoff for unguarded local sessions", async () => {
+    const fileChooser = { setFiles: vi.fn(async () => {}) };
+
+    await setFileChooserFilesViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      page: page as never,
+      fileChooser: fileChooser as never,
+      paths: ["/tmp/openclaw/uploads/ok.txt"],
+      timeoutMs: 250,
+    });
+
+    expect(resolveStrictExistingUploadPaths).toHaveBeenCalledWith({
+      requestedPaths: ["/tmp/openclaw/uploads/ok.txt"],
+    });
+    expect(stat).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(fileChooser.setFiles).toHaveBeenCalledWith(["/private/tmp/openclaw/uploads/ok.txt"], {
+      timeout: 250,
+    });
+  });
+
+  it("converts guarded chooser uploads to payloads before Playwright path handoff", async () => {
+    const fileChooser = { setFiles: vi.fn(async () => {}) };
+
+    await setFileChooserFilesViaPlaywright({
+      cdpUrl: "https://browser.example/cdp",
+      targetId: "T1",
+      page: page as never,
+      fileChooser: fileChooser as never,
+      paths: ["/tmp/openclaw/uploads/ok.txt"],
+      timeoutMs: 250,
+      ssrfPolicy: {},
+    });
+
+    expect(stat).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
+    expect(readFile).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
+    expect(fileChooser.setFiles).toHaveBeenCalledWith(
+      [
+        {
+          name: "ok.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("upload contents"),
+        },
+      ],
+      { timeout: 250 },
+    );
+  });
+});
 
 describe("setInputFilesViaPlaywright", () => {
   beforeEach(() => {
@@ -197,7 +264,7 @@ describe("setInputFilesViaPlaywright", () => {
     expect(setInputFiles).not.toHaveBeenCalled();
   });
 
-  it("keeps assignment-triggered navigation inside the browser policy guard", async () => {
+  it("converts guarded loopback uploads to payloads inside the browser policy guard", async () => {
     const { setInputFiles } = seedSingleLocatorPage();
 
     await setInputFilesViaPlaywright({
@@ -208,6 +275,15 @@ describe("setInputFilesViaPlaywright", () => {
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
 
+    expect(stat).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
+    expect(readFile).toHaveBeenCalledWith("/private/tmp/openclaw/uploads/ok.txt");
+    expect(setInputFiles).toHaveBeenCalledWith([
+      {
+        name: "ok.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("upload contents"),
+      },
+    ]);
     expect(withPageNavigationRequestGuard).toHaveBeenCalledTimes(1);
     expect(setInputFiles).toHaveBeenCalledTimes(1);
     expect(assertPageNavigationCompletedSafely).toHaveBeenCalledTimes(1);

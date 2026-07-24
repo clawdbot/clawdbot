@@ -112,6 +112,7 @@ export function registerBrowserAgentActHookRoutes(
             targetId: tab.targetId,
             paths: resolvedPaths,
             timeoutMs: timeoutMs ?? undefined,
+            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
         }
         res.json({ ok: true });

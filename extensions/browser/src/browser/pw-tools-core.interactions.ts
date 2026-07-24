@@ -19,7 +19,6 @@ import {
   resolveActInteractionTimeoutMs,
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
-import { isLoopbackHost } from "./cdp.helpers.js";
 import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
@@ -114,14 +113,7 @@ function shouldUsePlaywrightFilePayloads(opts: {
   cdpUrl: string;
   ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
 }): boolean {
-  if (!opts.ssrfPolicy) {
-    return false;
-  }
-  try {
-    return !isLoopbackHost(new URL(opts.cdpUrl).hostname);
-  } catch {
-    return false;
-  }
+  return Boolean(opts.ssrfPolicy);
 }
 
 type NavigationObservablePage = Pick<Page, "url"> & {
@@ -1716,9 +1708,18 @@ export async function setFileChooserFilesViaPlaywright(
     timeoutMs: number;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
+  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+  if (!resolvedResult.ok) {
+    throw new Error(resolvedResult.error);
+  }
+  const resolvedPaths = resolvedResult.paths;
+  const resolvedFiles = shouldUsePlaywrightFilePayloads(opts)
+    ? await toPlaywrightFilePayloads(resolvedPaths)
+    : resolvedPaths;
+
   await awaitNavigationGuardedInteraction({
     action: async () => {
-      await opts.fileChooser.setFiles(opts.paths, { timeout: opts.timeoutMs });
+      await opts.fileChooser.setFiles(resolvedFiles, { timeout: opts.timeoutMs });
     },
     cdpUrl: opts.cdpUrl,
     page: opts.page,

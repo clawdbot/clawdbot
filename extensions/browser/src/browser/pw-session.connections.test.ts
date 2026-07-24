@@ -1,4 +1,5 @@
 // Browser tests cover pw session.connections plugin behavior.
+import { createServer } from "node:http";
 import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -304,6 +305,73 @@ describe("pw-session connection scoping", () => {
     }
   });
 
+  it("follows same-authority redirects in the pinned Playwright CDP transport", async () => {
+    const server = createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    const redirectedUpgradePaths: string[] = [];
+    wss.on("connection", (socket) => {
+      socket.addEventListener("message", (event) => {
+        const msg = JSON.parse(rawDataToString(event.data)) as { id?: number };
+        socket.send(JSON.stringify({ id: msg.id, result: { ok: true } }));
+      });
+    });
+    server.on("upgrade", (request, socket, head) => {
+      if (request.url === "/start") {
+        socket.write(
+          "HTTP/1.1 302 Found\r\nLocation: /devtools/browser/redirected\r\nConnection: close\r\n\r\n",
+        );
+        socket.destroy();
+        return;
+      }
+      redirectedUpgradePaths.push(request.url ?? "");
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test server did not expose a TCP port");
+    }
+    const cdpUrl = `ws://127.0.0.1:${address.port}/start`;
+    getChromeWebSocketEndpointSpy.mockResolvedValue({
+      url: cdpUrl,
+      lookup: ((_hostname: string, options: unknown, callback?: unknown) => {
+        const cb = typeof options === "function" ? options : callback;
+        if (typeof cb === "function") {
+          cb(null, "127.0.0.1", 4);
+        }
+      }) as never,
+    });
+    const browser = makeBrowser("A", "https://example.com");
+    connectOverCdpSpy.mockImplementationOnce((async (transportArg: unknown) => {
+      const transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
+      const message = new Promise<object>((resolve) => {
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onmessage property.
+        transport.onmessage = (value) => resolve(value);
+      });
+      transport.send({ id: 8, method: "Browser.getVersion" });
+      await expect(message).resolves.toStrictEqual({ id: 8, result: { ok: true } });
+      transport.close();
+      return browser.browser;
+    }) as never);
+
+    try {
+      await expect(listPagesViaPlaywright({ cdpUrl, ssrfPolicy: {} })).resolves.toEqual([
+        expect.objectContaining({ targetId: "A" }),
+      ]);
+      expect(redirectedUpgradePaths).toStrictEqual(["/devtools/browser/redirected"]);
+    } finally {
+      await new Promise<void>((resolve) => {
+        wss.close(() => {
+          server.close(() => resolve());
+        });
+      });
+    }
+  });
+
   it("closes the pinned Playwright transport on malformed CDP JSON", async () => {
     const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await new Promise<void>((resolve) => {
@@ -327,10 +395,70 @@ describe("pw-session connection scoping", () => {
     connectOverCdpSpy.mockImplementationOnce((async (transportArg: unknown) => {
       const transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
       const closed = new Promise<string | undefined>((resolve) => {
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onclose property.
         transport.onclose = (reason) => resolve(reason);
       });
       (await serverSocket).send("{not-json");
       await expect(closed).resolves.toBe("CDP socket closed");
+      return browser.browser;
+    }) as never);
+
+    try {
+      await expect(listPagesViaPlaywright({ cdpUrl, ssrfPolicy: {} })).resolves.toEqual([
+        expect.objectContaining({ targetId: "A" }),
+      ]);
+      expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("delivers queued CDP messages before reporting pinned transport closure", async () => {
+    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => {
+      server.once("listening", () => resolve());
+    });
+    const port = (server.address() as { port: number }).port;
+    const cdpUrl = `ws://127.0.0.1:${port}/devtools/browser/test`;
+    const serverSocket = new Promise<import("ws").WebSocket>((resolve) => {
+      server.on("connection", (socket) => resolve(socket));
+    });
+    getChromeWebSocketEndpointSpy.mockResolvedValue({
+      url: cdpUrl,
+      lookup: ((_hostname: string, options: unknown, callback?: unknown) => {
+        const cb = typeof options === "function" ? options : callback;
+        if (typeof cb === "function") {
+          cb(null, "127.0.0.1", 4);
+        }
+      }) as never,
+    });
+    const browser = makeBrowser("A", "https://example.com");
+    connectOverCdpSpy.mockImplementationOnce((async (transportArg: unknown) => {
+      const transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
+      const events: string[] = [];
+      const message = new Promise<void>((resolve) => {
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onmessage property.
+        transport.onmessage = () => {
+          events.push("message");
+          resolve();
+        };
+      });
+      const closed = new Promise<void>((resolve) => {
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onclose property.
+        transport.onclose = () => {
+          events.push("close");
+          resolve();
+        };
+      });
+      const socket = await serverSocket;
+      socket.send(JSON.stringify({ id: 1, result: { ok: true } }));
+      socket.close();
+
+      await message;
+      await closed;
+      expect(events).toStrictEqual(["message", "close"]);
       return browser.browser;
     }) as never);
 
@@ -369,6 +497,7 @@ describe("pw-session connection scoping", () => {
     connectOverCdpSpy.mockImplementationOnce((async (transportArg: unknown) => {
       const transport = transportArg as import("playwright-core").ConnectOverCDPTransport;
       const closed = new Promise<string | undefined>((resolve) => {
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onclose property.
         transport.onclose = (reason) => resolve(reason);
       });
       // oxlint-disable-next-line unicorn/prefer-add-event-listener -- Playwright's ConnectOverCDPTransport contract uses an onmessage property.
