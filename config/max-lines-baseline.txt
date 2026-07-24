@@ -487,7 +487,6 @@ src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
 src/agents/sessions/package-manager.ts
 src/agents/sessions/resource-loader.ts
-src/agents/sessions/session-manager.test.ts
 src/agents/sessions/settings-manager.ts
 src/agents/subagent-announce-delivery.test.ts
 src/agents/subagent-announce-delivery.ts
