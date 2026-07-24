@@ -76,7 +76,7 @@ function stripCompactionSourceEntryIds(messages: AgentMessage[]): AgentMessage[]
     const next = { ...record };
     delete next[COMPACTION_SOURCE_ENTRY_ID];
     changed = true;
-    return next as AgentMessage;
+    return next as unknown as AgentMessage;
   });
   return changed ? nextMessages : messages;
 }

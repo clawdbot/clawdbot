@@ -58,7 +58,9 @@ function makeMessages(count: number, size: number): AgentMessage[] {
 }
 
 function compareTimestampIds(left: AgentMessage["timestamp"], right: AgentMessage["timestamp"]) {
-  return left < right ? -1 : left > right ? 1 : 0;
+  const leftValue = left ?? 0;
+  const rightValue = right ?? 0;
+  return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
 }
 
 function makeAssistantToolCall(

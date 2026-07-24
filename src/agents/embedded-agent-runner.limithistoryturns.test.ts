@@ -265,8 +265,10 @@ describe("limitHistoryTurns", () => {
 
     const rebound = rebindCompactionBoundaryMessages(source, transformed);
 
-    expect((rebound[1] as Record<string, unknown>)[sourceId]).toBe("post-b");
-    expect((rebound[1] as Record<PropertyKey, unknown>)[retainedBoundary]).toBeUndefined();
+    expect((rebound[1] as unknown as Record<string, unknown>)[sourceId]).toBe("post-b");
+    expect(
+      (rebound[1] as unknown as Record<PropertyKey, unknown>)[retainedBoundary],
+    ).toBeUndefined();
     expect((rebound[0] as { retainedMessageCount?: number }).retainedMessageCount).toBe(0);
   });
 

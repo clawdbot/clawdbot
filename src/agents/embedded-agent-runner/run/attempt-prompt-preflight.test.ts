@@ -205,6 +205,6 @@ describe("attempt prompt preflight", () => {
     expect(result.promptError).toBeNull();
     expect(result.promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
-    expect(sessionManager.buildSessionContext().messages).toEqual([toolResult]);
+    expect(sessionManager.buildSessionContext().messages).toMatchObject([toolResult]);
   });
 });

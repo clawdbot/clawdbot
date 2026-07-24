@@ -54,7 +54,7 @@ function messageEntry(message: AgentMessage, index: number): SessionTreeEntry {
     type: "message",
     id: `entry-${index}`,
     parentId: index === 0 ? null : `entry-${index - 1}`,
-    timestamp: new Date(message.timestamp).toISOString(),
+    timestamp: new Date(message.timestamp ?? 0).toISOString(),
     message,
   };
 }

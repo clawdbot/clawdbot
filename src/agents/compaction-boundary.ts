@@ -8,7 +8,7 @@ type CompactionBoundaryMarkedMessage = AgentMessage & {
   [COMPACTION_RETAINED_BOUNDARY]?: unknown;
 };
 
-export type CompactionBoundary = {
+type CompactionBoundary = {
   latestSummaryIndex: number;
   latestSummaryTimestamp: number | null;
   maxSummaryTimestamp: number | null;
@@ -103,8 +103,9 @@ export function resolveCompactionBoundary(messages: AgentMessage[]): CompactionB
       ? null
       : Math.min(messages.length, latestSummaryIndex + 1);
   const retainedEndIndex = explicitRetainedIndexes
-    ? (explicitRetainedIndexes.at(-1) ?? retainedStartIndex) +
-      (explicitRetainedIndexes.length > 0 ? 1 : 0)
+    ? explicitRetainedIndexes.length === 0
+      ? retainedStartIndex
+      : (explicitRetainedIndexes.at(-1) as number) + 1
     : retainedStartIndex === null || retainedMessageCount === null
       ? null
       : Math.min(messages.length, retainedStartIndex + retainedMessageCount);

@@ -1244,12 +1244,12 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
         tokensBefore: 0,
         timestamp: 2_000,
         retainedMessageCount: 1,
-      } as AgentMessage),
+      } as unknown as AgentMessage),
       markRetained({
         role: "assistant",
         content: [{ type: "thinking", thinking: "old", thinkingSignature: "stale" }],
         timestamp: "not-a-timestamp",
-      } as AgentMessage),
+      } as unknown as AgentMessage),
     ];
 
     const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
