@@ -117,11 +117,41 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
   try {
     const document = JSON.parse(body) as {
       kind?: unknown;
+      changeBodies?: unknown;
       rootBody?: unknown;
       payload?: unknown;
       sequence?: unknown;
       generatedAt?: unknown;
     };
+    if (
+      document.kind === "official-external-plugin-catalog-changes-v1" &&
+      Array.isArray(document.changeBodies) &&
+      document.changeBodies.length > 0
+    ) {
+      const lastBody = document.changeBodies.at(-1);
+      if (typeof lastBody !== "string") {
+        return undefined;
+      }
+      const envelope = JSON.parse(lastBody) as { payload?: unknown };
+      if (typeof envelope.payload !== "string") {
+        return undefined;
+      }
+      const change = JSON.parse(decodeBase64Payload(envelope.payload)) as {
+        toSequence?: unknown;
+        generatedAt?: unknown;
+      };
+      if (!isOfficialExternalPluginCatalogSequence(change.toSequence)) {
+        return undefined;
+      }
+      return {
+        sequence: change.toSequence,
+        ...(typeof change.generatedAt === "string" &&
+        parseOfficialExternalPluginCatalogTimestamp(change.generatedAt) !== undefined
+          ? { generatedAt: change.generatedAt }
+          : {}),
+        payloadSha256: createHash("sha256").update(body).digest("hex"),
+      };
+    }
     const wireDocument =
       document.kind === "official-external-plugin-catalog-shards-v1" &&
       typeof document.rootBody === "string"

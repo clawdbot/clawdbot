@@ -741,6 +741,56 @@ async function parseHostedCatalogFeedBody(params: {
   const document = JSON.parse(params.body) as unknown;
   if (params.verification?.mode === "signed") {
     const {
+      applyVerifiedOfficialExternalPluginCatalogChangeBodies,
+      parseOfficialExternalPluginCatalogIncrementalSnapshot,
+    } = await import("./official-external-plugin-catalog-changes.js");
+    const incrementalSnapshot = parseOfficialExternalPluginCatalogIncrementalSnapshot(document);
+    if (incrementalSnapshot) {
+      const base = await parseHostedCatalogFeedBody({
+        ...params,
+        body: incrementalSnapshot.baseBody,
+        allowExpired: true,
+        allowMissingExpiry: true,
+      });
+      if (!base.trust) {
+        throw new Error("hosted catalog incremental base is not signed");
+      }
+      const applied = applyVerifiedOfficialExternalPluginCatalogChangeBodies({
+        feed: base.feed,
+        changeBodies: incrementalSnapshot.changeBodies,
+        trustedKeys: params.verification.keys,
+        threshold: params.verification.threshold,
+        expectedFeedId: params.expectedFeedId,
+      });
+      const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(applied.feed.generatedAt);
+      const expiresAt = normalizeOptionalString(applied.feed.expiresAt);
+      const expiresAtMs = expiresAt
+        ? parseOfficialExternalPluginCatalogTimestamp(expiresAt)
+        : undefined;
+      if (
+        generatedAtMs === undefined ||
+        expiresAtMs === undefined ||
+        expiresAtMs <= generatedAtMs
+      ) {
+        throw new Error("hosted catalog incremental result has an invalid validity window");
+      }
+      const expired = expiresAtMs <= params.now.getTime();
+      if (expired && params.allowExpired !== true) {
+        throw new Error(`hosted catalog signed feed expired at ${expiresAt}`);
+      }
+      return {
+        feed: enforceHostedCatalogFeedInstallAuthority(applied.feed),
+        trust: {
+          mode: "signed",
+          signedBy: applied.signedBy,
+          signatureCount: applied.signatureCount,
+          threshold: applied.threshold,
+          verifiedAt: params.verifiedAt,
+        },
+        ...(expired ? { expired: true } : {}),
+      };
+    }
+    const {
       OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
       OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
       verifyOfficialExternalPluginCatalogEnvelopePayload,
@@ -1208,6 +1258,212 @@ async function loadHostedCatalogShardBodies(params: {
   return bodies;
 }
 
+async function tryLoadHostedCatalogIncrementalRefresh(params: {
+  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
+  url: URL;
+  hostnameAllowlist: readonly string[];
+  expectedFeedId?: string;
+  verification: Extract<OfficialExternalPluginCatalogFeedVerification, { mode: "signed" }>;
+  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+  requireManifestInstallSourceRef: boolean;
+  fetchImpl?: FetchLike;
+  timeoutMs: number;
+  chunkTimeoutMs: number;
+  now: Date;
+  requireSnapshotWrite?: boolean;
+}): Promise<HostedOfficialExternalPluginCatalogLoadResult | null> {
+  if (!params.snapshotStore) {
+    return null;
+  }
+  const snapshot = await params.snapshotStore.read(params.url.href).catch(() => null);
+  if (!snapshot || snapshot.trust?.mode !== "signed") {
+    return null;
+  }
+  const current = await parseHostedCatalogFeedBody({
+    body: snapshot.body,
+    expectedFeedId: params.expectedFeedId,
+    verification: params.verification,
+    verifiedAt: snapshot.trust.verifiedAt,
+    allowLegacyBetaEnvelope: true,
+    now: params.now,
+    allowExpired: true,
+    allowMissingExpiry: true,
+  }).catch(() => null);
+  if (!current?.trust) {
+    return null;
+  }
+  const {
+    parseOfficialExternalPluginCatalogIncrementalSnapshot,
+    serializeOfficialExternalPluginCatalogIncrementalSnapshot,
+    verifyOfficialExternalPluginCatalogChangeEnvelopeBody,
+  } = await import("./official-external-plugin-catalog-changes.js");
+  const storedWrapper = parseOfficialExternalPluginCatalogIncrementalSnapshot(
+    JSON.parse(snapshot.body) as unknown,
+  );
+  const changesUrl = new URL(params.url.href);
+  changesUrl.pathname = `${changesUrl.pathname.replace(/\/$/u, "")}/changes`;
+  changesUrl.search = "";
+  changesUrl.hash = "";
+  const newBodies: string[] = [];
+  let cursor: string | null = null;
+  let downloadedBytes = 0;
+  const consumedCursors = new Set<string>();
+  let lastStatus = 200;
+  let lastVerification:
+    | ReturnType<typeof verifyOfficialExternalPluginCatalogChangeEnvelopeBody>
+    | undefined;
+  const { fetchWithSsrFGuard } = await import("../infra/net/fetch-guard.js");
+  for (let pageCount = 0; pageCount < 2048; pageCount += 1) {
+    const requestUrl = new URL(changesUrl.href);
+    if (cursor === null) {
+      requestUrl.searchParams.set("fromSequence", String(current.feed.sequence));
+      requestUrl.searchParams.set("limit", "500");
+    } else {
+      if (consumedCursors.has(cursor)) {
+        return null;
+      }
+      consumedCursors.add(cursor);
+      requestUrl.searchParams.set("cursor", cursor);
+    }
+    let response: Response | undefined;
+    let release: (() => Promise<void>) | undefined;
+    try {
+      const guarded = await fetchWithSsrFGuard({
+        url: requestUrl.href,
+        fetchImpl: params.fetchImpl,
+        init: {
+          method: "GET",
+          headers: { accept: DSSE_ENVELOPE_MEDIA_TYPE },
+        },
+        requireHttps: true,
+        maxRedirects: 2,
+        timeoutMs: params.timeoutMs,
+        policy: { hostnameAllowlist: [...params.hostnameAllowlist] },
+        auditContext: "official-external-plugin-catalog-changes",
+      });
+      response = guarded.response;
+      release = guarded.release;
+      if (new URL(guarded.finalUrl).origin !== params.url.origin) {
+        return null;
+      }
+      lastStatus = response.status;
+      if (response.status !== 200 && response.status !== 409) {
+        return null;
+      }
+      if (
+        response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !==
+        DSSE_ENVELOPE_MEDIA_TYPE
+      ) {
+        return null;
+      }
+      const body = await readHostedCatalogResponseText({
+        response,
+        maxBytes: DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_SIGNED_MAX_BYTES,
+        chunkTimeoutMs: params.chunkTimeoutMs,
+      });
+      downloadedBytes += Buffer.byteLength(body, "utf8");
+      if (downloadedBytes > 256 * 1024 * 1024) {
+        return null;
+      }
+      const verified = verifyOfficialExternalPluginCatalogChangeEnvelopeBody(body, {
+        trustedKeys: params.verification.keys,
+        threshold: params.verification.threshold,
+      });
+      lastVerification = verified;
+      if (
+        verified.payload.feedId !== current.feed.id ||
+        verified.payload.fromSequence !== current.feed.sequence
+      ) {
+        return null;
+      }
+      if ("resetRequired" in verified.payload) {
+        // The signed reset URL is never followed here: the configured root
+        // remains the authority. Cross-origin reset locations are ignored too.
+        return null;
+      }
+      if (response.status !== 200) {
+        return null;
+      }
+      newBodies.push(body);
+      cursor = verified.payload.nextCursor;
+      if (cursor === null) {
+        break;
+      }
+    } finally {
+      if (response?.bodyUsed !== true) {
+        await response?.body?.cancel().catch(() => undefined);
+      }
+      await release?.().catch(() => undefined);
+    }
+  }
+  if (cursor !== null || newBodies.length === 0 || !lastVerification) {
+    return null;
+  }
+  const existingBodies = storedWrapper?.changeBodies ?? [];
+  if (existingBodies.length + newBodies.length > 2048) {
+    return null;
+  }
+  const baseBody = storedWrapper?.baseBody ?? snapshot.body;
+  const snapshotBody = serializeOfficialExternalPluginCatalogIncrementalSnapshot({
+    baseBody,
+    changeBodies: [...existingBodies, ...newBodies],
+  });
+  if (Buffer.byteLength(snapshotBody, "utf8") > 256 * 1024 * 1024) {
+    return null;
+  }
+  const verifiedAt = params.now.toISOString();
+  const parsed = await parseHostedCatalogFeedBody({
+    body: snapshotBody,
+    expectedFeedId: params.expectedFeedId,
+    verification: params.verification,
+    verifiedAt,
+    now: params.now,
+  });
+  const entries = filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+    parseOfficialExternalPluginCatalogEntries(parsed.feed),
+    {
+      catalogConfig: params.catalogConfig,
+      requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
+    },
+  );
+  const metadata: HostedOfficialExternalPluginCatalogMetadata = {
+    url: params.url.href,
+    status: lastStatus,
+    checksum: sha256Hex(snapshotBody),
+  };
+  // A signed empty range is useful as a live freshness proof, but persisting it
+  // would change the stored bytes without advancing the accepted sequence.
+  if (parsed.feed.sequence !== current.feed.sequence) {
+    await params.snapshotStore
+      .write({
+        body: snapshotBody,
+        metadata,
+        savedAt: verifiedAt,
+        trust: parsed.trust,
+        monotonic: {
+          mode: "signed-feed",
+          sequence: parsed.feed.sequence,
+          generatedAt: parsed.feed.generatedAt,
+        },
+      })
+      .catch((error: unknown) => {
+        if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
+          throw error;
+        }
+        if (params.requireSnapshotWrite) {
+          throw new HostedCatalogSnapshotWriteError(error);
+        }
+      });
+  }
+  return {
+    source: "hosted",
+    entries: dedupeOfficialExternalPluginCatalogEntries(entries),
+    feed: parsed.feed,
+    metadata,
+    trust: parsed.trust,
+  };
+}
+
 async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   feedUrl?: string;
   feedProfile?: string;
@@ -1268,6 +1524,52 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       verification: source.verification,
       now: currentTime(),
     });
+  }
+  if (
+    source.verification?.mode === "signed" &&
+    !expectedSha256 &&
+    !normalizeOptionalString(params?.ifNoneMatch) &&
+    !normalizeOptionalString(params?.ifModifiedSince)
+  ) {
+    try {
+      const incremental = await tryLoadHostedCatalogIncrementalRefresh({
+        snapshotStore,
+        url,
+        hostnameAllowlist: source.hostnameAllowlist,
+        expectedFeedId: source.expectedFeedId,
+        verification: source.verification,
+        catalogConfig: params?.catalogConfig,
+        requireManifestInstallSourceRef,
+        fetchImpl: params?.fetchImpl,
+        timeoutMs: params?.timeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS,
+        chunkTimeoutMs:
+          params?.chunkTimeoutMs ??
+          DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
+        now: currentTime(),
+        requireSnapshotWrite: params?.requireSnapshotWrite,
+      });
+      if (incremental) {
+        return incremental;
+      }
+    } catch (error) {
+      if (error instanceof HostedCatalogSnapshotWriteError) {
+        throw error.originalError;
+      }
+      if (error instanceof HostedCatalogSignedFeedMonotonicityError) {
+        return await snapshotOrBundledFallbackResult({
+          error,
+          snapshotStore,
+          url: url.href,
+          catalogConfig: params?.catalogConfig,
+          requireManifestInstallSourceRef,
+          expectedFeedId: source.expectedFeedId,
+          verification: source.verification,
+          now: currentTime(),
+        });
+      }
+      // A missing, unavailable, or malformed changes route is compatible with
+      // older publishers. Continue with the existing full snapshot refresh.
+    }
   }
   const headers = new Headers();
   const ifNoneMatch = normalizeOptionalString(params?.ifNoneMatch);
