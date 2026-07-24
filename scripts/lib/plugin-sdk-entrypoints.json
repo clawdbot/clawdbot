@@ -69,6 +69,7 @@
   "ssrf-runtime",
   "ssrf-runtime-internal",
   "media-runtime",
+  "media-local-roots",
   "media-store",
   "media-mime",
   "embedding-providers",
