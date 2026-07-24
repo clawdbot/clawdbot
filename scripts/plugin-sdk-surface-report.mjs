@@ -161,13 +161,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      // +33: public numeric coercion, timer bound, and timestamp helpers.
       // +3: typed channel partial-delivery error, creator, and structural guard.
       // +1: closed attempt-terminal merge, normalization, and projection helper.
       // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
       // +1: canonical unknown-value to Error coercion.
       // +6: canonical session delivery normalization, access, and projection helpers.
-      4733,
+      4744,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -185,12 +184,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: plugin approval detail truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
       // +2: shipped Slack and Discord setup compatibility helpers.
-      // +29: public numeric coercion, timer bound, and timestamp helpers.
       // +2: channel partial-delivery error creator and structural guard.
       // +1: harness-native MCP App preview helper.
       // +1: canonical unknown-value to Error coercion.
       // +6: canonical session delivery normalization, access, and projection helpers.
-      2876,
+      2884,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
