@@ -83,6 +83,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
       path: "/tmp/openclaw.json",
       issues: [],
       config: {},
+      sourceConfig: {},
+      runtimeConfig: { agents: { entries: { main: { default: true } } } },
     })),
   };
 });
@@ -111,6 +113,9 @@ vi.mock("../commands/onboard-inference.js", async (importActual) => {
 });
 
 const runtime = { log: () => {}, error: () => {}, exit: () => {} } as never;
+const materializedMainRuntimeConfig: OpenClawConfig = {
+  agents: { entries: { main: { default: true } } },
+};
 const testCliRuntimeArtifactFingerprint = "test-cli-runtime-artifact";
 const testCodexRuntimeArtifact = {
   id: "codex-app-server",
@@ -386,6 +391,10 @@ function createConfigTransformHarness(
   };
 }
 
+function createPreRosterConfigTransformHarness() {
+  return createConfigTransformHarness({}, materializedMainRuntimeConfig);
+}
+
 describe("applySystemAgentModelSelection", () => {
   it("pins a verified credential without putting the profile suffix in model metadata", async () => {
     const result = await applySystemAgentModelSelection({
@@ -396,6 +405,7 @@ describe("applySystemAgentModelSelection", () => {
 
     expect(result.agents?.defaults?.model).toBe("openai/gpt-5.5@openai:setup-123");
     expect(result.agents?.defaults?.models).toBeUndefined();
+    expect(result.agents?.entries).toBeUndefined();
   });
 
   it("overrides higher-priority runtime metadata on an inheriting default agent", async () => {
@@ -1010,7 +1020,7 @@ describe("activateSetupInference", () => {
   it("reports an audit warning without turning a committed setup into a failure", async () => {
     mocks.appendAudit.mockRejectedValueOnce(new Error("audit directory is read-only"));
     const error = vi.fn();
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
 
     const result = await activateSetupInference({
       kind: "claude-cli",
@@ -1024,7 +1034,7 @@ describe("activateSetupInference", () => {
           hash: "setup-config-hash",
           config: {},
           sourceConfig: {},
-          runtimeConfig: {},
+          runtimeConfig: materializedMainRuntimeConfig,
         })) as never,
         runCliAgent: vi.fn(successfulRunner("claude-cli", "claude-opus-5")) as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
@@ -1045,7 +1055,7 @@ describe("activateSetupInference", () => {
   });
 
   it("lets an enclosing persistent operation own the setup audit", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
 
     const result = await activateSetupInference({
       kind: "claude-cli",
@@ -1133,7 +1143,7 @@ describe("activateSetupInference", () => {
   });
 
   it("rejects an unattested successful candidate before persisting its model", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const result = await activateSetupInference({
       kind: "claude-cli",
       surface: "gateway",
@@ -1158,7 +1168,7 @@ describe("activateSetupInference", () => {
     const config = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
     } satisfies OpenClawConfig;
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const result = await activateSetupInference({
       kind: "existing-model",
       surface: "gateway",
@@ -1180,7 +1190,7 @@ describe("activateSetupInference", () => {
   });
 
   it("keeps a committed success when temporary cleanup fails", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const runtimeLog = vi.fn();
     const result = await activateSetupInference({
       kind: "claude-cli",
@@ -1244,12 +1254,19 @@ describe("activateSetupInference", () => {
 
   it("reconciles a config write that committed before its writer threw", async () => {
     let committedConfig: OpenClawConfig | undefined;
-    const readConfigFileSnapshot = vi.fn(async () => ({
-      exists: true,
-      valid: true,
-      config: committedConfig ?? {},
-      runtimeConfig: committedConfig ?? {},
-    }));
+    const readConfigFileSnapshot = vi.fn(async () => {
+      const sourceConfig = committedConfig ?? {};
+      return {
+        exists: true,
+        valid: true,
+        config: sourceConfig,
+        sourceConfig,
+        runtimeConfig: {
+          ...sourceConfig,
+          agents: { ...sourceConfig.agents, entries: { main: { default: true } } },
+        },
+      };
+    });
     const transformConfig = vi.fn(
       async (params: {
         transform: (
@@ -1258,7 +1275,15 @@ describe("activateSetupInference", () => {
         ) => Promise<{ nextConfig: OpenClawConfig }>;
       }) => {
         committedConfig = (
-          await params.transform({}, { snapshot: { config: {}, runtimeConfig: {} } })
+          await params.transform(
+            {},
+            {
+              snapshot: {
+                config: materializedMainRuntimeConfig,
+                runtimeConfig: materializedMainRuntimeConfig,
+              },
+            },
+          )
         ).nextConfig;
         throw new Error("simulated post-write failure");
       },
@@ -1281,7 +1306,7 @@ describe("activateSetupInference", () => {
   });
 
   it("persists only the verified model before OpenClaw configures the rest", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
 
     const result = await activateSetupInference({
       kind: "claude-cli",
@@ -1740,7 +1765,7 @@ describe("activateSetupInference", () => {
   });
 
   it("returns an auth failure when the verified owner drifts during persistence", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const result = await activateSetupInference({
       kind: "openai-api-key",
       surface: "gateway",
@@ -1769,7 +1794,7 @@ describe("activateSetupInference", () => {
   });
 
   it("revalidates a stable CLI runtime owner at the config commit boundary", async () => {
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const resolveCliRuntimeOwnerFingerprint = vi.fn(async () => "test-runtime-owner");
 
     const result = await activateSetupInference({
@@ -1833,7 +1858,7 @@ describe("activateSetupInference", () => {
     if (!initialAuthFingerprint) {
       throw new Error("expected auth fingerprint");
     }
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
       params.onSuccessfulAuthBinding?.({
         ...successfulAgentHarnessBinding(params),
@@ -3760,7 +3785,7 @@ describe("activateSetupInference", () => {
 
   it("prefers usable Codex OAuth without registering a discovered API key", async () => {
     const readCodexCliActiveApiKey = vi.fn(() => null);
-    const configHarness = createConfigTransformHarness();
+    const configHarness = createPreRosterConfigTransformHarness();
     const runEmbeddedAgent = vi.fn(successfulRunner("openai", "gpt-5.6-sol"));
 
     const result = await activateSetupInference({
@@ -4818,7 +4843,12 @@ describe("activateSetupInference", () => {
       }) => {
         const transformed = await params.transform(
           {},
-          { snapshot: { config: {}, runtimeConfig: {} } },
+          {
+            snapshot: {
+              config: materializedMainRuntimeConfig,
+              runtimeConfig: materializedMainRuntimeConfig,
+            },
+          },
         );
         const record = transformed.nextConfig.plugins?.installs?.codex;
         if (record) {

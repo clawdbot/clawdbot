@@ -5,23 +5,25 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
-const AgentEntryConfigSchema = z
-  .unknown()
-  .superRefine((value, ctx) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return;
-    }
-    for (const key of Object.getOwnPropertyNames(value)) {
-      if (isBlockedObjectKey(key)) {
+const AgentEntryConfigSchema = z.preprocess(
+  (value, ctx) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const key of Object.getOwnPropertyNames(value)) {
+        if (!isBlockedObjectKey(key)) {
+          continue;
+        }
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: [key],
           message: "agent entries must not contain blocked object keys",
         });
+        return z.NEVER;
       }
     }
-  })
-  .pipe(AgentEntrySchema.omit({ id: true }));
+    return value;
+  },
+  AgentEntrySchema.omit({ id: true }),
+);
 
 export const AgentsSchema = z
   .object({

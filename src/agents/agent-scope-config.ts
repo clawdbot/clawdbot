@@ -8,7 +8,7 @@ import type {
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
@@ -122,6 +122,10 @@ export function hasAgentRosterProperty(raw: unknown): boolean {
 /** Lists unique configured agent ids. */
 export function listAgentIds(cfg: OpenClawConfig): string[] {
   const agents = listAgentEntries(cfg);
+  if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
+    // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
+    return [LEGACY_IMPLICIT_AGENT_ID];
+  }
   const seen = new Set<string>();
   const ids: string[] = [];
   for (const entry of agents) {
@@ -135,28 +139,31 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
   return ids;
 }
 
-/** Resolves the sole configured default agent id. */
+/** Resolves the configured default while preserving the shipped Plugin SDK legacy shape. */
 export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
+    // Runtime config loading materializes this entry. Keep the roster-property-absent
+    // case for shipped Plugin SDK callers that still pass a pre-roster config object.
+    if (!hasAgentRosterProperty(cfg)) {
+      return LEGACY_IMPLICIT_AGENT_ID;
+    }
     throw new Error("No agents configured. Run `openclaw onboard` or `openclaw agents add` first.");
   }
   const defaults = agents.filter((agent) => agent?.default === true);
-  if (defaults.length !== 1) {
-    throw new Error(
-      `Invalid agent roster: expected exactly one default=true entry, found ${defaults.length}. Run \`openclaw doctor --fix\`.`,
-    );
-  }
-  return normalizeAgentId(defaults[0]!.id);
+  // Runtime config loading canonicalizes zero/multiple markers before this helper is called.
+  // External SDK callers may still pass the shipped list shape, which chose the first candidate.
+  return normalizeAgentId((defaults[0] ?? agents[0])!.id);
 }
 
 /** Returns the configured default when diagnostics must tolerate an invalid raw roster. */
 export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefined {
-  try {
-    return resolveDefaultAgentId(cfg);
-  } catch {
+  const agents = listAgentEntries(cfg);
+  const defaults = agents.filter((agent) => agent?.default === true);
+  if (defaults.length !== 1) {
     return undefined;
   }
+  return normalizeAgentId(defaults[0]!.id);
 }
 
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {

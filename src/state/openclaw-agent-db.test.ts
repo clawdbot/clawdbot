@@ -31,7 +31,6 @@ import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.
 import {
   isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
-  resolveOpenClawRegisteredAgentDatabaseOwners,
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
@@ -1692,9 +1691,6 @@ describe("openclaw agent database", () => {
       const database = openOpenClawAgentDatabase({ agentId: "worker", env, path: realPath });
       unregisterOpenClawAgentDatabase({ agentId: "worker", env, path: database.path });
       registerOpenClawAgentDatabase({ agentId: "worker", env, path: aliasPath });
-
-      expect(resolveOpenClawRegisteredAgentDatabaseOwners(realPath, { env })).toEqual(["worker"]);
-      expect(resolveOpenClawRegisteredAgentDatabaseOwners(aliasPath, { env })).toEqual(["worker"]);
     },
   );
 

@@ -24,10 +24,7 @@ import {
   type SessionStoreTarget,
 } from "./targets-collision.js";
 
-export type {
-  SessionStoreTarget,
-  SessionStoreTargetCollisionDiagnostic,
-} from "./targets-collision.js";
+export type { SessionStoreTarget } from "./targets-collision.js";
 export { dedupeSessionStoreTargetsBySqliteTarget } from "./targets-collision.js";
 
 /** CLI/session-store target selection options. */

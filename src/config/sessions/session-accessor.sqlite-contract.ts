@@ -19,6 +19,7 @@ import type { SessionEntry } from "./types.js";
 export type SessionAccessScope = {
   agentId?: string;
   clone?: boolean;
+  /** Fixed-store ownership is explicit; omitted values use the storage resolver's legacy-main contract. */
   defaultAgentId?: string;
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;

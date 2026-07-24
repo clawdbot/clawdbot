@@ -175,8 +175,10 @@ function applySystemAgentModelSelectionWithModules(
   }
 
   const agentEntries = toAgentEntriesRecord(roster);
-  const { list: _legacyList, ...agentConfig } = nextConfig.agents;
-  nextConfig.agents = { ...agentConfig, entries: agentEntries };
+  if (writesAgent || params.agentRuntimeId) {
+    const { list: _legacyList, ...agentConfig } = nextConfig.agents;
+    nextConfig.agents = { ...agentConfig, entries: agentEntries };
+  }
   const agentEntryKey =
     roster.find((entry) => normalizeAgentId(entry.id) === agentId)?.id ?? agentId;
   let agent = agentEntries[agentEntryKey];

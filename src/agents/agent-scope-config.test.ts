@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listAgentEntriesWithSource,
+  listAgentIds,
   resolveAgentConfig,
   resolveDefaultAgentId,
   tryResolveDefaultAgentId,
@@ -11,15 +12,38 @@ import {
 vi.unmock("./agent-scope-config.js");
 
 describe("agent roster resolution", () => {
-  it("requires one explicit default", () => {
-    expect(() =>
-      resolveDefaultAgentId({ agents: { list: [{ id: "alpha" }, { id: "beta" }] } }),
-    ).toThrow("exactly one default=true");
+  it("preserves the Plugin SDK fallback only when the roster property is absent", () => {
+    expect(listAgentIds({})).toEqual(["main"]);
+    expect(listAgentIds({ agents: { entries: {} } })).toEqual([]);
+    expect(resolveDefaultAgentId({})).toBe("main");
+    expect(resolveDefaultAgentId({ agents: { defaults: { workspace: "/srv/main" } } })).toBe(
+      "main",
+    );
+    expect(() => resolveDefaultAgentId({ agents: { entries: {} } })).toThrow(
+      "No agents configured",
+    );
+    expect(() => resolveDefaultAgentId({ agents: { list: [] } })).toThrow("No agents configured");
+  });
+
+  it("preserves legacy first-entry selection while diagnostic lookup stays strict", () => {
+    const missingDefault = { agents: { list: [{ id: "alpha" }, { id: "beta" }] } };
+    expect(resolveDefaultAgentId(missingDefault)).toBe("alpha");
+    expect(tryResolveDefaultAgentId(missingDefault)).toBeUndefined();
     expect(
       resolveDefaultAgentId({
         agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
       }),
     ).toBe("beta");
+    const duplicateDefaults = {
+      agents: {
+        list: [
+          { id: "alpha", default: true },
+          { id: "beta", default: true },
+        ],
+      },
+    };
+    expect(resolveDefaultAgentId(duplicateDefaults)).toBe("alpha");
+    expect(tryResolveDefaultAgentId(duplicateDefaults)).toBeUndefined();
   });
 
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {

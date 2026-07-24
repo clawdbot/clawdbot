@@ -1333,11 +1333,15 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       const { diagnostics, store } = loadCombinedSessionStoreForGateway(cfg);
       expect(store["agent:main:main"]?.sessionId).toBe("s-main-unscoped");
       expect(store["agent:ops:main"]).toBeUndefined();
-      expect(diagnostics).toContainEqual(expect.stringContaining('ignored owner(s): "ops"'));
+      expect(diagnostics).toContainEqual(
+        expect.stringContaining(
+          'owner "main" selected by database-registry; suffixed owner(s): "ops"',
+        ),
+      );
     });
   });
 
-  test("fixed stores honor a registered owner over the configured default", async () => {
+  test("fixed stores preserve a registered suffix while the default keeps the unsuffixed target", async () => {
     await withStateDirEnv("openclaw-fixed-store-registered-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "ops.json");
       const cfg = {
@@ -1361,7 +1365,9 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(store["agent:ops:main"]?.sessionId).toBe("s-ops-registered");
       expect(store["agent:main:main"]).toBeUndefined();
       expect(diagnostics).toContainEqual(
-        expect.stringContaining('owner "ops" selected by database-registry'),
+        expect.stringContaining(
+          'owner "main" selected by configured-default; suffixed owner(s): "ops"',
+        ),
       );
     });
   });

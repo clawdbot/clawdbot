@@ -17,7 +17,7 @@ export type SessionStoreTarget = {
   storePath: string;
 };
 
-export type SessionStoreTargetCollisionDiagnostic = {
+type SessionStoreTargetCollisionDiagnostic = {
   message: string;
   sqlitePath: string;
   ownerAgentId?: string;
