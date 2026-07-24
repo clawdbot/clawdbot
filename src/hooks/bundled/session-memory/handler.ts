@@ -117,12 +117,17 @@ async function getRecentSqliteSessionContent(
   messageCount: number,
 ): Promise<string | null> {
   try {
+    const events = await loadTranscriptEvents({ ...scope });
+    const latestResetIndex = events.findLastIndex(
+      (event) =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        !Array.isArray(event) &&
+        (event as { type?: unknown }).type === "reset",
+    );
+    const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
     return getRecentSessionContentFromEvents(
-      selectVisibleTranscriptEvents(
-        await loadTranscriptEvents({
-          ...scope,
-        }),
-      ),
+      selectVisibleTranscriptEvents(retiredEvents),
       messageCount,
     );
   } catch {

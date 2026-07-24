@@ -290,8 +290,14 @@ function pruneMissingTranscriptEntries(params: {
     ) {
       continue;
     }
-    // Explicitly pending supervised sessions may not have written their first transcript row yet.
-    if (parseAgentSessionKey(key) && entry.initializationPending === true) {
+    const legacySessionFile = (entry as { sessionFile?: unknown }).sessionFile;
+    // Explicitly pending sessions and their shipped pre-flag shape may not have a first turn yet.
+    if (
+      parseAgentSessionKey(key) &&
+      (entry.initializationPending === true ||
+        (entry.sessionId === key &&
+          (typeof legacySessionFile !== "string" || !legacySessionFile.trim())))
+    ) {
       continue;
     }
     if (!entry?.sessionId) {

@@ -77,6 +77,22 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     throw params.initialAcquireSignal.reason;
   }
   const noOpLock = { release: async () => {} } as SessionLock;
+  let cleanupStarted = false;
+  let disposed = false;
+  let lifecycle = Promise.resolve();
+  const serializeLifecycle = async (run: () => Promise<void> | void): Promise<void> => {
+    const previous = lifecycle;
+    let release!: () => void;
+    lifecycle = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      await run();
+    } finally {
+      release();
+    }
+  };
   return {
     canAdvanceSessionEntryCache: () => false,
     publishOwnedSessionFileSnapshot: () => false,
@@ -86,14 +102,25 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     releaseHeldLockForAbort: async () => {},
     refreshAfterOwnedSessionWrite: () => {},
     withOwnedSessionFileWrite: (run) => run(),
-    reacquireAfterPrompt: async () => {
-      await params.reloadPromptReleasedSessionFile?.();
-    },
+    reacquireAfterPrompt: async () =>
+      await serializeLifecycle(async () => {
+        if (cleanupStarted || disposed) {
+          return;
+        }
+        await params.reloadPromptReleasedSessionFile?.();
+      }),
     waitForSessionEvents: async () => {},
     withSessionWriteLock: async (run) => await run(),
-    acquireForCleanup: async () => noOpLock,
+    acquireForCleanup: async () => {
+      cleanupStarted = true;
+      await serializeLifecycle(() => {});
+      return noOpLock;
+    },
     hasSessionTakeover: () => false,
-    dispose: async () => {},
+    dispose: async () => {
+      disposed = true;
+      await serializeLifecycle(() => {});
+    },
   };
 }
 
