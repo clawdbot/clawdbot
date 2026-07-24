@@ -156,13 +156,54 @@ Audit the current migration queue with `pnpm plugins:boundary-report`:
 | `--fail-on-eligible-compat`                             | Exit non-zero when a deprecated compat record's `removeAfter` date has passed. |
 | `--fail-on-unclassified-unused-reserved`                | Exit non-zero on unused reserved SDK shims.                                    |
 
-`pnpm plugins:boundary-report:ci` runs with all three fail flags. Each
-compatibility record has an explicit `removeAfter` date (not a vague "next
-major release") - the report groups deprecated records by that date, counts
-local code/doc references, surfaces cross-owner reserved SDK imports, and
-summarizes the private memory-host SDK bridge. Reserved SDK subpaths must have
-tracked owner usage; unused reserved exports should be removed from the public
-SDK.
+`pnpm plugins:boundary-report:ci` runs with all three fail flags. Deprecated
+records normally have an explicit `removeAfter` date rather than a vague "next
+major release". A record whose owner has not approved a date leaves
+`removeAfter` absent, appears as `no-date`, and is never eligible for removal.
+The report groups deprecated records by date, counts local code/doc references,
+surfaces cross-owner reserved SDK imports, and summarizes the private
+memory-host SDK bridge. Reserved SDK subpaths must have tracked owner usage;
+unused reserved exports should be removed from the public SDK.
+
+### Media legacy projection
+
+The `media-legacy-projection` compatibility record covers the old parallel
+media fields, payload builders, hook metadata aliases, and media template
+names. Its approved `removeAfter` date is **2026-10-01** (two release trains
+after the facts-first replacements shipped). Removal additionally requires a
+clean published-plugin artifact sweep at that time; migrate before the date.
+
+For channel ingress, replace singular/plural `MediaPath`, `MediaUrl`,
+`MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`,
+`MediaTranscribedIndexes`, `MediaWorkspaceDir`, and `MediaStaged` with ordered
+facts:
+
+```ts
+import { toInboundMediaFacts } from "openclaw/plugin-sdk/channel-inbound";
+
+const media = toInboundMediaFacts([
+  { path: saved.path, url: nativeUrl, contentType: saved.contentType, messageId },
+]);
+
+const ctx = finalizeInboundContext({ Body: caption, media });
+```
+
+Use `event.media` in `inbound_claim` and `message_received` hooks. If remote
+media is not locally staged, use `event.originalMedia` for identity/diagnostics
+and wait for `event.media`; `event.mediaStagingPending` distinguishes that
+state. Do not read the deprecated singular/plural properties from
+`event.metadata`.
+
+For CLI media models, replace `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`,
+and `{{MediaDir}}` with `{{AttachmentPath}}`, `{{AttachmentUrl}}`,
+`{{AttachmentContentType}}`, and `{{AttachmentDir}}`. Use
+`{{AttachmentIndex}}` when attachment position matters.
+
+For local media read policy, import `getAgentScopedMediaLocalRoots(...)` or
+`getAgentScopedMediaLocalRootsForSources(...)` from
+`openclaw/plugin-sdk/media-local-roots`. The
+`openclaw/plugin-sdk/agent-media-payload` facade and its
+`buildAgentMediaPayload(...)` projection are deprecated.
 
 ## How to migrate
 
@@ -944,18 +985,20 @@ apps own device capture/playback UX.
 | When                                        | What happens                                                                                                                              |
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Now**                                     | Warning-capable deprecated surfaces emit runtime warnings; repository guards reject deprecated SDK imports from core and bundled plugins. |
+| **Pending owner decision**                  | Date-less records remain deprecated and ineligible for removal until their owner publishes a `removeAfter` date.                          |
 | **Each compat record's `removeAfter` date** | That specific surface is eligible for removal; `pnpm plugins:boundary-report --fail-on-eligible-compat` fails CI once the date passes.    |
-| **Next major release**                      | Any surfaces still not migrated are removed; plugins still using them will fail.                                                          |
+| **Next major release**                      | Dated surfaces may be removed only after their `removeAfter` date; date-less records still require owner approval and a published date.   |
 
 The remaining public SDK subpaths below have registry-backed removal windows.
 The July 30 rows were removed after their early maintainer-authorized sweep:
 unused subpaths were deleted, earlier compatibility aliases were deleted, and
 bundled-only modules were demoted to private-local build mappings.
 
-| `removeAfter` | Tier                               | SDK subpaths                                                                                                                                                           |
-| ------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `2026-08-15`  | Earlier compatibility deprecations | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `inbound-reply-dispatch`, `matrix`, `text-runtime`, `zod` |
-| `2026-09-01`  | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                    |
+| `removeAfter` | Tier                               | SDK subpaths                                                                                                                                                                        |
+| ------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2026-08-15`  | Earlier compatibility deprecations | `agent-config-primitives`, `channel-logging`, `channel-secret-runtime`, `channel-streaming`, `group-access`, `inbound-reply-dispatch`, `matrix`, `text-runtime`, `zod`              |
+| `2026-09-01`  | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
+| `2026-10-01`  | Media legacy projection            | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |
 
 All core plugins have already migrated. External plugins should migrate
 before the next major release. Run `pnpm plugins:boundary-report` to see which

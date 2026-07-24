@@ -6,7 +6,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -102,7 +102,9 @@ export function preflightOpenClawDatabaseSchemas(options: {
   const sqlite = requireNodeSqlite();
   let stateDatabase: DatabaseSync | undefined;
   try {
-    stateDatabase = new sqlite.DatabaseSync(statePath, { readOnly: true });
+    stateDatabase = new sqlite.DatabaseSync(resolveNodeSqliteLocation(statePath), {
+      readOnly: true,
+    });
     stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const stateVersion = readSqliteUserVersion(stateDatabase);
     if (stateVersion > options.supportedVersions.state) {
@@ -135,7 +137,9 @@ export function preflightOpenClawDatabaseSchemas(options: {
       }
       let agentDatabase: DatabaseSync | undefined;
       try {
-        agentDatabase = new sqlite.DatabaseSync(agentPath, { readOnly: true });
+        agentDatabase = new sqlite.DatabaseSync(resolveNodeSqliteLocation(agentPath), {
+          readOnly: true,
+        });
         agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
         const agentVersion = readSqliteUserVersion(agentDatabase);
         if (agentVersion <= options.supportedVersions.agent) {

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   canRepairLegacyAuditEventsSchema,
@@ -152,7 +152,7 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
     return [];
   }
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname), { readOnly: true });
   try {
     const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
     const userVersion = readSqliteUserVersion(db);

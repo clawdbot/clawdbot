@@ -12,6 +12,7 @@ const STRUCTURED_MEDIA_KINDS = new Set<NonNullable<MediaFactInput["kind"]>>([
   "sticker",
   "unknown",
 ]);
+const MIME_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu;
 
 function normalizeOptionalText(value: string | null | undefined): string | undefined {
   const normalized = value?.trim();
@@ -70,13 +71,22 @@ export function normalizeStructuredMediaEntryForTranscript(
 ): MediaFactInput {
   const mediaPath = normalizeOptionalText(media.path);
   const mediaUrl = normalizeOptionalText(media.url);
+  const kind = normalizeStructuredMediaKind(media.kind);
+  const legacyKind = normalizeOptionalText(media.kind);
+  const messageId = normalizeOptionalText(media.messageId);
+  const workspaceDir = normalizeOptionalText(media.workspaceDir);
+  const contentType =
+    normalizeOptionalText(media.contentType) ??
+    (kind || !legacyKind || !MIME_TYPE_PATTERN.test(legacyKind) ? undefined : legacyKind) ??
+    mimeTypeFromFilePath(mediaPath ?? mediaUrl);
   return {
-    path: mediaPath,
-    url: mediaUrl,
-    contentType:
-      normalizeOptionalText(media.contentType) ?? mimeTypeFromFilePath(mediaPath ?? mediaUrl),
-    kind: normalizeStructuredMediaKind(media.kind),
-    workspaceDir: normalizeOptionalText(media.workspaceDir),
+    ...(mediaPath ? { path: mediaPath } : {}),
+    ...(mediaUrl ? { url: mediaUrl } : {}),
+    ...(contentType ? { contentType } : {}),
+    ...(kind ? { kind } : {}),
+    ...(media.transcribed === true ? { transcribed: true } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
     ...(media.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
   };
 }
@@ -84,14 +94,7 @@ export function normalizeStructuredMediaEntryForTranscript(
 export function shouldPersistStructuredMediaEntries(
   media: readonly PersistedUserTurnMediaInput[] | null | undefined,
 ): boolean {
-  return (media ?? []).some((entry) => {
-    const legacy = normalizeMediaEntryForTranscript(entry);
-    const structured = normalizeStructuredMediaEntryForTranscript(entry);
-    const structuredIdentity = structured.path ?? structured.url;
-    return (
-      structured.hydrationSuppressed === true ||
-      structuredIdentity !== legacy.path ||
-      Boolean(structured.url && structured.url !== legacy.path)
-    );
-  });
+  // PR 1 dual-writes canonical facts beside byte-stable legacy fields. PR 3
+  // removes this compatibility decision together with the legacy writer.
+  return Array.isArray(media) && media.length > 0;
 }

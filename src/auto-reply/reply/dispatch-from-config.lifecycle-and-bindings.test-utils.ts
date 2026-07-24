@@ -1532,8 +1532,20 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     const [event] = firstMockCall(hookMocks.runner.runMessageReceived, "message received hook") as
-      | [{ metadata?: Record<string, unknown> }]
+      | [
+          {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
+            metadata?: Record<string, unknown>;
+          },
+        ]
       | [];
+    expect(event?.media).toBeUndefined();
+    expect(event?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(event?.mediaStagingPending).toBe(true);
     expect(event?.metadata?.mediaPath).toBeUndefined();
     expect(event?.metadata?.mediaPaths).toBeUndefined();
     expect(event?.metadata?.mediaUrl).toBeUndefined();
@@ -1555,6 +1567,9 @@ describe("dispatchReplyFromConfig", () => {
           unknown,
           unknown,
           {
+            media?: unknown[];
+            originalMedia?: Array<Record<string, unknown>>;
+            mediaStagingPending?: boolean;
             metadata?: Record<string, unknown>;
           },
         ]
@@ -1563,6 +1578,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookCall?.[3]?.metadata?.mediaRemoteHost).toBe("user@gateway-host");
     expect(internalHookCall?.[3]?.metadata?.originalMediaPath).toBe(rawPath);
     expect(internalHookCall?.[3]?.metadata?.originalMediaPaths).toEqual([rawPath]);
+    expect(internalHookCall?.[3]?.media).toBeUndefined();
+    expect(internalHookCall?.[3]?.originalMedia).toEqual([
+      expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
+    ]);
+    expect(internalHookCall?.[3]?.mediaStagingPending).toBe(true);
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
     expect(ctx.media).toEqual([

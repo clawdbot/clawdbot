@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveGatewayLockDir } from "../config/paths.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "./node-sqlite.js";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
@@ -95,7 +95,7 @@ export function acquireDeviceIdentityCoordinator(params: {
   const coordinatorPath = resolveDeviceIdentityCoordinatorPath(params.databasePath, params.lockDir);
   ensurePrivateCoordinatorDirectory(path.dirname(coordinatorPath));
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(coordinatorPath);
+  const database = new DatabaseSync(resolveNodeSqliteLocation(coordinatorPath));
   try {
     const timeout = Math.max(0, Math.trunc(params.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS));
     database.exec(`PRAGMA busy_timeout = ${timeout}; BEGIN EXCLUSIVE;`);

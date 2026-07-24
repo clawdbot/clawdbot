@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   openOpenClawStateDatabase,
@@ -121,7 +121,7 @@ export async function loadCronJobsStoreWithConfigJobsReadOnly(
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(statePath, { readOnly: true });
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(statePath), { readOnly: true });
   try {
     if (!tableExists(db, "cron_jobs")) {
       return emptyLoadedCronStore();
