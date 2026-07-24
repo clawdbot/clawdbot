@@ -185,6 +185,21 @@ describe("chat pane pull request refresh", () => {
     expect(state.assistantName).toBe("Session Agent");
   });
 
+  it("resets a session-specific identity when the logical connection changes", () => {
+    const client = {} as GatewayBrowserClient;
+    const nextClient = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client });
+    state.assistantName = "Session Agent";
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client: nextClient,
+      connected: false,
+    });
+
+    expect(state.assistantName).toBe(pane.context.config.current.assistantIdentity.name);
+  });
+
   it("preserves shared PR state for an empty rate-limited snapshot", async () => {
     const request = vi.fn().mockResolvedValue({ pullRequests: [], rateLimited: true });
     const setPullRequestSummary = vi.fn();
