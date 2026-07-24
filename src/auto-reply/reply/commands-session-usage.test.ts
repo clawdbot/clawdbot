@@ -185,13 +185,11 @@ describe("handleUsageCommand", () => {
     const params = buildUsageParams();
     params.sessionEntry = {
       sessionId: "wrapper-session",
-      sessionFile: "/tmp/wrapper-session.jsonl",
       updatedAt: Date.now(),
     };
     params.sessionStore = {
       [params.sessionKey]: {
         sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
         updatedAt: Date.now(),
       },
     };
@@ -200,7 +198,11 @@ describe("handleUsageCommand", () => {
 
     const args = expectSessionCostArgs();
     expect(args.sessionId).toBe("target-session");
-    expect(args.sessionFile).toBe("/tmp/target-session.jsonl");
+    expect(args.sessionTarget).toMatchObject({
+      agentId: "target",
+      sessionId: "target-session",
+      sessionKey: params.sessionKey,
+    });
   });
 
   it("prefers the target session entry from sessionStore for /usage footer mode", async () => {

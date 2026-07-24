@@ -30,11 +30,11 @@ export async function resolveAgentRunSessionTarget(params: {
   const sessionTarget = params.sessionTarget;
   const agentId = normalizeOptionalString(sessionTarget?.agentId) ?? params.agentId;
   const sessionId = normalizeOptionalString(sessionTarget?.sessionId) ?? params.sessionId;
-  const sessionKey = normalizeOptionalString(sessionTarget?.sessionKey) ?? params.sessionKey;
-  const effectiveAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey);
-  if (sessionTarget && !sessionKey) {
-    throw new Error(`Cannot resolve run session target without a session key: ${sessionId}`);
-  }
+  const sessionKey =
+    normalizeOptionalString(sessionTarget?.sessionKey) ??
+    normalizeOptionalString(params.sessionKey) ??
+    normalizeOptionalString(sessionId);
+  const effectiveAgentId = agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
   if (sessionTarget && sessionKey) {
     const storePath =
       normalizeOptionalString(sessionTarget.storePath) ??

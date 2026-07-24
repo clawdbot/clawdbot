@@ -2,6 +2,7 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   isJsonRecord,
@@ -158,6 +159,9 @@ export class SessionManagerBranching extends SessionManagerEntries {
         sessionKey: persistenceTarget.sessionKey,
         storePath: persistenceTarget.storePath,
       });
+      const canonicalPreviousEntry = previousEntry
+        ? projectCanonicalSessionEntryShape(previousEntry as unknown as Record<string, unknown>)
+        : { updatedAt };
       this.persistenceTarget = { ...persistenceTarget, sessionId: newSessionId };
       replaceSessionEntrySync(
         {
@@ -166,7 +170,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
           storePath: persistenceTarget.storePath,
         },
         {
-          ...(previousEntry ?? { updatedAt }),
+          ...canonicalPreviousEntry,
           sessionId: newSessionId,
           updatedAt,
         },

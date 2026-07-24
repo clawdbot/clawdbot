@@ -1,6 +1,7 @@
 // Codex tests cover run attempt plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import "../../../../test/helpers/session-manager-file-compat.js";
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,

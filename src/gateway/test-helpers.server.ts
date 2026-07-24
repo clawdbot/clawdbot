@@ -14,6 +14,7 @@ import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/se
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
+  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
@@ -230,6 +231,12 @@ export async function writeSessionStore(params: {
     throw new Error("writeSessionStore requires testState.sessionStorePath");
   }
   const upsertsByAgentId = new Map<string, Array<{ sessionKey: string; entry: SessionEntry }>>();
+  const transcriptImports: Array<{
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    transcriptPath: string;
+  }> = [];
   for (const [requestKey, entry] of Object.entries(params.entries)) {
     const rawKey = requestKey.trim();
     if (typeof entry.sessionId !== "string" || entry.sessionId.trim().length === 0) {
@@ -258,6 +265,16 @@ export async function writeSessionStore(params: {
         ...canonicalEntry,
       },
     });
+    if (typeof entry.sessionFile === "string" && entry.sessionFile.trim()) {
+      transcriptImports.push({
+        agentId,
+        sessionId: entry.sessionId,
+        sessionKey: storeKey,
+        transcriptPath: path.isAbsolute(entry.sessionFile)
+          ? entry.sessionFile
+          : path.join(path.dirname(storePath), entry.sessionFile),
+      });
+    }
     upsertsByAgentId.set(agentId, upserts);
   }
   clearSessionStoreCacheForTest();
@@ -277,6 +294,26 @@ export async function writeSessionStore(params: {
       upserts,
       skipMaintenance: true,
     });
+  }
+  for (const transcriptImport of transcriptImports) {
+    const contents = await fs.readFile(transcriptImport.transcriptPath, "utf8").catch(() => "");
+    if (!contents) {
+      continue;
+    }
+    const events = contents
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    await replaceTranscriptEvents(
+      {
+        agentId: transcriptImport.agentId,
+        sessionId: transcriptImport.sessionId,
+        sessionKey: transcriptImport.sessionKey,
+        storePath,
+      },
+      events,
+    );
   }
   clearSessionStoreCacheForTest();
 }

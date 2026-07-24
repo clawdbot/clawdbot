@@ -711,7 +711,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     expect(result.ok).toBe(true);
     const saved = loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() });
-    expect(saved?.sessionFile).toBe(marker);
+    expect(saved).not.toHaveProperty("sessionFile");
     expect(saved?.updatedAt).toBeGreaterThan(100);
     expect(saved?.pluginExtensions).toEqual({
       "metadata-owner": {
@@ -745,7 +745,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(mirrorResult.messageId).toBe(existingMessageId);
     }
     const saved = loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() });
-    expect(saved?.sessionFile).toBe(marker);
+    expect(saved).not.toHaveProperty("sessionFile");
   });
 
   it("idempotently appends identified channel finals while preserving repeated replies", async () => {

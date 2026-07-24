@@ -236,7 +236,6 @@ export function buildAgentSessionPatch(params: {
           endedAt: undefined,
           runtimeMs: undefined,
           abortedLastRun: undefined,
-          ...(shouldClearRotatedState ? { sessionFile: undefined } : {}),
         }
       : {}),
   };

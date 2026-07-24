@@ -385,9 +385,12 @@ export async function readTailAssistantTextFromSessionTranscript(
       ...(sessionFile.storePath ? { storePath: sessionFile.storePath } : {}),
     });
     for (const event of events.toReversed()) {
-      const parsed = event as { message?: { role?: unknown } };
-      if (!parsed.message || parsed.message.role !== "assistant") {
+      const parsed = event as { message?: { model?: unknown; provider?: unknown; role?: unknown } };
+      if (!parsed.message || typeof parsed.message !== "object") {
         continue;
+      }
+      if (parsed.message.role !== "assistant") {
+        return undefined;
       }
       const assistantText = parseAssistantTranscriptText(JSON.stringify(event), {
         excludeTranscriptOnlyOpenClawAssistant:
@@ -395,6 +398,12 @@ export async function readTailAssistantTextFromSessionTranscript(
       });
       if (assistantText) {
         return assistantText;
+      }
+      if (
+        options?.excludeTranscriptOnlyOpenClawAssistant !== true ||
+        !isTranscriptOnlyOpenClawAssistantMessage(parsed.message)
+      ) {
+        return undefined;
       }
     }
     return undefined;

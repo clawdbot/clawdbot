@@ -185,14 +185,7 @@ async function writeMainTranscriptSession(params: {
     sessionKey: "agent:main:main",
     storePath,
   });
-  return expectStringValue(
-    loadSessionEntry({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath,
-    })?.sessionFile,
-    "sessionFile",
-  );
+  return "agent:main:main";
 }
 
 function loadEntry(params: { agentId?: string; sessionKey: string; storePath: string }) {
@@ -640,14 +633,7 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
     content: "new transcript",
     messageId: "m-new",
   });
-  const newSessionFile = expectStringValue(
-    loadEntry({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath,
-    })?.sessionFile,
-    "new sessionFile",
-  );
+  const newSessionFile = "agent:main:main";
 
   const reset = await performSessionReset({
     key: "main",

@@ -112,13 +112,6 @@ function resolveSqliteMarkerSessionKey(
     readOnly: true,
     storePath: marker.storePath,
   });
-  const exactEntry = entries.find(({ entry }) => {
-    return entry.sessionId === marker.sessionId && entry.sessionFile === target.sessionFile;
-  });
-  const sessionEntry =
-    exactEntry ??
-    entries.find(({ entry }) => {
-      return entry.sessionId === marker.sessionId;
-    });
+  const sessionEntry = entries.find(({ entry }) => entry.sessionId === marker.sessionId);
   return sessionEntry?.sessionKey;
 }

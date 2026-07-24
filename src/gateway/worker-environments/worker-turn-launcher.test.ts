@@ -8,6 +8,7 @@ import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   type AgentEventPayload,
   onAgentEvent as subscribeAgentEvent,
@@ -56,17 +57,29 @@ describe("worker turn launcher", () => {
   let database: OpenClawStateDatabase;
   let placements: WorkerSessionPlacementStore;
   let sessionFile: string;
+  let sessionTarget: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-turn-"));
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database });
-    const manager = SessionManager.create(path.join(root, "sessions"), path.join(root, "sessions"));
-    const file = manager.getSessionFile();
-    if (!file) {
-      throw new Error("expected file-backed session manager");
-    }
-    sessionFile = file;
+    sessionTarget = {
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      storePath: path.join(root, "sessions.json"),
+    };
+    await upsertSessionEntry(sessionTarget, {
+      sessionId: SESSION_ID,
+      updatedAt: Date.now(),
+    });
+    SessionManager.open(sessionTarget);
+    sessionFile = SESSION_KEY;
   });
 
   afterEach(async () => {
@@ -82,6 +95,10 @@ describe("worker turn launcher", () => {
       resolveWorkspacePath: async () => root,
       ...options,
     });
+  }
+
+  function openSessionManager() {
+    return SessionManager.open(sessionTarget);
   }
 
   function seedActivePlacement(): void {
@@ -228,6 +245,7 @@ describe("worker turn launcher", () => {
       sessionKey: SESSION_KEY,
       agentId: "main",
       sessionFile,
+      sessionTarget,
       workspaceDir: root,
       prompt: "Inspect this workspace",
       timeoutMs: 5_000,
@@ -490,7 +508,7 @@ describe("worker turn launcher", () => {
     });
     expect(initialized.code).toBe(0);
     seedActivePlacement();
-    const manager = SessionManager.openFile(sessionFile);
+    const manager = openSessionManager();
     const earlierRequestId = manager.appendMessage(
       makeAgentUserMessage({ content: "Earlier request", timestamp: 10 }),
     );
@@ -565,7 +583,7 @@ describe("worker turn launcher", () => {
         expect(command.argv.join(" ")).not.toContain(credential().credential);
         await Promise.resolve();
         expect(acknowledgeCredentialDelivery).toHaveBeenCalledOnce();
-        const completed = SessionManager.openFile(sessionFile);
+        const completed = openSessionManager();
         const leafId = completed.appendMessage(
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "Worker reply" }],
@@ -577,14 +595,14 @@ describe("worker turn launcher", () => {
           environmentId: ENVIRONMENT_ID,
           ownerEpoch: OWNER_EPOCH,
           runId: "run-worker-turn",
-          transcriptSeq: 1,
+          transcriptSeq: 2,
           workspaceResultPending: true,
         });
         return {
           stdout: JSON.stringify({
             status: "completed",
             transcriptLeafId: leafId,
-            transcriptNextSeq: 2,
+            transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
           }),
           stderr: "",
           code: 0,
@@ -659,7 +677,7 @@ describe("worker turn launcher", () => {
       },
     });
     expect(
-      SessionManager.openFile(sessionFile)
+      openSessionManager()
         .getBranch()
         .some(
           (entry) =>
@@ -709,7 +727,7 @@ describe("worker turn launcher", () => {
       },
     ]);
     expect(
-      SessionManager.openFile(sessionFile)
+      openSessionManager()
         .getEntries()
         .flatMap((entry) =>
           entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
@@ -719,7 +737,7 @@ describe("worker turn launcher", () => {
 
   it("does not replay an already-persisted current user message into worker history", async () => {
     seedActivePlacement();
-    const manager = SessionManager.openFile(sessionFile);
+    const manager = openSessionManager();
     manager.appendMessage(makeAgentUserMessage({ content: "Earlier request", timestamp: 18 }));
     manager.appendMessage(
       makeAgentAssistantMessage({
@@ -741,7 +759,7 @@ describe("worker turn launcher", () => {
       })),
       runWorkspaceCommand: vi.fn(async (command): Promise<SpawnResult> => {
         descriptor = parseWorkerLaunchDescriptor(JSON.parse(command.input ?? ""));
-        const completed = SessionManager.openFile(sessionFile);
+        const completed = openSessionManager();
         const leafId = completed.appendMessage(
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "Worker reply" }],
@@ -753,14 +771,14 @@ describe("worker turn launcher", () => {
           environmentId: ENVIRONMENT_ID,
           ownerEpoch: OWNER_EPOCH,
           runId: "run-persisted-user",
-          transcriptSeq: 1,
+          transcriptSeq: 2,
           workspaceResultPending: true,
         });
         return {
           stdout: JSON.stringify({
             status: "completed",
             transcriptLeafId: leafId,
-            transcriptNextSeq: 2,
+            transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
           }),
           stderr: "",
           code: 0,
@@ -812,10 +830,7 @@ describe("worker turn launcher", () => {
       { role: "user" },
       { role: "assistant" },
     ]);
-    const persistedEntries = (await fs.readFile(sessionFile, "utf8"))
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as unknown);
+    const persistedEntries = openSessionManager().getEntries();
     const persistedCurrentUsers = persistedEntries.filter((entry) => {
       if (typeof entry !== "object" || entry === null || !("message" in entry)) {
         return false;
@@ -860,7 +875,7 @@ describe("worker turn launcher", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(async (): Promise<SpawnResult> => {
-          const completed = SessionManager.openFile(sessionFile);
+          const completed = openSessionManager();
           completed.appendMessage(
             makeAgentAssistantMessage({
               content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
@@ -912,14 +927,14 @@ describe("worker turn launcher", () => {
             environmentId: ENVIRONMENT_ID,
             ownerEpoch: OWNER_EPOCH,
             runId: "run-worker-usage",
-            transcriptSeq: 1,
+            transcriptSeq: 2,
             workspaceResultPending: true,
           });
           return {
             stdout: JSON.stringify({
               status: "completed",
               transcriptLeafId: leafId,
-              transcriptNextSeq: 2,
+              transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
             }),
             stderr: "",
             code: 0,
@@ -1545,7 +1560,7 @@ describe("worker turn launcher", () => {
     ).rejects.toThrow("already has an active turn claim");
     expect(runWorkspaceCommand).toHaveBeenCalledOnce();
 
-    const completed = SessionManager.openFile(sessionFile);
+    const completed = openSessionManager();
     const leafId = completed.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Only worker reply" }],
@@ -1557,7 +1572,7 @@ describe("worker turn launcher", () => {
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
       runId: "run-overlap",
-      transcriptSeq: 1,
+      transcriptSeq: 2,
       workspaceResultPending: true,
     });
     const active = placements.get(SESSION_ID);
@@ -1576,7 +1591,7 @@ describe("worker turn launcher", () => {
       stdout: JSON.stringify({
         status: "completed",
         transcriptLeafId: leafId,
-        transcriptNextSeq: 2,
+        transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
       }),
       stderr: "",
       code: 0,
@@ -1630,7 +1645,7 @@ describe("worker turn launcher", () => {
               termination: "exit",
             };
           }
-          const completed = SessionManager.openFile(sessionFile);
+          const completed = openSessionManager();
           const leafId = completed.appendMessage(
             makeAgentAssistantMessage({
               content: [{ type: "text", text: "Recovered worker reply" }],
@@ -1642,14 +1657,14 @@ describe("worker turn launcher", () => {
             environmentId: ENVIRONMENT_ID,
             ownerEpoch: OWNER_EPOCH,
             runId: "run-model-recovered",
-            transcriptSeq: 1,
+            transcriptSeq: 2,
             workspaceResultPending: true,
           });
           return {
             stdout: JSON.stringify({
               status: "completed",
               transcriptLeafId: leafId,
-              transcriptNextSeq: 2,
+              transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
             }),
             stderr: "",
             code: 0,
@@ -1732,7 +1747,7 @@ describe("worker turn launcher", () => {
         state: "active",
         turnClaim: { owner: "worker", runId },
       });
-      const completed = SessionManager.openFile(sessionFile);
+      const completed = openSessionManager();
       const leafId = completed.appendMessage(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "Redispatched worker reply" }],
@@ -1744,14 +1759,14 @@ describe("worker turn launcher", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         runId,
-        transcriptSeq: 1,
+        transcriptSeq: 2,
         workspaceResultPending: true,
       });
       return {
         stdout: JSON.stringify({
           status: "completed",
           transcriptLeafId: leafId,
-          transcriptNextSeq: 2,
+          transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
         }),
         stderr: "",
         code: 0,

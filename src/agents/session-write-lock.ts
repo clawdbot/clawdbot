@@ -901,7 +901,7 @@ export async function acquireSessionWriteLock(params: {
     throw error;
   };
   throwIfAborted();
-  if (!path.isAbsolute(params.sessionFile) || !params.sessionFile.endsWith(".jsonl")) {
+  if (!path.isAbsolute(params.sessionFile)) {
     return { release: async () => {} };
   }
   registerCleanupHandlers();

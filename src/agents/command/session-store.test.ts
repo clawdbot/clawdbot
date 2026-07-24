@@ -396,11 +396,11 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]).toMatchObject({
         sessionId: rotatedSessionId,
-        sessionFile: rotatedSessionFile,
         usageFamilyKey: sessionKey,
         usageFamilySessionIds: [sessionId, rotatedSessionId],
         compactionCount: 1,
       });
+      expect(sessionStore[sessionKey]).not.toHaveProperty("sessionFile");
       expect(sessionStore[sessionKey]?.sessionStartedAt).toBeGreaterThan(1);
     });
   });

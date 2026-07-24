@@ -104,6 +104,8 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       activeTrajectoryRuntimeSidecarForSessionExists: false,
       activeTrajectorySessionSidecarForSessionExists: false,
     });
+    expect(report.pluginSdkConsumer?.sessionIdentity).toBe(report.pluginSdkSessionKey);
+    expect(report.pluginSdkConsumer?.listedSessionKeys).toContain(report.pluginSdkSessionKey);
     expect(report.pluginSdkConsumer?.transcriptEventsAfterAppend).toBeGreaterThan(
       report.pluginSdkConsumer?.transcriptEventsBeforeAppend ?? 0,
     );

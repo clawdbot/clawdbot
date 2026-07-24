@@ -551,6 +551,7 @@ async function compactResolvedContextEngine(
           ? await compactionCheckpointStore.captureSnapshot({
               sessionFile: params.sessionFile,
               sessionManager: SessionManager.open(runtimeTarget),
+              sessionTarget: runtimeTarget,
             })
           : null;
         const hookRunner = engineOwnsCompaction
@@ -650,6 +651,7 @@ async function compactResolvedContextEngine(
         // Shipped pre-sessionTarget engines report rotation via the deprecated
         // sessionFile field; honor it when no typed target is present.
         let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
+        let postCompactionSessionTarget = delegatedSessionFile ? undefined : runtimeTarget;
         if (delegatedSessionTarget) {
           const resolvedDelegatedTarget = await resolveAgentRunSessionTarget({
             agentId: delegatedSessionTarget.agentId ?? sessionAgentId,
@@ -660,6 +662,7 @@ async function compactResolvedContextEngine(
           });
           postCompactionSessionId = resolvedDelegatedTarget.sessionId;
           postCompactionSessionFile = resolvedDelegatedTarget.sessionKey;
+          postCompactionSessionTarget = resolvedDelegatedTarget;
         }
         if (result.ok && result.compacted) {
           checkpointSnapshotRetained = await persistCompactionCheckpoint({
@@ -673,6 +676,7 @@ async function compactResolvedContextEngine(
             tokensBefore: result.result?.tokensBefore,
             tokensAfter: result.result?.tokensAfter,
             sessionFile: postCompactionSessionFile,
+            sessionTarget: postCompactionSessionTarget,
           });
           await runContextEngineMaintenance({
             contextEngine,

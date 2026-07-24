@@ -696,12 +696,14 @@ function mergeSessionEntryWithPolicy(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
-    return normalizeSessionRuntimeModelFields({
-      ...patch,
-      sessionId,
-      updatedAt,
-      sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
-    });
+    return stripRetiredSessionEntryLocators(
+      normalizeSessionRuntimeModelFields({
+        ...patch,
+        sessionId,
+        updatedAt,
+        sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
+      }),
+    );
   }
   const next = {
     ...existing,
@@ -736,7 +738,14 @@ function mergeSessionEntryWithPolicy(
       delete next.modelProvider;
     }
   }
-  return normalizeSessionRuntimeModelFields(next);
+  return stripRetiredSessionEntryLocators(normalizeSessionRuntimeModelFields(next));
+}
+
+function stripRetiredSessionEntryLocators(entry: SessionEntry): SessionEntry {
+  const mutable = entry as SessionEntry & { sessionFile?: unknown; transcriptPath?: unknown };
+  delete mutable.sessionFile;
+  delete mutable.transcriptPath;
+  return entry;
 }
 
 export function mergeSessionEntry(

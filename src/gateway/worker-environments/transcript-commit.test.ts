@@ -280,11 +280,11 @@ describe("worker transcript commit application", () => {
           messageSeq: index + 1,
           sessionKey: SESSION_KEY,
           sessionId: SESSION_ID,
-          target: {
+          target: expect.objectContaining({
             agentId: "main",
             sessionId: SESSION_ID,
             sessionKey: SESSION_KEY,
-          },
+          }),
         }),
       ),
     );

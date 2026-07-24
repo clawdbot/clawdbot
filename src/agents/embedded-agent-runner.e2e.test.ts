@@ -186,6 +186,9 @@ beforeAll(async () => {
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
   const { SessionManager: LoadedSessionManager } =
     await import("openclaw/plugin-sdk/agent-sessions");
+  const { installSessionManagerFileCompat } =
+    await import("../../test/helpers/session-manager-file-compat.js");
+  installSessionManagerFileCompat(LoadedSessionManager);
   SessionManager = LoadedSessionManager;
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);

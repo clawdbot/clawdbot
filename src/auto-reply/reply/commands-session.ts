@@ -20,6 +20,7 @@ import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -32,6 +33,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -318,12 +320,24 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       agentId: params.agentId,
     });
+    const usageAgentId = sessionAgentId ?? DEFAULT_AGENT_ID;
     const sessionSummary = await loadSessionCostSummary({
       sessionId: targetSessionEntry?.sessionId,
       sessionEntry: targetSessionEntry,
-      sessionFile: targetSessionEntry ? params.sessionKey : undefined,
+      ...(targetSessionEntry?.sessionId && params.sessionKey
+        ? {
+            sessionTarget: {
+              agentId: usageAgentId,
+              sessionId: targetSessionEntry.sessionId,
+              sessionKey: params.sessionKey,
+              storePath: resolveStorePath(params.cfg.session?.store, {
+                agentId: usageAgentId,
+              }),
+            },
+          }
+        : {}),
       config: params.cfg,
-      agentId: sessionAgentId,
+      agentId: usageAgentId,
     });
     const summary = await loadCostUsageSummary({
       config: params.cfg,

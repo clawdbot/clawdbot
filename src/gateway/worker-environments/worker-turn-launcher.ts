@@ -394,7 +394,11 @@ async function executeWorkerTurn(params: {
     runtimeResult.transcriptLeafId !== completed.getLeafId() ||
     runtimeResult.transcriptNextSeq !== (currentPlacement?.lastTranscriptAckCursor ?? 0) + 1
   ) {
-    throw new Error("Cloud worker result does not match its committed transcript acknowledgement");
+    throw new Error(
+      `Cloud worker result does not match its committed transcript acknowledgement ` +
+        `(leaf=${runtimeResult.transcriptLeafId ?? "none"}/${completed.getLeafId() ?? "none"}, ` +
+        `nextSeq=${runtimeResult.transcriptNextSeq}/${(currentPlacement?.lastTranscriptAckCursor ?? 0) + 1})`,
+    );
   }
   if (
     (currentPlacement?.state !== "active" && currentPlacement?.state !== "draining") ||

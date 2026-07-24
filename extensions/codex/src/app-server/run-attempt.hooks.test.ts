@@ -1,5 +1,6 @@
 // Codex tests cover run attempt.hooks plugin behavior.
 import path from "node:path";
+import "../../../../test/helpers/session-manager-file-compat.js";
 import {
   abortAgentHarnessRun,
   onAgentEvent,

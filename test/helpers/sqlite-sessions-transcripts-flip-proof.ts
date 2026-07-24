@@ -116,7 +116,7 @@ type PluginSdkConsumerEvidence = {
   latestAssistantTextBeforeAppend: string;
   latestAssistantTextAfterAppend: string;
   listedSessionKeys: string[];
-  sessionFileMarker: string;
+  sessionIdentity: string;
   sessionId: string;
   sessionKey: string;
   storeTranscriptEvents: number;
@@ -1261,20 +1261,8 @@ async function runPluginSdkConsumerProbe(
       `SDK session store read returned ${JSON.stringify(sessionEntry)} for ${context.pluginSdkSessionKey}`,
     );
   }
-  const expectedMarker = formatSqliteSessionFileMarker({
-    agentId: context.agentId,
-    sessionId,
-    storePath: context.storePath,
-  });
-  if (sessionEntry.sessionFile !== expectedMarker) {
-    throw new Error(
-      `SDK session store exposed unexpected transcript marker for ${context.pluginSdkSessionKey}: ${String(
-        sessionEntry.sessionFile,
-      )}`,
-    );
-  }
-  if (fsSync.existsSync(sessionEntry.sessionFile)) {
-    throw new Error(`SDK session marker unexpectedly resolves to an active file path`);
+  if (Object.hasOwn(sessionEntry, "sessionFile")) {
+    throw new Error(`SDK session store exposed retired transcript locator`);
   }
 
   const listedSessionKeys = listSdkSessionEntries({
@@ -1369,7 +1357,7 @@ async function runPluginSdkConsumerProbe(
     latestAssistantTextBeforeAppend: latestBefore.text,
     latestAssistantTextAfterAppend: latestAfter.text,
     listedSessionKeys,
-    sessionFileMarker: sessionEntry.sessionFile,
+    sessionIdentity: context.pluginSdkSessionKey,
     sessionId,
     sessionKey: context.pluginSdkSessionKey,
     storeTranscriptEvents,

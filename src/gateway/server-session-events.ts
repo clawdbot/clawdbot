@@ -22,7 +22,6 @@ import {
   buildGatewaySessionEventFields,
   buildGatewaySessionEventRow,
 } from "./session-event-payload.js";
-import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
   readSessionMessageCountAsync,
@@ -158,10 +157,6 @@ async function handleTranscriptUpdateBroadcast(
   if (!sessionKey && legacyMarker) {
     sessionKey = resolveTranscriptSessionKeyBySessionId(legacyMarker);
   }
-  sessionKey ??=
-    update.sessionFile && !legacyMarker
-      ? resolveSessionKeyForTranscriptFile(update.sessionFile)
-      : undefined;
   if (!sessionKey || update.message === undefined) {
     return;
   }
