@@ -14,6 +14,7 @@ import {
   resolveDispatchWorkspaceAccess,
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
+import { isWorkboardClaimReclaimable } from "./store-constants.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -227,6 +228,7 @@ function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
 function selectStartableCards(
   cards: WorkboardCard[],
   limit: number,
+  now: number,
   candidates: WorkboardCard[] = cards,
 ): WorkboardCard[] {
   if (limit <= 0) {
@@ -234,9 +236,10 @@ function selectStartableCards(
   }
   const runningByOwner = new Map<string, number>();
   for (const card of cards) {
+    const claim = card.metadata?.claim;
     const consumesOwnerSlot =
       card.status === "running" ||
-      Boolean(card.metadata?.claim) ||
+      Boolean(claim && !isWorkboardClaimReclaimable(claim, now)) ||
       card.execution?.status === "running";
     if (!consumesOwnerSlot || cardIsArchived(card)) {
       continue;
@@ -279,7 +282,7 @@ export async function dispatchAndStartWorkboardCards(params: {
   const cards = await params.store.list();
   const candidates = await params.store.list({ boardId });
 
-  for (const card of selectStartableCards(cards, maxStarts, candidates)) {
+  for (const card of selectStartableCards(cards, maxStarts, now, candidates)) {
     const ownerId = params.options?.ownerId?.trim() || card.agentId || DEFAULT_DISPATCH_OWNER;
     const sessionKey = buildSessionKey(card);
     let claimValue = "";

@@ -20,7 +20,7 @@ import {
   retryBudgetExhausted,
 } from "./store-card-helpers.js";
 import {
-  CLAIM_RECLAIM_MS,
+  isWorkboardClaimReclaimable,
   MAX_ATTACHMENT_ENTRIES,
   MAX_CARDS,
   MAX_CARD_NOTIFICATIONS,
@@ -78,7 +78,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
         const timedOut =
           Boolean(maxRuntimeSeconds && runtimeStartedAt) &&
           now - runtimeStartedAt! > secondsToDurationMs(maxRuntimeSeconds!);
-        const claimExpired = Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
+        const claimExpired = isWorkboardClaimReclaimable(claim, now);
         const retriesExhausted = retryBudgetExhausted(latest);
         if (latest.status === "running" && (timedOut || claimExpired)) {
           const reason = timedOut

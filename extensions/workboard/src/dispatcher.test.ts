@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { cleanupWorkboardRunWorktree } from "./dispatcher-workspace.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { CLAIM_RECLAIM_MS } from "./store-constants.js";
 import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
@@ -913,6 +914,45 @@ describe("dispatchAndStartWorkboardCards", () => {
       status: "ready",
       metadata: { automation: { boardId: "product" } },
     });
+  });
+
+  it("ignores an expired claim on another board when reserving owner capacity", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const expired = await store.create({
+      title: "Expired product review",
+      status: "review",
+      agentId: "codex-main",
+      boardId: "product",
+    });
+    const claimed = await store.claim(expired.id, {
+      ownerId: "codex-main",
+      token: "expired-token",
+      ttlSeconds: 1,
+    });
+    const ready = await store.create({
+      title: "Ready ops work",
+      status: "ready",
+      agentId: "codex-main",
+      boardId: "ops",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-ops" });
+    const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+    expect(expiresAt).toBeDefined();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        now: expiresAt! + CLAIM_RECLAIM_MS + 1,
+        maxStarts: 1,
+        boardId: "ops",
+      },
+    });
+
+    expect(result.started).toEqual([expect.objectContaining({ cardId: ready.id })]);
+    expect(run).toHaveBeenCalledOnce();
+    expect((await store.get(expired.id))?.metadata?.claim).toBeDefined();
   });
 
   it("keeps claimed review cards in the owner running slot", async () => {

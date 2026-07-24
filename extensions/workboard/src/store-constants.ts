@@ -1,3 +1,4 @@
+import type { WorkboardClaim } from "@openclaw/workboard-contract";
 import {
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
@@ -23,6 +24,15 @@ export const READY_STRANDED_MS = 60 * 60 * 1000;
 export const RUNNING_HEARTBEAT_STALE_MS = 20 * 60 * 1000;
 export const BLOCKED_TOO_LONG_MS = 24 * 60 * 60 * 1000;
 export const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
+
+// Dispatch gives late heartbeats a fixed grace window before reclaiming.
+// Capacity checks must reuse this rule or stale cross-board claims can starve an owner.
+export function isWorkboardClaimReclaimable(
+  claim: WorkboardClaim | undefined,
+  now: number,
+): boolean {
+  return Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
+}
 
 export function secondsToDurationMs(seconds: number): number {
   const ms = Math.trunc(seconds) * 1000;
