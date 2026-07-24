@@ -1509,9 +1509,13 @@ jobs:
           DIFF_BASE_REVISION: ${{ needs.preflight.outputs.diff_base_revision }}
         run: |
           if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["localization:catalogs:check"] ? 0 : 1)'; then
+            generated_paths_output="$(
+              node --import tsx scripts/localization-catalogs.ts paths targets
+            )"
+            mapfile -t generated_paths <<< "${generated_paths_output}"
             if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] ||
               { [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] &&
-                ! git diff --quiet "${DIFF_BASE_REVISION}" HEAD -- src/wizard/i18n/catalogs/generated; }; then
+                ! git diff --quiet "${DIFF_BASE_REVISION}" HEAD -- "${generated_paths[@]}"; }; then
               pnpm localization:catalogs:check
             else
               pnpm localization:catalogs:detect

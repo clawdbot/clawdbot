@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - localization/catalogs.json
-      - src/wizard/i18n/catalogs/en.json
+      - "**/i18n/catalogs/en.json"
       - scripts/localization-catalogs.ts
       - scripts/control-ui-i18n.ts
       - packages/localization-core/src/catalog.ts
@@ -85,6 +85,19 @@ jobs:
       - name: Validate generated catalog targets
         run: pnpm localization:catalogs:check
 
+      - name: Resolve registry-owned publication paths
+        id: paths
+        run: |
+          set -euo pipefail
+          {
+            echo 'generated<<OPENCLAW_GENERATED_PATHS'
+            node --import tsx scripts/localization-catalogs.ts paths targets
+            echo 'OPENCLAW_GENERATED_PATHS'
+            echo 'sources<<OPENCLAW_SOURCE_PATHS'
+            node --import tsx scripts/localization-catalogs.ts paths sources
+            echo 'OPENCLAW_SOURCE_PATHS'
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Open or update generated catalog PR
         uses: ./.github/actions/publish-generated-pr
         with:
@@ -97,10 +110,10 @@ jobs:
           commit-message: "chore(localization): refresh adopted catalogs"
           pr-title: "chore(localization): refresh adopted catalogs"
           auto-merge: "false"
-          generated-paths: src/wizard/i18n/catalogs/generated
+          generated-paths: ${{ steps.paths.outputs.generated }}
           invalidation-paths: |
             localization/catalogs.json
-            src/wizard/i18n/catalogs/en.json
+            ${{ steps.paths.outputs.sources }}
             scripts/localization-catalogs.ts
             scripts/control-ui-i18n.ts
             packages/localization-core/src/catalog.ts

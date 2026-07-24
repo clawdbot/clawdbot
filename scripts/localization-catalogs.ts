@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   type LocalizationCatalog,
   validateCatalog,
 } from "../packages/localization-core/src/catalog.js";
+import { OPENCLAW_LOCALES } from "../packages/localization-core/src/locale-registry.js";
 
 type CatalogTarget = {
   locale: string;
@@ -65,6 +66,21 @@ function expectString(value: unknown, label: string): string {
   return value;
 }
 
+function expectRepositoryPath(value: unknown, label: string): string {
+  const candidate = expectString(value, label);
+  if (
+    candidate.includes("\\") ||
+    path.isAbsolute(candidate) ||
+    path.posix.isAbsolute(candidate) ||
+    path.posix.normalize(candidate) !== candidate ||
+    candidate === "." ||
+    candidate.startsWith("../")
+  ) {
+    throw new Error(`${label} must be a normalized repository-relative path`);
+  }
+  return candidate;
+}
+
 function expectStringMap(value: unknown, label: string): Record<string, string> {
   if (!isRecord(value)) {
     throw new Error(`${label} must be an object`);
@@ -83,6 +99,9 @@ async function readRegistry(root: string, registryPath: string): Promise<Catalog
   if (!isRecord(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.areas)) {
     throw new Error("localization catalog registry must use schemaVersion 1 and declare areas");
   }
+  if (raw.areas.length === 0) {
+    throw new Error("localization catalog registry must declare at least one area");
+  }
   const areas = raw.areas.map((entry, index): CatalogArea => {
     if (
       !isRecord(entry) ||
@@ -91,17 +110,20 @@ async function readRegistry(root: string, registryPath: string): Promise<Catalog
     ) {
       throw new Error(`localization catalog registry area ${index} is malformed`);
     }
+    if (entry.targets.length === 0) {
+      throw new Error(`localization catalog registry area ${index} must declare a target`);
+    }
     return {
       id: expectString(entry.id, `areas[${index}].id`),
       namespace: expectString(entry.namespace, `areas[${index}].namespace`),
-      source: expectString(entry.source, `areas[${index}].source`),
+      source: expectRepositoryPath(entry.source, `areas[${index}].source`),
       targets: entry.targets.map((target, targetIndex) => {
         if (!isRecord(target)) {
           throw new Error(`areas[${index}].targets[${targetIndex}] is malformed`);
         }
         return {
           locale: expectString(target.locale, `areas[${index}].targets[${targetIndex}].locale`),
-          path: expectString(target.path, `areas[${index}].targets[${targetIndex}].path`),
+          path: expectRepositoryPath(target.path, `areas[${index}].targets[${targetIndex}].path`),
         };
       }),
       protectedLiterals: entry.protectedLiterals.map((literal, literalIndex) =>
@@ -113,7 +135,50 @@ async function readRegistry(root: string, registryPath: string): Promise<Catalog
   if (ids.size !== areas.length) {
     throw new Error("localization catalog registry contains duplicate area ids");
   }
+  const sourcePaths = areas.map((area) => area.source);
+  if (new Set(sourcePaths).size !== sourcePaths.length) {
+    throw new Error("localization catalog registry contains duplicate source paths");
+  }
+  const targetPaths = areas.flatMap((area) => area.targets.map((target) => target.path));
+  if (new Set(targetPaths).size !== targetPaths.length) {
+    throw new Error("localization catalog registry contains duplicate target paths");
+  }
+  for (const area of areas) {
+    if (!/(?:^|\/)i18n\/catalogs\/en\.json$/u.test(area.source)) {
+      throw new Error(`${area.source} must use the adopted i18n/catalogs/en.json source path`);
+    }
+    const locales = new Set<string>();
+    for (const target of area.targets) {
+      if (!(OPENCLAW_LOCALES as readonly string[]).includes(target.locale)) {
+        throw new Error(`area ${area.id} uses unsupported locale ${target.locale}`);
+      }
+      if (locales.has(target.locale)) {
+        throw new Error(`area ${area.id} contains duplicate target locale ${target.locale}`);
+      }
+      locales.add(target.locale);
+      const expectedSuffix = `/i18n/catalogs/generated/${target.locale}.json`;
+      if (!target.path.endsWith(expectedSuffix)) {
+        throw new Error(`${target.path} must end with ${expectedSuffix}`);
+      }
+      if (target.path === area.source) {
+        throw new Error(`area ${area.id} source and target paths must differ`);
+      }
+    }
+  }
   return { schemaVersion: 1, areas };
+}
+
+export async function catalogWorkflowPaths(
+  options: { root?: string; registryPath?: string } = {},
+): Promise<{ sources: readonly string[]; targets: readonly string[] }> {
+  const root = options.root ?? process.cwd();
+  const registry = await readRegistry(root, options.registryPath ?? DEFAULT_REGISTRY_PATH);
+  return {
+    sources: Object.freeze(registry.areas.map((area) => area.source).toSorted()),
+    targets: Object.freeze(
+      registry.areas.flatMap((area) => area.targets.map((target) => target.path)).toSorted(),
+    ),
+  };
 }
 
 async function readSource(root: string, area: CatalogArea): Promise<SourceCatalog> {
@@ -214,6 +279,21 @@ ${issues.map((issue) => `- ${issue.code} ${issue.key}: ${issue.detail}`).join("\
   }
 }
 
+function validateSourceContent(area: CatalogArea, source: SourceCatalog): void {
+  const issues = validateCatalog({
+    namespace: area.namespace,
+    source: source.messages satisfies LocalizationCatalog,
+    candidate: source.messages satisfies LocalizationCatalog,
+  });
+  if (issues.length > 0) {
+    throw new Error(
+      `${area.id} English source failed catalog validation:\n${issues
+        .map((issue) => `- ${issue.code} ${issue.key}: ${issue.detail}`)
+        .join("\n")}`,
+    );
+  }
+}
+
 function validateGenerated(
   area: CatalogArea,
   source: SourceCatalog,
@@ -250,6 +330,7 @@ export async function checkCatalogs(
   const registry = await readRegistry(root, options.registryPath ?? DEFAULT_REGISTRY_PATH);
   for (const area of selectAreas(registry, options.area)) {
     const source = await readSource(root, area);
+    validateSourceContent(area, source);
     for (const target of area.targets) {
       validateGenerated(area, source, await readGenerated(root, area, target));
     }
@@ -268,15 +349,19 @@ export async function detectCatalogDrift(
   const drift: string[] = [];
   for (const area of selectAreas(registry, options.area)) {
     const source = await readSource(root, area);
+    validateSourceContent(area, source);
     for (const target of area.targets) {
-      const generated = await readGenerated(root, area, target);
       try {
+        const generated = await readGenerated(root, area, target);
         validateGenerated(area, source, generated);
       } catch (error) {
-        if (!(error instanceof CatalogSourceDriftError)) {
+        if (isRecord(error) && error.code === "ENOENT") {
+          drift.push(`${target.locale}/${area.id} is missing generated target ${target.path}`);
+        } else if (error instanceof CatalogSourceDriftError) {
+          drift.push(error.message);
+        } else {
           throw error;
         }
-        drift.push(error.message);
       }
     }
   }
@@ -322,6 +407,7 @@ export async function refreshCatalogs(options: {
   let changed = 0;
   for (const area of selectAreas(registry, options.area)) {
     const source = await readSource(root, area);
+    validateSourceContent(area, source);
     const sourceRevision = catalogSourceRevision(source.messages);
     const targets = options.locale
       ? area.targets.filter((target) => target.locale === options.locale)
@@ -362,6 +448,7 @@ export async function refreshCatalogs(options: {
       validateGenerated(area, source, generated);
       changed += 1;
       if (options.write) {
+        await mkdir(path.dirname(path.resolve(root, target.path)), { recursive: true });
         await writeFile(
           path.resolve(root, target.path),
           `${JSON.stringify(generated, null, 2)}\n`,
@@ -374,7 +461,8 @@ export async function refreshCatalogs(options: {
 }
 
 type CliArgs = {
-  command: "check" | "detect" | "refresh";
+  command: "check" | "detect" | "paths" | "refresh";
+  pathKind?: "sources" | "targets";
   area?: string;
   locale?: string;
   write: boolean;
@@ -382,13 +470,22 @@ type CliArgs = {
 
 function parseArgs(argv: readonly string[]): CliArgs {
   const command = argv[0];
-  if (command !== "check" && command !== "detect" && command !== "refresh") {
+  if (command !== "check" && command !== "detect" && command !== "paths" && command !== "refresh") {
     throw new Error(
-      "usage: localization-catalogs.ts check|detect [--area <id>] | refresh [--area <id>] [--locale <id>] --write",
+      "usage: localization-catalogs.ts check|detect [--area <id>] | paths sources|targets | refresh [--area <id>] [--locale <id>] --write",
     );
   }
   const args: CliArgs = { command, write: false };
-  for (let index = 1; index < argv.length; index += 1) {
+  let startIndex = 1;
+  if (command === "paths") {
+    const pathKind = argv[1];
+    if (pathKind !== "sources" && pathKind !== "targets") {
+      throw new Error("paths requires sources or targets");
+    }
+    args.pathKind = pathKind;
+    startIndex = 2;
+  }
+  for (let index = startIndex; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "--write") {
       args.write = true;
@@ -397,12 +494,21 @@ function parseArgs(argv: readonly string[]): CliArgs {
       if (!value) {
         throw new Error(`${token} requires a value`);
       }
-      if (token === "--area") args.area = value;
-      else args.locale = value;
+      if (token === "--area") {
+        args.area = value;
+      } else {
+        args.locale = value;
+      }
       index += 1;
     } else {
       throw new Error(`unknown argument: ${token}`);
     }
+  }
+  if (command === "paths" && (args.area || args.locale || args.write)) {
+    throw new Error("paths does not accept filters or --write");
+  }
+  if ((command === "check" || command === "detect") && (args.locale || args.write)) {
+    throw new Error(`${command} accepts only --area`);
   }
   return args;
 }
@@ -420,6 +526,11 @@ async function main() {
       process.stdout.write(`::warning::${finding}\n`);
     }
     process.stdout.write(`detected ${drift.length} stale localization catalog(s)\n`);
+    return;
+  }
+  if (args.command === "paths") {
+    const paths = await catalogWorkflowPaths();
+    process.stdout.write(`${paths[args.pathKind ?? "sources"].join("\n")}\n`);
     return;
   }
   if (!args.write) {

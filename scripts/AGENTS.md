@@ -29,6 +29,14 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 - If a script writes generated artifacts, keep the source-of-truth generator, the package script, and the matching verification/check command aligned.
 - Prefer additive generator/check pairs like `*:gen` and `*:check` over one-off undocumented scripts.
 
+## Localization Catalog Adoption
+
+- Extend the shared `localization/catalogs.json` registry, `localization-catalogs` CI lane, and Localization Catalog Refresh workflow. Do not add a gate or refresh workflow per product surface.
+- Adopted English sources use `<owner>/i18n/catalogs/en.json`; generated targets use `<owner>/i18n/catalogs/generated/<locale>.json`. The convention triggers the shared workflow, and the registry supplies its exact source and publication paths.
+- Source PRs run credential-free detection: missing targets and source drift are reported, while malformed current output fails. Generated changes and manual/release runs use strict source/generated parity.
+- Keep auto-merge disabled. Generation provenance and structural validation do not count as linguistic, product, or safety approval.
+- A new area must include the owner runtime import and focused rendering tests in the same adoption slice. Do not register speculative or unconsumed catalogs.
+
 ## Scope
 
 - Keep script-runner behavior, wrapper expectations, and generated-artifact guidance here.
