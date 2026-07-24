@@ -227,7 +227,22 @@ describe("localization surface dispositions", () => {
         registryPath: "registry.json",
         catalogRegistryPath: "catalogs.json",
       }),
-    ).rejects.toThrow("must stay below, not replace, a declared root");
+    ).rejects.toThrow("must stay below and not cover a declared root");
+  });
+
+  it("rejects excluding another complete declared owner root", async () => {
+    const value = registry([adoptedSurface]);
+    value.adapters[0]!.roots = ["product", "product/nested"];
+    value.adapters[0]!.excludedRoots = ["product/nested"];
+    await writeJson("registry.json", value);
+
+    await expect(
+      checkSurfaceDispositions({
+        root,
+        registryPath: "registry.json",
+        catalogRegistryPath: "catalogs.json",
+      }),
+    ).rejects.toThrow("must stay below and not cover a declared root");
   });
 
   it("rejects a symbolic link used as a declared owner root", async () => {

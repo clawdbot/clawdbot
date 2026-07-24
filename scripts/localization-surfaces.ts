@@ -175,9 +175,13 @@ async function readRegistry(root: string, registryPath: string): Promise<Surface
         )
       : [];
     for (const excludedRoot of excludedRoots) {
-      if (!roots.some((rootPath) => excludedRoot.startsWith(`${rootPath}/`))) {
+      const staysBelowRoot = roots.some((rootPath) => excludedRoot.startsWith(`${rootPath}/`));
+      const coversDeclaredRoot = roots.some(
+        (rootPath) => rootPath === excludedRoot || rootPath.startsWith(`${excludedRoot}/`),
+      );
+      if (!staysBelowRoot || coversDeclaredRoot) {
         throw new Error(
-          `adapters[${index}].excludedRoots must stay below, not replace, a declared root`,
+          `adapters[${index}].excludedRoots must stay below and not cover a declared root`,
         );
       }
     }
