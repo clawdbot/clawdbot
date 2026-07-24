@@ -87,6 +87,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Registered readiness criterion ids that must report True before the Gateway is ready. A False, Unknown, missing, timed-out, or failed criterion blocks readiness; use this list only for dependencies necessary to serve work.",
   "gateway.readiness.advisoryCriteria":
     "Registered readiness criterion ids reported as diagnostics without blocking readiness. Use advisory criteria to observe optional dependencies before deciding whether they belong in the required serving contract.",
+  hosting:
+    "Selects an optional standard hosting posture with a release-tested set of readiness conditions. Leave unset to preserve the universal Gateway lifecycle baseline.",
+  "hosting.profile":
+    'Standard hosting profile: "local", "container", "reverse-proxy", or "node-mode". Use the deployment shape that OpenClaw should validate at startup and report through readiness.',
   "gateway.bind":
     'Network bind profile: "auto", "lan", "loopback", "custom", or "tailnet" to control interface exposure. Keep "loopback" for local-only operation; "auto" can expose all interfaces.',
   "gateway.customBindHost":
