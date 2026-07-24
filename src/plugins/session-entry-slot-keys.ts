@@ -26,6 +26,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "observerDigest",
   "markedUnreadAt",
   "lastActivityAt",
+  "sessionFile",
   "spawnedBy",
   "completionOwnerSessionKey",
   "spawnedWorkspaceDir",
@@ -174,7 +175,9 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "acp",
   "quotaSuspension",
   "visibility",
-] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
+] as const satisfies ReadonlyArray<
+  keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile"
+>;
 
 type ReservedSessionEntrySlotKey = Extract<
   (typeof SESSION_ENTRY_RESERVED_SLOT_KEY_LIST)[number],

@@ -58,6 +58,10 @@ export class SessionManagerCore {
 
   setSessionTarget(target: SessionManagerPersistenceTarget): void {
     const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const header = entries.find((entry) => entry.type === "session");
+    if (header?.cwd) {
+      this.cwd = header.cwd;
+    }
     this.setLoadedSessionTarget(target, entries);
   }
 
@@ -68,7 +72,7 @@ export class SessionManagerCore {
     this.persistenceTarget = target;
     const partitioned = partitionSessionFileEntries(entries);
     if (partitioned.fileEntries.length === 0) {
-      this.newSession({ id: target?.sessionId });
+      this.initializeSession({ id: target?.sessionId });
       return;
     }
     this.fileEntries = partitioned.fileEntries;
@@ -83,6 +87,13 @@ export class SessionManagerCore {
   }
 
   newSession(options?: NewSessionOptions): string | undefined {
+    if (this.persistenceTarget) {
+      throw new Error("Persisted session managers cannot change session identity in place");
+    }
+    return this.initializeSession(options);
+  }
+
+  private initializeSession(options?: NewSessionOptions): string | undefined {
     this.sessionId = options?.id ?? this.persistenceTarget?.sessionId ?? createSessionId();
     this.migrated = false;
     const timestamp = new Date().toISOString();

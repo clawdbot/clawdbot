@@ -14,6 +14,7 @@ import {
 import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagent-lifecycle-events.js";
 import { createSubagentRegistryLifecycleController } from "../agents/subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "../agents/subagent-registry.types.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
@@ -1880,12 +1881,11 @@ describe("session.message websocket events", () => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({
-        target: {
+        sessionFile: formatSqliteSessionFileMarker({
           agentId: "main",
           sessionId: "sess-new",
-          sessionKey: "agent:main:newer",
           storePath,
-        },
+        }),
         message,
         messageId: "msg-shared",
       });

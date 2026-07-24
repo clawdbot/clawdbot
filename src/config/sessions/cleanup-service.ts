@@ -290,8 +290,8 @@ function pruneMissingTranscriptEntries(params: {
     ) {
       continue;
     }
-    // Header-only supervised transcripts are valid while their first native turn is pending.
-    if (parseAgentSessionKey(key) && entry.sessionId === key) {
+    // Explicitly pending supervised sessions may not have written their first transcript row yet.
+    if (parseAgentSessionKey(key) && entry.initializationPending === true) {
       continue;
     }
     if (!entry?.sessionId) {

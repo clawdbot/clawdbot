@@ -375,19 +375,19 @@ export async function readTailAssistantTextFromSessionTranscript(
   options?: { excludeTranscriptOnlyOpenClawAssistant?: boolean },
 ): Promise<TailAssistantTranscriptText | undefined> {
   if (typeof sessionFile === "object") {
-    if (!sessionFile.agentId || !sessionFile.sessionId || !sessionFile.storePath) {
+    if (!sessionFile.sessionId || (!sessionFile.agentId && !sessionFile.sessionKey)) {
       return undefined;
     }
     const events = await loadTranscriptEvents({
-      agentId: sessionFile.agentId,
+      ...(sessionFile.agentId ? { agentId: sessionFile.agentId } : {}),
       sessionId: sessionFile.sessionId,
       ...(sessionFile.sessionKey ? { sessionKey: sessionFile.sessionKey } : {}),
-      storePath: sessionFile.storePath,
+      ...(sessionFile.storePath ? { storePath: sessionFile.storePath } : {}),
     });
     for (const event of events.toReversed()) {
       const parsed = event as { message?: { role?: unknown } };
       if (!parsed.message || parsed.message.role !== "assistant") {
-        return undefined;
+        continue;
       }
       const assistantText = parseAssistantTranscriptText(JSON.stringify(event), {
         excludeTranscriptOnlyOpenClawAssistant:

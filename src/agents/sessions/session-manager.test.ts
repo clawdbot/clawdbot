@@ -201,6 +201,56 @@ describe("SessionManager.open", () => {
     expect(reopened.getAppendMode()).toBe("side");
   });
 
+  it("uses the selected logical leaf immediately after a side append control", () => {
+    const manager = SessionManager.inMemory("/tmp");
+    const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    const secondId = manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
+    manager.appendLeafControl({
+      targetId: firstId,
+      appendParentId: secondId,
+      appendMode: "side",
+    });
+
+    const thirdId = manager.appendMessage({ role: "user", content: "third", timestamp: 3 });
+
+    expect(manager.getBranch().map((entry) => entry.id)).toEqual([firstId, thirdId]);
+  });
+
+  it("refreshes cwd when switching persisted targets and rejects identity reset", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const firstTarget = {
+      agentId: "main",
+      sessionId: "first-target",
+      sessionKey: "agent:main:first-target",
+      storePath,
+    };
+    const secondTarget = {
+      agentId: "main",
+      sessionId: "second-target",
+      sessionKey: "agent:main:second-target",
+      storePath,
+    };
+    await upsertSessionEntry(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntry(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(firstTarget, {
+      cwd: path.join(dir, "first-workspace"),
+      message: { role: "user", content: "first" },
+    });
+    await appendTranscriptMessage(secondTarget, {
+      cwd: path.join(dir, "second-workspace"),
+      message: { role: "user", content: "second" },
+    });
+
+    const manager = SessionManager.open(firstTarget);
+    manager.setSessionTarget(secondTarget);
+
+    expect(manager.getCwd()).toBe(path.join(dir, "second-workspace"));
+    expect(() => manager.newSession()).toThrow(
+      "Persisted session managers cannot change session identity in place",
+    );
+  });
+
   it("migrates version-two hook messages before current-role validation", () => {
     const manager = SessionManager.fromEntries([
       {

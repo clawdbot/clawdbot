@@ -4,6 +4,8 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";
 import { hasPluginSessionsChangedSubscribers } from "../plugins/gateway-events.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -150,11 +152,18 @@ async function handleTranscriptUpdateBroadcast(
   },
   update: InternalSessionTranscriptUpdate,
 ): Promise<void> {
-  const storageAgentId = update.target?.agentId ?? update.agentId;
+  const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
+  const legacySessionKey = legacyMarker
+    ? resolveTranscriptSessionKeyBySessionId(legacyMarker)
+    : undefined;
+  const storageAgentId = update.target?.agentId ?? update.agentId ?? legacyMarker?.agentId;
   const sessionKey =
     update.target?.sessionKey ??
     update.sessionKey ??
-    (update.sessionFile ? resolveSessionKeyForTranscriptFile(update.sessionFile) : undefined);
+    legacySessionKey ??
+    (update.sessionFile && !legacyMarker
+      ? resolveSessionKeyForTranscriptFile(update.sessionFile)
+      : undefined);
   if (!sessionKey || update.message === undefined) {
     return;
   }
@@ -184,12 +193,12 @@ async function handleTranscriptUpdateBroadcast(
   if (messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
-    const updateStorePath = update.target?.storePath;
+    const updateStorePath = update.target?.storePath ?? legacyMarker?.storePath;
     const fallbackTarget = updateStorePath
       ? undefined
       : loadSessionEntryReadOnly(sessionKey, { agentId: visibleAgentId });
     const entry = fallbackTarget?.entry;
-    const targetSessionId = update.target?.sessionId ?? entry?.sessionId;
+    const targetSessionId = update.target?.sessionId ?? legacyMarker?.sessionId ?? entry?.sessionId;
     const storePath = updateStorePath ?? fallbackTarget?.storePath;
     messageSeq = targetSessionId
       ? asPositiveSafeInteger(
