@@ -224,3 +224,24 @@ class ExecutionEngine:
             0,
             round((perf_counter() - started) * 1000),
         )
+
+
+def build_execution_engine_from_environment() -> ExecutionEngine:
+    """Build the production-shaped engine from environment configuration."""
+
+    from tools.ai_intelligence.ollama_provider import (
+        build_ollama_provider,
+    )
+    from tools.ai_intelligence.provider_registry import (
+        ProviderRegistry,
+    )
+    from tools.ai_intelligence.router import (
+        build_router_from_environment,
+    )
+
+    return ExecutionEngine(
+        router=build_router_from_environment(),
+        provider_registry=ProviderRegistry(
+            (build_ollama_provider(),)
+        ),
+    )

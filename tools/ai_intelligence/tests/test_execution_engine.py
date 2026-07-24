@@ -5,10 +5,12 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 from typing import Any
+from unittest.mock import patch
 
 from tools.ai_intelligence.execution_engine import (
     ExecutionEngine,
     ExecutionEngineConfigurationError,
+    build_execution_engine_from_environment,
 )
 from tools.ai_intelligence.execution_models import (
     AttemptStatus,
@@ -21,6 +23,9 @@ from tools.ai_intelligence.provider import (
     ProviderError,
     ProviderTimeoutError,
     ProviderUnavailableError,
+)
+from tools.ai_intelligence.provider_registry import (
+    ProviderRegistry,
 )
 from tools.ai_intelligence.routing_models import (
     AssignmentType,
@@ -210,6 +215,42 @@ class ExecutionEngineTests(unittest.TestCase):
                 router=None,  # type: ignore[arg-type]
                 provider_registry=FakeProviderRegistry(),
             )
+
+    @patch(
+        "tools.ai_intelligence.ollama_provider."
+        "build_ollama_provider"
+    )
+    @patch(
+        "tools.ai_intelligence.router."
+        "build_router_from_environment"
+    )
+    def test_builds_environment_engine_without_execution(
+        self,
+        build_router: Any,
+        build_provider: Any,
+    ) -> None:
+        router = FakeRouter()
+        provider = FakeProvider(
+            [response("ollama-primary")]
+        )
+        build_router.return_value = router
+        build_provider.return_value = provider
+
+        engine = build_execution_engine_from_environment()
+
+        self.assertIs(engine.router, router)
+        self.assertIsInstance(
+            engine.provider_registry,
+            ProviderRegistry,
+        )
+        self.assertEqual(
+            engine.provider_registry.providers,
+            (provider,),
+        )
+        self.assertEqual(router.route_calls, 0)
+        self.assertEqual(provider.requests, [])
+        build_router.assert_called_once_with()
+        build_provider.assert_called_once_with()
 
     def test_returns_primary_success(self) -> None:
         routing_request = RoutingRequest(
