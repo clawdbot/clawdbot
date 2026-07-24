@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -68,6 +69,13 @@ afterEach(async () => {
 });
 
 describe("localization catalog authoring", () => {
+  it("hashes source messages in locale-independent code-point order", () => {
+    const canonical = JSON.stringify({ "wizard.B": "upper", "wizard.a": "lower" });
+    const expected = `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+
+    expect(catalogSourceRevision({ "wizard.a": "lower", "wizard.B": "upper" })).toBe(expected);
+  });
+
   it("accepts a current generated catalog", async () => {
     await expect(checkCatalogs({ root, registryPath: "registry.json" })).resolves.toBeUndefined();
   });

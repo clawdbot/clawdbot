@@ -243,7 +243,9 @@ async function readGenerated(
 export function catalogSourceRevision(messages: Readonly<Record<string, string>>): string {
   const canonical = JSON.stringify(
     Object.fromEntries(
-      Object.entries(messages).toSorted(([left], [right]) => left.localeCompare(right)),
+      Object.entries(messages).toSorted(([left], [right]) =>
+        left < right ? -1 : left > right ? 1 : 0,
+      ),
     ),
   );
   return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
