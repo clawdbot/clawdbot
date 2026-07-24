@@ -4,7 +4,7 @@ import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { filterSupplementalContextItems } from "openclaw/plugin-sdk/security-runtime";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
 
-export type DiscordHistorySenderProvenance = Readonly<{
+type DiscordHistorySenderProvenance = Readonly<{
   id: string;
   name?: string;
   tag?: string;
