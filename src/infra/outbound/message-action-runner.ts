@@ -1954,6 +1954,7 @@ export async function runMessageAction(
     channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
   const defersExternalTargetResolution =
     delegatesActionToGateway &&
+    !dryRun &&
     shouldDeferExternalMessageActionTargetResolution({
       channel,
       action,
@@ -1964,7 +1965,7 @@ export async function runMessageAction(
         input.conversationReadOrigin,
       ),
     });
-  if (!delegatesActionToGateway) {
+  if (!delegatesActionToGateway || dryRun) {
     const authorization = input.messageActionAuthorization;
     params = prepareExternalMessageActionTargetForResolution({
       channel,
