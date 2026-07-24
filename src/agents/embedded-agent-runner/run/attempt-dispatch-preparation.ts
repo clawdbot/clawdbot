@@ -159,6 +159,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           sessionKey: resolvedSessionKey,
           sessionFile: trajectorySessionFile,
           ...(resolvedSessionTarget?.agentId &&
+          resolvedSessionTarget.sessionId &&
           resolvedSessionTarget.sessionKey &&
           resolvedSessionTarget.storePath
             ? {

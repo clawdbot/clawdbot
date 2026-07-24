@@ -109,16 +109,13 @@ export async function readBtwTranscriptMessages(params: {
     if (!params.sessionKey || !params.storePath) {
       return [];
     }
-    const entries = (await loadTranscriptEvents({
+    const sessionEntries = (await loadTranscriptEvents({
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     })) as AgentSessionEntry[];
-    migrateSessionEntries(entries);
-    const sessionEntries = entries.filter(
-      (entry): entry is AgentSessionEntry => entry.type !== "session",
-    );
+    migrateSessionEntries(sessionEntries);
     const tree = scanSessionTranscriptTree(sessionEntries);
     if (!tree.hasLeafUpdate) {
       return buildSessionContext(sessionEntries).messages;
