@@ -7,7 +7,6 @@ import { ErrorCodes, errorShape } from "../protocol/index.js";
 import {
   AiExecuteParamsSchema,
   AiExecuteResultSchema,
-  type AiExecuteParams,
 } from "../protocol/schema/ai-intelligence.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -26,7 +25,7 @@ export const aiIntelligenceHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const result = await executeAiIntelligenceGatewayRequest(params as AiExecuteParams);
+      const result = await executeAiIntelligenceGatewayRequest(params);
       if (!Value.Check(AiExecuteResultSchema, result)) {
         throw new Error("AI Intelligence bridge returned an invalid result");
       }
