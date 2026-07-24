@@ -537,6 +537,7 @@ export async function runCodexAppServerSideQuestion(
           options: options.nativeHookRelay,
           events: nativeHookRelayEvents,
           agentId: sessionAgentId,
+          accountId: params.agentAccountId,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           config: params.cfg,
@@ -775,6 +776,7 @@ function registerCodexSideNativeHookRelay(params: {
   };
   events: readonly NativeHookRelayEvent[];
   agentId: string | undefined;
+  accountId?: string;
   sessionId: string;
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
@@ -792,6 +794,7 @@ function registerCodexSideNativeHookRelay(params: {
   return registerNativeHookRelay({
     provider: "codex",
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
@@ -1032,6 +1035,7 @@ async function createCodexSideToolBridge(input: {
       loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
       hookContext: {
         agentId: input.sessionAgentId,
+        accountId: input.params.agentAccountId,
         config: input.params.cfg,
         sessionId: input.params.sessionId,
         sessionKey: input.params.sessionKey,

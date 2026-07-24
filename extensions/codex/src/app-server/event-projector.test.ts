@@ -4681,6 +4681,7 @@ describe("CodexAppServerEventProjector", () => {
     const projector = await createProjector({
       ...(await createParams()),
       agentId: "main",
+      agentAccountId: "slack-account-1",
       sessionKey: "agent:main:session-1",
     });
 
@@ -4735,6 +4736,7 @@ describe("CodexAppServerEventProjector", () => {
       "after_tool_call context",
     );
     expect(context.agentId).toBe("main");
+    expect(context.accountId).toBe("slack-account-1");
     expect(context.sessionId).toBe("session-1");
     expect(context.sessionKey).toBe("agent:main:session-1");
     expect(context.runId).toBe("run-1");

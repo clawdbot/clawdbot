@@ -2249,7 +2249,11 @@ describe("runCodexAppServerAttempt", () => {
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const params = createParams(sessionFile, workspaceDir);
+    params.agentAccountId = "slack-account-1";
+    params.currentMessageId = "1784750000.000100";
+    params.currentThreadTs = "1784750000.000099";
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -2260,12 +2264,21 @@ describe("runCodexAppServerAttempt", () => {
     expect(beforePromptBuild).toHaveBeenCalledOnce();
     const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
       { messages?: Array<{ role?: string }>; prompt?: string },
-      { runId?: string; sessionId?: string },
+      {
+        accountId?: string;
+        messageId?: string | number;
+        threadId?: string | number;
+        runId?: string;
+        sessionId?: string;
+      },
     ];
     expect(hookInput.prompt).toBe("hello");
     expect(hookInput.messages).toEqual([]);
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
+    expect(hookContext.accountId).toBe("slack-account-1");
+    expect(hookContext.messageId).toBe("1784750000.000100");
+    expect(hookContext.threadId).toBe("1784750000.000099");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
     const wrappedPluginSystemContext = (text: string) =>

@@ -131,6 +131,7 @@ export function createCodexNativeHookRelay(params: {
   generationMismatchGraceMs?: number;
   events: readonly NativeHookRelayEvent[];
   agentId: string | undefined;
+  accountId?: string;
   sessionId: string;
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
@@ -158,6 +159,7 @@ export function createCodexNativeHookRelay(params: {
       ? { generationMismatchGraceMs: params.generationMismatchGraceMs }
       : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),

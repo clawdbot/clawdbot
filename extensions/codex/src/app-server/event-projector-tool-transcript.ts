@@ -184,6 +184,7 @@ export class CodexToolTranscriptProjection {
       toolCallId: item.id,
       runId: this.params.runId,
       agentId: this.params.agentId,
+      accountId: this.params.agentAccountId,
       sessionId: this.params.sessionId,
       sessionKey: this.params.sessionKey,
       startArgs: itemToolArgs(item) ?? {},

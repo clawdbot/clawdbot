@@ -268,6 +268,12 @@ export type PluginHookAgentContext = {
   jobId?: string;
   trace?: DiagnosticTraceContext;
   agentId?: string;
+  /** Authenticated channel account selected by the host for this run. */
+  accountId?: string;
+  /** Host-owned inbound message target for channel-originated runs. */
+  messageId?: string | number;
+  /** Host-owned inbound thread target for channel-originated runs. */
+  threadId?: string | number;
   sessionKey?: string;
   sessionId?: string;
   workspaceDir?: string;

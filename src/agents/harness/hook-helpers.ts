@@ -17,6 +17,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   toolCallId: string;
   runId?: string;
   agentId?: string;
+  accountId?: string;
   sessionId?: string;
   sessionKey?: string;
   channelId?: string;
@@ -50,6 +51,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
       {
         toolName: params.toolName,
         ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.accountId ? { accountId: params.accountId } : {}),
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         ...(params.runId ? { runId: params.runId } : {}),

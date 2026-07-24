@@ -196,6 +196,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           : undefined,
       events: nativeHookRelayEvents,
       agentId: sessionAgentId,
+      accountId: params.agentAccountId,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       config: params.config,

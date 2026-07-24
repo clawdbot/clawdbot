@@ -65,6 +65,7 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 
 type CodexDynamicToolHookContext = {
   agentId?: string;
+  accountId?: string;
   config?: EmbeddedRunAttemptParams["config"];
   workspaceDir?: string;
   sessionId?: string;
@@ -599,6 +600,7 @@ export function createCodexDynamicToolBridge(params: {
           toolCallId: call.callId,
           runId: toolResultHookContext.runId,
           agentId: toolResultHookContext.agentId,
+          accountId: toolResultHookContext.accountId,
           sessionId: toolResultHookContext.sessionId,
           sessionKey: toolResultHookContext.sessionKey,
           channelId: toolResultHookContext.channelId,
@@ -785,6 +787,7 @@ export function createCodexDynamicToolBridge(params: {
           toolCallId: call.callId,
           runId: toolResultHookContext.runId,
           agentId: toolResultHookContext.agentId,
+          accountId: toolResultHookContext.accountId,
           sessionId: toolResultHookContext.sessionId,
           sessionKey: toolResultHookContext.sessionKey,
           channelId: toolResultHookContext.channelId,
@@ -1107,9 +1110,10 @@ function dedupeQuarantinedDynamicTools(
 function toToolResultHookContext(
   ctx: CodexDynamicToolHookContext | undefined,
 ): CodexToolResultHookContext {
-  const { agentId, sessionId, sessionKey, runId, channelId } = ctx ?? {};
+  const { agentId, accountId, sessionId, sessionKey, runId, channelId } = ctx ?? {};
   return {
     ...(agentId && { agentId }),
+    ...(accountId && { accountId }),
     ...(sessionId && { sessionId }),
     ...(sessionKey && { sessionKey }),
     ...(runId && { runId }),

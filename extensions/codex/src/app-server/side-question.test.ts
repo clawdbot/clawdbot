@@ -2226,6 +2226,10 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("bridges side-thread dynamic tool requests to OpenClaw tools", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
     const client = createFakeClient();
     let toolResponse: unknown;
     client.request.mockImplementation(async (method: string) => {
@@ -2262,7 +2266,9 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
-    const result = await runCodexAppServerSideQuestion(sideParams());
+    const result = await runCodexAppServerSideQuestion(
+      sideParams({ agentAccountId: "slack-account-1" }),
+    );
 
     expect(result).toEqual({ text: "Tool answer." });
     const [toolCallId, toolArguments, toolSignal, toolOptions] = mockCall(toolExecuteMock);
@@ -2274,6 +2280,10 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolResponse).toEqual({
       success: true,
       contentItems: [{ type: "inputText", text: "tool output" }],
+    });
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    expect(afterToolCall.mock.calls[0]?.[1]).toMatchObject({
+      accountId: "slack-account-1",
     });
   });
 
