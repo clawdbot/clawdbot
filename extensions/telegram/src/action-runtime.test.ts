@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
+import {
+  handleTelegramAction as handleTelegramActionRuntime,
+  telegramActionRuntime,
+} from "./action-runtime.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
@@ -17,6 +20,17 @@ import type { TelegramRuntime } from "./runtime.types.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
+
+function handleTelegramAction(
+  params: Parameters<typeof handleTelegramActionRuntime>[0],
+  cfg: Parameters<typeof handleTelegramActionRuntime>[1],
+  options?: Parameters<typeof handleTelegramActionRuntime>[2],
+) {
+  return handleTelegramActionRuntime(params, cfg, {
+    conversationReadOrigin: "direct-operator",
+    ...options,
+  });
+}
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
 const sendMessageTelegram = vi.fn(
   async (_to: string, _text: string, _opts?: Record<string, unknown>) => ({
@@ -355,6 +369,194 @@ describe("handleTelegramAction", () => {
 
   it("adds reactions when reactionLevel is minimal", async () => {
     await expectReactionAdded("minimal");
+  });
+
+  it("strips a topic target only after binding the delegated current message", async () => {
+    await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "telegram:-1001:topic:77",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+      {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentMessageId: "456",
+        },
+      },
+    );
+
+    expect(mockCall(reactMessageTelegram, 0, "topic reaction")[0]).toBe("-1001");
+  });
+
+  it("soft-fails an unbound delegated topic reaction before provider execution", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "telegram:-1001:topic:77",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+      {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentMessageId: "999",
+        },
+      },
+    );
+
+    expect(resultDetails(result)).toMatchObject({ ok: false, reason: "error" });
+    expect(reactMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("binds a topicless delegated reaction to the trusted current topic", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "-1001",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+      {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentMessageId: "456",
+          currentThreadTs: "77",
+        },
+      },
+    );
+
+    expect(resultDetails(result)).toMatchObject({ ok: true });
+    expect(mockCall(reactMessageTelegram, 0, "topicless reaction")[0]).toBe("-1001");
+  });
+
+  it("binds a General-topic reaction using trusted thread context", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "-1001",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+      {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001",
+          currentMessageId: "456",
+          currentThreadTs: "1",
+        },
+      },
+    );
+
+    expect(resultDetails(result)).toMatchObject({ ok: true });
+    expect(mockCall(reactMessageTelegram, 0, "General-topic reaction")[0]).toBe("-1001");
+  });
+
+  it("soft-fails a topicless different-chat reaction during a trusted topic turn", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "-1002",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+      {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentMessageId: "456",
+          currentThreadTs: "77",
+        },
+      },
+    );
+
+    expect(resultDetails(result)).toMatchObject({ ok: false, reason: "error" });
+    expect(reactMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("rejects threadless cross-chat mutations before provider execution", async () => {
+    const context = {
+      conversationReadOrigin: "delegated" as const,
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "telegram" as const,
+        currentChannelId: "telegram:-1001",
+        currentMessageId: "456",
+      },
+    };
+
+    const reaction = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "-1002",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+      context,
+    );
+    expect(resultDetails(reaction)).toMatchObject({ ok: false, reason: "error" });
+    await expect(
+      handleTelegramAction(
+        {
+          action: "editMessage",
+          chatId: "-1002",
+          messageId: 456,
+          content: "updated",
+        },
+        telegramConfig(),
+        context,
+      ),
+    ).rejects.toThrow("provider-observed binding");
+    await expect(
+      handleTelegramAction(
+        {
+          action: "deleteMessage",
+          chatId: "-1002",
+          messageId: 456,
+        },
+        telegramConfig(),
+        context,
+      ),
+    ).rejects.toThrow("provider-observed binding");
+
+    expect(reactMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deleteMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("treats missing invocation origin as delegated for threadless mutations", async () => {
+    const result = await handleTelegramActionRuntime(
+      {
+        action: "react",
+        chatId: "-1001",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+    );
+
+    expect(resultDetails(result)).toMatchObject({ ok: false, reason: "error" });
+    expect(reactMessageTelegram).not.toHaveBeenCalled();
   });
 
   it("routes omitted-account action tokens through the configured defaultAccount (#61012)", async () => {
@@ -1755,6 +1957,93 @@ describe("handleTelegramAction", () => {
     expect(call[0]).toBe("123");
     expect(call[1]).toBe(456);
     expect(requireRecord(call[2], "delete message options").token).toBe("tok");
+  });
+
+  it("binds delegated topic edit and delete actions before provider execution", async () => {
+    const actionContext = {
+      conversationReadOrigin: "delegated" as const,
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "telegram" as const,
+        currentChannelId: "telegram:-1001:topic:77",
+        currentMessageId: "456",
+      },
+    };
+
+    await handleTelegramAction(
+      {
+        action: "editMessage",
+        chatId: "telegram:-1001:topic:77",
+        messageId: 456,
+        content: "updated",
+      },
+      telegramConfig(),
+      actionContext,
+    );
+    expect(mockCall(editMessageTelegram, 0, "topic edit")[0]).toBe("-1001");
+
+    await handleTelegramAction(
+      {
+        action: "deleteMessage",
+        chatId: "telegram:-1001:topic:77",
+        messageId: 456,
+      },
+      telegramConfig(),
+      actionContext,
+    );
+    expect(mockCall(deleteMessageTelegram, 0, "topic delete")[0]).toBe("-1001");
+  });
+
+  it("rejects unbound delegated topic edit and delete actions before provider execution", async () => {
+    const actionContext = {
+      conversationReadOrigin: "delegated" as const,
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "telegram" as const,
+        currentChannelId: "telegram:-1001:topic:77",
+        currentMessageId: "999",
+      },
+    };
+
+    await expect(
+      handleTelegramAction(
+        {
+          action: "editMessage",
+          chatId: "telegram:-1001:topic:77",
+          messageId: 456,
+          content: "updated",
+        },
+        telegramConfig(),
+        actionContext,
+      ),
+    ).rejects.toThrow("provider-observed binding");
+    await expect(
+      handleTelegramAction(
+        {
+          action: "deleteMessage",
+          chatId: "telegram:-1001:topic:77",
+          messageId: 456,
+        },
+        telegramConfig(),
+        actionContext,
+      ),
+    ).rejects.toThrow("provider-observed binding");
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deleteMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("keeps direct-operator topic mutations available", async () => {
+    await handleTelegramAction(
+      {
+        action: "deleteMessage",
+        chatId: "telegram:-1001:topic:77",
+        messageId: 456,
+      },
+      telegramConfig(),
+      { conversationReadOrigin: "direct-operator" },
+    );
+
+    expect(mockCall(deleteMessageTelegram, 0, "direct topic delete")[0]).toBe("-1001");
   });
 
   it("rejects fractional message ids before mutating messages", async () => {

@@ -52,6 +52,10 @@ function usesRealAccessorStore(storePath?: string): boolean {
 
 export const buildWorkspaceSkillSnapshotMock = createMock();
 export const resolveAgentConfigMock = createMock();
+const resolveAgentWorkspaceDirMock = vi.fn(
+  (cfg: { agents?: { list?: Array<{ id?: string; workspace?: string }> } }, agentId: string) =>
+    cfg.agents?.list?.find((entry) => entry.id === agentId)?.workspace ?? "/tmp/workspace",
+);
 const resolveEffectiveModelFallbacksMock = createMock();
 const resolveSubagentModelFallbacksOverrideMock = createMock();
 export const resolveAgentModelFallbacksOverrideMock = createMock();
@@ -105,7 +109,7 @@ export const resolveCronAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
 export const deriveSessionTotalTokensMock = createMock();
 const hasNonzeroUsageMock = createMock();
-const ensureAgentWorkspaceMock = createMock();
+export const ensureAgentWorkspaceMock = createMock();
 const normalizeThinkLevelMock = createMock();
 const normalizeVerboseLevelMock = createMock();
 export const isThinkingLevelSupportedMock = createMock();
@@ -121,13 +125,14 @@ const isExternalHookSessionMock = createMock();
 const resolveHookExternalContentSourceMock = createMock();
 const getSkillsSnapshotVersionMock = createMock();
 export const loadModelCatalogMock = createMock();
+export const loadModelCatalogOwnerMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
 
 vi.mock("./run.runtime.js", async () => ({
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
-  resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
@@ -175,10 +180,6 @@ vi.mock("./run-external-content.runtime.js", () => ({
 
 vi.mock("./run-context.runtime.js", () => ({
   lookupContextTokens: lookupContextTokensMock,
-}));
-
-vi.mock("./run-model-catalog.runtime.js", () => ({
-  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 
 vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
@@ -230,7 +231,9 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
 vi.mock("./run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
-  loadPreparedModelCatalog: loadModelCatalogMock,
+  loadPreparedModelCatalogOwnerSnapshot: loadModelCatalogOwnerMock,
+  resolveAgentConfig: resolveAgentConfigMock,
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
   getModelRefStatus: getModelRefStatusMock,
   normalizeModelSelection: normalizeModelSelectionForTest,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
@@ -565,6 +568,26 @@ function resetRunConfigMocks(): void {
   resolveHookExternalContentSourceMock.mockReturnValue(undefined);
   getSkillsSnapshotVersionMock.mockReturnValue(42);
   loadModelCatalogMock.mockResolvedValue([]);
+  loadModelCatalogOwnerMock.mockImplementation(
+    async (params: {
+      agentId?: string;
+      agentDir?: string;
+      config: object;
+      workspaceDir?: string;
+    }) => {
+      const agentId = params.agentId ?? "default";
+      return {
+        agentId,
+        agentDir: params.agentDir ?? "/tmp/agent-dir",
+        workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDirMock(params.config, agentId),
+        config: params.config,
+        modelCatalog: {
+          entries: await loadModelCatalogMock(params),
+          routeVariants: [],
+        },
+      };
+    },
+  );
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
 }
 

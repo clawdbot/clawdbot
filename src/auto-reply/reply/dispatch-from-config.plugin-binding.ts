@@ -8,12 +8,12 @@ import {
   resolveTextCommand,
 } from "../commands-registry.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { resolveCommandContextText } from "./context-text.js";
 import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
 
 export function shouldBypassPluginOwnedBindingForCommand(
-  ctx: FinalizedMsgContext,
+  ctx: FinalizedRuntimeMsgContext,
   cfg: OpenClawConfig,
 ): boolean {
   // Command authorization is a trust boundary. Reject malformed runtime context

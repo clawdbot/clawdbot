@@ -307,7 +307,9 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER = {
     buildLeaveScript: meetLeaveScript,
     parseLeaveResult: parseMeetLeaveResult,
     captions: {
-      enabled: (mode) => mode === "transcribe",
+      // Durable notes observe the caption stream in every mode; live transcript
+      // visibility remains gated by MeetingSessionRuntime.
+      enabled: (_mode) => true,
       buildTranscriptScript: ({ finalize, meetingSessionId, meetingUrl }) =>
         meetTranscriptScript(meetingUrl, meetingSessionId, finalize),
       parseTranscript: parseMeetTranscriptSnapshot,

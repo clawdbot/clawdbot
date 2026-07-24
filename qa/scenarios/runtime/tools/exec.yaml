@@ -3,7 +3,7 @@ title: "Runtime tool fixture — exec"
 scenario:
   id: runtime-tool-exec
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
       - tools.exec-routing-exec

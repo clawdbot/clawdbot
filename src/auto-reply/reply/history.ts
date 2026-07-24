@@ -74,12 +74,6 @@ function recordChannelHistoryEntry<T extends HistoryEntry>(params: {
   return history;
 }
 
-/**
- * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).record(...)`.
- * This helper remains for core internals and older plugin compatibility.
- */
-export const recordPendingHistoryEntry = recordChannelHistoryEntry;
-
 export function recordChannelHistoryEntryIfEnabled<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
@@ -342,11 +336,6 @@ function clearChannelHistory(params: {
 }): void {
   params.historyMap.set(params.historyKey, []);
 }
-
-/**
- * @deprecated Plugin message-turn code should use `createChannelHistoryWindow(...).clear(...)`.
- */
-export const clearHistoryEntries = clearChannelHistory;
 
 export function clearChannelHistoryIfEnabled(params: {
   historyMap: Map<string, HistoryEntry[]>;

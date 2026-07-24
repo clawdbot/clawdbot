@@ -30,6 +30,20 @@ vi.mock("../channels/plugins/session-conversation.js", () => ({
   }),
 }));
 
+vi.mock("../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: () => ({
+    config: {
+      listAccountIds: (config: OpenClawConfig) => [
+        "default",
+        ...Object.keys(
+          (config.channels?.whatsapp as { accounts?: Record<string, unknown> } | undefined)
+            ?.accounts ?? {},
+        ),
+      ],
+    },
+  }),
+}));
+
 async function writeSessionEntries(
   storePath: string,
   entries: Record<string, unknown>,
@@ -205,6 +219,38 @@ describe("resolveGroupToolPolicy group context validation", () => {
     });
 
     expect(policy).toEqual({ allow: ["read"] });
+  });
+
+  it("fails closed when scheduled authority names a removed account", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:safe-room",
+        accountId: "removed",
+        requireConfiguredAccount: true,
+      }),
+    ).toEqual({ allow: [] });
+  });
+
+  it("resolves scheduled group policy for a still-configured named account", () => {
+    const accountCfg = {
+      ...cfg,
+      channels: {
+        whatsapp: {
+          ...cfg.channels?.whatsapp,
+          accounts: { work: {} },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveGroupToolPolicy({
+        config: accountCfg,
+        sessionKey: "agent:main:whatsapp:group:safe-room",
+        accountId: "work",
+        requireConfiguredAccount: true,
+      }),
+    ).toEqual({ allow: ["read"] });
   });
 });
 

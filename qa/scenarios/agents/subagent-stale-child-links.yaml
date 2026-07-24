@@ -3,6 +3,7 @@ title: Subagent stale child links
 scenario:
   id: subagent-stale-child-links
   surface: subagents
+  runtimePairLane: core
   coverage:
     primary:
       - gateway.session-apis-subagents

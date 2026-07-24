@@ -3,6 +3,7 @@ title: Approval turn tool followthrough
 scenario:
   id: approval-turn-tool-followthrough
   surface: harness
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.approval-flow-approvals

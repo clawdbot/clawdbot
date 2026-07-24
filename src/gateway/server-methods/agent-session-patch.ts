@@ -13,8 +13,11 @@ import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.j
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  deliveryContextFromSession,
   mergeDeliveryContext,
-  normalizeSessionDeliveryFields,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import { canonicalizeSpawnedByForAgent, loadSessionEntryReadOnly } from "../session-utils.js";
@@ -48,9 +51,7 @@ export function buildAgentSessionPatch(params: {
   normalizedSpawned: { groupId?: string; groupChannel?: string; groupSpace?: string };
   requestDeliveryHint: DeliveryContext | undefined;
   requestLabel?: string;
-  recipientChannel?: string;
   pluginOwnerId?: string;
-  createdBy?: SessionEntry["createdBy"];
   expectedExistingSessionId?: string;
   hasRestoredCronContinuation: boolean;
   resetPolicy: ReturnType<typeof import("../../config/sessions.js").resolveSessionResetPolicy>;
@@ -115,17 +116,16 @@ export function buildAgentSessionPatch(params: {
           (trustRequestSelectors ? params.normalizedSpawned.groupSpace : undefined),
       };
 
-  const deliveryFields = normalizeSessionDeliveryFields(params.freshEntry);
   const effectiveDelivery = mergeDeliveryContext(
-    deliveryFields.deliveryContext,
+    deliveryContextFromSession(params.freshEntry),
     params.requestDeliveryHint,
   );
-  const effectiveDeliveryFields = normalizeSessionDeliveryFields({
-    route: deliveryFields.route,
-    deliveryContext: effectiveDelivery,
+  const delivery = normalizeSessionDeliveryState({
+    route: sessionDeliveryRoute(params.freshEntry),
+    context: effectiveDelivery,
+    origin: sessionDeliveryOrigin(params.freshEntry),
   });
   const labelValue = normalizeOptionalString(params.requestLabel) || params.freshEntry?.label;
-  const channelValue = params.freshEntry?.channel ?? params.recipientChannel?.trim();
   const freshSessionRotatedSinceLoad = Boolean(
     params.initialEntry?.sessionId &&
     params.freshEntry?.sessionId &&
@@ -210,9 +210,6 @@ export function buildAgentSessionPatch(params: {
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(freshIsNewSession && !freshSessionRotatedSinceLoad ? { sessionStartedAt: params.now } : {}),
-    ...(freshIsNewSession && !freshSessionRotatedSinceLoad
-      ? { createdBy: params.createdBy ? { ...params.createdBy } : undefined }
-      : {}),
     ...(params.touchInteraction
       ? {
           lastInteractionAt: params.now,
@@ -222,23 +219,9 @@ export function buildAgentSessionPatch(params: {
         }
       : {}),
     ...automaticRecoveryClearPatch,
-    ...(effectiveDeliveryFields.route ? { route: effectiveDeliveryFields.route } : {}),
-    ...(effectiveDeliveryFields.deliveryContext
-      ? { deliveryContext: effectiveDeliveryFields.deliveryContext }
-      : {}),
-    ...(effectiveDeliveryFields.lastChannel
-      ? { lastChannel: effectiveDeliveryFields.lastChannel }
-      : {}),
-    ...(effectiveDeliveryFields.lastTo ? { lastTo: effectiveDeliveryFields.lastTo } : {}),
-    ...(effectiveDeliveryFields.lastAccountId
-      ? { lastAccountId: effectiveDeliveryFields.lastAccountId }
-      : {}),
-    ...(effectiveDeliveryFields.lastThreadId != null
-      ? { lastThreadId: effectiveDeliveryFields.lastThreadId }
-      : {}),
+    delivery,
     ...(labelValue ? { label: labelValue } : {}),
     ...(freshSpawnedBy ? { spawnedBy: freshSpawnedBy } : {}),
-    ...(channelValue ? { channel: channelValue } : {}),
     groupId: nextGroup.groupId,
     groupChannel: nextGroup.groupChannel,
     space: nextGroup.groupSpace,

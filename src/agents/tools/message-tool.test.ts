@@ -15,6 +15,7 @@ import {
   MESSAGE_TOOL_DELIVERY_HINTS,
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import { EMPTY_PREPARED_MESSAGE_TOOL_CATALOG } from "../../plugins/prepared-message-tool-catalog.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
@@ -1697,6 +1698,31 @@ describe("message tool delivery mode schema", () => {
 
     expect(bestEffort?.type).toBe("boolean");
     expect(bestEffort?.description).toContain("requiring durable delivery");
+  });
+
+  it("does not rediscover an active catalog after a prepared absence", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "test",
+      actions: ["send"],
+      message: {
+        durableFinal: {
+          capabilities: { reconcileUnknownSend: true },
+          reconcileUnknownSend: async () => ({ status: "not_sent" }),
+        },
+      },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "discord",
+      preparedMessageToolCatalog: EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
+    });
+
+    expect(getToolProperties(tool).bestEffort).toBeUndefined();
   });
 });
 

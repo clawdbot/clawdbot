@@ -20,6 +20,7 @@ import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -113,8 +114,10 @@ export type AgentCommandOpts = {
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Trusted in-process subagent-completion handoff; never accepted from public RPC params. */
   trustedInternalHandoff?: boolean;
-  /** Internal marker for an auto-applied cap that CLI runtimes must omit. */
+  /** Internal marker identifying a server-managed default cap. */
   toolsAllowIsDefault?: boolean;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
   requireExplicitMessageTarget?: boolean;
   cliSessionBindingFacts?: CliSessionBindingFacts;

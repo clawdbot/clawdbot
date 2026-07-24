@@ -1,9 +1,18 @@
 // History image prune tests keep provider replay compact by replacing stale
-// image bytes and media references while preserving recent user context.
+// image bytes and fact-owned projections while preserving recent user context.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import {
+  attachRuntimePromptMediaFacts,
+  readRuntimePromptMediaFacts,
+} from "../../../media/media-facts.js";
+import { buildPersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import {
   installHistoryImagePruneContextTransform,
   pruneProcessedHistoryImages,
@@ -12,6 +21,8 @@ import {
 const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
 const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
   "[media reference removed - already processed by model]";
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
 function expectArrayMessageContent(
   message: AgentMessage | undefined,
@@ -105,9 +116,23 @@ describe("pruneProcessedHistoryImages", () => {
     expect(content[0]?.type).toBe("text");
   });
 
-  it("scrubs old media attachment markers from text blocks", () => {
-    // Text references are scrubbed alongside image blocks so old paths and
-    // media URIs cannot rehydrate stale images on a later replay.
+  it("strips explicit-image provenance when its old image block is pruned", () => {
+    const message = castAgentMessage({
+      role: "user",
+      content: [{ type: "text", text: "explicit image" }, { ...image }],
+      __openclaw: {
+        mediaImageBlockFactIndexes: [null],
+        mediaImageLayout: { slots: [{ kind: "inline" }] },
+      },
+    });
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const meta = (pruned[0] as unknown as Record<string, unknown>)["__openclaw"];
+
+    expect(meta).toBeUndefined();
+  });
+
+  it("redacts factless legacy attachment text while pruning old image blocks", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "user",
@@ -147,7 +172,7 @@ describe("pruneProcessedHistoryImages", () => {
     expectContentBlock(originalContent[1], { type: "image", data: "abc" });
   });
 
-  it("scrubs old media attachment markers from string content without image blocks", () => {
+  it("redacts factless legacy attachment text without image blocks", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "user",
@@ -157,16 +182,11 @@ describe("pruneProcessedHistoryImages", () => {
     ];
 
     const pruned = expectPrunedMessages(messages);
-
-    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(firstUser?.content).toBe(`please remember ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}`);
-    const originalUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
-    expect(originalUser?.content).toBe(
-      "please remember [media attached: media://inbound/stale-image.png]",
-    );
+    const user = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(user?.content).toBe(`please remember ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}`);
   });
 
-  it("prunes marked bare late-media turns identically to legacy literal turns", () => {
+  it("prunes fact-owned and factless legacy late-media projections", () => {
     const fields = {
       role: "user" as const,
       MediaPath: "media://inbound/stale-image.png",
@@ -178,8 +198,8 @@ describe("pruneProcessedHistoryImages", () => {
       __openclaw: { lateMedia: true },
     });
     const legacyString = castAgentMessage({
-      ...fields,
       content: "[media attached: media://inbound/stale-image.png]",
+      role: "user",
     });
     const markedArray = castAgentMessage({
       ...fields,
@@ -187,7 +207,7 @@ describe("pruneProcessedHistoryImages", () => {
       __openclaw: { lateMedia: true },
     });
     const legacyArray = castAgentMessage({
-      ...fields,
+      role: "user",
       content: [
         { type: "text", text: "[media attached: media://inbound/stale-image.png]" },
         { ...image },
@@ -199,12 +219,20 @@ describe("pruneProcessedHistoryImages", () => {
     const prunedMarkedArray = expectPrunedMessages([markedArray, ...oldEnoughTail()]);
     const prunedLegacyArray = expectPrunedMessages([legacyArray, ...oldEnoughTail()]);
     const markedStringOutput = prunedMarkedString as unknown as Array<{ content?: unknown }>;
-    const legacyStringOutput = prunedLegacyString as unknown as Array<{ content?: unknown }>;
     const markedArrayOutput = prunedMarkedArray as unknown as Array<{ content?: unknown }>;
+    const legacyStringOutput = prunedLegacyString as unknown as Array<{ content?: unknown }>;
     const legacyArrayOutput = prunedLegacyArray as unknown as Array<{ content?: unknown }>;
 
-    expect(markedStringOutput[0]?.content).toBe(legacyStringOutput[0]?.content);
-    expect(markedArrayOutput[0]?.content).toEqual(legacyArrayOutput[0]?.content);
+    expect(markedStringOutput[0]?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
+    expect(legacyStringOutput[0]?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
+    expect(markedArrayOutput[0]?.content).toEqual([
+      { type: "text", text: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER },
+      { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER },
+    ]);
+    expect(legacyArrayOutput[0]?.content).toEqual([
+      { type: "text", text: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER },
+      { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER },
+    ]);
   });
 
   it("does not replace a distinct caption on an old marked late-media turn", () => {
@@ -216,12 +244,178 @@ describe("pruneProcessedHistoryImages", () => {
       __openclaw: { lateMedia: true },
     });
 
-    expect(pruneProcessedHistoryImages([message, ...oldEnoughTail()])).toBeNull();
-    const output = [message] as unknown as Array<{ content?: unknown }>;
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const output = pruned as unknown as Array<{ content?: unknown; MediaPath?: unknown }>;
     expect(output[0]?.content).toBe("resolved subtitle");
+    expect(output[0]?.MediaPath).toBeUndefined();
   });
 
-  it("scrubs bare old inbound media URIs from tool results", () => {
+  it("drops runtime facts from captioned old turns without changing their text", () => {
+    const message = attachRuntimePromptMediaFacts(
+      castAgentMessage({ role: "user", content: "caption stays byte-identical" }),
+      [{ path: "/tmp/stale.png", contentType: "image/png" }],
+    );
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe("caption stays byte-identical");
+    expect(firstUser && readRuntimePromptMediaFacts(firstUser)).toBeUndefined();
+    expect(readRuntimePromptMediaFacts(message)).toHaveLength(1);
+  });
+
+  it("redacts the exact fact-owned projection from a captioned old turn", () => {
+    const imagePath = "/tmp/stale-owned.png";
+    const message = attachRuntimePromptMediaFacts(
+      castAgentMessage({
+        role: "user",
+        content: `[media attached: ${imagePath} (image/png)]\n\ncaption stays`,
+      }),
+      [{ path: imagePath, contentType: "image/png" }],
+    );
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe(`${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}\n\ncaption stays`);
+  });
+
+  it("redacts a persisted fact projection with a distinct URL", () => {
+    const imagePath = "/tmp/stale-owned.png";
+    const imageUrl = "https://example.test/stale-owned.png";
+    const message = castAgentMessage({
+      role: "user",
+      content: `[media attached: ${imagePath} (image/png) | ${imageUrl}]`,
+      __openclaw: {
+        media: [
+          {
+            path: imagePath,
+            url: imageUrl,
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      },
+    });
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
+  });
+
+  it("redacts a persisted relative projection after legacy path canonicalization", () => {
+    const message = buildPersistedUserTurnMessage({
+      text: "[media attached: ./old.png (image/png)]",
+      media: [
+        {
+          path: "./old.png",
+          workspaceDir: "/workspace",
+          contentType: "image/png",
+        },
+      ],
+    }) as AgentMessage;
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
+  });
+
+  it("redacts a persisted relative projection without a dot prefix", () => {
+    const message = buildPersistedUserTurnMessage({
+      text: "[media attached: sub/old.png (image/png)]",
+      media: [
+        {
+          path: "sub/old.png",
+          workspaceDir: "/workspace",
+          contentType: "image/png",
+        },
+      ],
+    }) as AgentMessage;
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe(PRUNED_HISTORY_MEDIA_REFERENCE_MARKER);
+  });
+
+  it("does not claim a basename-only marker for an absolute owned fact", () => {
+    const message = buildPersistedUserTurnMessage({
+      text: "caption mentions [media attached: ./photo.png (image/png)]",
+      media: [{ path: "/workspace/sub/photo.png", contentType: "image/png" }],
+    }) as AgentMessage;
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe("caption mentions [media attached: ./photo.png (image/png)]");
+  });
+
+  it("preserves an unrelated legacy-shaped marker in a fact-backed caption", () => {
+    const message = buildPersistedUserTurnMessage({
+      text: "caption mentions [media attached: ./unrelated.png (image/png)]",
+      media: [{ path: "./owned.png", workspaceDir: "/workspace", contentType: "image/png" }],
+    }) as AgentMessage;
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe(
+      "caption mentions [media attached: ./unrelated.png (image/png)]",
+    );
+  });
+
+  it("redacts separately projected fact lines in distinct text blocks", () => {
+    const firstPath = "/tmp/first-owned.png";
+    const secondPath = "/tmp/second-owned.png";
+    const message = attachRuntimePromptMediaFacts(
+      castAgentMessage({
+        role: "user",
+        content: [
+          { type: "text", text: `[media attached: ${firstPath} (image/png)]` },
+          { type: "text", text: `[media attached: ${secondPath} (image/png)]` },
+        ],
+      }),
+      [
+        { path: firstPath, contentType: "image/png" },
+        { path: secondPath, contentType: "image/png" },
+      ],
+    );
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    expect(expectArrayMessageContent(pruned[0], "expected redacted text blocks")).toEqual([
+      { type: "text", text: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER },
+      { type: "text", text: PRUNED_HISTORY_MEDIA_REFERENCE_MARKER },
+    ]);
+  });
+
+  it("redacts a fact-backed legacy image-source projection", () => {
+    const imagePath = "/tmp/legacy-owned.jpg";
+    const message = castAgentMessage({
+      role: "user",
+      content: `[Image: source: ${imagePath}]\ncaption stays`,
+      MediaPath: imagePath,
+      MediaPaths: [imagePath],
+      MediaType: "image/jpeg",
+      MediaTypes: ["image/jpeg"],
+    });
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe(`${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}\ncaption stays`);
+  });
+
+  it("preserves a bare claim-check URI in a fact-backed caption", () => {
+    const mediaRef = "media://inbound/captioned.png";
+    const message = castAgentMessage({
+      role: "user",
+      content: `caption mentions ${mediaRef} as text`,
+      MediaPath: mediaRef,
+      MediaPaths: [mediaRef],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const firstUser = pruned[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe(`caption mentions ${mediaRef} as text`);
+  });
+
+  it("redacts bare old inbound media URIs from factless tool results", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "toolResult",
@@ -232,15 +426,8 @@ describe("pruneProcessedHistoryImages", () => {
     ];
 
     const pruned = expectPrunedMessages(messages);
-
     const toolResult = pruned[0] as Extract<AgentMessage, { role: "toolResult" }> | undefined;
     expect(toolResult?.content).toBe(`previous ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER} result`);
-    const originalToolResult = messages[0] as
-      | Extract<AgentMessage, { role: "toolResult" }>
-      | undefined;
-    expect(originalToolResult?.content).toBe(
-      "previous media://inbound/stale-screenshot.png result",
-    );
   });
 
   it("keeps image blocks that belong to the third-most-recent assistant turn", () => {
@@ -452,5 +639,134 @@ describe("installHistoryImagePruneContextTransform", () => {
 
     restore();
     expect(agent.transformContext).toBe(originalTransformContext);
+  });
+
+  it("does not legacy-redact a fact-backed caption on the wrapper second pass", async () => {
+    const mediaRef = "media://inbound/captioned.png";
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "user",
+        content: `caption mentions ${mediaRef} as text`,
+        media: [{ url: mediaRef, contentType: "image/png" }],
+      }),
+      ...oldEnoughTail(),
+    ];
+    const agent = {
+      transformContext: async (input: AgentMessage[]) =>
+        input.map((message) => ({ ...message })) as AgentMessage[],
+    };
+    const restore = installHistoryImagePruneContextTransform(agent);
+
+    const replay = await agent.transformContext(messages);
+
+    expect((replay[0] as { content?: unknown }).content).toBe(
+      `caption mentions ${mediaRef} as text`,
+    );
+    restore();
+  });
+
+  it("hydrates recent facts before an existing transform clones messages", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-history-hydrate-"));
+    const imagePath = path.join(workspaceDir, "photo.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const message = attachRuntimePromptMediaFacts(
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "describe" }] }),
+      [{ path: imagePath, contentType: "image/png" }],
+    );
+    const agent = {
+      transformContext: async (messages: AgentMessage[]) =>
+        messages.map((entry) => {
+          if (!("content" in entry)) {
+            return { ...entry };
+          }
+          return {
+            ...entry,
+            content: Array.isArray(entry.content)
+              ? entry.content.map((block: (typeof entry.content)[number]) => ({ ...block }))
+              : entry.content,
+          };
+        }) as AgentMessage[],
+    };
+    const restore = installHistoryImagePruneContextTransform(agent, {
+      workspaceDir,
+      model: { input: ["text", "image"] },
+      workspaceOnly: true,
+    });
+
+    try {
+      const replay = await agent.transformContext([message]);
+      expect(expectArrayMessageContent(replay[0], "expected hydrated content")).toEqual([
+        { type: "text", text: "describe" },
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      restore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("strips nested media metadata before old turns can rehydrate", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruned-nested-media-"));
+    const imagePath = path.join(workspaceDir, "old.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const baseBridge = createHostSandboxFsBridge(workspaceDir);
+    let hydrationReadCount = 0;
+    const bridge = {
+      ...baseBridge,
+      readFile: async (params: Parameters<typeof baseBridge.readFile>[0]) => {
+        hydrationReadCount++;
+        return await baseBridge.readFile(params);
+      },
+    };
+    const message = castAgentMessage({
+      role: "user",
+      content: "[media attached: ./old.png (image/png)]",
+      __openclaw: {
+        media: [{ path: "./old.png", contentType: "image/png" }],
+        mediaImageBlockFactIndexes: [0],
+        mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+      },
+    });
+    const agent: {
+      transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]> | AgentMessage[];
+    } = {};
+    const restore = installHistoryImagePruneContextTransform(agent, {
+      workspaceDir,
+      model: { input: ["text", "image"] },
+      workspaceOnly: true,
+      sandbox: { root: workspaceDir, bridge },
+    });
+
+    try {
+      const replay = await agent.transformContext?.([message, ...oldEnoughTail()]);
+      const meta = (replay?.[0] as unknown as Record<string, unknown>)?.["__openclaw"] as
+        | Record<string, unknown>
+        | undefined;
+      expect(hydrationReadCount).toBe(0);
+      expect(meta?.media).toBeUndefined();
+      expect(meta?.mediaImageBlockFactIndexes).toBeUndefined();
+      expect(meta?.mediaImageLayout).toBeUndefined();
+    } finally {
+      restore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats identity-less nested facts as structured ownership", () => {
+    const message = castAgentMessage({
+      role: "user",
+      content: "[media attached: /tmp/unknown.png (image/png)]",
+      __openclaw: {
+        media: [{ kind: "image" }],
+        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
+      },
+    });
+
+    const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
+    const first = pruned[0] as unknown as Record<string, unknown>;
+    const meta = first["__openclaw"] as Record<string, unknown> | undefined;
+    expect(first.content).toBe("[media attached: /tmp/unknown.png (image/png)]");
+    expect(meta?.media).toBeUndefined();
+    expect(meta?.mediaImageLayout).toBeUndefined();
   });
 });

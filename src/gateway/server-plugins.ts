@@ -28,6 +28,7 @@ import {
   type GatewayMethodDispatchResponse,
   unwrapGatewayMethodDispatchResponse,
 } from "./server-in-process-dispatch.js";
+import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -247,6 +248,7 @@ type DispatchGatewayMethodInProcessOptions = {
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   delegatedToolPolicyHandoff?: boolean;
+  sessionCreation?: TrustedSessionCreation;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
@@ -288,6 +290,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
       : {}),
     delegatedToolPolicyHandoff: options?.delegatedToolPolicyHandoff === true,
+    ...(options?.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
     scopes: options?.syntheticScopes,
   });
   const scopedClient = mergePluginRuntimeClientInternal(

@@ -85,7 +85,6 @@ const TIER_EVAL_RETIRED_ROOT_PATHS = [
   ["logging", "redactSensitive"],
   ["commands", "useAccessGroups"],
   ["gateway", "controlUi", "allowInsecureAuth"],
-  ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
   ["memory", "qmd", "mcporter"],
   ["memory", "qmd", "update"],
   ["memory", "search", "remote", "nonBatchConcurrency"],

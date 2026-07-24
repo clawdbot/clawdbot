@@ -79,7 +79,7 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
   disk?: QaSuiteCommandOptions["disk"];
   preflight?: QaSuiteCommandOptions["preflight"];
   runtimePair?: QaSuiteCommandOptions["runtimePair"];
-  runtimeParityTier?: QaSuiteCommandOptions["runtimeParityTier"];
+  runtimePairLane?: QaSuiteCommandOptions["runtimePairLane"];
 };
 
 const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
@@ -510,8 +510,8 @@ export function registerQaLabCli(program: Command) {
     .option("--disk <size>", "Multipass disk size")
     .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. openclaw,codex")
     .option(
-      "--runtime-parity-tier <tier>",
-      "Add scenarios tagged with runtimeParityTier (standard, optional, live-only, soak; repeatable or comma-separated)",
+      "--runtime-pair-lane <lane>",
+      "Add scenarios in a runtimePairLane (core, extended, soak; repeatable or comma-separated)",
       collectString,
       [],
     )
@@ -541,7 +541,7 @@ export function registerQaLabCli(program: Command) {
         disk: opts.disk,
         preflight: opts.preflight,
         runtimePair: opts.runtimePair,
-        runtimeParityTier: opts.runtimeParityTier,
+        runtimePairLane: opts.runtimePairLane,
       });
     });
 

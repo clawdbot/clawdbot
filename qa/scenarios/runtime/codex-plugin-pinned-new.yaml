@@ -3,7 +3,7 @@ title: Codex plugin pinned new
 scenario:
   id: codex-plugin-pinned-new
   surface: runtime
-  runtimeParityTier: standard
+  runtimePairLane: core
   runtimeParityUsage:
     expectation: not-applicable
     reason: Local version-mismatch fixture only; no assistant turn runs.

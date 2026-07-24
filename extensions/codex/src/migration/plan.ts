@@ -179,6 +179,7 @@ function buildPluginItems(
           action: "install",
           status: conflict ? "conflict" : "planned",
           reason: conflict ? MIGRATION_REASON_PLUGIN_EXISTS : undefined,
+          applyPhase: "after-promotion",
           source: plugin.source,
           target: `plugins.entries.codex.config.codexPlugins.plugins.${configKey}`,
           message: `Install Codex plugin "${plugin.pluginName}" in the OpenClaw-managed Codex app-server runtime.`,
@@ -425,6 +426,7 @@ function buildPluginConfigItem(
     target: "plugins.entries.codex.config.codexPlugins",
     status: conflict ? "conflict" : "planned",
     reason: conflict ? MIGRATION_REASON_TARGET_EXISTS : undefined,
+    applyPhase: "after-promotion",
     message:
       "Enable OpenClaw's Codex plugin integration and record migrated source-installed curated plugins.",
     details: {

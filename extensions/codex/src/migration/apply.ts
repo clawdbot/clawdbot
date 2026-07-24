@@ -6,6 +6,7 @@ import {
   markMigrationItemError,
   markMigrationItemSkipped,
   MIGRATION_REASON_TARGET_EXISTS,
+  resolveMigrationConfigRuntime,
   summarizeMigrationItems,
   writeMigrationConfigPath,
 } from "openclaw/plugin-sdk/migration";
@@ -421,14 +422,31 @@ async function applyCodexPluginConfigItem(
   item: MigrationItem,
   appliedItems: readonly MigrationItem[],
 ): Promise<MigrationItem> {
+  const incompletePluginItems = appliedItems.filter(
+    (candidate) =>
+      candidate.kind === "plugin" &&
+      candidate.action === "install" &&
+      readCodexPluginPolicy(candidate) !== undefined &&
+      !isCodexPluginConfigTerminal(candidate),
+  );
+  if (incompletePluginItems.length > 0) {
+    return {
+      ...item,
+      status: "warning",
+      reason: "selected Codex plugin activation is incomplete",
+    };
+  }
   const entries = appliedItems
     .map(readAppliedPluginConfigEntry)
     .filter((entry): entry is CodexPluginMigrationConfigEntry => entry !== undefined);
   if (entries.length === 0) {
-    return markMigrationItemSkipped(item, "no selected Codex plugins");
+    return {
+      ...markMigrationItemSkipped(item, "no selected Codex plugins"),
+      deferredCompletion: true,
+    };
   }
   const returnPatch = shouldReturnCodexPluginConfigPatch(ctx);
-  const configApi = ctx.runtime?.config;
+  const configApi = resolveMigrationConfigRuntime(ctx);
   const currentConfig = returnPatch
     ? ctx.config
     : (configApi?.current?.() as MigrationProviderContext["config"] | undefined);
@@ -474,10 +492,20 @@ async function applyCodexPluginConfigItem(
   }
 }
 
+function isCodexPluginConfigTerminal(item: MigrationItem): boolean {
+  return (
+    item.status === "migrated" ||
+    (item.status === "skipped" &&
+      (item.deferredCompletion === true ||
+        item.reason === CODEX_PLUGIN_NOT_SELECTED_REASON ||
+        item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON))
+  );
+}
+
 function readAppliedPluginConfigEntry(
   item: MigrationItem,
 ): CodexPluginMigrationConfigEntry | undefined {
-  if (item.status === "migrated") {
+  if (item.status === "migrated" || item.deferredCompletion === true) {
     return readCodexPluginMigrationConfigEntry(item, true);
   }
   if (

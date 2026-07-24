@@ -64,6 +64,44 @@ describe("swarm board widget", () => {
     ]);
   });
 
+  it("renders every child beyond the ordinary 50-row session page", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderSwarmWidget({
+        sessionKey: parentSessionKey,
+        sessions: Array.from({ length: 55 }, (_, index) =>
+          session({ key: `child-${index}`, status: "running" }),
+        ),
+      }),
+      container,
+    );
+
+    expect(container.querySelectorAll(".swarm-widget__dot")).toHaveLength(55);
+  });
+
+  it("caps historical dots while keeping active workers visible", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderSwarmWidget({
+        sessionKey: parentSessionKey,
+        sessions: [
+          ...Array.from({ length: 300 }, (_, index) =>
+            session({ key: `done-${index}`, status: "done" }),
+          ),
+          session({ key: "running", status: "running" }),
+        ],
+      }),
+      container,
+    );
+
+    expect(container.querySelectorAll(".swarm-widget__dot")).toHaveLength(256);
+    expect(container.querySelector(".swarm-widget__dot--running")).not.toBeNull();
+    expect(container.querySelector(".swarm-widget__more")?.textContent?.trim()).toBe("+45");
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain("1 Running · 300 Done");
+  });
+
   it("renders dot tooltips and keeps an empty state when no group is active", () => {
     const container = document.createElement("div");
     document.body.append(container);

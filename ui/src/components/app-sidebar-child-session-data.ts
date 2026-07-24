@@ -1,49 +1,8 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { SessionCapability } from "../lib/sessions/index.ts";
+export { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
 
 const MAX_SESSION_LINEAGE_DEPTH = 16;
-
-export async function fetchChildSessionRows(params: {
-  sessions: SessionCapability;
-  parentKey: string;
-  isCurrent: () => boolean;
-}): Promise<GatewaySessionRow[] | null> {
-  const rows: GatewaySessionRow[] = [];
-  const seenOffsets = new Set<number>();
-  let offset = 0;
-  while (!seenOffsets.has(offset)) {
-    seenOffsets.add(offset);
-    const result = await params.sessions.list({
-      spawnedBy: params.parentKey,
-      ...(offset > 0 ? { offset } : {}),
-      limit: 20,
-      includeGlobal: false,
-      includeUnknown: false,
-      configuredAgentsOnly: true,
-    });
-    if (!params.isCurrent()) {
-      return null;
-    }
-    if (!result) {
-      throw new Error("child session list returned no result");
-    }
-    const runtimeSampledAt = Date.now();
-    for (const row of result.sessions) {
-      if (!rows.some((candidate) => candidate.key === row.key)) {
-        rows.push({ ...row, runtimeSampledAt });
-      }
-    }
-    const hasMore =
-      result.hasMore ?? (typeof result.totalCount === "number" && rows.length < result.totalCount);
-    const nextOffset = result.nextOffset ?? rows.length;
-    if (!hasMore || nextOffset <= offset) {
-      break;
-    }
-    offset = nextOffset;
-  }
-  return rows;
-}
 
 export function collectKnownSessionRows(
   rootRows: readonly GatewaySessionRow[],

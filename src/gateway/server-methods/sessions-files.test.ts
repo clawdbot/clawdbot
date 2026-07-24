@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 // Session file method tests cover transcript-linked files plus the workspace browser.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -163,6 +164,7 @@ describe("sessions.files RPC handlers", () => {
     );
 
     expect(payload.root).toBe(workspaceRoot);
+    expect(payload.gitCheckout).toBe(false);
     expect(payload.files.map((file: Record<string, unknown>) => [file.path, file.kind])).toEqual([
       ["package.json", "modified"],
       ["ui/chat.ts", "modified"],
@@ -180,6 +182,11 @@ describe("sessions.files RPC handlers", () => {
       ["ui", "directory", "modified"],
       ["package.json", "file", "modified"],
     ]);
+    execFileSync("git", ["-C", workspaceRoot, "init", "-q", "-b", "main"]);
+    const gitPayload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.list", { sessionKey: "agent:main:main" }),
+    );
+    expect(gitPayload.gitCheckout).toBe(true);
   });
 
   it("reveals the same workspace root returned by sessions.files.list", async () => {

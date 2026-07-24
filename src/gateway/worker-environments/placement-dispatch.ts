@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   createPlacementFailureActions,
+  isUnavailableEnvironment,
   type WorkerActivationBarrier,
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchEnvironmentService,
@@ -14,6 +15,7 @@ import type {
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import { type WorkerEnvironmentService, workerEnvironmentIdForIdempotencyKey } from "./service.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
 import {
   verifyReconciledWorkspaceFinal,
@@ -444,7 +446,15 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     if (inFlight) {
       return await inFlight;
     }
-    const operation = reclaimOnce(request);
+    const operation = reclaimOnce(request).catch((error: unknown) => {
+      // Another teardown path can win after this call has crossed its durable completion fence.
+      // Report the committed terminal state instead of leaking a stale tunnel error to callers.
+      const completed = placements.get(request.sessionId);
+      if (error instanceof WorkerTunnelOwnerDisconnectedError && completed?.state === "reclaimed") {
+        return completed;
+      }
+      throw error;
+    });
     reclaimInFlight.set(request.sessionId, operation);
     try {
       return await operation;
@@ -457,14 +467,28 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
 
   return {
     dispatch,
-    forceDestroyEnvironment: (environmentId: string) =>
+    forceDestroyEnvironment: (environmentId: string, onCleanupError?: (error: unknown) => void) =>
       options.workspaceOperations.run(environmentId, async () => {
         await forceAbandonWorkerEnvironment({
           placements,
           environmentId,
           resolveWorkspacePath: options.resolveWorkspacePath,
+          onCleanupError,
         });
-        return await environments.destroy(environmentId);
+        try {
+          return await environments.destroy(environmentId);
+        } catch (error) {
+          const current = environments.get(environmentId);
+          if (!current || !isUnavailableEnvironment(current)) {
+            throw error;
+          }
+          try {
+            onCleanupError?.(error);
+          } catch {
+            // Reporting cannot overturn the durable placement/environment fences.
+          }
+          return current;
+        }
       }),
     reclaim,
     reconcile: recovery.reconcile,

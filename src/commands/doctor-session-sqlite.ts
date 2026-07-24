@@ -3,6 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import {
   importSqliteSessionRows,
@@ -11,7 +12,6 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
-import { normalizeSessionEntryDelivery } from "../config/sessions/store-load.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
@@ -66,7 +67,7 @@ import {
   type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
 import {
-  assertDoctorSqliteMaintenancePathsNotHardLinked,
+  assertDoctorSqliteMaintenancePathsNotAliased,
   isDestructiveDoctorSessionSqliteMode,
 } from "./doctor-sqlite-maintenance-lock.js";
 export {
@@ -104,9 +105,11 @@ export async function runDoctorSessionSqlite(
     store: options.store,
   });
   if (isDestructiveDoctorSessionSqliteMode(options.mode)) {
-    assertDoctorSqliteMaintenancePathsNotHardLinked(
+    const maintenancePaths = resolveDoctorSessionSqliteMaintenancePaths(targets);
+    assertDoctorSqliteMaintenancePathsNotAliased(
       `session SQLite ${options.mode}`,
-      resolveDoctorSessionSqliteMaintenancePaths(targets),
+      maintenancePaths,
+      resolveDoctorSessionSqliteMaintenanceRoots(targets, env),
     );
   }
   if (options.mode === "restore") {
@@ -170,6 +173,44 @@ function resolveDoctorSessionSqliteMaintenancePaths(
     }
   }
   return [...protectedPaths];
+}
+
+function resolveDoctorSessionSqliteMaintenanceRoots(
+  targets: readonly SessionStoreTarget[],
+  env: NodeJS.ProcessEnv,
+): string[] {
+  const stateDir = path.resolve(resolveStateDir(env));
+  const roots = new Set([stateDir]);
+  for (const target of targets) {
+    const sqlitePath = resolveTargetSqlitePath(target);
+    if (isPathWithin(stateDir, target.storePath) && isPathWithin(stateDir, sqlitePath)) {
+      continue;
+    }
+    const commonRoot = commonPathAncestor(path.dirname(target.storePath), path.dirname(sqlitePath));
+    const parentRoot = path.dirname(commonRoot);
+    roots.add(parentRoot === path.parse(commonRoot).root ? commonRoot : parentRoot);
+  }
+  return [...roots];
+}
+
+function isPathWithin(rootPath: string, candidatePath: string): boolean {
+  const relativePath = path.relative(rootPath, path.resolve(candidatePath));
+  return (
+    relativePath === "" || (!relativePath.startsWith(`..${path.sep}`) && relativePath !== "..")
+  );
+}
+
+function commonPathAncestor(leftPath: string, rightPath: string): string {
+  let currentPath = path.resolve(leftPath);
+  const resolvedRightPath = path.resolve(rightPath);
+  while (!isPathWithin(currentPath, resolvedRightPath)) {
+    const parentPath = path.dirname(currentPath);
+    if (parentPath === currentPath) {
+      return currentPath;
+    }
+    currentPath = parentPath;
+  }
+  return currentPath;
 }
 
 // Direct store migrations are scoped by path; broader agent discovery needs runtime config.

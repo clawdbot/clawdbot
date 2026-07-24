@@ -30,10 +30,10 @@ import {
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
-import {
-  isManifestPluginAvailableForControlPlane,
-  loadManifestMetadataSnapshot,
-} from "../../plugins/manifest-contract-eligibility.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
+import { isPluginMetadataSnapshotCompatible } from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -490,6 +490,7 @@ function providerUsesRuntimeModelAugment(params: {
   cfg?: OpenClawConfig;
   provider: string;
   workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): boolean {
   const provider = normalizeMediaProviderId(params.provider);
   if (!provider) {
@@ -499,11 +500,27 @@ function providerUsesRuntimeModelAugment(params: {
     return true;
   }
   const config = params.cfg ?? {};
-  const snapshot = loadManifestMetadataSnapshot({
-    config,
-    env: process.env,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-  });
+  const preparedSnapshot =
+    params.metadataSnapshot &&
+    params.metadataSnapshot.pluginIds === undefined &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: params.metadataSnapshot,
+      config,
+      env: process.env,
+      workspaceDir: params.workspaceDir,
+    })
+      ? params.metadataSnapshot
+      : undefined;
+  const snapshot =
+    preparedSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config,
+      env: process.env,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    });
+  if (!snapshot) {
+    return false;
+  }
   return snapshot.plugins.some((plugin) => {
     const ownsProvider =
       plugin.providers.some((candidate) => normalizeMediaProviderId(candidate) === provider) ||
@@ -559,6 +576,7 @@ async function resolveCompressionModelPolicy(params: {
   model: string;
   agentDir?: string;
   workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ImageCompressionModelPolicy> {
   const configuredStaticPolicy = await resolveCompressionModelPolicyWithHooks({
     ...params,
@@ -574,6 +592,7 @@ async function resolveCompressionModelPolicy(params: {
       cfg: params.cfg,
       provider: params.provider,
       workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
     })
   ) {
     return staticPolicy;
@@ -592,6 +611,7 @@ async function resolveImageCompressionPolicy(params: {
   imageCount: number;
   agentDir?: string;
   workspaceDir?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ImageCompressionPolicy> {
   const modelCandidates = resolveCompressionModelCandidates(params);
   const quality = params.cfg?.agents?.defaults?.imageQuality;
@@ -603,6 +623,7 @@ async function resolveImageCompressionPolicy(params: {
         model: candidate.model,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
+        metadataSnapshot: params.metadataSnapshot,
       });
     }),
   );
@@ -974,6 +995,7 @@ export function createImageTool(options?: {
           imageCount: imageInputs.length,
           agentDir,
           workspaceDir: options?.workspaceDir,
+          metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
         });
         imageRoute = { kind: "fallback", imageModelConfig, imageCompression };
       }

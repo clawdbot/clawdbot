@@ -36,8 +36,14 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "claude-opus-4-6",
   DEFAULT_PROVIDER: "anthropic",
   getModelRefStatus: getModelRefStatusMock,
-  loadPreparedModelCatalog: loadModelCatalogMock,
+  loadPreparedModelCatalogOwnerSnapshot: loadModelCatalogMock,
   normalizeModelSelection: normalizeModelSelectionMock,
+  resolveAgentConfig: (cfg: { agents?: { list?: AgentConfig[] } }, agentId: string) =>
+    cfg.agents?.list?.find((agent) => agent.id === agentId),
+  resolveAgentWorkspaceDir: (
+    cfg: { agents?: { list?: Array<AgentConfig & { workspace?: string }> } },
+    agentId: string,
+  ) => cfg.agents?.list?.find((agent) => agent.id === agentId)?.workspace ?? "/tmp/workspace",
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
@@ -73,7 +79,6 @@ type AgentTurnPayload = {
 
 type SelectModelOptions = {
   cfg?: Record<string, unknown>;
-  cfgWithAgentDefaults?: Record<string, unknown>;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   payload?: AgentTurnPayload;
   sessionEntry?: {
@@ -138,8 +143,6 @@ async function selectModel(options: SelectModelOptions = {}) {
   const cfg = options.cfg ?? {};
   return resolveCronModelSelection({
     cfg: cfg as never,
-    catalogConfig: cfg as never,
-    cfgWithAgentDefaults: (options.cfgWithAgentDefaults ?? cfg) as never,
     agentConfigOverride: options.agentConfigOverride,
     sessionEntry: options.sessionEntry ?? {},
     payload: options.payload ?? defaultPayload(),
@@ -165,7 +168,20 @@ async function expectDefaultSelectedModel(options: SelectModelOptions = {}) {
 describe("cron model formatting and precedence edge cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadModelCatalogMock.mockResolvedValue([]);
+    loadModelCatalogMock.mockImplementation(
+      async (params: {
+        config: Record<string, unknown>;
+        agentId?: string;
+        agentDir: string;
+        workspaceDir: string;
+      }) => ({
+        agentId: params.agentId ?? "main",
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        modelCatalog: { entries: [], routeVariants: [] },
+      }),
+    );
     getModelRefStatusMock.mockReturnValue({ allowed: false });
     resolveHooksGmailModelMock.mockReturnValue(null);
     resolveConfiguredModelRefMock.mockImplementation(({ cfg }: { cfg?: Record<string, unknown> }) =>
@@ -292,20 +308,8 @@ describe("cron model formatting and precedence edge cases", () => {
           ],
         },
       };
-      const cfgWithAgentDefaults = {
-        ...cfg,
-        agents: {
-          ...cfg.agents,
-          defaults: {
-            ...cfg.agents.defaults,
-            models: cfg.agents.list[0]?.models,
-          },
-        },
-      };
-
       await selectModel({
         cfg,
-        cfgWithAgentDefaults,
         agentId: "worker",
         payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "approved" },
       });
@@ -313,6 +317,70 @@ describe("cron model formatting and precedence edge cases", () => {
       expect(resolveAllowedModelRefMock).toHaveBeenCalledWith(
         expect.objectContaining({ cfg, agentId: "worker", raw: "approved" }),
       );
+    });
+
+    it("uses one published replacement owner for cron model selection", async () => {
+      const callerConfig = {
+        agents: {
+          defaults: { model: "anthropic/caller-model" },
+          list: [{ id: "worker", default: true }],
+        },
+      };
+      const ownerConfig = {
+        agents: {
+          defaults: {
+            model: "openai/owner-default",
+            modelPolicy: { allow: ["openai/*"] },
+          },
+          list: [{ id: "main", default: true }],
+        },
+      };
+      const ownerCatalog = [{ id: "owner-model", name: "Owner Model", provider: "openai" }];
+      loadModelCatalogMock.mockResolvedValueOnce({
+        agentId: "main",
+        agentDir: "/tmp/owner-agent",
+        workspaceDir: "/tmp/owner-workspace",
+        config: ownerConfig,
+        modelCatalog: { entries: ownerCatalog, routeVariants: [] },
+      });
+
+      const result = await selectModel({
+        cfg: callerConfig,
+        payload: {
+          kind: "agentTurn",
+          message: DEFAULT_MESSAGE,
+          model: "openai/owner-model",
+        },
+      });
+
+      expect(loadModelCatalogMock).toHaveBeenCalledOnce();
+      expect(loadModelCatalogMock).toHaveBeenCalledWith({
+        config: callerConfig,
+        readOnly: true,
+      });
+      expect(resolveConfiguredModelRefMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cfg: expect.objectContaining(ownerConfig) }),
+      );
+      expect(resolveAllowedModelRefMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: ownerConfig,
+          agentId: "main",
+          catalog: ownerCatalog,
+          raw: "openai/owner-model",
+        }),
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        provider: "openai",
+        model: "owner-model",
+        owner: {
+          config: ownerConfig,
+          agentId: "main",
+          agentDir: "/tmp/owner-agent",
+          workspaceDir: "/tmp/owner-workspace",
+          catalog: ownerCatalog,
+        },
+      });
     });
 
     it("normalizes provider casing", async () => {

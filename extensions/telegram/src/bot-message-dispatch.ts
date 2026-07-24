@@ -165,7 +165,13 @@ async function prepareTelegramSticker(params: {
 }) {
   const { context } = params;
   const sticker = context.ctxPayload.Sticker;
-  if (!sticker?.fileId || !sticker.fileUniqueId || !context.ctxPayload.MediaPath) {
+  const stickerFact = context.ctxPayload.media?.find((media) => media.kind === "sticker");
+  const stickerPath =
+    stickerFact?.path ??
+    (!stickerFact && context.ctxPayload.StickerMediaIncluded
+      ? context.ctxPayload.media?.[0]?.path
+      : undefined);
+  if (!sticker?.fileId || !sticker.fileUniqueId || !stickerPath) {
     return;
   }
   const agentDir = resolveAgentDir(params.cfg, context.route.agentId);
@@ -176,7 +182,7 @@ async function prepareTelegramSticker(params: {
   const description =
     sticker.cachedDescription ||
     (await describeStickerImage({
-      imagePath: context.ctxPayload.MediaPath,
+      imagePath: stickerPath,
       cfg: params.cfg,
       agentDir,
       agentId: context.route.agentId,

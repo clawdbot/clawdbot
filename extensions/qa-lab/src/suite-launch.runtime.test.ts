@@ -1178,7 +1178,7 @@ describe("qa suite runtime launcher", () => {
     expect(rejected).toBe(true);
   });
 
-  it("records unavailable channel credentials as blocked evidence", async () => {
+  it("reuses unavailable channel credential evidence across serial partitions", async () => {
     const repoRoot = await makeTempRepo("qa-suite-credential-unavailable-");
     const poolError = Object.assign(new Error("no WhatsApp credential is available"), {
       code: "POOL_EXHAUSTED",
@@ -1195,17 +1195,22 @@ describe("qa suite runtime launcher", () => {
       providerMode: "mock-openai",
       channelDriver: "live",
       adapterFactories: [{ id: "whatsapp", matches: () => true, create: vi.fn() }],
-      scenarioIds: ["whatsapp-status-command", "control-ui-chat-flow-playwright"],
+      scenarioIds: [
+        "whatsapp-status-command",
+        "whatsapp-access-control-dm-open",
+        "control-ui-chat-flow-playwright",
+      ],
     });
 
     expect(result.executionKind).toBe("suite");
     if (result.executionKind !== "suite") {
       throw new Error("expected unified suite result");
     }
-    expect(result.result.scenarios[0]).toMatchObject({
-      status: "fail",
-      details: expect.stringContaining("channel credential unavailable"),
-    });
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(result.result.scenarios.slice(0, 2)).toMatchObject([
+      { status: "fail", details: expect.stringContaining("channel credential unavailable") },
+      { status: "fail", details: expect.stringContaining("channel credential unavailable") },
+    ]);
     const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
       entries?: Array<{
         execution?: { channel?: { id?: string } };
@@ -1213,11 +1218,13 @@ describe("qa suite runtime launcher", () => {
         test?: { id?: string };
       }>;
     };
-    const blocked = evidence.entries?.find((entry) => entry.test?.id === "whatsapp-status-command");
-    expect(blocked).toMatchObject({
-      execution: { channel: { id: "whatsapp" } },
-      result: { status: "blocked" },
-    });
+    for (const scenarioId of ["whatsapp-status-command", "whatsapp-access-control-dm-open"]) {
+      const blocked = evidence.entries?.find((entry) => entry.test?.id === scenarioId);
+      expect(blocked).toMatchObject({
+        execution: { channel: { id: "whatsapp" } },
+        result: { status: "blocked" },
+      });
+    }
   });
 
   it("shares ordinary flow scenarios and isolates flow scenarios with config patches", async () => {

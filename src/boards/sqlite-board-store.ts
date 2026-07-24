@@ -47,7 +47,7 @@ import {
 
 type BoardDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "board_tabs" | "board_widgets" | "session_entries"
+  "board_tabs" | "board_widgets" | "session_nodes"
 >;
 type BoardDatabaseHandle = Pick<OpenClawAgentDatabase, "db" | "path">;
 
@@ -286,16 +286,28 @@ function deleteRemovedTabs(
 
 function hasSession(database: BoardDatabaseHandle, sessionKey: string): boolean {
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-  return Boolean(
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_entries")
-        .select("session_key")
-        .where("session_key", "=", sessionKey)
-        .limit(1),
-    ).rows[0],
-  );
+  const row = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_nodes")
+      .select("entry_json")
+      .where("session_key", "=", sessionKey)
+      .limit(1),
+  ).rows[0];
+  if (!row) {
+    return false;
+  }
+  try {
+    const entry = JSON.parse(row.entry_json) as unknown;
+    return Boolean(
+      entry &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      typeof (entry as { sessionId?: unknown }).sessionId === "string",
+    );
+  } catch {
+    return false;
+  }
 }
 
 function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {

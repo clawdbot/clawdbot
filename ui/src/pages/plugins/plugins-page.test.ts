@@ -78,9 +78,8 @@ function createSnapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
+    phase: connected ? "connected" : "reconnecting",
     offlineStable: false,
-    reconnecting: !connected,
     hello: {
       type: "hello-ok",
       protocol: 1,

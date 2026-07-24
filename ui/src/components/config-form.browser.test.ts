@@ -649,7 +649,7 @@ describe("config form renderer", () => {
           type: "array",
           items: { type: "string" },
         },
-        chatMessageMaxWidth: {
+        displayWidth: {
           type: "string",
         },
       },
@@ -667,7 +667,7 @@ describe("config form renderer", () => {
           lastTouchedAt: "2026-05-05T00:00:00.000Z",
           setupCommand: "apt-get update",
           allowedDomains: ["example.com"],
-          chatMessageMaxWidth: "960px",
+          displayWidth: "960px",
         },
         onPatch: vi.fn(),
       }),

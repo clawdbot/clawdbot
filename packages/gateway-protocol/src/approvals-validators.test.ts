@@ -61,6 +61,13 @@ describe("unified approval protocol validators", () => {
     expect(validateApprovalPresentation(execPresentation)).toBe(true);
     expect(validateApprovalPresentation(pluginPresentation)).toBe(true);
     expect(validateApprovalPresentation(systemAgentPresentation)).toBe(true);
+    expect(validateApprovalPresentation({ ...pluginPresentation, detail: "full tool input" })).toBe(
+      true,
+    );
+    expect(validateApprovalPresentation({ ...pluginPresentation, detail: "" })).toBe(false);
+    expect(
+      validateApprovalPresentation({ ...pluginPresentation, detail: "x".repeat(16_385) }),
+    ).toBe(false);
 
     for (const forbiddenField of ["cwd", "env", "systemRunBinding", "systemRunPlan"] as const) {
       expect(

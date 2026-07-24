@@ -1,11 +1,16 @@
 package ai.openclaw.app
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 internal object AndroidScreenshotFixture {
+  const val gatewayId = "android-screenshot-gateway"
   const val mainSessionKey = "agent:main:node-screenshot"
   const val primarySessionTitle = "Android release planning"
   const val cronJobId = "android-release-digest"
@@ -99,8 +104,61 @@ internal object AndroidScreenshotFixture {
       "cron.list" -> cronList()
       "cron.get" -> cronJob().toString()
       "cron.runs" -> cronRuns()
+      "openclaw.chat" -> systemAgentChat(paramsJson)
       else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
     }
+
+  private fun systemAgentChat(paramsJson: String?): String {
+    val message =
+      paramsJson
+        ?.let { Json.parseToJsonElement(it).jsonObject["message"] }
+        ?.jsonPrimitive
+        ?.contentOrNull
+    return buildJsonObject {
+      put("sessionId", JsonPrimitive("android-screenshot-openclaw"))
+      put(
+        "reply",
+        JsonPrimitive(
+          if (message == null) {
+            "I can check Gateway status, repair configuration, change models, or connect channels."
+          } else {
+            "I’ll keep this conversation separate from ordinary agent chat."
+          },
+        ),
+      )
+      put("action", JsonPrimitive("none"))
+      if (message == null) {
+        put(
+          "question",
+          buildJsonObject {
+            put("id", JsonPrimitive("help"))
+            put("header", JsonPrimitive("OpenClaw"))
+            put("question", JsonPrimitive("What should we look at first?"))
+            put(
+              "options",
+              buildJsonArray {
+                add(
+                  buildJsonObject {
+                    put("label", JsonPrimitive("Check status"))
+                    put("description", JsonPrimitive("Review the Gateway and active services."))
+                    put("recommended", JsonPrimitive(true))
+                    put("reply", JsonPrimitive("Check Gateway status"))
+                  },
+                )
+                add(
+                  buildJsonObject {
+                    put("label", JsonPrimitive("Review setup"))
+                    put("description", JsonPrimitive("Inspect models, channels, and configuration."))
+                    put("reply", JsonPrimitive("Review setup"))
+                  },
+                )
+              },
+            )
+          },
+        )
+      }
+    }.toString()
+  }
 
   private fun cronList(): String =
     buildJsonObject {

@@ -3,7 +3,7 @@ title: First-hour 20-turn runtime parity
 scenario:
   id: runtime-first-hour-20-turn
   surface: runtime
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
       - session-memory.token-pressure-multi-turn-continuity

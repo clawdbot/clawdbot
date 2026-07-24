@@ -343,6 +343,41 @@ Ref behavior:
   Playwright's `aria-ref` selector. Run a fresh snapshot on the same tab when
   that happens.
 
+## Browser batch CLI
+
+`openclaw browser batch` runs an array of nested `/act` actions in one `/act`
+call (the same `kind="batch"` runtime reached through the agent tool), so CLI
+users and scripts can combine actions like `wait`, `click`, `type`, and
+`evaluate` into a single replayable plan without per-action round trips. Each
+entry in `actions[]` is a `BrowserActRequest` — the closed union the `/act`
+route accepts (`click`, `clickCoords`, `type`, `press`, `hover`,
+`scrollIntoView`, `drag`, `select`, `fill`, `resize`, `wait`, `evaluate`,
+`close`, `batch`) — not arbitrary `openclaw browser` subcommands. `batch` is
+not supported on `profile="user"` and other existing-session (chrome-mcp)
+profiles; send actions individually there.
+
+- CLI: `openclaw browser batch --actions '<json>'`, `openclaw browser batch
+--actions-file plan.json`, or `openclaw browser batch --actions-file -` to
+  read the JSON array from stdin. `--continue` sets `stopOnError=false`; the
+  default is to stop on first error. `--target-id` scopes the whole batch to
+  one tab.
+- Ref lifecycle: refs come from a `snapshot` run before the batch (snapshot is
+  not a nested action). A nested action that changes page state — such as a
+  `click` that triggers navigation, or an `evaluate` that mutates the DOM — can
+  invalidate earlier refs for the rest of the batch. Put state-changing actions
+  first, or split into a follow-up batch after re-snapshotting. Navigation and
+  re-snapshotting happen outside the batch (`openclaw browser navigate` /
+  `snapshot`), since `open`, `navigate`, and `snapshot` are not `/act` kinds.
+- Target id conflicts: a nested action may omit `targetId` or repeat the
+  request-level `targetId`; an explicit nested `targetId` that resolves to a
+  different tab is rejected with `ACT_TARGET_ID_MISMATCH` before any action
+  runs. Batched actions share the request's tab by design.
+- Error summary: the response is `{ "results": [{ "ok": true }, { "ok": false,
+"error": "<message>" }, ...] }`, one entry per action in order. When
+  `stopOnError` is the default, the array ends at the first failure; with
+  `--continue` it covers every action. Any failed entry makes the CLI exit
+  nonzero; pass `--json` to preserve the full ordered response for scripts.
+
 ## Wait power-ups
 
 You can wait on more than just time/text:

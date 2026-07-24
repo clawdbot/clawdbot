@@ -50,6 +50,7 @@ export {
 } from "./model-selection-directive.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
+  normalizeStoredRuntimeModelRef,
   resolveStoredModelOverride,
 } from "./stored-model-override.js";
 
@@ -340,9 +341,11 @@ export async function createModelSelectionState(params: {
     directStoredOverride &&
     !hasOneTurnModelOverride
   ) {
-    const normalizedOverride = normalizeRuntimeModelRef(
+    const normalizedOverride = normalizeStoredRuntimeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
+      cfg,
+      sessionEntry,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
     const overrideAllowed = visibilityPolicy.allowsKey(key);
@@ -429,9 +432,11 @@ export async function createModelSelectionState(params: {
     (resetModelOverride && staleDirectStoredOverride && storedOverride?.source === "session");
 
   if (storedOverride?.model && !skipStoredOverride) {
-    const normalizedStoredOverride = normalizeRuntimeModelRef(
+    const normalizedStoredOverride = normalizeStoredRuntimeModelRef(
       storedOverride.provider || defaultProvider,
       storedOverride.model,
+      cfg,
+      sessionEntry,
     );
     const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
     if (visibilityPolicy.allowsKey(key)) {

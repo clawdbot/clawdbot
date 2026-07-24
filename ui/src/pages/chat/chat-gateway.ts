@@ -20,6 +20,7 @@ import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
   hasVisibleStreamParts,
+  streamReconciliationStartIndex,
   terminalMessageReplacesVisibleStream,
 } from "./stream-reconciliation.ts";
 import {
@@ -181,7 +182,11 @@ function appendCachedChatMessage(
   appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
 }
 
-function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
+function handleChatEvent(
+  state: ChatState,
+  payload?: ChatEventPayload,
+  opts?: { keyedStreamStartIndex?: number },
+) {
   if (!payload) {
     return null;
   }
@@ -235,6 +240,13 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
 
   const terminalRunId = payload.runId ?? state.chatRunId;
+  const materializeVisibleStream = (
+    materializeOpts: Parameters<typeof materializeVisibleAssistantStreamMessages>[2] = {},
+  ) =>
+    materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+      ...materializeOpts,
+      keyedStartIndex: opts?.keyedStreamStartIndex,
+    });
   const reconcileTerminalRun = (
     outcome: "done" | "interrupted",
     sessionStatus: "done" | "failed" | "killed",
@@ -288,9 +300,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           isHiddenStreamText: isHiddenAssistantStreamText,
         })
       ) {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
-          includeCurrent: false,
-        });
+        state.chatMessages = materializeVisibleStream({ includeCurrent: false });
         clearToolStreamSegments(state);
       }
       state.chatMessages = appendTerminalAssistantMessage(
@@ -298,7 +308,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         rememberLiveTerminalRun(finalMessage, terminalRunId),
       );
     } else {
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+      state.chatMessages = materializeVisibleStream();
     }
     if (payload.yielded === true && payload.stopReason === "end_turn") {
       reconcileChatRunLifecycle(
@@ -318,13 +328,13 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+      state.chatMessages = materializeVisibleStream({
         replacementMessages: [normalizedMessage],
         includeCurrent: false,
       });
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, normalizedMessage);
     } else {
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+      state.chatMessages = materializeVisibleStream();
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
@@ -351,11 +361,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
               isHiddenStreamText: isHiddenAssistantStreamText,
             })
           ) {
-            state.chatMessages = materializeVisibleAssistantStreamMessages(
-              state.chatMessages,
-              state,
-              { includeCurrent: false },
-            );
+            state.chatMessages = materializeVisibleStream({ includeCurrent: false });
             clearToolStreamSegments(state);
           }
           state.chatMessages = appendTerminalAssistantMessage(
@@ -363,18 +369,12 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
             visiblePayloadMessage,
           );
         } else {
-          state.chatMessages = materializeVisibleAssistantStreamMessages(
-            state.chatMessages,
-            state,
-            { includeCurrent: true },
-          );
+          state.chatMessages = materializeVisibleStream({ includeCurrent: true });
           clearToolStreamSegments(state);
           state.chatMessages = [...state.chatMessages, visiblePayloadMessage];
         }
       } else {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
-          includeCurrent: true,
-        });
+        state.chatMessages = materializeVisibleStream({ includeCurrent: true });
       }
     }
     reconcileTerminalRun("interrupted", "failed");
@@ -419,17 +419,27 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
     return null;
   }
   const activeRunIdBeforeEvent = state.chatRunId;
+  let terminalKeyedStreamStartIndex: number | undefined;
   if (
     isTerminalChatState(payload?.state) &&
     payload !== undefined &&
     (chatEventSessionMatches(state, payload) || payload.runId === activeRunIdBeforeEvent) &&
     !isEventForDifferentActiveRun(payload, activeRunIdBeforeEvent)
   ) {
+    // The active stream belongs to the user boundary that preceded any steer
+    // chip retired below. Preserve that boundary through terminal materialization.
+    const localOnlySteerBoundary = streamReconciliationStartIndex(state.chatMessages);
     // A steered chip can be the only local copy while transcript persistence lags.
     // Materialize it before the terminal assistant so user/assistant order stays stable.
-    retireSteeredChipsForTerminalRun(state, payload?.runId);
+    const firstPersistedSteerIndex = retireSteeredChipsForTerminalRun(state, payload?.runId);
+    terminalKeyedStreamStartIndex =
+      firstPersistedSteerIndex === undefined
+        ? localOnlySteerBoundary
+        : streamReconciliationStartIndex(state.chatMessages, firstPersistedSteerIndex);
   }
-  const result = handleChatEvent(state, payload);
+  const result = handleChatEvent(state, payload, {
+    keyedStreamStartIndex: terminalKeyedStreamStartIndex,
+  });
   return result;
 }
 

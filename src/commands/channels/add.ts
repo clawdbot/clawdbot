@@ -5,6 +5,7 @@ import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js"
 import { resolveChannelSetupCliOptionMetadata } from "../../channels/plugins/cli-add-options.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { resolveChannelSetupExecutionAdapter } from "../../channels/plugins/setup-contract.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
@@ -108,6 +109,17 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   return input as ChannelSetupInput;
 }
 
+// Safe to forward every defined key: CLI registration is selection-scoped and
+// resolveChannelsAddOptions drops non-user-authored values (Commander defaults),
+// so no other channel's options or defaults can reach the selected contract.
+function buildChannelOwnedSetupInput(opts: ChannelsAddOptions): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(opts).filter(
+      ([key, value]) => !CHANNEL_ADD_CONTROL_OPTION_KEYS.has(key) && value !== undefined,
+    ),
+  );
+}
+
 /** Add or configure a channel account, using the wizard when no concrete flags are supplied. */
 export async function channelsAddCommand(
   opts: ChannelsAddOptions,
@@ -168,7 +180,7 @@ async function channelsAddCommandImpl(
     pluginId?: string,
   ): Promise<ChannelPlugin | undefined> => {
     const existing = getLoadedChannelPlugin(channelId);
-    if (existing?.setup?.applyAccountConfig) {
+    if (existing?.setupContract?.applyAccountConfig || existing?.setup?.applyAccountConfig) {
       return existing;
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
@@ -239,7 +251,8 @@ async function channelsAddCommandImpl(
   }
 
   const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
-  if (!plugin?.setup?.applyAccountConfig) {
+  const setup = plugin ? resolveChannelSetupExecutionAdapter(plugin) : undefined;
+  if (!plugin || !setup?.applyAccountConfig) {
     runtime.error(
       `${formatUnsupportedChannelActionMessage({
         channel,
@@ -249,16 +262,27 @@ async function channelsAddCommandImpl(
     runtime.exit(1);
     return;
   }
-  let input = buildChannelSetupInput(opts);
+  let input: unknown;
+  if (plugin.setupContract) {
+    const parsed = plugin.setupContract.parseInput(buildChannelOwnedSetupInput(opts));
+    if (!parsed.ok) {
+      runtime.error(parsed.error);
+      runtime.exit(1);
+      return;
+    }
+    input = parsed.value;
+  } else {
+    input = buildChannelSetupInput(opts);
+  }
   const accountId =
-    plugin.setup.resolveAccountId?.({
+    setup.resolveAccountId?.({
       cfg: nextConfig,
       accountId: opts.account,
       input,
     }) ?? normalizeAccountId(opts.account);
-  if (plugin.setup.prepareAccountConfigInput) {
+  if (setup.prepareAccountConfigInput) {
     await params?.beforePersistentEffect?.();
-    input = await plugin.setup.prepareAccountConfigInput({
+    input = await setup.prepareAccountConfigInput({
       cfg: nextConfig,
       accountId,
       input,
@@ -266,7 +290,7 @@ async function channelsAddCommandImpl(
     });
   }
 
-  const validationError = plugin.setup.validateInput?.({
+  const validationError = setup.validateInput?.({
     cfg: nextConfig,
     accountId,
     input,
@@ -319,7 +343,7 @@ async function channelsAddCommandImpl(
     });
   }
   runtime.log(`Added ${plugin.meta.label ?? channelLabel(channel)} account "${accountId}".`);
-  const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
+  const afterAccountConfigWritten = setup.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
     const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
     await runCollectedChannelOnboardingPostWriteHooks({

@@ -288,29 +288,53 @@ type FakeCheckRun = {
 
 function fakeGithub(options: {
   prs: Array<Record<string, unknown>>;
-  runsBySha: Record<string, Array<{ conclusion: string | null; event?: string }>>;
+  runsBySha: Record<
+    string,
+    Array<{ conclusion: string | null; event?: string; id?: number; status?: string }>
+  >;
   checksByRef?: Record<string, FakeCheckRun[]>;
   workflowRunsById?: Record<number, FakeWorkflowRun>;
   pullsGetByNumber?: Record<number, Record<string, unknown>>;
   events?: Array<Record<string, unknown>>;
+  pageSize?: number;
 }) {
   const calls: FakeCall[] = [];
   const record = (method: string, args: Record<string, unknown>) => {
     calls.push({ method, args });
   };
   const github = {
-    paginate: (endpoint: { endpointName: string }, args: Record<string, unknown>) => {
+    paginate: (
+      endpoint: { endpointName: string },
+      args: Record<string, unknown>,
+      mapFn?: (response: { data: unknown[] }, done: () => void) => unknown[],
+    ) => {
       record(endpoint.endpointName, args);
+      // Emulate octokit's paged mapFn contract: the page where done() fires is
+      // still included in the result, and later pages are never fetched.
+      const paged = (items: unknown[]) => {
+        if (!mapFn) {
+          return Promise.resolve(items);
+        }
+        const pageSize = options.pageSize ?? Math.max(items.length, 1);
+        const collected: unknown[] = [];
+        let stopped = false;
+        for (let start = 0; start < items.length && !stopped; start += pageSize) {
+          record(`${endpoint.endpointName}.page`, { start });
+          collected.push(
+            ...mapFn({ data: items.slice(start, start + pageSize) }, () => {
+              stopped = true;
+            }),
+          );
+        }
+        return Promise.resolve(collected);
+      };
       if (endpoint.endpointName === "pulls.list") {
-        return Promise.resolve(options.prs);
+        return paged(options.prs);
       }
       if (endpoint.endpointName === "actions.listWorkflowRuns") {
         return Promise.resolve(
           (options.runsBySha[args.head_sha as string] ?? [])
-            .map((run) => ({
-              event: run.event ?? "pull_request",
-              conclusion: run.conclusion,
-            }))
+            .map((run) => ({ ...run, event: run.event ?? "pull_request" }))
             .filter((run) => !args.event || run.event === args.event),
         );
       }
@@ -438,8 +462,120 @@ describe("runPrCiSweeper", () => {
     });
     expect(results).toEqual([
       { number: 7, sha: "a".repeat(12), action: "refire", reason: "ci-startup-failure" },
+      { number: 8, sha: "b".repeat(12), action: "skip", reason: "ci-attached" },
     ]);
     expect(calls.filter((call) => call.method === "pulls.update")).toEqual([]);
+  });
+
+  it("logs a ci-attached skip with the attached run ids", async () => {
+    const attached = {
+      ...pr(),
+      number: 21,
+      state: "open",
+      head: { sha: "5".repeat(40) },
+    };
+    const { github } = fakeGithub({
+      prs: [attached],
+      runsBySha: {
+        [attached.head.sha]: [{ id: 30105208438, status: "completed", conclusion: "failure" }],
+      },
+    });
+    const { core: loggedCore, logs } = recordingCore();
+    const results = await runPrCiSweeper({
+      github: github as never,
+      context: context as never,
+      core: loggedCore as never,
+      now: NOW,
+    });
+    expect(results).toEqual([
+      { number: 21, sha: "5".repeat(12), action: "skip", reason: "ci-attached" },
+    ]);
+    expect(logs).toContain("pr-ci-sweeper: skip #21 (ci-attached: 30105208438:completed/failure)");
+  });
+
+  it("logs draft skips so every scanned PR has a decision", async () => {
+    const draft = {
+      ...pr({ draft: true }),
+      number: 22,
+      state: "open",
+      head: { sha: "6".repeat(40) },
+    };
+    const { github, calls } = fakeGithub({ prs: [draft], runsBySha: {} });
+    const { core: loggedCore, logs } = recordingCore();
+    const results = await runPrCiSweeper({
+      github: github as never,
+      context: context as never,
+      core: loggedCore as never,
+      now: NOW,
+    });
+    expect(results).toEqual([{ number: 22, sha: "6".repeat(12), action: "skip", reason: "draft" }]);
+    expect(logs).toContain("pr-ci-sweeper: skip #22 (draft)");
+    // Drafts skip before the per-head run lookup so they cost no Actions reads.
+    expect(calls.filter((call) => call.method === "actions.listWorkflowRuns")).toEqual([]);
+  });
+
+  it("keeps logging decisions after the per-sweep re-fire cap", async () => {
+    const dropped = Array.from({ length: 11 }, (_, index) => ({
+      ...pr(),
+      number: 100 + index,
+      state: "open",
+      head: { sha: index.toString(16).padStart(2, "0").repeat(20) },
+    }));
+    const { github, calls } = fakeGithub({ prs: dropped, runsBySha: {} });
+    const { core: loggedCore, logs } = recordingCore();
+    const results = await runPrCiSweeper({
+      github: github as never,
+      context: context as never,
+      core: loggedCore as never,
+      dryRun: true,
+      now: NOW,
+    });
+    expect(results.filter((entry) => entry.action === "refire")).toHaveLength(10);
+    expect(results.at(-1)).toEqual({
+      number: 110,
+      sha: "0a".repeat(6),
+      action: "skip",
+      reason: "refire-cap-reached",
+    });
+    expect(logs).toContain("pr-ci-sweeper: skip #110 (refire-cap-reached)");
+    // The capped PR is classified from list data only, never fetched.
+    expect(
+      calls.filter((call) => call.method === "pulls.get" && call.args.pull_number === 110),
+    ).toEqual([]);
+  });
+
+  it("stops listing pages once creation dates cross the lookback", async () => {
+    const recent = { ...pr(), number: 30, state: "open", head: { sha: "7".repeat(40) } };
+    const oldA = {
+      ...pr({ created_at: new Date(NOW - 25 * HOURS).toISOString() }),
+      number: 31,
+      state: "open",
+      head: { sha: "8".repeat(40) },
+    };
+    const oldB = {
+      ...pr({ created_at: new Date(NOW - 30 * HOURS).toISOString() }),
+      number: 32,
+      state: "open",
+      head: { sha: "9".repeat(40) },
+    };
+    const { github, calls } = fakeGithub({
+      prs: [recent, oldA, oldB],
+      runsBySha: {},
+      pageSize: 1,
+    });
+    const results = await runPrCiSweeper({
+      github: github as never,
+      context: context as never,
+      core: core as never,
+      dryRun: true,
+      now: NOW,
+    });
+    // Page 2 crossed the 24h creation horizon, so page 3 is never fetched and
+    // the outside-lookback PR on page 2 stops the scan without a decision.
+    expect(calls.filter((call) => call.method === "pulls.list.page")).toHaveLength(2);
+    expect(results).toEqual([
+      { number: 30, sha: "7".repeat(12), action: "refire", reason: "ci-run-missing" },
+    ]);
   });
 
   it("closes and reopens a dropped-CI PR in live mode", async () => {

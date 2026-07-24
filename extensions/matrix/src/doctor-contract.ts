@@ -4,7 +4,12 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  defineChannelAliasMigration,
+  hasLegacyAccountStreamingAliases,
+  normalizeChannelConfigEntries,
+  stripRetiredChannelKeys,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,
@@ -50,53 +55,6 @@ const streamingAliasMigration = defineChannelAliasMigration<MatrixStreamingMode>
   accountStreamingReplacesRoot: true,
 });
 
-// Runs before the alias migration: leaving `streamMode` in place would make
-// the generic migration materialize a streaming.mode from a key Matrix never
-// honored, silently changing the effective (inherited) mode.
-function stripMatrixJunkStreamMode(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const channels = isRecord(cfg.channels) ? cfg.channels : null;
-  const matrix = isRecord(channels?.matrix) ? channels.matrix : null;
-  if (!matrix) {
-    return cfg;
-  }
-  let updated = matrix;
-  let changed = false;
-  if (updated.streamMode !== undefined) {
-    const { streamMode: _streamMode, ...rest } = updated;
-    updated = rest;
-    changes.push("Removed channels.matrix.streamMode (never read by the Matrix runtime).");
-    changed = true;
-  }
-  const accounts = isRecord(updated.accounts) ? updated.accounts : null;
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts: Record<string, unknown> = { ...accounts };
-    for (const [accountId, accountValue] of Object.entries(accounts)) {
-      const account = isRecord(accountValue) ? accountValue : null;
-      if (!account || account.streamMode === undefined) {
-        continue;
-      }
-      const { streamMode: _streamMode, ...rest } = account;
-      nextAccounts[accountId] = rest;
-      changes.push(
-        `Removed channels.matrix.accounts.${accountId}.streamMode (never read by the Matrix runtime).`,
-      );
-      accountsChanged = true;
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-  if (!changed) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    channels: { ...channels, matrix: updated },
-  } as OpenClawConfig;
-}
-
 function hasLegacyMatrixRoomAllowAlias(value: unknown): boolean {
   const room = isRecord(value) ? value : null;
   return Boolean(room && typeof room.allow === "boolean");
@@ -107,32 +65,6 @@ function hasLegacyMatrixRoomMapAllowAliases(value: unknown): boolean {
   return Boolean(rooms && Object.values(rooms).some((room) => hasLegacyMatrixRoomAllowAlias(room)));
 }
 
-function hasLegacyMatrixAccountRoomAllowAliases(value: unknown): boolean {
-  const accounts = isRecord(value) ? value : null;
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => {
-    if (!isRecord(account)) {
-      return false;
-    }
-    return (
-      hasLegacyMatrixRoomMapAllowAliases(account.groups) ||
-      hasLegacyMatrixRoomMapAllowAliases(account.rooms)
-    );
-  });
-}
-
-function hasLegacyMatrixAccountPrivateNetworkAliases(value: unknown): boolean {
-  const accounts = isRecord(value) ? value : null;
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) =>
-    hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
-  );
-}
-
 function hasLegacyTrustedDmPolicy(value: unknown): boolean {
   const root = isRecord(value) ? value : null;
   if (!root) {
@@ -140,14 +72,6 @@ function hasLegacyTrustedDmPolicy(value: unknown): boolean {
   }
   const dm = isRecord(root.dm) ? root.dm : null;
   return dm?.policy === "trusted";
-}
-
-function hasLegacyMatrixAccountTrustedDmPolicies(value: unknown): boolean {
-  const accounts = isRecord(value) ? value : null;
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacyTrustedDmPolicy(account));
 }
 
 function migrateLegacyTrustedDmPolicy(params: {
@@ -218,7 +142,10 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "matrix", "accounts"],
     message:
       'channels.matrix.accounts.<id>.allowPrivateNetwork is legacy; use channels.matrix.accounts.<id>.network.dangerouslyAllowPrivateNetwork instead. Run "openclaw doctor --fix".',
-    match: hasLegacyMatrixAccountPrivateNetworkAliases,
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, (account) =>
+        hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
+      ),
   },
   {
     path: ["channels", "matrix", "groups"],
@@ -236,7 +163,16 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "matrix", "accounts"],
     message:
       'channels.matrix.accounts.<id>.{groups,rooms}.<room>.allow is legacy; use channels.matrix.accounts.<id>.{groups,rooms}.<room>.enabled instead. Run "openclaw doctor --fix".',
-    match: hasLegacyMatrixAccountRoomAllowAliases,
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, (account) => {
+        if (!isRecord(account)) {
+          return false;
+        }
+        return (
+          hasLegacyMatrixRoomMapAllowAliases(account.groups) ||
+          hasLegacyMatrixRoomMapAllowAliases(account.rooms)
+        );
+      }),
   },
   {
     path: ["channels", "matrix"],
@@ -248,9 +184,36 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "matrix", "accounts"],
     message:
       'channels.matrix.accounts.<id>.dm.policy "trusted" is legacy; use "allowlist" (with allowFrom entries) or "pairing" instead. Run "openclaw doctor --fix".',
-    match: hasLegacyMatrixAccountTrustedDmPolicies,
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyTrustedDmPolicy),
   },
 ];
+
+function normalizeMatrixEntry(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const network = migrateLegacyFlatAllowPrivateNetworkAlias(params);
+  const dmPolicy = migrateLegacyTrustedDmPolicy({ ...params, entry: network.entry });
+  let entry = dmPolicy.entry;
+  let changed = network.changed || dmPolicy.changed;
+  for (const key of ["groups", "rooms"] as const) {
+    const rooms = isRecord(entry[key]) ? entry[key] : null;
+    if (!rooms) {
+      continue;
+    }
+    const normalized = normalizeMatrixRoomAllowAliases({
+      rooms,
+      pathPrefix: `${params.pathPrefix}.${key}`,
+      changes: params.changes,
+    });
+    if (normalized.changed) {
+      entry = Object.assign({}, entry, { [key]: normalized.rooms });
+      changed = true;
+    }
+  }
+  return { entry, changed };
+}
 
 export function normalizeCompatibilityConfig({
   cfg,
@@ -258,124 +221,24 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const changes: string[] = [];
-  const withoutJunkStreamMode = stripMatrixJunkStreamMode(cfg, changes);
+  // `streamMode` was never honored by Matrix, so remove it before the generic
+  // alias migration can mistake it for mode intent.
+  const withoutJunkStreamMode = stripRetiredChannelKeys({
+    cfg,
+    channelId: "matrix",
+    keys: new Set(["streamMode"]),
+    scope: "root-and-accounts",
+    onRemove: ({ key, pathPrefix }) =>
+      changes.push(`Removed ${pathPrefix}.${key} (never read by the Matrix runtime).`),
+  }).config;
   const aliases = streamingAliasMigration.normalizeChannelConfig({
     cfg: withoutJunkStreamMode,
     changes,
   });
-  const channels = isRecord(aliases.config.channels) ? aliases.config.channels : null;
-  const matrix = isRecord(channels?.matrix) ? channels.matrix : null;
-  if (!matrix) {
-    return { config: cfg, changes: [] };
-  }
-
-  let updatedMatrix: Record<string, unknown> = matrix;
-  let changed = aliases.config !== cfg;
-
-  const topLevelPrivateNetwork = migrateLegacyFlatAllowPrivateNetworkAlias({
-    entry: updatedMatrix,
-    pathPrefix: "channels.matrix",
+  return normalizeChannelConfigEntries({
+    cfg: aliases.config,
+    channelId: "matrix",
     changes,
+    normalizeEntry: normalizeMatrixEntry,
   });
-  updatedMatrix = topLevelPrivateNetwork.entry;
-  changed = changed || topLevelPrivateNetwork.changed;
-
-  const topLevelTrustedDmPolicy = migrateLegacyTrustedDmPolicy({
-    entry: updatedMatrix,
-    pathPrefix: "channels.matrix",
-    changes,
-  });
-  updatedMatrix = topLevelTrustedDmPolicy.entry;
-  changed = changed || topLevelTrustedDmPolicy.changed;
-
-  const normalizeTopLevelRoomScope = (key: "groups" | "rooms") => {
-    const rooms = isRecord(updatedMatrix[key]) ? updatedMatrix[key] : null;
-    if (!rooms) {
-      return;
-    }
-    const normalized = normalizeMatrixRoomAllowAliases({
-      rooms,
-      pathPrefix: `channels.matrix.${key}`,
-      changes,
-    });
-    if (normalized.changed) {
-      updatedMatrix = { ...updatedMatrix, [key]: normalized.rooms };
-      changed = true;
-    }
-  };
-
-  normalizeTopLevelRoomScope("groups");
-  normalizeTopLevelRoomScope("rooms");
-
-  const accounts = isRecord(updatedMatrix.accounts) ? updatedMatrix.accounts : null;
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts: Record<string, unknown> = { ...accounts };
-    for (const [accountId, accountValue] of Object.entries(accounts)) {
-      const account = isRecord(accountValue) ? accountValue : null;
-      if (!account) {
-        continue;
-      }
-      let nextAccount: Record<string, unknown> = account;
-      let accountChanged = false;
-
-      const privateNetworkMigration = migrateLegacyFlatAllowPrivateNetworkAlias({
-        entry: nextAccount,
-        pathPrefix: `channels.matrix.accounts.${accountId}`,
-        changes,
-      });
-      if (privateNetworkMigration.changed) {
-        nextAccount = privateNetworkMigration.entry;
-        accountChanged = true;
-      }
-
-      const accountTrustedDmPolicy = migrateLegacyTrustedDmPolicy({
-        entry: nextAccount,
-        pathPrefix: `channels.matrix.accounts.${accountId}`,
-        changes,
-      });
-      if (accountTrustedDmPolicy.changed) {
-        nextAccount = accountTrustedDmPolicy.entry;
-        accountChanged = true;
-      }
-
-      for (const key of ["groups", "rooms"] as const) {
-        const rooms = isRecord(nextAccount[key]) ? nextAccount[key] : null;
-        if (!rooms) {
-          continue;
-        }
-        const normalized = normalizeMatrixRoomAllowAliases({
-          rooms,
-          pathPrefix: `channels.matrix.accounts.${accountId}.${key}`,
-          changes,
-        });
-        if (normalized.changed) {
-          nextAccount = { ...nextAccount, [key]: normalized.rooms };
-          accountChanged = true;
-        }
-      }
-      if (accountChanged) {
-        nextAccounts[accountId] = nextAccount;
-        accountsChanged = true;
-      }
-    }
-    if (accountsChanged) {
-      updatedMatrix = { ...updatedMatrix, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return { config: cfg, changes: [] };
-  }
-  return {
-    config: {
-      ...aliases.config,
-      channels: {
-        ...aliases.config.channels,
-        matrix: updatedMatrix as NonNullable<OpenClawConfig["channels"]>["matrix"],
-      },
-    },
-    changes,
-  };
 }

@@ -241,7 +241,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        timedOut: true,
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
         lastAssistant: makeAssistantMessageFixture({
           stopReason: "error",
           errorMessage: "You exceeded your current OpenAI quota.",

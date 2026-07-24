@@ -2,6 +2,7 @@
 import { clearCodeModeNamespacesForPlugin } from "../agents/code-mode-namespaces.js";
 import { clearContextEnginesForOwner } from "../context-engine/registry.js";
 import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
+import { cleanupPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import { clearPluginInteractiveHandlersForPlugin } from "./interactive-registry.js";
 import { createPluginApiFactory } from "./registry-api.js";
 import { createPluginRegistrars } from "./registry-registrars.js";
@@ -44,6 +45,30 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     clearCodeModeNamespacesForPlugin(pluginId);
     clearContextEnginesForOwner(`plugin:${pluginId}`);
     registrars.rollbackHooks(pluginId);
+
+    // Roll back live session-scheduler records created during a failed registration.
+    // registry.sessionSchedulerJobs metadata is restored by the snapshot above; this
+    // removes the module-global live records and invokes their cleanup callbacks so
+    // external plugin-owned work is cancelled at the rollback boundary.
+    const schedulerRecords = state.registry.sessionSchedulerJobs.filter(
+      (r) => r.pluginId === pluginId,
+    );
+    if (schedulerRecords.length > 0) {
+      void cleanupPluginSessionSchedulerJobs({
+        pluginId,
+        reason: "disable",
+        records: schedulerRecords,
+        cleanupOwnerRegistry: state.registry,
+      }).then((failures) => {
+        for (const failure of failures) {
+          state.pushDiagnostic({
+            level: "warn",
+            pluginId: failure.pluginId,
+            message: `scheduler job cleanup failed during rollback: ${failure.hookId}`,
+          });
+        }
+      });
+    }
   };
 
   return {

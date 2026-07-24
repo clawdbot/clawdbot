@@ -28,7 +28,7 @@ describe("evidence summary", () => {
             primary: ["channels.dm"],
             secondary: ["channels.qa-channel"],
           },
-          runtimeParityTier: "standard",
+          runtimePairLane: "core",
           docsRefs: ["docs/channels/qa-channel.md"],
           codeRefs: ["extensions/qa-channel/src/gateway.ts"],
         },
@@ -79,7 +79,7 @@ describe("evidence summary", () => {
           path: "extensions/qa-channel/src/gateway.ts",
         },
       ],
-      runtimeParityTier: "standard",
+      runtimePairLane: "core",
       execution: {
         runner: "host",
         provider: {

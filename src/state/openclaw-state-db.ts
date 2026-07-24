@@ -1,20 +1,16 @@
 // OpenClaw state database manages shared persisted state and migrations.
 import { existsSync } from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import {
-  repairCanonicalSqliteUniqueIndexes,
-  type CanonicalSqliteUniqueIndex,
-} from "../infra/sqlite-index-schema.js";
+import { openNodeSqliteDatabase, resolveNodeSqliteReadOnlyLocation } from "../infra/node-sqlite.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
-  assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
 } from "../infra/sqlite-integrity.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
@@ -90,20 +86,6 @@ export { withOpenClawStateStartupMigrationCheckpointDatabase } from "./openclaw-
  * tables, private file permissions, cached handles, and audit rows for
  * migrations/backups that operate on local state.
  */
-const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
-  {
-    name: "idx_operator_approvals_resolution_ref",
-    definition: "ON operator_approvals(resolution_ref)",
-  },
-  {
-    name: "idx_worker_environments_provider_lease",
-    definition: `
-      ON worker_environments(provider_id, lease_id)
-      WHERE lease_id IS NOT NULL
-    `,
-  },
-] as const satisfies readonly CanonicalSqliteUniqueIndex[];
-
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 const terminalOpenLatch = createSqliteTerminalOpenLatch({
   closeByPath: (pathname) => {
@@ -143,11 +125,20 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     return { changes: [], warnings: [] };
   }
   ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname);
+  const db = openNodeSqliteDatabase(pathname);
+  const rebuiltIndexNames = new Set<string>();
   try {
-    assertSqliteIntegrity(db, pathname);
     assertSupportedSchemaVersion(db, pathname);
+    if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+      for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+        allowMissingColumns: true,
+      })) {
+        rebuiltIndexNames.add(name);
+      }
+    }
+    if (rebuiltIndexNames.size === 0) {
+      assertSqliteIntegrity(db, pathname);
+    }
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runSqliteImmediateTransactionSync(
       db,
@@ -189,8 +180,16 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
               `Migrated shared state tables to SQLite STRICT typing (${strictMigration.migratedTables.length})`,
             );
           }
+          for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+            verifyPhysicalIntegrity: false,
+          })) {
+            rebuiltIndexNames.add(name);
+          }
         }
         markCurrentStateSchemaVersion(db);
+        if (rebuiltIndexNames.size > 0) {
+          applied.push(`Rebuilt canonical shared-state SQLite indexes (${rebuiltIndexNames.size})`);
+        }
         return applied;
       },
       {
@@ -252,7 +251,9 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
             databaseLabel: pathname,
           });
         }
-        repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES);
+        repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+          verifyPhysicalIntegrity: false,
+        });
         db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
         executeSqliteQuerySync(
           db,
@@ -297,10 +298,10 @@ export function openExistingOpenClawStateDatabaseReadOnly(
   if (!existsSync(pathname)) {
     return undefined;
   }
-  const sqlite = requireNodeSqlite();
   const hasWalSidecars = existsSync(`${pathname}-wal`) || existsSync(`${pathname}-shm`);
-  const uri = `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
-  const db = new sqlite.DatabaseSync(hasWalSidecars ? pathname : uri, { readOnly: true });
+  const db = openNodeSqliteDatabase(resolveNodeSqliteReadOnlyLocation(pathname, hasWalSidecars), {
+    readOnly: true,
+  });
   try {
     assertSupportedSchemaVersion(db, pathname);
   } catch (error) {
@@ -331,22 +332,25 @@ function assertStateDatabaseIntegrityBeforeMutation(
   const hasApplicationSchema = database
     .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
     .get();
-  if (
+  const migrationPending =
     (userVersion === 0 && hasApplicationSchema) ||
-    (userVersion > 0 && userVersion < OPENCLAW_STATE_SCHEMA_VERSION)
-  ) {
-    // Migration rewrites the schema; prove the whole file before that mutation.
-    // Only a truly empty v0 file may skip; legacy v0 files need the same proof.
+    (userVersion > 0 && userVersion < OPENCLAW_STATE_SCHEMA_VERSION);
+  if (migrationPending) {
     stateDbLog.info("state database schema migration pending; verifying integrity first", {
       fromVersion: userVersion,
       path: pathname,
       toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     });
-    assertSqliteIntegrity(database, pathname);
-    return;
   }
-  if (tableExists(database, "schema_meta")) {
-    assertSqliteTableIntegrity(database, pathname, "schema_meta");
+  const rebuiltIndexes =
+    userVersion === OPENCLAW_STATE_SCHEMA_VERSION
+      ? repairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+          allowMissingColumns: true,
+        })
+      : [];
+  if (rebuiltIndexes.length === 0) {
+    // Every physical open proves the full file before schema mutation or exposure.
+    assertSqliteIntegrity(database, pathname);
   }
 }
 
@@ -394,8 +398,7 @@ export function openOpenClawStateDatabase(
     throw quarantineFailure;
   }
   ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname);
+  const db = openNodeSqliteDatabase(pathname);
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
@@ -456,6 +459,22 @@ export function runOpenClawStateWriteTransaction<T>(
     // callers never retry an operation that is durable in SQLite.
   }
   return result;
+}
+
+/** Close one cached shared state database handle by exact pathname. */
+export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
+  const resolvedPath = path.resolve(pathname);
+  const database = cachedDatabases.get(resolvedPath);
+  if (!database) {
+    return false;
+  }
+  database.walMaintenance.close();
+  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  if (database.db.isOpen) {
+    database.db.close();
+  }
+  cachedDatabases.delete(resolvedPath);
+  return true;
 }
 
 /** Close all cached shared state database handles. */

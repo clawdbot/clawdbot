@@ -2,7 +2,7 @@ import { html } from "lit";
 import type { GatewayAgentRow } from "../api/types.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { AgentSelectOption } from "./agent-select.ts";
 import "./agent-select-registration.ts";
@@ -17,10 +17,17 @@ type AgentScopeControlParams = {
 };
 
 export function renderAgentScopeControl(params: AgentScopeControlParams) {
-  const selected = params.selectedId ?? params.selection.state.scopeId ?? "";
+  const requestedSelected = params.selectedId ?? params.selection.state.scopeId ?? "";
+  const selectedId = requestedSelected ? normalizeAgentId(requestedSelected) : "";
   const allowAll = params.allowAll !== false;
+  // Do not let historical or selected IDs reintroduce a typed system row.
+  const isSystemAgentId = (agentId: string) =>
+    params.agents.some(
+      (agent) => agent.kind === "system" && normalizeAgentId(agent.id) === agentId,
+    );
+  const selectableAgents = listSelectableAgents(params.agents);
   const agentsById = new Map(
-    params.agents.map((agent) => {
+    selectableAgents.map((agent) => {
       const agentId = normalizeAgentId(agent.id);
       return [agentId, agentId === agent.id ? agent : { ...agent, id: agentId }] as const;
     }),
@@ -30,16 +37,21 @@ export function renderAgentScopeControl(params: AgentScopeControlParams) {
       continue;
     }
     const agentId = normalizeAgentId(value);
-    if (!agentsById.has(agentId)) {
+    if (!isSystemAgentId(agentId) && !agentsById.has(agentId)) {
       agentsById.set(agentId, { id: agentId });
     }
   }
-  if (selected && !agentsById.has(selected)) {
-    agentsById.set(selected, { id: selected });
+  if (selectedId && !isSystemAgentId(selectedId) && !agentsById.has(selectedId)) {
+    agentsById.set(selectedId, { id: selectedId });
   }
   const agents = [...agentsById.values()].toSorted((left, right) =>
     normalizeAgentLabel(left).localeCompare(normalizeAgentLabel(right)),
   );
+  const selected = isSystemAgentId(selectedId)
+    ? allowAll
+      ? ""
+      : (agents[0]?.id ?? "")
+    : selectedId;
   const options: AgentSelectOption[] = [
     ...(allowAll ? [{ value: "", label: t("agentScope.allAgents"), icon: icons.users }] : []),
     ...agents.map((agent) => ({

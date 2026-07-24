@@ -3,6 +3,7 @@ import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
   DEFAULT_AGENT_ID,
+  isIncognitoSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -10,6 +11,7 @@ import {
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -25,17 +27,23 @@ import type { SessionEntry } from "./types.js";
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
+  | "board_tabs"
+  | "board_widgets"
   | "conversation_deliveries"
   | "conversations"
+  | "heartbeat_outcomes"
   | "session_conversations"
-  | "session_entries"
-  | "session_routes"
-  | "session_transcript_generations"
-  | "sessions"
+  | "session_members"
+  | "session_nodes"
+  | "session_suggestions"
+  | "session_windows"
+  | "transcript_rewrite_watermarks"
   | "trajectory_runtime_events"
   | "transcript_event_identities"
   | "transcript_events"
->;
+> & {
+  sqlite_schema: { name: string | null; type: string };
+};
 
 export type ResolvedSqliteScope = {
   agentId: string;
@@ -104,11 +112,18 @@ export function resolveSqliteScope(
   scope: Pick<SessionAccessScope, "agentId" | "env" | "sessionKey" | "storePath">,
 ): ResolvedSqliteScope {
   const scopedAgentId = resolveExplicitSqliteAgentId(scope);
-  const storeTarget = scope.storePath
-    ? resolveSqliteTargetFromSessionStorePath(scope.storePath, { agentId: scopedAgentId })
+  const incognitoAgentId = isIncognitoSessionKey(scope.sessionKey)
+    ? resolveAgentIdFromSessionKey(scope.sessionKey)
+    : undefined;
+  const effectiveStorePath = incognitoAgentId
+    ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
+    : scope.storePath;
+  const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
+  const storeTarget = effectiveStorePath
+    ? resolveSqliteTargetFromSessionStorePath(effectiveStorePath, { agentId: effectiveAgentId })
     : undefined;
   const agentId = resolveSqliteAgentId({
-    scopedAgentId,
+    scopedAgentId: effectiveAgentId,
     sessionKey: scope.sessionKey,
     storeAgentId: storeTarget?.agentId,
     useDefaultAgentForUnownedStore: Boolean(
@@ -131,11 +146,18 @@ export function resolveSqliteReadScope(
 ): ResolvedSqliteReadScope {
   const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
   const scopedAgentId = resolveExplicitSqliteAgentId({ ...scope, sessionKey });
-  const storeTarget = scope.storePath
-    ? resolveSqliteTargetFromSessionStorePath(scope.storePath, { agentId: scopedAgentId })
+  const incognitoAgentId = isIncognitoSessionKey(sessionKey)
+    ? resolveAgentIdFromSessionKey(sessionKey)
+    : undefined;
+  const effectiveStorePath = incognitoAgentId
+    ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: incognitoAgentId, env: scope.env })
+    : scope.storePath;
+  const effectiveAgentId = incognitoAgentId ?? scopedAgentId;
+  const storeTarget = effectiveStorePath
+    ? resolveSqliteTargetFromSessionStorePath(effectiveStorePath, { agentId: effectiveAgentId })
     : undefined;
   const agentId = resolveSqliteAgentId({
-    scopedAgentId,
+    scopedAgentId: effectiveAgentId,
     sessionKey,
     storeAgentId: storeTarget?.agentId,
     useDefaultAgentForUnownedStore: Boolean(

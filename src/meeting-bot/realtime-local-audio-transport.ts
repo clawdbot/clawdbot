@@ -4,6 +4,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
+import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
+import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 const LOCAL_BRIDGE_TERMINATION_GRACE_MS = 1_000;
@@ -61,6 +63,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   bargeInCooldownMs: number;
   logger: RuntimeLogger;
   logScope: string;
+  audioFormat?: MeetingRealtimeAudioFormat;
   spawn?: MeetingRealtimeAudioSpawn;
 }): MeetingRealtimeAudioTransport {
   const input = splitCommand(params.inputCommand);
@@ -81,6 +84,9 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   let fatalHandler: (() => void) | undefined;
   let stopPromise: Promise<void> | undefined;
   const retiredOutputStops = new Set<Promise<void>>();
+  const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
+    audioFormat: params.audioFormat ?? "pcm16-24khz",
+  });
 
   const signalFatal = () => {
     if (!fatalSignaled) {
@@ -150,10 +156,13 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       inputStarted = true;
       inputProcess.stdout?.on("data", (chunk) => {
         if (!stopped) {
-          onAudio(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          const audio = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          outputLoopbackVerifier.recordInput(audio);
+          onAudio(audio);
         }
       });
     },
+    beginOutput: () => outputLoopbackVerifier.beginOutput(),
     stop: () => {
       stopPromise ??= (async () => {
         stopped = true;
@@ -176,6 +185,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       if (stopped) {
         return;
       }
+      outputLoopbackVerifier.recordOutput(audio);
       try {
         outputProcess.stdin?.write(audio);
       } catch (error) {
@@ -186,6 +196,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       if (stopped) {
         return;
       }
+      outputLoopbackVerifier.cancelOutput();
       const previousOutput = outputProcess;
       outputProcess = spawnOutputProcess();
       attachOutputProcessHandlers(outputProcess);
@@ -204,6 +215,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     dispose: async () => {
       await transport.stop();
     },
+    getHealth: () => outputLoopbackVerifier.getHealth(),
   };
 
   if (!params.bargeInInputCommand) {

@@ -17,11 +17,9 @@ export type {
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
-  CliBackendResolveRuntimeToolAvailability,
-  CliBackendResolveRuntimeToolAvailabilityContext,
-  CliBackendRuntimeToolAvailability,
   CliBackendSideQuestionToolMode,
   CliBackendToolAvailability,
+  CliBackendToolAvailabilityEnforcement,
   CliBackendThinkingLevel,
   CliBundleMcpMode,
   PluginTextTransforms,
@@ -143,6 +141,7 @@ export type {
 } from "./capability-provider.types.js";
 export type {
   MigrationApplyResult,
+  MigrationConfigRuntime,
   MigrationDetection,
   MigrationItem,
   MigrationPlan,

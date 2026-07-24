@@ -59,11 +59,15 @@ export type ControlUiMockGatewayScenario = {
     label: string;
     pluginId: string;
   }>;
+  allowedSessionVisibilities?: Array<"shared" | "read-only" | "suggest" | "draft">;
+  hasMultipleSessionSharingIdentities?: boolean;
   featureCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
   devGitBranch?: string;
+  /** Simulate the one-time legacy Control UI device-auth pairing transition. */
+  deviceAuthMigrationPending?: boolean;
   deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
@@ -129,6 +133,10 @@ export type MockGatewayControls = {
   setOnline: (online: boolean) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   setMethodResponse: (method: string, payload: unknown) => Promise<void>;
+  setSessionSharingPolicy: (policy: {
+    allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
+    hasMultipleSessionSharingIdentities: boolean;
+  }) => Promise<void>;
   waitForRequest: (method: string) => Promise<MockGatewayRequest>;
 };
 
@@ -277,10 +285,18 @@ function normalizeScenario(
     basePath,
     controlUiTabs: scenario.controlUiTabs ?? [],
     controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
+    allowedSessionVisibilities: scenario.allowedSessionVisibilities ?? [
+      "shared",
+      "read-only",
+      "suggest",
+      "draft",
+    ],
+    hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities ?? false,
     featureCapabilities: scenario.featureCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
+    deviceAuthMigrationPending: scenario.deviceAuthMigrationPending ?? false,
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
@@ -368,6 +384,10 @@ function installControlUiMockGateway(input: {
     setOnline: (online: boolean) => void;
     setHistoryMessages: (messages: unknown[]) => void;
     setMethodResponse: (method: string, payload: unknown) => void;
+    setSessionSharingPolicy: (policy: {
+      allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
+      hasMultipleSessionSharingIdentities: boolean;
+    }) => void;
     socketCount: () => number;
     socketUrls: () => string[];
   };
@@ -398,6 +418,8 @@ function installControlUiMockGateway(input: {
   const sessionPatches = new Map<string, Record<string, unknown>>();
   const sessionMessageSubscriptions = new Set<string>();
   const sockets: Array<{ readonly url: string }> = [];
+  let deviceAuthMigrationPending = scenario.deviceAuthMigrationPending;
+  let deviceAuthMigrationDeviceId = "";
   let sessionMessageEventIndex = 0;
   let sessionMessageEventTimer: number | null = null;
   const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
@@ -764,6 +786,28 @@ function installControlUiMockGateway(input: {
   }
 
   function buildResponse(method: string, params: unknown): unknown {
+    if (method === "connect") {
+      const device = isRecord(params) ? params.device : undefined;
+      deviceAuthMigrationDeviceId =
+        isRecord(device) && typeof device.id === "string" ? device.id : "";
+    }
+    if (deviceAuthMigrationPending && method === "device.pair.list") {
+      return {
+        paired: [],
+        pending: deviceAuthMigrationDeviceId
+          ? [
+              {
+                requestId: "mock-device-auth-migration-request",
+                deviceId: deviceAuthMigrationDeviceId,
+              },
+            ]
+          : [],
+      };
+    }
+    if (deviceAuthMigrationPending && method === "device.pair.approve") {
+      deviceAuthMigrationPending = false;
+      return { requestId: "mock-device-auth-migration-request" };
+    }
     if (method === "sessions.patch") {
       recordSessionPatch(params);
     }
@@ -844,7 +888,7 @@ function installControlUiMockGateway(input: {
       case "connect":
         return {
           auth: {
-            deviceToken: scenario.deviceToken,
+            ...(deviceAuthMigrationPending ? {} : { deviceToken: scenario.deviceToken }),
             role: "operator",
             scopes: [
               "operator.admin",
@@ -861,8 +905,18 @@ function installControlUiMockGateway(input: {
           },
           controlUiTabs: scenario.controlUiTabs,
           controlUiWidgetKinds: scenario.controlUiWidgetKinds,
+          ...(deviceAuthMigrationPending
+            ? { deviceAuthMigration: { pending: true as const } }
+            : {}),
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
+          policy: {
+            maxPayload: 1_048_576,
+            maxBufferedBytes: 1_048_576,
+            tickIntervalMs: 30_000,
+            allowedSessionVisibilities: scenario.allowedSessionVisibilities,
+            hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
+          },
           snapshot: {
             ...presenceSnapshot(params),
             sessionDefaults: {
@@ -1276,6 +1330,10 @@ function installControlUiMockGateway(input: {
         // Current-document responses still work if browser storage is unavailable.
       }
     },
+    setSessionSharingPolicy(policy) {
+      scenario.allowedSessionVisibilities = policy.allowedSessionVisibilities;
+      scenario.hasMultipleSessionSharingIdentities = policy.hasMultipleSessionSharingIdentities;
+    },
     setHistoryMessages(messages) {
       scenario.historyMessages = Array.isArray(messages) ? messages : [];
       const configuredHistory = scenario.methodResponses["chat.history"];
@@ -1527,6 +1585,21 @@ function createMockGatewayControls(page: Page, defaultSessionKey: string): MockG
         },
         { targetMethod: method, responsePayload: payload },
       );
+    },
+    async setSessionSharingPolicy(policy) {
+      await page.evaluate((nextPolicy) => {
+        const gateway = (
+          window as Window & {
+            openclawControlUiE2eGateway?: {
+              setSessionSharingPolicy: (policy: typeof nextPolicy) => void;
+            };
+          }
+        ).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setSessionSharingPolicy(nextPolicy);
+      }, policy);
     },
     async waitForRequest(method) {
       await page.waitForFunction(

@@ -3,7 +3,7 @@ title: "Runtime tool fixture — edit"
 scenario:
   id: runtime-tool-edit
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.tool-edit

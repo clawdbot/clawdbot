@@ -65,6 +65,15 @@ class AndroidScreenshotModeTest {
   }
 
   @Test
+  fun openClawSceneTargetsSystemAgentSettings() {
+    val scene = AndroidScreenshotScene.fromRawValue("openclaw")
+
+    assertEquals(AndroidScreenshotScene.OpenClaw, scene)
+    assertEquals(HomeDestination.Settings, scene.homeDestination)
+    assertEquals(SettingsRoute.SystemAgent, scene.settingsRoute)
+  }
+
+  @Test
   fun voiceWakeSceneTargetsVoiceSettings() {
     val scene = AndroidScreenshotScene.fromRawValue("voice-wake")
 

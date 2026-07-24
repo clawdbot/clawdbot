@@ -101,8 +101,8 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     }
   });
 
-  it("removes all monitors when heartbeats are disabled", async () => {
-    const add = vi.fn(async () => ({}));
+  it("keeps a stable disabled monitor when heartbeat cadence is disabled", async () => {
+    const add = vi.fn(async (_input: { declarationKey?: string }, _options?: AddOptions) => ({}));
     const remove = vi.fn(async () => ({ ok: true }));
     const list = vi.fn(async () => [monitorJob("main")]);
     const cfg = {
@@ -115,8 +115,15 @@ describe("reconcileHeartbeatMonitorJobs", () => {
       logger,
     });
 
-    expect(add).not.toHaveBeenCalled();
-    expect(remove).toHaveBeenCalledWith("job-main", { systemOwned: true });
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        declarationKey: "heartbeat:main",
+        enabled: false,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: expect.any(Number) },
+      }),
+    );
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it("keeps converging other agents when one convergence fails", async () => {

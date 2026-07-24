@@ -25,18 +25,18 @@
     "@openclaw/libterminal": "0.3.2",
     "@openclaw/media-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
-    "@openclaw/workboard-contract": "workspace:*",
     "@openclaw/uirouter": "0.1.0",
+    "@openclaw/workboard-contract": "workspace:*",
     "@tanstack/lit-virtual": "3.13.33",
     "@tanstack/virtual-core": "3.17.4",
-    "dompurify": "3.4.11",
+    "dompurify": "3.4.12",
     "ghostty-web": "0.4.0",
     "highlight.js": "11.11.1",
     "json5": "2.2.3",
     "lit": "3.3.3",
     "markdown-it": "14.3.0",
     "markdown-it-task-lists": "2.1.1",
-    "marked": "18.0.5",
+    "marked": "18.0.6",
     "remend": "1.3.0"
   },
   "devDependencies": {
@@ -46,7 +46,7 @@
     "jsdom": "29.1.1",
     "openclaw": "workspace:*",
     "playwright": "1.61.1",
-    "vite": "8.1.3",
+    "vite": "8.1.5",
     "vitest": "4.1.10"
   }
 }

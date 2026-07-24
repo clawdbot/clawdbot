@@ -3,6 +3,7 @@ title: Subagent fanout synthesis
 scenario:
   id: subagent-fanout-synthesis
   surface: subagents
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.subagent-turns-subagents

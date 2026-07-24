@@ -6,6 +6,7 @@ import {
   preflightPluginInstall,
   resolveInstalledClawHubPlugin,
 } from "../plugins/plugin-install-preflight.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
@@ -207,14 +208,36 @@ export async function preflightClawPackage(
   };
 }
 
+type InstallClawPackagesOptions = OpenClawStateDatabaseOptions & {
+  deps?: PackageInstallerDeps;
+  runtime?: RuntimeEnv;
+  nowMs?: number;
+  onExternalMutation?: (pkg: ClawPackage) => void;
+};
+
 export async function installClawPackages(
   plan: ClawAddPlan,
-  options: OpenClawStateDatabaseOptions & {
-    deps?: PackageInstallerDeps;
-    runtime?: RuntimeEnv;
-    nowMs?: number;
-    onExternalMutation?: (pkg: ClawPackage) => void;
-  } = {},
+  options: InstallClawPackagesOptions = {},
+): Promise<PersistedClawPackageRef[]> {
+  const includesPlugin = plan.actions.some(
+    (action) => action.kind === "package" && action.details?.kind === "plugin",
+  );
+  if (!includesPlugin) {
+    return await installClawPackagesUnlocked(plan, options);
+  }
+  return await withPluginLifecycleLease(
+    {
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.path ? { path: options.path } : {}),
+      ...(options.database ? { database: options.database } : {}),
+    },
+    async () => await installClawPackagesUnlocked(plan, options),
+  );
+}
+
+async function installClawPackagesUnlocked(
+  plan: ClawAddPlan,
+  options: InstallClawPackagesOptions,
 ): Promise<PersistedClawPackageRef[]> {
   const deps = options.deps ?? {};
   const installPlugin = deps.installPlugin ?? runPluginInstallCommand;
@@ -414,6 +437,9 @@ export async function installClawPackages(
       });
       installedPackages.push(packageRef);
 
+      // The installer has no mutation receipt. Mark the boundary before calling it so a throw
+      // after an on-disk change is treated as uncertain instead of falsely reported as rolled back.
+      options.onExternalMutation?.(pkg);
       await installPlugin({
         raw: `clawhub:${pkg.ref}@${pkg.version}`,
         opts: {

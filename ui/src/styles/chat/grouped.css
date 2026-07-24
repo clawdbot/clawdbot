@@ -22,6 +22,10 @@
   justify-content: flex-start;
 }
 
+.chat-group.user.chat-group--peer {
+  flex-direction: row;
+}
+
 /* Freshly submitted composer text flows up into the transcript. Applied only
    to the locally pending bubble (see shouldAnimateUserTurnEntry); the bubble
    keeps a stable key through the history handoff so this never replays. */
@@ -58,6 +62,13 @@
   justify-content: end;
 }
 
+.chat-group.user.chat-group--with-footer:where(.chat-group--peer) {
+  --chat-group-avatar-column: 1;
+  --chat-group-content-column: 2;
+  grid-template-columns: 36px minmax(0, var(--chat-message-column-max));
+  justify-content: start;
+}
+
 .chat-group.chat-group--with-footer .chat-avatar {
   grid-column: var(--chat-group-avatar-column);
   grid-row: 1;
@@ -92,12 +103,20 @@
   align-items: flex-end;
 }
 
+.chat-group.user.chat-group--peer .chat-group-messages {
+  align-items: flex-start;
+}
+
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
 }
 
 .chat-group.user .chat-group-footer {
   justify-content: flex-end;
+}
+
+.chat-group.user.chat-group--peer .chat-group-footer {
+  justify-content: flex-start;
 }
 
 /* Footer at bottom of a message group (role + time). It stays in flow while
@@ -135,7 +154,7 @@
 .chat-group-footer--persistent-identity .chat-delete-wrap,
 .chat-group-footer--persistent-identity .chat-group-timestamp,
 .chat-group-footer--persistent-identity .msg-meta,
-.chat-group-footer--persistent-identity > .chat-group-footer-actions {
+.chat-group-footer--persistent-identity .chat-group-footer-actions {
   position: absolute;
   opacity: 0;
   pointer-events: none;
@@ -156,9 +175,9 @@
 .chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-delete-wrap,
 .chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-group-timestamp,
 .chat-group-footer--persistent-identity:has(details.msg-meta[open]) .msg-meta,
-.chat-group:hover .chat-group-footer--persistent-identity > .chat-group-footer-actions,
-.chat-group:focus-within .chat-group-footer--persistent-identity > .chat-group-footer-actions,
-.chat-group-footer--persistent-identity:has(details.msg-meta[open]) > .chat-group-footer-actions {
+.chat-group:hover .chat-group-footer--persistent-identity .chat-group-footer-actions,
+.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-footer-actions,
+.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-group-footer-actions {
   position: static;
   opacity: 1;
   pointer-events: auto;
@@ -185,6 +204,7 @@
   flex: 0 0 auto;
 }
 
+.chat-group.user .chat-group-footer-actions,
 .chat-group.assistant .chat-group-footer-actions,
 .chat-group.assistant .chat-message-actions-row {
   justify-content: flex-start;
@@ -382,6 +402,16 @@
 
 .chat-divider__action {
   white-space: nowrap;
+}
+
+.chat-notice {
+  margin: 14px auto;
+  padding: 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  white-space: pre-wrap;
 }
 
 /* Avatar Styles */
@@ -584,6 +614,20 @@ img.chat-avatar {
   color: color-mix(in srgb, var(--foreground) 80%, var(--primary) 20%);
 }
 
+.chat-reply-attribution {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-reply-attribution__icon,
+.chat-reply-attribution__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -597,7 +641,7 @@ img.chat-avatar {
   .chat-group-footer--persistent-identity .chat-delete-wrap,
   .chat-group-footer--persistent-identity .chat-group-timestamp,
   .chat-group-footer--persistent-identity .msg-meta,
-  .chat-group-footer--persistent-identity > .chat-group-footer-actions {
+  .chat-group-footer--persistent-identity .chat-group-footer-actions {
     position: static;
     opacity: 1;
     pointer-events: auto;
@@ -838,6 +882,11 @@ details.msg-meta:not([open]) .msg-meta__details {
   left: auto;
 }
 
+.chat-group.user.chat-group--peer .msg-meta__details {
+  right: auto;
+  left: 0;
+}
+
 .msg-meta__time,
 .msg-meta__tokens,
 .msg-meta__cache,
@@ -991,7 +1040,8 @@ details.msg-meta:not([open]) .msg-meta__details {
     --chat-message-column-max: 88%;
   }
 
-  .chat-group.chat-group--with-footer {
+  .chat-group.chat-group--with-footer,
+  .chat-group.user.chat-group--peer.chat-group--with-footer {
     --chat-group-avatar-column: 1;
     --chat-group-content-column: 1;
     grid-template-columns: minmax(0, var(--chat-message-column-max));

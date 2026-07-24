@@ -26,8 +26,20 @@ export const signalChannelConfigUiHints = {
   "accounts.*.defaultTo": { presentation: "phone-number" },
   "accounts.*.groupAllowFrom.*": { presentation: "phone-number" },
   "accounts.*.reactionAllowlist.*": { presentation: "phone-number" },
-  configPath: {
+  transport: {
+    label: "Signal Transport",
+    help: "Account-owned native process or external endpoint configuration. Named accounts do not inherit this value.",
+  },
+  "transport.kind": {
+    label: "Signal Transport Kind",
+    help: "Use managed-native to let OpenClaw start signal-cli, external-native for an existing native daemon, or container for signal-cli-rest-api.",
+  },
+  "transport.configPath": {
     label: "Signal CLI Config Path",
     help: "Optional directory passed to signal-cli via --config when the service needs a non-default signal-cli data path.",
+  },
+  "transport.url": {
+    label: "Signal Transport URL",
+    help: "Base URL for an external-native or container transport, or the connection endpoint for a managed-native daemon when it differs from the bind address.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

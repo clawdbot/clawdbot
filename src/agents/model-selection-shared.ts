@@ -98,15 +98,11 @@ function resolveManifestPluginsForModelIdNormalization(params: {
     if (currentManifestPlugins) {
       return currentManifestPlugins;
     }
-    return loadManifestMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-    }).plugins;
   }
   return loadManifestMetadataSnapshot({
     config: params.cfg,
-    workspaceDir,
     env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
   }).plugins;
 }
 
@@ -1356,17 +1352,15 @@ function resolveConfiguredModelManifestPlugins(params: {
   }
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   if (!workspaceDir) {
-    return (
-      getCurrentPluginMetadataSnapshot({
-        config: params.cfg,
-        env: process.env,
-      })?.plugins ?? []
-    );
+    return getCurrentPluginMetadataSnapshot({
+      config: params.cfg,
+      env: process.env,
+    })?.plugins;
   }
   return loadManifestMetadataSnapshot({
     config: params.cfg,
-    workspaceDir,
     env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
   }).plugins;
 }
 

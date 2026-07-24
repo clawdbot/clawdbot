@@ -14,6 +14,7 @@ import {
   isDirectReleaseCandidateExecution,
   parseArgs,
   parseRunIdFromDispatchOutput,
+  preflightCorePackageTarballs,
   reconcileReleaseCandidateState,
   releaseBranchForTag,
   resolveArtifactName,
@@ -587,6 +588,37 @@ describe("release candidate checklist", () => {
         params,
       ),
     ).toThrow("invalid dependency tarball metadata");
+  });
+
+  it("prefers the complete core package tarball set with legacy manifest fallback", () => {
+    const legacyTarball = {
+      packageName: "@openclaw/ai",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-ai-2026.7.1-beta.3.tgz",
+      tarballSha256: "ai-sha",
+    };
+    const gatewayProtocolTarball = {
+      packageName: "@openclaw/gateway-protocol",
+      packageVersion: "2026.7.1-beta.3",
+      tarballName: "openclaw-gateway-protocol-2026.7.1-beta.3.tgz",
+      tarballSha256: "protocol-sha",
+    };
+
+    expect(
+      preflightCorePackageTarballs({
+        corePackageTarballs: [legacyTarball, gatewayProtocolTarball],
+        dependencyTarballs: [legacyTarball],
+      }),
+    ).toEqual([legacyTarball, gatewayProtocolTarball]);
+    expect(preflightCorePackageTarballs({ dependencyTarballs: [legacyTarball] })).toEqual([
+      legacyTarball,
+    ]);
+    expect(() =>
+      preflightCorePackageTarballs({
+        corePackageTarballs: null,
+        dependencyTarballs: [legacyTarball],
+      }),
+    ).toThrow("missing dependency tarball metadata");
   });
 
   it("trusts the npm workflow SHA while binding the candidate through its manifest", () => {

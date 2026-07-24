@@ -1,4 +1,3 @@
-// Zalouser tests cover text styles plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parseZalouserTextStyles } from "./text-styles.js";
 import { TextStyle } from "./zca-constants.js";
@@ -15,10 +14,81 @@ describe("parseZalouserTextStyles", () => {
     });
   });
 
+  it.each([
+    {
+      name: "resolves ambiguous triple-marker nesting with CommonMark precedence",
+      input: "***foo** bar*",
+      before: { text: "***foo** bar*", styles: [] },
+      after: {
+        text: "foo bar",
+        styles: [
+          { start: 0, len: 7, st: TextStyle.Italic },
+          { start: 0, len: 3, st: TextStyle.Bold },
+        ],
+      },
+    },
+    {
+      name: "uses Unicode-aware underscore flanking inside words",
+      input: "привет_мир_снова",
+      before: {
+        text: "приветмирснова",
+        styles: [{ start: 6, len: 3, st: TextStyle.Italic }],
+      },
+      after: { text: "привет_мир_снова", styles: [] },
+    },
+  ])("documents before and after: $name", ({ input, after }) => {
+    expect(parseZalouserTextStyles(input)).toEqual(after);
+  });
+
   it("keeps inline code and plain math markers literal", () => {
     expect(parseZalouserTextStyles("before `inline *code*` after\n2 * 3 * 4")).toEqual({
       text: "before `inline *code*` after\n2 * 3 * 4",
       styles: [],
+    });
+  });
+
+  it.each([
+    ["authored underline HTML inside code", "`<u>x</u>`", "`<u>x</u>`"],
+    ["code after an escaped backtick", "\\` `*x*`", "` `*x*`"],
+    ["HTML entities resembling projection sentinels", "&#xE000;", "&#xE000;"],
+    ["blank-line paragraph boundaries", "**first\n\nsecond**", "**first\n\nsecond**"],
+    ["unsupported escapes", "\\[literal]", "\\[literal]"],
+    ["hard-break syntax", "line\\\nnext  ", "line\\\nnext  "],
+    ["backslash before trailing whitespace", "line\\  ", "line\\  "],
+    ["whitespace-only paragraph boundaries", "**first\n  \nsecond**", "**first\n\nsecond**"],
+    ["authored token-shaped text", "<zalouser-token-0>[", "<zalouser-token-0>["],
+    ["rendered token-shaped text", "<zalouser\\-token-0>", "<zalouser-token-0>"],
+  ])("keeps local literal bytes for %s", (_name, input, text) => {
+    expect(parseZalouserTextStyles(input)).toEqual({ text, styles: [] });
+  });
+
+  it("keeps emphasis flanking next to protected inline code", () => {
+    expect(parseZalouserTextStyles("_foo_`bar`")).toEqual({
+      text: "foo`bar`",
+      styles: [{ start: 0, len: 3, st: TextStyle.Italic }],
+    });
+  });
+
+  it("keeps link syntax literal while styling its label", () => {
+    expect(parseZalouserTextStyles("[**label**](https://example.com)")).toEqual({
+      text: "[label](https://example.com)",
+      styles: [{ start: 1, len: 5, st: TextStyle.Bold }],
+    });
+  });
+
+  it("projects token-dense input without leaking sentinels", () => {
+    const result = parseZalouserTextStyles("{red}x{/red}".repeat(4_100));
+    expect(result.text).toBe("x".repeat(4_100));
+    expect(result.styles).toHaveLength(4_100);
+  });
+
+  it("keeps emphasis isolated from local block compilation", () => {
+    expect(parseZalouserTextStyles("**before\n# heading\nafter**")).toEqual({
+      text: "**before\nheading\nafter**",
+      styles: [
+        { start: 9, len: 7, st: TextStyle.Bold },
+        { start: 9, len: 7, st: TextStyle.Big },
+      ],
     });
   });
 
@@ -170,13 +240,20 @@ describe("parseZalouserTextStyles", () => {
   });
 
   it("supports nested markdown and tag styles regardless of order", () => {
-    expect(parseZalouserTextStyles("**{red}x{/red}** {red}**y**{/red}")).toEqual({
-      text: "x y",
+    expect(
+      parseZalouserTextStyles(
+        '**{red}x{/red}** {red}**y**{/red} {underline}z{/underline} {red}*"q"*{/red}',
+      ),
+    ).toEqual({
+      text: 'x y z "q"',
       styles: [
         { start: 0, len: 1, st: TextStyle.Bold },
         { start: 0, len: 1, st: TextStyle.Red },
         { start: 2, len: 1, st: TextStyle.Red },
         { start: 2, len: 1, st: TextStyle.Bold },
+        { start: 4, len: 1, st: TextStyle.Underline },
+        { start: 6, len: 3, st: TextStyle.Red },
+        { start: 6, len: 3, st: TextStyle.Italic },
       ],
     });
   });
@@ -189,8 +266,8 @@ describe("parseZalouserTextStyles", () => {
   });
 
   it("keeps escaped markers literal", () => {
-    expect(parseZalouserTextStyles("\\*literal\\* \\{underline}tag{/underline}")).toEqual({
-      text: "*literal* {underline}tag{/underline}",
+    expect(parseZalouserTextStyles("\\*literal\\* \\{underline}tag{/underline} \\`tick")).toEqual({
+      text: "*literal* {underline}tag{/underline} `tick",
       styles: [],
     });
   });

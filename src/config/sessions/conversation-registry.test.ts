@@ -2,22 +2,38 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
   listConversations,
   registerConversationAddresses,
   resolveConversation,
 } from "./conversation-registry.js";
-import { deleteSessionEntryLifecycle, upsertSessionEntry } from "./session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  upsertSessionEntry as upsertCanonicalSessionEntry,
+} from "./session-accessor.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { SessionEntry, SessionOrigin } from "./types.js";
+
+type LegacyDeliveryFixture = Partial<SessionEntry> & {
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+};
+
+const upsertSessionEntry = (
+  scope: Parameters<typeof upsertCanonicalSessionEntry>[0],
+  entry: LegacyDeliveryFixture,
+) => upsertCanonicalSessionEntry(scope, normalizeLegacySessionEntryDelivery(entry as SessionEntry));
 
 describe("conversation registry", () => {
   let tempDir: string;
@@ -163,7 +179,7 @@ describe("conversation registry", () => {
     );
     executeSqliteQuerySync(
       database.db,
-      db.deleteFrom("session_entries").where("session_key", "=", staleSessionKey),
+      db.deleteFrom("session_nodes").where("session_key", "=", staleSessionKey),
     );
 
     expect(
@@ -172,7 +188,7 @@ describe("conversation registry", () => {
       target: "reef:peer-a",
       sessionId: "live-session",
       sessionKey: liveSessionKey,
-      lastSeenAt: 200,
+      lastSeenAt: 100,
     });
   });
 

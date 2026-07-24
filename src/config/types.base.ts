@@ -213,6 +213,15 @@ export type SessionThreadBindingsConfig = {
   defaultSpawnContext?: "isolated" | "fork";
 };
 
+export type SessionSharingConfig = {
+  /** Allow owners/admins to set sessions read-only. Default: true. */
+  readOnly?: boolean;
+  /** Allow owners/admins to select suggest mode. Default: true. */
+  suggest?: boolean;
+  /** Allow owners/admins to hide draft sessions from other operators. Default: true. */
+  drafts?: boolean;
+};
+
 export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
@@ -229,6 +238,8 @@ export type SessionConfig = {
   sendPolicy?: SessionSendPolicyConfig;
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
+  /** Collaboration modes owners and administrators may select. */
+  sharing?: SessionSharingConfig;
   /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
   maintenance?: SessionMaintenanceConfig;
 };

@@ -9,6 +9,7 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
@@ -21,7 +22,10 @@ import {
 } from "../../sessions/model-overrides.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
+import type {
+  FinalizedRuntimeMsgContext as MsgContext,
+  FinalizedTemplateContext as TemplateContext,
+} from "../templating.js";
 import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
@@ -182,7 +186,7 @@ export function initFastReplySessionState(params: {
     listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
   );
   const existingEntry = loadSessionEntry({ storePath, sessionKey });
-  const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const commandSource = ctx.commandText ?? "";
   const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
     ? commandSource.trim()
     : stripStructuralPrefixes(commandSource).trim();
@@ -205,7 +209,7 @@ export function initFastReplySessionState(params: {
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
   const bodyStripped = resetTriggered
     ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
-    : (ctx.BodyForAgent ?? ctx.Body ?? "");
+    : (ctx.agentText ?? "");
   const now = Date.now();
   const sessionFile =
     !resetTriggered && existingEntry?.sessionFile
@@ -214,8 +218,25 @@ export function initFastReplySessionState(params: {
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
-    ...((resetTriggered || !existingEntry) && ctx.SessionCreator
-      ? { createdBy: { ...ctx.SessionCreator } }
+    ...(!existingEntry && ctx.SessionCreation
+      ? buildSessionCreationStamp(ctx.SessionCreation)
+      : {}),
+    ...(resetTriggered && existingEntry
+      ? {
+          previousSessionId: existingEntry.sessionId,
+          spawnedBy: existingEntry.spawnedBy,
+          spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
+          spawnedCwd: existingEntry.spawnedCwd,
+          parentSessionKey: existingEntry.parentSessionKey,
+          forkedFromParent: existingEntry.forkedFromParent,
+          forkSource: existingEntry.forkSource,
+          createdVia: existingEntry.createdVia,
+          createdActor: existingEntry.createdActor,
+          createdAt: existingEntry.createdAt,
+          spawnDepth: existingEntry.spawnDepth,
+          subagentRole: existingEntry.subagentRole,
+          subagentControlScope: existingEntry.subagentControlScope,
+        }
       : {}),
     sessionFile,
     updatedAt: now,
@@ -259,6 +280,9 @@ export function initFastReplySessionState(params: {
   });
   const sessionCtx: TemplateContext = {
     ...ctx,
+    commandText: ctx.commandText ?? "",
+    agentText: bodyStripped,
+    rawText: ctx.rawText ?? "",
     SessionKey: sessionKey,
     CommandAuthorized: commandAuthorized,
     BodyStripped: bodyStripped,

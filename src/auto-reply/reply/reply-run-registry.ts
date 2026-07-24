@@ -18,6 +18,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import type { MediaFact } from "../../media/media-facts.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
@@ -41,6 +42,7 @@ export type ReplyBackendQueueMessageOptions = {
   debounceMs?: number;
   /** Ordered current-turn images to inject with the steering text. */
   images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
   /** Ordered facts represented by attachment text in this steering prompt. */
   media?: MediaFact[];
   deliveryTimeoutMs?: number;

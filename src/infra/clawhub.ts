@@ -1631,6 +1631,41 @@ export async function reportClawHubSkillInstallTelemetry(params: {
   }
 }
 
+export async function reportClawHubPluginInstallTelemetry(params: {
+  baseUrl?: string;
+  token?: string;
+  packageName: string;
+  version?: string | null;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<void> {
+  const token = normalizeOptionalString(params.token) ?? (await resolveClawHubAuthToken());
+  if (!token || isClawHubTelemetryDisabled()) {
+    return;
+  }
+  const packageName = normalizeOptionalString(params.packageName);
+  if (!packageName) {
+    return;
+  }
+
+  const { response, url, hasToken } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    path: "/api/cli/telemetry/install",
+    method: "POST",
+    token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    json: {
+      event: "plugin_install",
+      packageName,
+      version: params.version ?? undefined,
+    },
+  });
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+  }
+}
+
 function isClawHubTelemetryDisabled(): boolean {
   const raw =
     normalizeOptionalString(process.env.CLAWHUB_DISABLE_TELEMETRY) ??

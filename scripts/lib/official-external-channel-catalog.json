@@ -638,6 +638,10 @@
               "description": "Signal account number (E.164)"
             },
             {
+              "flags": "--signal-transport <kind>",
+              "description": "Signal HTTP transport (external-native or container)"
+            },
+            {
               "flags": "--http-host <host>",
               "description": "Signal HTTP daemon host"
             },

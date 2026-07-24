@@ -1,10 +1,7 @@
 // Control UI tests cover markdown behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  handleMarkdownCodeBlockCopy,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownHtml,
-} from "./markdown.ts";
+import { handleMarkdownCodeBlockCopy } from "./markdown-code-blocks.ts";
+import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
   const container = document.createElement("div");

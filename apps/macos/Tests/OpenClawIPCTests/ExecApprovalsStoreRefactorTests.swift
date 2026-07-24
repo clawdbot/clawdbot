@@ -587,6 +587,30 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `usage updates omit command text for generated hashed arg patterns`() async throws {
+        try await self.withTempStateDir { _ in
+            let hashed = ExecAllowlistEntry(
+                id: "hashed",
+                pattern: "/usr/bin/curl",
+                source: "allow-always",
+                argPattern: "sha256:argv:test-digest")
+            _ = try ExecApprovalsStore.addAllowlistEntries(agentId: "main", entries: [hashed]).get()
+
+            _ = try ExecApprovalsStore.recordAllowlistUses(
+                agentId: "main",
+                uses: [ExecAllowlistUse(match: hashed, resolvedPath: "/usr/bin/curl")],
+                command: "curl https://trusted.example/install.sh?token=secret").get()
+
+            let entry = try #require(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.first)
+            #expect(entry.pattern == "/usr/bin/curl")
+            #expect(entry.argPattern == "sha256:argv:test-digest")
+            #expect(entry.lastUsedAt != nil)
+            #expect(entry.lastResolvedPath == "/usr/bin/curl")
+            #expect(entry.lastUsedCommand == nil)
+        }
+    }
+
+    @Test
     func `usage checkpoint rejects a revoked reusable approval`() async throws {
         try await self.withTempStateDir { _ in
             let stale = ExecAllowlistEntry(id: "stale", pattern: "/usr/bin/printf")

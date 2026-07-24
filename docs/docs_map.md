@@ -66,6 +66,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: How cron works
   - H2: Schedule types
+  - H3: Heartbeat task migration
   - H3: Stream sources
   - H3: Dynamic cadence (pacing)
   - H3: Day-of-month and day-of-week use OR logic
@@ -502,7 +503,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Private API actions
   - H2: Config writes
   - H2: Coalescing split-send DMs (command + URL in one composition)
-  - H3: Scenarios and what the agent sees
   - H2: Inbound recovery after a bridge or gateway restart
   - H3: Operator-visible signal
   - H3: Migration
@@ -859,7 +859,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it is
   - H2: Setup path A: link existing Signal account (QR)
   - H2: Setup path B: register dedicated bot number (SMS, Linux)
-  - H2: External daemon mode (httpUrl)
+  - H2: External native daemon mode
   - H2: Container mode (bbernhard/signal-cli-rest-api)
   - H2: Access control (DMs + groups)
   - H2: How it works (behavior)
@@ -1372,10 +1372,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/claws
 - Headings:
   - H1: openclaw claws
-  - H2: Create a grouped manifest
+  - H2: Create a Claw package
   - H2: Inspect and preview
   - H2: Inspect installed state
-  - H2: Preview an update
+  - H2: Update an installed Claw
   - H2: Remove an installed Claw
   - H2: Export an installed agent
   - H2: Command reference
@@ -2111,6 +2111,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Output
   - H2: Many sessions per day
   - H2: Missing summaries
+  - H2: Upgrading the legacy file store
   - H2: Configuration
 
 ## cli/tui.md
@@ -2786,6 +2787,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Trust boundary
   - H2: Ownership and presence
+  - H2: Drafts
   - H2: Turn attribution
   - H2: Related
 
@@ -2993,6 +2995,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How messages are routed
   - H2: DM isolation
   - H3: Dock linked channels
+  - H2: Incognito sessions
   - H2: Remember across conversations
   - H2: Session lifecycle
   - H2: Where state lives
@@ -3159,6 +3162,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Resolve config secrets with op
   - H2: Service account setup for headless Gateways
   - H2: The 1password skill for agents
+  - H2: Browser sign-in with 1Password for Claude
   - H2: Security notes
   - H2: Troubleshooting
 
@@ -3256,6 +3260,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Timeouts and long-running work
   - H3: Claude CLI specifics
+  - H3: Claude browser tools and 1Password sign-in
   - H2: Sessions
   - H2: Fallback prelude from claude-cli sessions
   - H2: Images
@@ -3597,11 +3602,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: What each flag does
   - H3: Per-channel vs per-account examples
   - H3: Common patterns
-  - H2: HEARTBEAT.md (optional)
-  - H3: tasks: blocks
-  - H3: Can the agent update HEARTBEAT.md?
+  - H2: Monitor scratch (optional)
+  - H3: Schedule recurring checks with cron
+  - H3: Can the agent update its scratch?
   - H2: Manual wake (on-demand)
-  - H2: Reasoning delivery (optional)
   - H2: Cost awareness
   - H2: Context overflow after heartbeat
   - H2: Related
@@ -4022,6 +4026,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: What the audit checks (high level)
   - H3: Priority order when triaging findings
   - H2: Hardened baseline in 60 seconds
+  - H3: Requester-scoped controls and prompt context
   - H2: Trust boundary matrix
   - H2: Not vulnerabilities by design
   - H2: Gateway and node trust
@@ -4299,6 +4304,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Live: APNs HTTP/2 proxy reachability
   - H2: Live: ACP bind smoke (/acp spawn ... --bind here)
   - H2: Live: Codex app-server harness smoke
+  - H2: Live: OpenAI repeated compaction
   - H3: Recommended live recipes
   - H2: Live: model matrix (what we cover)
   - H3: Aggregators / alternate gateways
@@ -5794,6 +5800,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supervise Codex sessions
   - H2: Configuration
   - H3: Compaction
+  - H3: Direct API long context
   - H2: Verify Codex runtime
   - H2: Routing and model selection
   - H2: Deployment patterns
@@ -6018,6 +6025,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Minimal example
   - H2: Rich example
   - H2: Top-level field reference
+  - H2: MCP server reference
   - H2: dashboard reference
   - H2: catalog reference
   - H2: Generation provider metadata reference
@@ -6058,7 +6066,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Choose a plugin
   - H2: Choose a mode
   - H2: Prepare Chrome and audio
-  - H2: Enable the plugin
+  - H2: Install or disable plugins
   - H2: Verify and join
   - H2: Handle platform policy prompts
   - H2: Discord voice chat
@@ -7478,6 +7486,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-channel-inbound
 - Headings:
   - H2: Core helpers
+  - H2: Delivery settlement contract
   - H2: Migration
 
 ## plugins/sdk-channel-ingress.md
@@ -7566,8 +7575,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What changed
   - H3: Why
   - H2: Compatibility policy
+  - H3: Published channel setup compatibility
   - H3: Channel setup input field compatibility
   - H4: Verifying readers
+  - H3: Media legacy projection
   - H2: How to migrate
   - H2: Import path reference
   - H2: Removed compatibility surfaces
@@ -7632,6 +7643,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Package metadata
   - H3: openclaw fields
   - H3: openclaw.channel
+  - H3: Channel-owned setup fields
   - H3: openclaw.install
   - H3: Deferred full load
   - H2: Plugin manifest
@@ -7851,7 +7863,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Usage and cost tracking
   - H2: Getting started
   - H2: Claude sessions across computers
-  - H2: Thinking defaults (Claude Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
+  - H2: Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Fable 5)
   - H3: Why this exists
   - H3: How it works
@@ -8754,7 +8766,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Version naming
   - H2: Release cadence
-  - H2: Monthly npm-only extended-stable publication
+  - H2: Monthly Gateway extended-stable publication
+  - H3: Prepare and stabilize the candidate
+  - H3: Publish the npm packages
+  - H3: Verify and recover
   - H2: Regular release operator checklist
   - H2: Stable main closeout
   - H2: Release preflight
@@ -8826,6 +8841,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /reference/full-release-validation
 - Headings:
+  - H2: Extended-stable exception
   - H2: Top-level stages
   - H2: Release checks stages
   - H2: Docker release-path chunks
@@ -9701,6 +9717,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works (internal)
   - H2: CLI quick reference
   - H2: Snapshots and refs
+  - H2: Browser batch CLI
   - H2: Wait power-ups
   - H2: Debug workflows
   - H2: JSON output
@@ -10715,6 +10732,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Connection loss and reconnect
   - H2: PWA install and web push
   - H2: Hosted embeds
+  - H2: Chat transcript layout
   - H2: Chat message width
   - H2: Tailnet access (recommended)
   - H2: Insecure HTTP

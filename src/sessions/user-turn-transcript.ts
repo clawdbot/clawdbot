@@ -1,18 +1,18 @@
 // User turn transcript helpers extract user-turn text from session transcripts.
-import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
-import {
-  projectMediaFacts,
-  resolveMediaFacts,
-  type MediaFact,
-  type MediaFactInput,
-} from "../media/media-facts.js";
+import { projectMediaFacts, resolveMediaFacts, type MediaFact } from "../media/media-facts.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
+import {
+  normalizeMediaEntryForTranscript,
+  normalizeStructuredMediaEntryForTranscript,
+  resolveTranscriptMediaPath,
+  shouldPersistStructuredMediaEntries,
+} from "./user-turn-transcript.media-normalize.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
   PersistUserTurnTranscriptParams,
@@ -70,37 +70,6 @@ export function resolvePersistedUserTurnText(value: string | null | undefined): 
     return undefined;
   }
   return normalized;
-}
-
-function mediaTypeForTranscript(media: PersistedUserTurnMediaInput, mediaPath?: string): string {
-  return (
-    normalizeOptionalText(media.contentType) ??
-    normalizeOptionalText(media.kind) ??
-    mimeTypeFromFilePath(mediaPath) ??
-    "application/octet-stream"
-  );
-}
-
-function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput): MediaFactInput {
-  const rawPath = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
-  if (!rawPath) {
-    return {};
-  }
-  return {
-    path: resolveTranscriptMediaPath(rawPath, normalizeOptionalText(media.workspaceDir)),
-    contentType: mediaTypeForTranscript(media, rawPath),
-  };
-}
-
-const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
-
-function resolveTranscriptMediaPath(pathValue: string, workspaceDir: string | undefined): string {
-  // Relative staged media paths are anchored to the media workspace; absolute
-  // paths and URL-like refs are already stable transcript references.
-  if (!workspaceDir || path.isAbsolute(pathValue) || URL_LIKE_MEDIA_PATH_PATTERN.test(pathValue)) {
-    return pathValue;
-  }
-  return path.join(workspaceDir, pathValue);
 }
 
 function resolveTranscriptMediaType(params: {
@@ -211,6 +180,7 @@ function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown>
 
 export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
+  const normalizedMedia = (params.media ?? []).map(normalizeStructuredMediaEntryForTranscript);
   const text = normalizeTranscriptText(params.text);
   // Storage is BARE (no timestamp prefix). The per-message timestamp is added
   // at the single LLM-boundary stamping site (normalizeMessagesForLlmBoundary),
@@ -223,6 +193,19 @@ export function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedU
     ...(params.senderIsOwner === undefined ? {} : { senderIsOwner: params.senderIsOwner }),
     ...senderMeta,
     ...(params.transport ? { transport: params.transport } : {}),
+    ...(shouldPersistStructuredMediaEntries(params.media) ? { media: normalizedMedia } : {}),
+    ...(params.mediaImageLayout
+      ? {
+          mediaImageLayout: {
+            slots: params.mediaImageLayout.slots.map((slot) => ({ ...slot })),
+            ...(params.mediaImageLayout.suppressedFactIndexes?.length
+              ? {
+                  suppressedFactIndexes: [...params.mediaImageLayout.suppressedFactIndexes],
+                }
+              : {}),
+          },
+        }
+      : {}),
   };
   const message = {
     role: "user",

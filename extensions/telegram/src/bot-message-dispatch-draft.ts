@@ -22,6 +22,7 @@ import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-st
 import { renderTelegramHtmlText } from "./format.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
+import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 
@@ -133,6 +134,25 @@ export function createTelegramDraftController(params: {
             lanes[laneName].retainedPromptContextPages.push({
               messageId: page.messageId,
               text: page.textSnapshot,
+            });
+          },
+          onProviderMessage: async (message) => {
+            await (
+              params.telegramDeps.recordOutboundMessageForPromptContext ??
+              recordOutboundMessageForPromptContext
+            )({
+              cfg: params.cfg,
+              account: {
+                accountId: params.accountId,
+                ...(params.telegramCfg.name !== undefined ? { name: params.telegramCfg.name } : {}),
+              },
+              chatId: params.chatId,
+              message,
+              messageId: message.message_id,
+              ...(params.threadSpec.id !== undefined
+                ? { messageThreadId: params.threadSpec.id }
+                : {}),
+              successfulSendThread: params.threadSpec,
             });
           },
           log: logVerbose,

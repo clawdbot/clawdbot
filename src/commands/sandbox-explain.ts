@@ -40,6 +40,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { sessionDeliveryChannel } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 type SandboxExplainOptions = {
@@ -113,21 +114,10 @@ function resolveActiveChannel(params: {
   entry?: SessionEntry;
   sessionKey: string;
 }): string | undefined {
-  const legacyEntry = params.entry as
-    | (SessionEntry & { lastProvider?: string; provider?: string })
-    | undefined;
-  const candidate = (
-    params.entry?.lastChannel ??
-    params.entry?.channel ??
-    // Legacy keys (pre-rename).
-    legacyEntry?.lastProvider ??
-    legacyEntry?.provider ??
-    ""
-  ).trim();
+  const candidate = (sessionDeliveryChannel(params.entry) ?? "").trim();
   const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
   if (!normalizedCandidate) {
-    // Empty session-store channel fields can still be recovered from legacy key
-    // shapes, which keeps explain useful for old persisted sessions.
+    // Empty canonical delivery can still be recovered from the session key.
     return inferProviderFromSessionKey({
       cfg: params.cfg,
       sessionKey: params.sessionKey,

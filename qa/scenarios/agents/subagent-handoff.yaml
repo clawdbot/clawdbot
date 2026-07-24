@@ -3,6 +3,7 @@ title: Subagent handoff
 scenario:
   id: subagent-handoff
   surface: subagents
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.subagent-turns-subagents

@@ -10,7 +10,10 @@ import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  resolvePluginMetadataSnapshot,
+} from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
@@ -133,7 +136,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     );
   }
 
-  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
+  const { cfg, pluginMetadataSnapshot } = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
@@ -291,7 +294,16 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
   const manifestMetadataSnapshot = pluginsEnabled
-    ? loadManifestMetadataSnapshot({ config: cfg, workspaceDir, env: process.env })
+    ? pluginMetadataSnapshot &&
+      pluginMetadataSnapshot.pluginIds === undefined &&
+      isPluginMetadataSnapshotCompatible({
+        snapshot: pluginMetadataSnapshot,
+        config: cfg,
+        env: process.env,
+        workspaceDir,
+      })
+      ? pluginMetadataSnapshot
+      : resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir })
     : undefined;
   const modelManifestContext = {
     manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],

@@ -5,17 +5,19 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  compareReleaseVersions as compareReleaseVersionsBase,
-  collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
-  resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
-  parseReleaseVersion as parseReleaseVersionBase,
-} from "./lib/npm-publish-plan.mjs";
+import { resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase } from "./lib/npm-publish-plan.mjs";
+import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "./lib/package-dist-inventory.ts";
+import {
+  compareReleaseVersions as compareReleaseVersionsBase,
+  collectReleaseVersionFloorErrors as collectReleaseVersionFloorErrorsBase,
+  parseReleaseVersion as parseReleaseVersionBase,
+  type ParsedReleaseVersion,
+} from "./lib/release-version.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "./lib/workspace-bootstrap-smoke.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
@@ -30,18 +32,6 @@ type PackageJson = {
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
-};
-
-type ParsedReleaseVersion = {
-  version: string;
-  baseVersion: string;
-  channel: "stable" | "alpha" | "beta";
-  year: number;
-  month: number;
-  patch: number;
-  alphaNumber?: number;
-  betaNumber?: number;
-  correctionNumber?: number;
 };
 
 type ParsedReleaseTag = {
@@ -197,7 +187,7 @@ function isLocalDependencySpec(value: string | undefined): boolean {
 }
 
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
-  return parseReleaseVersionBase(version) as ParsedReleaseVersion | null;
+  return parseReleaseVersionBase(version);
 }
 
 export function compareReleaseVersions(left: string, right: string): number | null {
@@ -291,25 +281,10 @@ export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null
   return null;
 }
 
-function positiveEnvInt(name: string, env: NodeJS.ProcessEnv, fallback: number): number {
-  const raw = env[name]?.trim();
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  if (!/^[1-9]\d*$/u.test(raw)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value)) {
-    throw new Error(`invalid ${name}: ${raw}`);
-  }
-  return value;
-}
-
 export function resolveNpmReleaseCheckCommandTimeoutMs(
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  return positiveEnvInt(
+  return readPositiveEnvInt(
     "OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS",
     env,
     DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,

@@ -16,6 +16,7 @@ minimumReleaseAgeExclude:
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"
+  - "@agentclientprotocol/codex-acp@1.1.7"
   - "axios"
   - "basic-ftp"
   - "baileys@7.0.0-rc13"
@@ -28,15 +29,27 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workers-types"
   - "@hono/node-server"
   - "@mariozechner/*"
+  - "@aws-sdk/checksums@3.1000.19"
   - "@aws-sdk/client-bedrock-runtime@3.1053.0"
   - "@aws-sdk/client-bedrock@3.1053.0"
   - "@aws-sdk/client-cognito-identity@3.1053.0"
   - "@aws-sdk/client-s3@3.1053.0"
   - "@aws-sdk/core"
+  - "@aws-sdk/credential-provider-env@3.972.60"
+  - "@aws-sdk/credential-provider-http@3.972.62"
+  - "@aws-sdk/credential-provider-ini@3.973.5"
+  - "@aws-sdk/credential-provider-login@3.972.67"
+  - "@aws-sdk/credential-provider-process@3.972.60"
+  - "@aws-sdk/credential-provider-sso@3.973.4"
+  - "@aws-sdk/credential-provider-web-identity@3.972.66"
   - "@aws-sdk/credential-providers@3.1053.0"
+  - "@aws-sdk/middleware-sdk-s3@3.972.65"
+  - "@aws-sdk/middleware-websocket@3.972.42"
+  - "@aws-sdk/nested-clients@3.997.34"
   - "@aws-sdk/s3-request-presigner@3.1053.0"
   - "@aws-sdk/token-providers@3.1052.0"
   - "@aws-sdk/token-providers@3.1053.0"
+  - "@aws-sdk/token-providers@3.1092.0"
   - "@copilotkit/aimock@1.27.1"
   - "@microsoft/mxc-sdk@0.7.0"
   - "@earendil-works/pi-tui"
@@ -50,7 +63,12 @@ minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
   - "@pierre/diffs@1.2.3"
+  - "@smithy/core@3.29.7"
+  - "@smithy/credential-provider-imds@4.4.12"
+  - "@smithy/fetch-http-handler@5.6.9"
   - "@smithy/shared-ini-file-loader@4.5.4"
+  - "@smithy/signature-v4@5.6.8"
+  - "postcss@8.5.22"
   - "@typescript/native-preview*"
   - "@types/node"
   - "@rolldown/*"
@@ -97,19 +115,19 @@ nodeLinker: hoisted
 blockExoticSubdeps: true
 
 overrides:
-  "@anthropic-ai/sdk": 0.109.1
+  "@anthropic-ai/sdk": 0.112.3
   "@opentelemetry/core": 2.9.0
   "@opentelemetry/propagator-jaeger": 2.9.0
-  "@aws-sdk/core": 3.974.27
-  "@aws-sdk/credential-provider-node": 3.972.61
-  "@aws-sdk/xml-builder": 3.972.33
-  hono: 4.12.25
+  "@aws-sdk/core": 3.975.3
+  "@aws-sdk/credential-provider-node": 3.972.70
+  "@aws-sdk/xml-builder": 3.972.36
+  hono: 4.12.31
   "@hono/node-server": 1.19.14
-  axios: 1.18.0
+  axios: 1.18.1
   fast-uri: 3.1.4
   follow-redirects: 1.16.0
-  defu: 6.1.5
-  fast-xml-parser: 5.7.0
+  defu: 6.1.7
+  fast-xml-parser: 5.10.1
   request: "npm:@cypress/request@3.0.10"
   request-promise: "npm:@cypress/request-promise@5.0.0"
   basic-ftp: 6.0.1
@@ -117,15 +135,15 @@ overrides:
   form-data: 2.5.6
   ip-address: 10.2.0
   minimatch: 10.2.5
-  path-to-regexp: 8.4.0
-  qs: 6.15.2
+  path-to-regexp: 8.4.2
+  qs: 6.15.3
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
-  typebox: 1.3.3
-  tar: 7.5.19
-  tough-cookie: 4.1.3
-  yauzl: 3.2.1
+  typebox: 1.3.6
+  tar: 7.5.20
+  tough-cookie: 4.1.4
+  yauzl: 3.4.0
   protobufjs: 7.6.5
-  uuid: 14.0.0
+  uuid: 14.0.1
 
 allowBuilds:
   "@openclaw/fs-safe": true
@@ -154,5 +172,3 @@ packageExtensions:
     peerDependenciesMeta:
       sharp:
         optional: true
-
-patchedDependencies:

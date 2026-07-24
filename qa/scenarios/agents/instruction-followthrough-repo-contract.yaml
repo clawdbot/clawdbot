@@ -3,6 +3,7 @@ title: Instruction followthrough repo contract
 scenario:
   id: instruction-followthrough-repo-contract
   surface: repo-contract
+  runtimePairLane: core
   coverage:
     primary:
       - session-memory.instruction-profile-instructions

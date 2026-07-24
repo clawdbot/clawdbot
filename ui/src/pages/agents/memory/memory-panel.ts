@@ -208,7 +208,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   private createGatewayState(snapshot = this.context.gateway.snapshot): DreamingState {
     return createDreamingState({
       client: snapshot.client,
-      connected: snapshot.connected,
+      connected: snapshot.phase === "connected",
       hello: snapshot.hello,
       configSnapshot: this.context.runtimeConfig.state.configSnapshot,
       applySessionKey: snapshot.sessionKey,
@@ -221,8 +221,8 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     sourceBind?: "initial" | "replacement",
   ) {
     const clientChanged = this.dreaming.client !== snapshot.client;
-    const connectionChanged = this.dreaming.connected !== snapshot.connected;
-    const becameConnected = snapshot.connected && !this.dreaming.connected;
+    const connectionChanged = this.dreaming.connected !== (snapshot.phase === "connected");
+    const becameConnected = snapshot.phase === "connected" && !this.dreaming.connected;
     const replaceState = sourceBind === "replacement" || clientChanged || connectionChanged;
     if (connectionChanged) {
       this.gatewayEpoch += 1;
@@ -233,11 +233,11 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         this.resetTransientState();
       }
     } else {
-      this.dreaming.connected = snapshot.connected;
+      this.dreaming.connected = snapshot.phase === "connected";
       this.dreaming.hello = snapshot.hello;
       this.dreaming.applySessionKey = snapshot.sessionKey;
     }
-    if (snapshot.connected && (replaceState || becameConnected)) {
+    if (snapshot.phase === "connected" && (replaceState || becameConnected)) {
       void this.loadAll();
     }
     this.requestUpdate();

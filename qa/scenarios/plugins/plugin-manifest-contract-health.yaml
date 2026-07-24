@@ -3,10 +3,6 @@ title: Plugin manifest contract health
 scenario:
   id: plugin-manifest-contract-health
   surface: runtime
-  runtimeParityTier: live-only
-  runtimeParityUsage:
-    expectation: not-applicable
-    reason: Startup-log sentinel only; no assistant turn runs.
   coverage:
     primary:
       - plugins.load-failure-contract-sentinel

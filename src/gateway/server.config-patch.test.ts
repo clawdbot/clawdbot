@@ -568,6 +568,42 @@ describe("gateway config methods", () => {
     }
   });
 
+  it("rejects concurrent config.patch writes that share a stale base hash", async () => {
+    const original = await getCurrentConfigObject();
+    const names = Array.from({ length: 8 }, (_, index) => `concurrent-mcp-${index}`);
+
+    try {
+      const results = await Promise.all(
+        names.map((name, index) =>
+          rpcReq<{ ok?: boolean; error?: { message?: string } }>(requireWs(), "config.patch", {
+            raw: JSON.stringify({
+              mcp: {
+                servers: {
+                  [name]: { command: "node", args: [`server-${index}.mjs`] },
+                },
+              },
+            }),
+            baseHash: original.hash,
+          }),
+        ),
+      );
+
+      expect(results.filter((result) => result.ok).length).toBe(1);
+      const failures = results.filter((result) => !result.ok);
+      expect(failures).toHaveLength(names.length - 1);
+      for (const failure of failures) {
+        expect(failure.error?.message).toContain("config changed since last load");
+      }
+
+      const after = await getCurrentConfigObject();
+      const mcp = requireConfigObject(after.config.mcp, "mcp");
+      const servers = requireConfigObject(mcp.servers, "mcp.servers");
+      expect(names.filter((name) => Object.hasOwn(servers, name))).toHaveLength(1);
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
   it("does not reject config.set for unresolved auth-profile refs outside submitted config", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
     await writeUnresolvedAuthProfileTokenRef(missingEnvVar);

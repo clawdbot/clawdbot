@@ -3,7 +3,7 @@ title: Live OpenAI multi-restart task recovery
 scenario:
   id: gateway-restart-multi-live
   surface: runtime
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
       - session-memory.recovery-restart-recovery

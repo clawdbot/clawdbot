@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Synology Chat plugin module implements setup surface behavior.
 import {
   createAllowFromSection,
@@ -198,6 +199,29 @@ export const synologyChatSetupAdapter: ChannelSetupAdapter = {
     });
   },
 };
+
+export const synologyChatSetupContract = defineChannelSetupContract({
+  fields: {
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "Synology Chat token" },
+    },
+    url: {
+      kind: "string",
+      cli: { flags: "--url <url>", description: "Synology Chat webhook URL" },
+    },
+    webhookPath: {
+      kind: "string",
+      cli: { flags: "--webhook-path <path>", description: "Synology Chat webhook path" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use Synology Chat environment credentials" },
+    },
+  },
+  legacyAdapter: synologyChatSetupAdapter,
+});
 
 export const synologyChatSetupWizard: ChannelSetupWizard = {
   channel,

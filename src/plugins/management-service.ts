@@ -14,7 +14,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createAsyncLock } from "../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
@@ -54,6 +53,7 @@ import {
   type HostedOfficialExternalPluginCatalogLoadResult,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
@@ -65,6 +65,8 @@ import {
   applyPluginUninstallDirectoryRemoval,
   formatUninstallActionLabels,
   planPluginUninstall,
+  pluginUninstallTargetExists,
+  prepareConfigForPendingPluginDirectoryRemoval,
 } from "./uninstall.js";
 
 type ManagedPluginCatalogEntry = {
@@ -758,8 +760,6 @@ export async function listManagedPlugins(params: {
   };
 }
 
-const withManagedPluginMutationLock = createAsyncLock();
-
 function assertValidConfigSnapshot(
   prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
 ): ConfigSnapshotForInstallPersist {
@@ -1132,8 +1132,8 @@ export async function installManagedPlugin(params: {
   request: ManagedPluginInstallRequest;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ plugin: ManagedPluginCatalogEntry; warnings?: string[] }> {
-  return await withManagedPluginMutationLock(async () => {
-    const env = params.env ?? process.env;
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
     const officialCatalog = await loadOfficialCatalog();
     const warnings: string[] = [];
@@ -1181,8 +1181,8 @@ export async function setManagedPluginEnabled(params: {
   changedPaths: string[];
   warnings?: string[];
 }> {
-  return await withManagedPluginMutationLock(async () => {
-    const env = params.env ?? process.env;
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
     const metadata = loadPluginMetadataSnapshot({ config: snapshot.config, env });
     const pluginId = metadata.normalizePluginId(params.pluginId.trim());
@@ -1247,8 +1247,8 @@ export async function uninstallManagedPlugin(params: {
   pluginId: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ pluginId: string; removed: string[]; warnings?: string[] }> {
-  return await withManagedPluginMutationLock(async () => {
-    const env = params.env ?? process.env;
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
     const installRecords = await loadInstalledPluginIndexInstallRecords();
     // Mirror the CLI uninstall flow: plan against config carrying install records
@@ -1267,15 +1267,55 @@ export async function uninstallManagedPlugin(params: {
     // planPluginUninstall keeps its plugin-id fallback for channel config keys.
     const channelIds = manifest && manifest.channels.length > 0 ? manifest.channels : undefined;
     const extensionsDir = resolveDefaultPluginExtensionsDir(env);
-    const plan = planPluginUninstall({
+    const initialPlan = planPluginUninstall({
       config: configWithRecords,
       pluginId,
       ...(channelIds ? { channelIds } : {}),
       deleteFiles: true,
       extensionsDir,
     });
-    if (!plan.ok) {
-      throw new ManagedPluginLifecycleError(plan.error);
+    if (!initialPlan.ok) {
+      throw new ManagedPluginLifecycleError(initialPlan.error);
+    }
+    let plan = initialPlan;
+    let finalSnapshot = snapshot;
+    let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
+    if (plan.directoryRemoval) {
+      const disabledConfig = prepareConfigForPendingPluginDirectoryRemoval(
+        snapshot.config,
+        pluginId,
+      );
+      await replaceConfigFile({
+        nextConfig: disabledConfig,
+        baseHash: snapshot.baseHash,
+        writeOptions: {
+          ...snapshot.writeOptions,
+          afterWrite: { mode: "auto" },
+        },
+      });
+      directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+      if (pluginUninstallTargetExists(plan.directoryRemoval.target)) {
+        throw new ManagedPluginLifecycleError(
+          `Failed to remove plugin directory ${plan.directoryRemoval.target}; the plugin remains disabled and tracked so uninstall can be retried.`,
+          { kind: "unavailable" },
+        );
+      }
+      finalSnapshot = await readPluginMutationSnapshot(env);
+      const refreshedConfigWithRecords = withPluginInstallRecords(
+        finalSnapshot.config,
+        installRecords,
+      );
+      const refreshedPlan = planPluginUninstall({
+        config: refreshedConfigWithRecords,
+        pluginId,
+        ...(channelIds ? { channelIds } : {}),
+        deleteFiles: true,
+        extensionsDir,
+      });
+      if (!refreshedPlan.ok) {
+        throw new ManagedPluginLifecycleError(refreshedPlan.error);
+      }
+      plan = refreshedPlan;
     }
     const nextConfig = withoutPluginInstallRecords(plan.config);
     const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
@@ -1283,10 +1323,9 @@ export async function uninstallManagedPlugin(params: {
       previousInstallRecords: installRecords,
       nextInstallRecords,
       nextConfig,
-      baseHash: snapshot.baseHash,
-      writeOptions: snapshot.writeOptions,
+      baseHash: finalSnapshot.baseHash,
+      writeOptions: finalSnapshot.writeOptions,
     });
-    const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
     const warnings = [
       ...collectClawPluginUninstallWarnings({
         pluginId,

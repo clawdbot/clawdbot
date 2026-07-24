@@ -79,6 +79,42 @@ describe("portable Claw schema conformance", () => {
       expect.objectContaining({ path: "$.mcpServers.github.args" }),
     );
 
+    const mixedPackages = parseClawManifest({
+      ...baseManifest,
+      mcpServers: {
+        github: {
+          command: "npx",
+          args: ["--package", "safe@1.0.0", "--package", "unsafe@latest", "server"],
+        },
+      },
+    });
+    expect(mixedPackages.ok).toBe(false);
+    expect(mixedPackages.diagnostics).toContainEqual(
+      expect.objectContaining({ path: "$.mcpServers.github.args" }),
+    );
+
+    const unpinnedCommandBeforeChildArgs = parseClawManifest({
+      ...baseManifest,
+      mcpServers: {
+        github: {
+          command: "npx",
+          args: ["unsafe@latest", "--package", "safe@1.0.0"],
+        },
+      },
+    });
+    expect(unpinnedCommandBeforeChildArgs.ok).toBe(false);
+
+    const pinnedPackageWithChildArgs = parseClawManifest({
+      ...baseManifest,
+      mcpServers: {
+        github: {
+          command: "npx",
+          args: ["--package", "safe@1.0.0", "server", "--package", "child-arg"],
+        },
+      },
+    });
+    expect(pinnedPackageWithChildArgs.ok).toBe(true);
+
     const dangerousEnv = parseClawManifest({
       ...baseManifest,
       mcpServers: { github: { command: "node", env: { NODE_OPTIONS: "${NODE_OPTIONS}" } } },

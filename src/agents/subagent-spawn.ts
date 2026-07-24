@@ -18,6 +18,7 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
@@ -25,9 +26,19 @@ import { isFastTestRuntimeEnv } from "../infra/env.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
-import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { recordSubagentSpawned } from "../sessions/session-state-events.js";
+import {
+  GatewayDrainingError,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../process/gateway-work-admission.js";
+import {
+  isIncognitoSessionKey,
+  isValidAgentId,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import { recordSessionCreated, recordSubagentSpawned } from "../sessions/session-state-events.js";
 import type { FastMode } from "../shared/fast-mode.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
@@ -243,15 +254,15 @@ async function callSubagentGateway(
   authorization?: SubagentLaunchAuthorization,
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   // Subagent lifecycle requires methods spanning multiple scope tiers
-  // (sessions.patch / sessions.delete → admin, agent → write).  When each call
+  // (sessions.delete → admin, agent → write). When each call
   // independently negotiates least-privilege scopes the first connection pairs
   // at a lower tier and every subsequent higher-tier call triggers a
   // scope-upgrade handshake that headless gateway-client connections cannot
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
   // Only admin-requiring calls are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" -> write) keep their least-privilege scope. The params-aware
-  // resolver keeps spawn-metadata sessions.patch calls on the admin tier.
+  // "agent" -> write) keep their least-privilege scope. Apply the trusted
+  // launch authorization before resolving the request's required scope.
   const authorizedParams =
     params.params != null && typeof params.params === "object" && !Array.isArray(params.params)
       ? applySubagentLaunchAuthorization(params.params as Record<string, unknown>, authorization)
@@ -381,6 +392,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   if (patch.inheritedToolPolicyVersion === 1) {
     entry.inheritedToolPolicyVersion = 1;
   }
+  if (patch.incognito === true) {
+    entry.incognito = true;
+  }
   if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
     entry.spawnedBy = patch.spawnedBy.trim();
   }
@@ -389,6 +403,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
     patch.completionOwnerSessionKey.trim()
   ) {
     entry.completionOwnerSessionKey = patch.completionOwnerSessionKey.trim();
+  }
+  if (typeof patch.parentSessionKey === "string" && patch.parentSessionKey.trim()) {
+    entry.parentSessionKey = patch.parentSessionKey.trim();
   }
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
@@ -1255,7 +1272,11 @@ export async function spawnSubagentDirect(
       requesterGroupSpace: ctx.agentGroupSpace,
       requesterMemberRoleIds: ctx.agentMemberRoleIds,
     });
-    const childSessionKey = mintSpawnSessionKey({ targetAgentId, backend: "subagent" });
+    const incognito = isIncognitoSessionKey(requesterInternalKey);
+    const mintedChildSessionKey = mintSpawnSessionKey({ targetAgentId, backend: "subagent" });
+    const childSessionKey = incognito
+      ? mintedChildSessionKey.replace(":subagent:", ":subagent:incognito-")
+      : mintedChildSessionKey;
     const requesterRuntime = resolveSandboxRuntimeStatus({
       cfg,
       sessionKey: requesterInternalKey,
@@ -1340,21 +1361,31 @@ export async function spawnSubagentDirect(
       }
     }
     const resolvedModelMetadata = buildResolvedSubagentModelMetadata(resolvedModel);
+    let childCreationEntry: SessionEntry | undefined;
     const patchChildSession = async (
       patch: Record<string, unknown>,
+      creationStamp?: ReturnType<typeof buildSessionCreationStamp>,
     ): Promise<string | undefined> => {
       try {
-        const target = resolveGatewaySessionStoreTarget({
-          cfg,
-          key: childSessionKey,
-        });
-        await upsertSessionEntry(
+        const target = incognito
+          ? {
+              agentId: targetAgentId,
+              canonicalKey: childSessionKey,
+              storeKeys: [childSessionKey],
+              storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: targetAgentId }),
+            }
+          : resolveGatewaySessionStoreTarget({
+              cfg,
+              key: childSessionKey,
+            });
+        const updatedEntry = await upsertSessionEntry(
           {
             storePath: target.storePath,
             sessionKey: target.canonicalKey,
           },
-          buildDirectChildSessionPatch(patch),
+          { ...buildDirectChildSessionPatch(patch), ...creationStamp },
         );
+        childCreationEntry ??= updatedEntry ?? undefined;
         return undefined;
       } catch (err) {
         const message =
@@ -1364,6 +1395,13 @@ export async function spawnSubagentDirect(
     };
 
     const initialChildSessionPatch: Record<string, unknown> = {
+      spawnedBy: spawnedByKey,
+      completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+      // Navigation and control lineage commit with the creation stamp so a
+      // launch failure cannot leave a durable but parentless child row.
+      parentSessionKey: spawnedByKey,
+      ...(spawnedWorkspaceDir ? { spawnedWorkspaceDir } : {}),
+      ...(spawnedCwd ? { spawnedCwd } : {}),
       ...admission.childSessionPatch,
       inheritedToolPolicyVersion: 1,
       ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
@@ -1372,9 +1410,16 @@ export async function spawnSubagentDirect(
       ...(swarmGroupId ? { swarmGroupId } : {}),
       ...(params.collect ? { swarmCollector: true } : {}),
       ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
+      ...(incognito ? { incognito: true } : {}),
     };
 
-    const initialPatchError = await patchChildSession(initialChildSessionPatch);
+    const initialPatchError = await patchChildSession(
+      initialChildSessionPatch,
+      buildSessionCreationStamp({
+        via: "spawn",
+        actor: { type: "agent", id: requesterInternalKey },
+      }),
+    );
     if (initialPatchError) {
       return {
         status: "error",
@@ -1530,32 +1575,18 @@ export async function spawnSubagentDirect(
       persistentSession: spawnMode === "session",
       task,
     });
-
     const spawnedMetadata = normalizeSpawnedRunMetadata({
       spawnedBy: spawnedByKey,
       ...toolSpawnMetadata,
       workspaceDir: spawnedWorkspaceDir,
     });
-    const spawnLineagePatchError = await patchChildSession({
-      spawnedBy: spawnedByKey,
-      completionOwnerSessionKey: ownership.completionRequesterSessionKey,
-      ...(spawnedMetadata.workspaceDir
-        ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir }
-        : {}),
-      ...(spawnedCwd ? { spawnedCwd } : {}),
-    });
-    if (spawnLineagePatchError) {
-      await cleanupFailedSpawnBeforeAgentStart({
-        childSessionKey,
-        attachmentAbsDir,
-        emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
+
+    if (childCreationEntry) {
+      recordSessionCreated({
+        sessionKey: childSessionKey,
+        agentId: targetAgentId,
+        entry: childCreationEntry,
       });
-      return {
-        status: "error",
-        error: spawnLineagePatchError,
-        childSessionKey,
-      };
     }
     recordSubagentSpawned({
       childSessionKey,
@@ -1840,20 +1871,27 @@ export async function spawnSubagentDirect(
         groupId: swarmSchedulerGroupKey,
         runId: childRunId,
         start: async () => {
-          const response = await launchChildRun();
-          const gatewayRunId = readGatewayRunId(response) ?? childRunId;
-          try {
-            if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
-              throw new Error("collector registry row could not transition from queued to running");
+          await runWithGatewayIndependentRootWorkContinuation(async () => {
+            const response = await launchChildRun();
+            const gatewayRunId = readGatewayRunId(response) ?? childRunId;
+            try {
+              if (!startQueuedSubagentRun(childRunId, gatewayRunId)) {
+                throw new Error(
+                  "collector registry row could not transition from queued to running",
+                );
+              }
+            } catch (error) {
+              await terminateAcceptedCollectorRun({ childSessionKey, gatewayRunId });
+              launchTerminationConfirmed = true;
+              throw error;
             }
-          } catch (error) {
-            await terminateAcceptedCollectorRun({ childSessionKey, gatewayRunId });
-            launchTerminationConfirmed = true;
-            throw error;
-          }
-          await emitSpawnLifecycleHooks(gatewayRunId);
+            await emitSpawnLifecycleHooks(gatewayRunId);
+          });
         },
         onStartFailure: async (error) => {
+          if (error instanceof GatewayDrainingError) {
+            return false;
+          }
           const launchError = summarizeError(error);
           const [contextRollback, sessionCleanup] = await Promise.allSettled([
             rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),

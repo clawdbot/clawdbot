@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { chunkTextForTwitch } from "./markdown.js";
+import { chunkTextForTwitch, stripMarkdownForTwitch } from "./markdown.js";
+
+describe("stripMarkdownForTwitch", () => {
+  it.each([
+    [
+      "keeps labeled link destinations",
+      "Read **the [docs](https://example.com/docs)**",
+      "Read the docs (https://example.com/docs)",
+    ],
+  ])("%s", (_name, input, expected) => {
+    expect(stripMarkdownForTwitch(input)).toBe(expected);
+  });
+});
 
 describe("chunkTextForTwitch", () => {
   it("strips markdown and keeps surrogate pairs intact at hard boundaries", () => {

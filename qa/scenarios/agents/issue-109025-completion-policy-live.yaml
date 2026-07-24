@@ -3,7 +3,7 @@ title: Issue 109025 completion handoff sender-policy live probe
 scenario:
   id: issue-109025-completion-policy-live
   surface: subagents
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.delegated-tool-access
@@ -47,6 +47,7 @@ scenario:
     retryCount: 0
     summary: Exercise exact sender policy through a real inbound turn, dormant requester-agent completion, and restricted exec call.
     config:
+      requiredProviderMode: live-frontier
       childLabelPrefix: issue-109025-completion-child
       chainFilePrefix: issue-109025-completion-chain
       completionPrefix: ISSUE109025_COMPLETION_EXEC_OK

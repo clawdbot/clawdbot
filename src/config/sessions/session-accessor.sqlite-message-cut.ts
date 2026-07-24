@@ -33,6 +33,7 @@ import type {
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
 } from "./session-accessor.types.js";
+import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { inheritSessionSelection } from "./session-entry-selection.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
@@ -86,6 +87,13 @@ export async function listSqliteSessionBranches(
   } catch {
     return { status: "failed" };
   }
+}
+
+/** Resolves the active branch leaf from the same transcript tree used by branch listing. */
+export function resolveSessionTranscriptActiveLeafEntryId(
+  events: readonly TranscriptEvent[],
+): string | undefined {
+  return scanSessionTranscriptTree(events).leafId ?? undefined;
 }
 
 export async function rewindSqliteSessionToMessage(
@@ -142,6 +150,7 @@ async function mutateSqliteSessionAtMessage(
       result = mutateSqliteSessionAtMessageInTransaction(database, resolved, {
         entryId: params.entryId,
         canonicalSourceKey,
+        creation: params.creation,
         mode,
         sourceKey,
         targetKey,
@@ -158,6 +167,7 @@ function mutateSqliteSessionAtMessageInTransaction(
   resolved: ResolvedSqliteScope,
   params: {
     canonicalSourceKey: string;
+    creation?: SessionMessageCutMutationParams["creation"];
     entryId: string;
     mode: SessionTranscriptMutationMode;
     sourceKey: string;
@@ -215,13 +225,25 @@ function mutateSqliteSessionAtMessageInTransaction(
 
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
   // target the old session and cannot erase this leaf repoint from the active session.
-  const nextEntry = cloneMessageCutSessionEntry({
-    currentEntry,
-    forked: params.mode === "fork",
-    nextSessionFile,
-    nextSessionId,
-    parentSessionKey: params.mode === "fork" ? params.canonicalSourceKey : undefined,
-  });
+  const nextEntry = {
+    ...cloneMessageCutSessionEntry({
+      currentEntry,
+      forked: params.mode === "fork",
+      forkSource:
+        params.mode === "fork"
+          ? {
+              sessionKey: params.canonicalSourceKey,
+              sessionId: currentEntry.sessionId,
+              entryId: params.entryId,
+            }
+          : undefined,
+      nextSessionFile,
+      nextSessionId,
+    }),
+    ...(params.mode === "fork" && params.creation
+      ? buildSessionCreationStamp(params.creation)
+      : {}),
+  };
   writeSessionEntry(database, params.targetKey, nextEntry);
   return {
     status: "created",
@@ -356,9 +378,9 @@ function resolveMessageCut(
 function cloneMessageCutSessionEntry(params: {
   currentEntry: SessionEntry;
   forked: boolean;
+  forkSource?: NonNullable<SessionEntry["forkSource"]>;
   nextSessionFile: string;
   nextSessionId: string;
-  parentSessionKey?: string;
 }): SessionEntry {
   const baseEntry = params.forked
     ? inheritSessionSelection(params.currentEntry)
@@ -407,7 +429,10 @@ function cloneMessageCutSessionEntry(params: {
     abortCutoffTimestamp: undefined,
     usageFamilyKey: params.forked ? undefined : params.currentEntry.usageFamilyKey,
     usageFamilySessionIds: params.forked ? undefined : params.currentEntry.usageFamilySessionIds,
-    ...(params.parentSessionKey ? { parentSessionKey: params.parentSessionKey } : {}),
+    previousSessionId: params.forked ? undefined : params.currentEntry.sessionId,
+    ...(params.forkSource
+      ? { forkSource: params.forkSource, parentSessionKey: params.forkSource.sessionKey }
+      : {}),
   };
 }
 

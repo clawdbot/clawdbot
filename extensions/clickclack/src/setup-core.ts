@@ -1,6 +1,10 @@
 // ClickClack plugin module implements non-interactive setup behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupAdapter,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -391,3 +395,51 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
     });
   },
 };
+
+export const clickClackSetupContract = defineChannelSetupContract({
+  fields: {
+    code: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--code <code>", description: "ClickClack one-time setup code or setup URL" },
+    },
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "ClickClack bot token" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "ClickClack bot token file" },
+    },
+    baseUrl: {
+      kind: "string",
+      cli: { flags: "--base-url <url>", description: "ClickClack API base URL" },
+    },
+    workspace: {
+      kind: "string",
+      cli: {
+        flags: "--workspace <workspace>",
+        description: "ClickClack workspace id, slug, or name",
+      },
+    },
+    defaultTo: {
+      kind: "string",
+      cli: { flags: "--default-to <target>", description: "Default ClickClack target" },
+    },
+    allowFrom: {
+      kind: "string-list",
+      cli: { flags: "--allow-from <ids>", description: "Allowed ClickClack senders" },
+    },
+    agentActivity: {
+      kind: "boolean",
+      cli: { flags: "--agent-activity", description: "Enable ClickClack agent activity" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use CLICKCLACK_BOT_TOKEN" },
+    },
+  },
+  legacyAdapter: clickClackSetupAdapter,
+});

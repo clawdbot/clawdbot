@@ -3,6 +3,7 @@ title: Compaction retry after mutating tool
 scenario:
   id: compaction-retry-mutating-tool
   surface: runtime
+  runtimePairLane: core
   coverage:
     primary:
       - session-memory.compaction

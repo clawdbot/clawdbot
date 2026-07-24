@@ -1,6 +1,7 @@
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflight.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   applyClawHubSkillUninstall,
   planClawHubSkillUninstall,
@@ -360,9 +361,30 @@ export async function planClawPackageRemovals(
   return decisions;
 }
 
+type ApplyClawPackageRemovalOptions = OpenClawStateDatabaseOptions & {
+  deps?: PackageRemovalDeps;
+};
+
 export async function applyClawPackageRemovals(
   decisions: ClawPackageRemovalDecision[],
-  options: OpenClawStateDatabaseOptions & { deps?: PackageRemovalDeps } = {},
+  options: ApplyClawPackageRemovalOptions = {},
+): Promise<ClawPackageRemovalResult[]> {
+  if (!decisions.some((decision) => decision.packageRef.kind === "plugin")) {
+    return await applyClawPackageRemovalsUnlocked(decisions, options);
+  }
+  return await withPluginLifecycleLease(
+    {
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.path ? { path: options.path } : {}),
+      ...(options.database ? { database: options.database } : {}),
+    },
+    async () => await applyClawPackageRemovalsUnlocked(decisions, options),
+  );
+}
+
+async function applyClawPackageRemovalsUnlocked(
+  decisions: ClawPackageRemovalDecision[],
+  options: ApplyClawPackageRemovalOptions,
 ): Promise<ClawPackageRemovalResult[]> {
   const deps = options.deps ?? {};
   const results: ClawPackageRemovalResult[] = [];

@@ -36,9 +36,8 @@ function deferred<T>() {
 function contextWithGateway(client: GatewayBrowserClient, connected: boolean): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
+    phase: connected ? "connected" : "stopped",
     offlineStable: false,
-    reconnecting: false,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -175,8 +174,8 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
     const previousState = page.dreaming;
     const preview = page.openWikiPage("old.md");
-    page.applyGatewaySnapshot({ client, connected: false } as ApplicationGatewaySnapshot);
-    page.applyGatewaySnapshot({ client, connected: true } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "stopped" } as ApplicationGatewaySnapshot);
+    page.applyGatewaySnapshot({ client, phase: "connected" } as ApplicationGatewaySnapshot);
     pending.resolve({ title: "Old", path: "old.md", content: "stale" });
 
     await expect(preview).resolves.toBeNull();

@@ -28,8 +28,11 @@ function codexClientClosedAttempt(
   // turn ended before completion and no user-visible side effect escaped.
   return makeAttemptResult({
     assistantTexts: [],
-    promptError: new Error("codex app-server client closed before turn completed"),
-    promptErrorSource: "prompt",
+    terminal: {
+      kind: "failed",
+      source: "prompt",
+      error: new Error("codex app-server client closed before turn completed"),
+    },
     codexAppServerFailure: {
       kind: "client_closed_before_turn_completed",
       transport: "stdio",
@@ -48,10 +51,16 @@ function codexTurnCompletionIdleTimeoutAttempt(
   // because only the former indicates Codex may have lost the final event.
   return makeAttemptResult({
     assistantTexts: [],
-    aborted: true,
-    timedOut: true,
-    promptError: new Error("codex app-server turn idle timed out waiting for turn/completed"),
-    promptErrorSource: "prompt",
+    terminal: {
+      kind: "timeout",
+      phase: "prompt",
+      source: "runtime",
+      aborted: true,
+      failure: {
+        source: "prompt",
+        error: new Error("codex app-server turn idle timed out waiting for turn/completed"),
+      },
+    },
     promptTimeoutOutcome: {
       message: CODEX_MISSING_TERMINAL_MESSAGE,
     },
@@ -69,7 +78,6 @@ function codexTurnCompletionIdleTimeoutAttempt(
 
 function successAttempt(): EmbeddedRunAttemptResult {
   return makeAttemptResult({
-    promptError: null,
     assistantTexts: ["Done."],
   });
 }
@@ -77,8 +85,7 @@ function successAttempt(): EmbeddedRunAttemptResult {
 function ordinaryPromptFailureAttempt(): EmbeddedRunAttemptResult {
   return makeAttemptResult({
     assistantTexts: [],
-    promptError: new Error("codex exploded"),
-    promptErrorSource: "prompt",
+    terminal: { kind: "failed", source: "prompt", error: new Error("codex exploded") },
   });
 }
 
@@ -470,7 +477,6 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       codexTurnCompletionIdleTimeoutAttempt({
-        timedOut: true,
         didSendViaMessagingTool: true,
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
         promptTimeoutOutcome: {

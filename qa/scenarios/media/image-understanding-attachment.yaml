@@ -3,6 +3,7 @@ title: Image understanding from attachment
 scenario:
   id: image-understanding-attachment
   surface: image-understanding
+  runtimePairLane: core
   coverage:
     primary:
       - media.image-summary-image-understanding

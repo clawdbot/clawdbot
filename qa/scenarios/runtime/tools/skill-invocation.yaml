@@ -3,7 +3,7 @@ title: "Runtime tool fixture — skill invocation"
 scenario:
   id: runtime-tool-skill-invocation
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
       - plugins.mixed-plugin-skill-invocation

@@ -1130,6 +1130,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["apps/android/fastlane/Fastfile", ["test/scripts/android-release-fastlane-gates.test.ts"]],
   ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  ["scripts/ios-release-cut.sh", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-cut.ts", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-plan.sh", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/ios-release-plan.ts", ["test/scripts/ios-release-plan.test.ts"]],
   [
     "scripts/ios-release-prepare.sh",
     ["test/scripts/ios-release-prepare.test.ts", "test/scripts/ios-release-wrapper-args.test.ts"],
@@ -1305,6 +1309,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
+  ["scripts/lib/ios-release-plan.ts", ["test/scripts/ios-release-plan.test.ts"]],
+  ["scripts/lib/ios-fastlane.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/live-docker-stage-private-sdk-exports.mjs", ["test/scripts/live-docker-stage.test.ts"]],
   [
@@ -1354,6 +1360,8 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
+  ["scripts/lib/numeric-options.mjs", ["test/scripts/numeric-options.test.ts"]],
+  ["scripts/lib/numeric-options.d.mts", ["test/scripts/numeric-options.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   [
     "scripts/lib/workspace-bootstrap-smoke.mjs",
@@ -1405,6 +1413,29 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/release-upgrade-baseline.test.ts",
       "test/scripts/android-version.test.ts",
       "test/scripts/ios-version.test.ts",
+      "test/scripts/upgrade-survivor-baselines.test.ts",
+      "test/scripts/upgrade-survivor-config-recipe.test.ts",
+    ],
+  ],
+  [
+    "scripts/lib/release-version.mjs",
+    [
+      "test/release-version.test.ts",
+      "test/npm-publish-plan.test.ts",
+      "test/openclaw-npm-release-check.test.ts",
+      "test/openclaw-npm-postpublish-verify.test.ts",
+      "test/plugin-npm-release.test.ts",
+      "test/plugin-clawhub-release.test.ts",
+      "test/scripts/android-version.test.ts",
+      "test/scripts/android-pin-version.test.ts",
+      "test/scripts/docker-release-policy.test.ts",
+      "test/scripts/ios-version.test.ts",
+      "test/scripts/openclaw-npm-extended-stable-release.test.ts",
+      "test/scripts/openclaw-npm-publish.test.ts",
+      "test/scripts/release-preflight.test.ts",
+      "test/scripts/release-prepare.test.ts",
+      "test/scripts/release-upgrade-baseline.test.ts",
+      "test/scripts/release-version.test.ts",
       "test/scripts/upgrade-survivor-baselines.test.ts",
       "test/scripts/upgrade-survivor-config-recipe.test.ts",
     ],
@@ -1706,7 +1737,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/plugin-prerelease-test-plan.test.ts",
     ],
   ],
-  ["scripts/measure-rpc-rtt.mjs", ["test/scripts/measure-rpc-rtt.test.ts"]],
   [
     "scripts/e2e/telegram-user-crabbox-proof.ts",
     ["test/scripts/telegram-user-crabbox-proof.test.ts"],
@@ -2230,6 +2260,7 @@ const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/lib/local-build-metadata-paths.d.mts", "scripts/lib/local-build-metadata-paths.mjs"],
   ["scripts/lib/local-build-metadata.d.mts", "scripts/lib/local-build-metadata.mjs"],
   ["scripts/lib/plugin-sdk-entries.d.mts", "scripts/lib/plugin-sdk-entries.mjs"],
+  ["scripts/lib/release-version.d.mts", "scripts/lib/release-version.mjs"],
   ["scripts/lib/vitest-local-scheduling.d.mts", "scripts/lib/vitest-local-scheduling.mjs"],
   ["scripts/run-node.d.mts", "scripts/run-node.mjs"],
   ["scripts/stage-bundled-plugin-runtime.d.mts", "scripts/stage-bundled-plugin-runtime.mjs"],
@@ -2377,7 +2408,47 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   ["src/plugin-sdk/reply-runtime.ts", ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"]],
   ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
-  ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  [
+    "extensions/google-meet/src/cli.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
+  [
+    "extensions/google-meet/src/cli-artifact-commands.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-export.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-space-commands.ts",
+    ["extensions/google-meet/src/cli-artifacts.test.ts"],
+  ],
+  [
+    "extensions/google-meet/src/cli-runtime-commands.ts",
+    ["extensions/google-meet/src/cli-runtime.test.ts"],
+  ],
+  ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
+  [
+    "extensions/google-meet/src/cli-command-context.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
+  [
+    "extensions/google-meet/src/cli-shared.ts",
+    [
+      "extensions/google-meet/src/cli-artifacts.test.ts",
+      "extensions/google-meet/src/cli-runtime.test.ts",
+      "extensions/google-meet/src/cli.test.ts",
+    ],
+  ],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
   [
@@ -2819,6 +2890,8 @@ function isPathLikeTargetArg(arg, cwd) {
     isFileLikeTarget(arg) ||
     isVitestConfigPathLikeTarget(relative) ||
     isExistingPathTarget(arg, cwd) ||
+    (path.posix.extname(relative) === "" &&
+      /^(?:src|test|extensions|ui|packages|apps)\//u.test(relative)) ||
     Boolean(resolveExplicitTestPrefixTargets(arg, cwd)?.length)
   );
 }
@@ -3077,6 +3150,9 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
       unmatched.push({
         target: targetArg,
         reason: "path-does-not-exist",
+        ...(path.posix.extname(relative) === ""
+          ? { includePattern: `${relative}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` }
+          : {}),
       });
       continue;
     }

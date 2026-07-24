@@ -1724,41 +1724,34 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("expands runtime parity tier selections onto the suite scenario list", async () => {
+  it("expands runtime-pair lane selections onto the suite scenario list", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
-      runtimeParityTier: ["standard"],
+      providerMode: "mock-openai",
+      runtimePairLane: ["core"],
       scenarioIds: ["channel-chat-baseline", "runtime-tool-bash"],
     });
 
-    expectFields(mockFirstObjectArg(runQaSuite), {
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      scenarioIds: [
+    const runOptions = mockFirstObjectArg(runQaSuite);
+    expect(runOptions.repoRoot).toBe(path.resolve("/tmp/openclaw-repo"));
+    expect(runOptions.scenarioIds).toEqual(
+      expect.arrayContaining([
         "channel-chat-baseline",
         "runtime-tool-bash",
-        "codex-plugin-cold-install",
-        "codex-plugin-pinned-new",
-        "codex-plugin-pinned-old",
+        "approval-turn-tool-followthrough",
+        "gateway-restart-inflight-run",
         "runtime-first-hour-20-turn",
         "runtime-tool-apply-patch",
-        "runtime-tool-edit",
-        "runtime-tool-exec",
-        "runtime-tool-fs-list",
-        "runtime-tool-fs-read",
-        "runtime-tool-fs-write",
-        "runtime-tool-grep",
-        "runtime-tool-session-status",
-        "runtime-tool-sessions-spawn",
-        "runtime-tool-web-fetch",
-        "runtime-tool-web-search",
-      ],
-    });
+        "source-docs-discovery-report",
+      ]),
+    );
+    expect(runOptions.scenarioIds).not.toContain("streaming-final-integrity");
   });
 
-  it("accepts comma-separated runtime parity tier filters", async () => {
+  it("accepts comma-separated runtime-pair lane filters", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
-      runtimeParityTier: ["optional,soak"],
+      runtimePairLane: ["extended,soak"],
     });
 
     expectFields(mockFirstObjectArg(runQaSuite), {
@@ -1780,17 +1773,17 @@ describe("qa cli runtime", () => {
     );
   });
 
-  it("keeps runtime-pair tier selection on flow scenarios and reports exclusions", async () => {
+  it("keeps runtime-pair lane selection on flow scenarios and reports exclusions", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
       runtimePair: "openclaw,codex",
-      runtimeParityTier: ["standard", "live-only"],
+      runtimePairLane: ["core"],
     });
 
     const scenarioIds = mockFirstObjectArg(runQaSuite).scenarioIds as string[];
     expect(scenarioIds).toContain("runtime-first-hour-20-turn");
-    expect(scenarioIds).toContain("streaming-final-integrity");
     expect(scenarioIds).not.toContain("gateway-restart-inflight-run");
+    expect(scenarioIds).toContain("streaming-final-integrity");
     expect(scenarioIds).not.toContain("hosted-image-generation-providers-live");
     expect(scenarioIds).not.toContain("hosted-video-generation-providers-live");
     expectFields(mockFirstObjectArg(runQaSuite), {
@@ -1798,7 +1791,7 @@ describe("qa cli runtime", () => {
     });
     expectWriteContains(
       stderrWrite,
-      "excluded incompatible non-flow scenario(s): hosted-image-generation-providers-live (script), hosted-video-generation-providers-live (script)",
+      "excluded incompatible non-flow scenario(s): codex-plugin-cold-install (script)",
     );
     expectWriteContains(
       stderrWrite,
@@ -1820,41 +1813,39 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("rejects runtime-pair tiers with no compatible flow scenarios", async () => {
+  it("rejects runtime-pair lanes with no compatible flow scenarios", async () => {
     const catalog = readQaScenarioPack();
-    const hostedImageScenario = catalog.scenarios.find(
-      (scenario) => scenario.id === "hosted-image-generation-providers-live",
+    const coldInstallScenario = catalog.scenarios.find(
+      (scenario) => scenario.id === "codex-plugin-cold-install",
     );
-    if (!hostedImageScenario) {
-      throw new Error("missing hosted image scenario fixture");
+    if (!coldInstallScenario) {
+      throw new Error("missing Codex cold-install scenario fixture");
     }
     readQaScenarioPack.mockReturnValueOnce({
       ...catalog,
-      scenarios: [hostedImageScenario],
+      scenarios: [coldInstallScenario],
     });
 
     await expect(
       runQaSuiteCommand({
         repoRoot: "/tmp/openclaw-repo",
         runtimePair: "openclaw,codex",
-        runtimeParityTier: ["live-only"],
+        runtimePairLane: ["core"],
       }),
     ).rejects.toThrow(
-      "--runtime-parity-tier matched no execution.kind: flow scenarios for live-only; incompatible scenario(s): hosted-image-generation-providers-live (script).",
+      "--runtime-pair-lane matched no execution.kind: flow scenarios for core; incompatible scenario(s): codex-plugin-cold-install (script).",
     );
 
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("rejects unknown runtime parity tier filters", async () => {
+  it("rejects unknown runtime-pair lane filters", async () => {
     await expect(
       runQaSuiteCommand({
         repoRoot: "/tmp/openclaw-repo",
-        runtimeParityTier: ["standardish"],
+        runtimePairLane: ["coreish"],
       }),
-    ).rejects.toThrow(
-      '--runtime-parity-tier must be one of standard, optional, live-only, soak, got "standardish".',
-    );
+    ).rejects.toThrow('--runtime-pair-lane must be one of core, extended, soak, got "coreish".');
   });
 
   it("rejects unknown suite packs", async () => {

@@ -3,7 +3,7 @@ title: Model-created one-shot and recurring cron jobs
 scenario:
   id: cron-model-created-one-shot-recurring
   surface: cron
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
       - automation.agent-cron-tool
@@ -38,6 +38,7 @@ scenario:
       senderAllowlist:
         - qa-cron-operator
     config:
+      requiredProviderMode: live-frontier
       conversationPrefix: cron-model-author
       authorDoneMarker: CRON-MODEL-AUTHOR-OK
       oneShotDelayMs: 240000

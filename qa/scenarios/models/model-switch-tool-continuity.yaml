@@ -3,6 +3,7 @@ title: Model switch with tool continuity
 scenario:
   id: model-switch-tool-continuity
   surface: models
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.runtime-override-switching

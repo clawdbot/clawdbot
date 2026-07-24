@@ -4,15 +4,15 @@ import { gatewaySubagentState } from "../../plugins/runtime/gateway-bindings.js"
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
-type CatalogSessionEntryLoader = (
+type CatalogSessionRowLoader = (
   sessionKey: string,
   options?: { agentId?: string; clone?: boolean },
-) => { entry: { createdBy?: { id: string; label?: string } } | undefined };
+) => { createdActor?: { type: "human" | "agent" | "system"; id?: string; label?: string } } | null;
 
 const hoisted = vi.hoisted(() => ({
   activeRegistry: { sessionCatalogs: [] as unknown[] },
   pinnedSessionExtensionRegistry: undefined as { sessionCatalogs: unknown[] } | undefined,
-  loadSessionEntryReadOnly: vi.fn<CatalogSessionEntryLoader>(() => ({ entry: undefined })),
+  loadGatewaySessionRow: vi.fn<CatalogSessionRowLoader>(() => null),
   recordSessionStateEvent: vi.fn(),
   upsertSessionUpstreamLink: vi.fn(),
 }));
@@ -41,7 +41,7 @@ vi.mock("../../plugins/session-conversation-binding.js", () => ({
 }));
 vi.mock("../session-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../session-utils.js")>();
-  return { ...actual, loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly };
+  return { ...actual, loadGatewaySessionRow: hoisted.loadGatewaySessionRow };
 });
 
 const { resolveSessionCatalogCreateTarget, sessionCatalogHandlers } =
@@ -81,8 +81,8 @@ describe("session catalog Gateway methods", () => {
   beforeEach(() => {
     hoisted.activeRegistry.sessionCatalogs = [];
     hoisted.pinnedSessionExtensionRegistry = undefined;
-    hoisted.loadSessionEntryReadOnly.mockReset();
-    hoisted.loadSessionEntryReadOnly.mockReturnValue({ entry: undefined });
+    hoisted.loadGatewaySessionRow.mockReset();
+    hoisted.loadGatewaySessionRow.mockReturnValue(null);
     hoisted.recordSessionStateEvent.mockClear();
     hoisted.upsertSessionUpstreamLink.mockClear();
     conversationBindingMocks.bindPluginSessionConversation.mockClear();
@@ -169,7 +169,7 @@ describe("session catalog Gateway methods", () => {
           status: "stored",
           archived: false,
           sessionKey: "agent:main:owned",
-          createdBy: { id: "provider-spoof" },
+          createdActor: { type: "human" as const, id: "provider-spoof" },
           canContinue: true,
           canArchive: false,
         },
@@ -178,7 +178,7 @@ describe("session catalog Gateway methods", () => {
           status: "stored",
           archived: false,
           sessionKey: "agent:main:missing",
-          createdBy: { id: "provider-spoof" },
+          createdActor: { type: "human" as const, id: "provider-spoof" },
           canContinue: true,
           canArchive: false,
         },
@@ -186,18 +186,17 @@ describe("session catalog Gateway methods", () => {
           threadId: "external-thread",
           status: "stored",
           archived: false,
-          createdBy: { id: "provider-spoof" },
+          createdActor: { type: "human" as const, id: "provider-spoof" },
           canContinue: true,
           canArchive: false,
         },
       ],
     };
-    hoisted.loadSessionEntryReadOnly.mockImplementation((sessionKey: string) => ({
-      entry:
-        sessionKey === "agent:main:owned"
-          ? { createdBy: { id: "profile-ada", label: "Ada" } }
-          : undefined,
-    }));
+    hoisted.loadGatewaySessionRow.mockImplementation((sessionKey: string) =>
+      sessionKey === "agent:main:owned"
+        ? { createdActor: { type: "human", id: "profile-ada", label: "Ada" } }
+        : null,
+    );
     hoisted.activeRegistry.sessionCatalogs = [
       {
         provider: provider("claude", {
@@ -219,10 +218,10 @@ describe("session catalog Gateway methods", () => {
     const projectedSessions = [
       expect.objectContaining({
         threadId: "owned-thread",
-        createdBy: { id: "profile-ada", label: "Ada" },
+        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
       }),
-      expect.not.objectContaining({ createdBy: expect.anything() }),
-      expect.not.objectContaining({ createdBy: expect.anything() }),
+      expect.not.objectContaining({ createdActor: expect.anything() }),
+      expect.not.objectContaining({ createdActor: expect.anything() }),
     ];
 
     expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -242,10 +241,10 @@ describe("session catalog Gateway methods", () => {
         }),
       ],
     });
-    expect(hoisted.loadSessionEntryReadOnly).toHaveBeenCalledWith("agent:main:owned", {
+    expect(hoisted.loadGatewaySessionRow).toHaveBeenCalledWith("agent:main:owned", {
       agentId: "main",
     });
-    expect(hoisted.loadSessionEntryReadOnly).toHaveBeenCalledTimes(2);
+    expect(hoisted.loadGatewaySessionRow).toHaveBeenCalledTimes(2);
   });
 
   it("uses the pinned Gateway catalog runtime after active registry churn", async () => {

@@ -9,6 +9,12 @@ import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
 
 export { SessionsCreateParamsSchema };
+export {
+  SessionCreatedActorSchema,
+  SessionRowSchema,
+  type SessionCreatedActor,
+  type SessionRow,
+} from "./sessions-row.js";
 
 export const SESSION_OBSERVER_HEALTH_VALUES = [
   "on-track",
@@ -19,13 +25,6 @@ export const SESSION_OBSERVER_HEALTH_VALUES = [
   "done",
   "failed",
 ] as const;
-
-/** Stable identity stamped on a session when an operator creates it. */
-export const SessionCreatorIdentitySchema = closedObject({
-  id: NonEmptyString,
-  label: Type.Optional(NonEmptyString),
-});
-export type SessionCreatorIdentity = Static<typeof SessionCreatorIdentitySchema>;
 
 /** Trajectory judgment produced for one observed agent session. */
 export const SessionObserverHealthSchema = Type.Union([
@@ -189,6 +188,8 @@ export const SessionsFilesListParamsSchema = closedObject({
 export const SessionsFilesListResultSchema = closedObject({
   sessionKey: NonEmptyString,
   root: Type.Optional(NonEmptyString),
+  /** Whether the session workspace directory is inside a git checkout; absent when the workspace root is unknown or the gateway predates the field. */
+  gitCheckout: Type.Optional(Type.Boolean()),
   files: Type.Array(SessionFileEntrySchema),
   browser: Type.Optional(SessionFileBrowserResultSchema),
 });
@@ -393,6 +394,8 @@ export const SessionsCreateResultSchema = Type.Object(
     sessionId: Type.Optional(NonEmptyString),
     entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     runStarted: Type.Optional(Type.Boolean()),
+    runId: Type.Optional(NonEmptyString),
+    messageSeq: Type.Optional(Type.Integer({ minimum: 1 })),
     runError: Type.Optional(ErrorShapeSchema),
     worktree: Type.Optional(SessionWorktreeInfoSchema),
   },
@@ -429,6 +432,8 @@ export const SessionsAbortParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  /** Also discard followup and lane queues for a key-only non-global session abort. */
+  clearQueued: Type.Optional(Type.Boolean()),
 });
 
 /** Mutable per-session preferences and routing metadata. */
@@ -478,17 +483,7 @@ export const SessionsPatchParamsSchema = closedObject({
   execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnedCwd: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
-  subagentRole: Type.Optional(
-    Type.Union([Type.Literal("orchestrator"), Type.Literal("leaf"), Type.Null()]),
-  ),
-  subagentControlScope: Type.Optional(
-    Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
-  ),
   inheritedToolPolicyVersion: Type.Optional(Type.Union([Type.Literal(1), Type.Null()])),
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),

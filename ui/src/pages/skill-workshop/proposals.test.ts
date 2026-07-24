@@ -29,9 +29,8 @@ function createFixture(
   const request = vi.fn<TestRequest>();
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as ApplicationGatewaySnapshot["client"],
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",

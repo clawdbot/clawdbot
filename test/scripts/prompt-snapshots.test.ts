@@ -230,11 +230,9 @@ describe("happy path prompt snapshots", () => {
 
     expect(openClawRuntimeInstructions).not.toContain(heartbeatPhrase);
     expect(collaborationModeInstructions).toContain(heartbeatPhrase);
-    expect(collaborationModeInstructions).toContain("HEARTBEAT.md exists");
-    expect(collaborationModeInstructions).toContain(
-      "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
-    );
-    expect(collaborationModeInstructions).not.toContain("<HEARTBEAT.md contents will be here>");
+    // Monitor context now lives in cron scratch; the collaboration prompt must
+    // no longer reference the retired workspace file.
+    expect(collaborationModeInstructions).not.toContain("HEARTBEAT.md");
     expect(collaborationModeInstructions.split(heartbeatPhrase)).toHaveLength(2);
   });
 

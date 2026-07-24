@@ -3,7 +3,7 @@ title: Gateway restart Code Mode wait recovery
 scenario:
   id: gateway-restart-inflight-run
   surface: runtime
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
       - session-memory.recovery-restart-recovery

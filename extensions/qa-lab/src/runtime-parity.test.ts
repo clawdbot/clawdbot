@@ -234,19 +234,20 @@ describe("runtime parity", () => {
     expect(cell.runtimeErrorClass).toBe("timeout");
   });
 
-  it("marks planned mock tool calls without outputs as missing tool results", async () => {
+  it("keeps planned mock calls diagnostic instead of promoting them to runtime calls", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [{ plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } }],
     });
 
-    expect(cell.toolCalls).toHaveLength(1);
-    expect(cell.toolCalls[0]).toMatchObject({
+    expect(cell.toolCalls).toEqual([]);
+    expect(cell.providerPlanToolCalls).toHaveLength(1);
+    expect(cell.providerPlanToolCalls?.[0]).toMatchObject({
       tool: "read_file",
       errorClass: "tool-result-missing",
     });
   });
 
-  it("keeps resolved mock tool calls eligible for no-drift parity", async () => {
+  it("records resolved mock calls as provider-plan evidence", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [
         { plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } },
@@ -254,8 +255,9 @@ describe("runtime parity", () => {
       ],
     });
 
-    expect(cell.toolCalls).toHaveLength(1);
-    expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+    expect(cell.toolCalls).toEqual([]);
+    expect(cell.providerPlanToolCalls).toHaveLength(1);
+    expect(cell.providerPlanToolCalls?.[0]?.errorClass).toBeUndefined();
 
     const result = await runRuntimeParityScenario({
       scenarioId: "resolved-tool",
@@ -299,7 +301,7 @@ describe("runtime parity", () => {
     ).toEqual({ expectation: "assistant-message-required" });
   });
 
-  it("classifies planned-only matching tool calls as failure-mode", async () => {
+  it("does not classify planned-only provider evidence as a runtime failure", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [{ plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } }],
     });
@@ -312,10 +314,8 @@ describe("runtime parity", () => {
       }),
     });
 
-    expect(result).toMatchObject({
-      drift: "failure-mode",
-      driftDetails: "at least one runtime planned a tool call without a tool result",
-    });
+    expect(result.drift).toBe("none");
+    expect(isRuntimeParityResultPass(result)).toBe(true);
   });
 
   it("treats matching controlled tool errors as equivalent results", async () => {
@@ -398,6 +398,20 @@ describe("runtime parity", () => {
   it("accepts a fresh scenario MEDIA result for terminal image tools", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
+      messages: [
+        { role: "user", content: "Generate the QA image." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "image-call",
+              name: "image_generate",
+              arguments: { prompt: "same" },
+            },
+          ],
+        },
+      ],
       scenarioResult: {
         status: "pass",
         steps: [
@@ -412,9 +426,58 @@ describe("runtime parity", () => {
     expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
   });
 
+  it("keeps multiple image provider plans from invalidating one proven runtime call", async () => {
+    const cell = await captureRuntimeParityWithMockRequests({
+      requests: [
+        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "first" } },
+        { plannedToolName: "image_generate", plannedToolArgs: { prompt: "second" } },
+      ],
+      messages: [
+        { role: "user", content: "Generate the QA image." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "image-call",
+              name: "image_generate",
+              arguments: { prompt: "runtime" },
+            },
+          ],
+        },
+      ],
+      scenarioResult: {
+        status: "pass",
+        steps: [
+          {
+            status: "pass",
+            details: "QA-CAPABILITY-1234\nimage_generate=true\nMEDIA:/tmp/qa-image.png",
+          },
+        ],
+      },
+    });
+
+    expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+    expect(cell.providerPlanToolCalls).toHaveLength(2);
+  });
+
   it("requires call-linked passed step evidence for terminal image results", async () => {
     const proven = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "image_generate" }],
+      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
+      messages: [
+        { role: "user", content: "Generate the QA image." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "image-call",
+              name: "image_generate",
+              arguments: { prompt: "same" },
+            },
+          ],
+        },
+      ],
       scenarioResult: {
         status: "pass",
         steps: [
@@ -426,14 +489,42 @@ describe("runtime parity", () => {
       },
     });
     const unrelated = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "image_generate" }],
+      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
+      messages: [
+        { role: "user", content: "Generate the QA image." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "image-call",
+              name: "image_generate",
+              arguments: { prompt: "same" },
+            },
+          ],
+        },
+      ],
       scenarioResult: {
         status: "pass",
         steps: [{ status: "pass", details: "MEDIA:/tmp/unrelated-screenshot.png" }],
       },
     });
     const failed = await captureRuntimeParityWithMockRequests({
-      requests: [{ plannedToolName: "image_generate" }],
+      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
+      messages: [
+        { role: "user", content: "Generate the QA image." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "image-call",
+              name: "image_generate",
+              arguments: { prompt: "same" },
+            },
+          ],
+        },
+      ],
       scenarioResult: {
         status: "pass",
         steps: [
@@ -450,7 +541,7 @@ describe("runtime parity", () => {
     expect(failed.toolCalls[0]?.errorClass).toBe("tool-result-missing");
   });
 
-  it("preserves a missing image result when MEDIA may belong to another call", async () => {
+  it("preserves incomplete image provider plans as diagnostic evidence", async () => {
     const cell = await captureRuntimeParityWithMockRequests({
       requests: [
         { plannedToolName: "image_generate", plannedToolArgs: { prompt: "first" } },
@@ -468,7 +559,8 @@ describe("runtime parity", () => {
       },
     });
 
-    expect(cell.toolCalls.map((toolCall) => toolCall.errorClass)).toEqual([
+    expect(cell.toolCalls).toEqual([]);
+    expect(cell.providerPlanToolCalls?.map((toolCall) => toolCall.errorClass)).toEqual([
       undefined,
       "tool-result-missing",
     ]);
@@ -514,8 +606,9 @@ describe("runtime parity", () => {
       },
     });
 
-    expect(cell.toolCalls).toEqual([
-      expect.objectContaining({ errorClass: "tool-result-missing" }),
+    expect(cell.toolCalls.map((toolCall) => toolCall.errorClass)).toEqual([
+      undefined,
+      "tool-result-missing",
     ]);
   });
 
@@ -559,12 +652,13 @@ describe("runtime parity", () => {
       ],
     });
 
-    expect(cell.toolCalls).toHaveLength(2);
-    expect(cell.toolCalls.map((toolCall) => toolCall.tool)).toEqual([
+    expect(cell.toolCalls).toEqual([]);
+    expect(cell.providerPlanToolCalls).toHaveLength(2);
+    expect(cell.providerPlanToolCalls?.map((toolCall) => toolCall.tool)).toEqual([
       "sessions_spawn",
       "sessions_spawn",
     ]);
-    expect(cell.toolCalls.map((toolCall) => toolCall.errorClass)).toEqual([
+    expect(cell.providerPlanToolCalls?.map((toolCall) => toolCall.errorClass)).toEqual([
       undefined,
       "tool-result-missing",
     ]);

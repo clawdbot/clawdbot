@@ -26,6 +26,7 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
+import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.ui.SettingsRoute
@@ -491,6 +492,8 @@ class MainViewModel private constructor(
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
     runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
   val operatorAdminScopeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.operatorAdminScopeAvailable }
+  internal val systemAgentChatState: StateFlow<SystemAgentChatState> =
+    runtimeState(initial = SystemAgentChatState()) { it.systemAgentChatState }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
   val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
@@ -1715,6 +1718,46 @@ class MainViewModel private constructor(
         throw err
       }
     }
+  }
+
+  internal fun refreshSystemAgentChat() {
+    ensureRuntime().refreshSystemAgentChat()
+  }
+
+  internal fun clearSystemAgentChatInput() {
+    ensureRuntime().clearSystemAgentChatInput()
+  }
+
+  internal fun setSystemAgentChatInput(value: String) {
+    ensureRuntime().setSystemAgentChatInput(value)
+  }
+
+  internal fun sendSystemAgentChatInput() {
+    ensureRuntime().sendSystemAgentChatInput()
+  }
+
+  internal fun answerSystemAgentQuestion(
+    messageId: String,
+    optionLabel: String,
+  ) {
+    ensureRuntime().answerSystemAgentQuestion(messageId, optionLabel)
+  }
+
+  internal fun skipSystemAgentQuestion(messageId: String) {
+    ensureRuntime().skipSystemAgentQuestion(messageId)
+  }
+
+  internal fun restartSystemAgentChat() {
+    ensureRuntime().restartSystemAgentChat()
+  }
+
+  internal fun openSystemAgentChatHandoff() {
+    val handoff = ensureRuntime().consumeSystemAgentChatHandoff() ?: return
+    handoff.agentId
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+      ?.let(::selectChatAgent)
+    handleAssistantLaunch(AssistantLaunchRequest(source = "system-agent", prompt = null, autoSend = false))
   }
 
   fun selectChatAgent(agentId: String) {

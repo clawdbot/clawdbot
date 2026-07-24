@@ -34,7 +34,6 @@ import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
 } from "../claws/types.js";
-import { buildClawUpdatePlan, CLAW_UPDATE_PLAN_SCHEMA_VERSION } from "../claws/update-plan.js";
 // Runtime handlers for experimental local Claws commands.
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -45,15 +44,12 @@ import {
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
-import { logClawUpdatePlanSummary } from "./claws-cli-update-output.js";
 import type {
   ClawsAddOptions,
   ClawsExportOptions,
   ClawsInspectOptions,
   ClawsRemoveOptions,
   ClawsStatusOptions,
-  ClawsUpdateOptions,
 } from "./claws-cli.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -204,6 +200,7 @@ export async function runClawsInspectCommand(
     valid: true,
     source: result.source,
     manifest: result.manifest,
+    ...(result.openClawProfile ? { openClawProfile: result.openClawProfile } : {}),
     diagnostics: result.diagnostics,
   };
   if (opts.json) {
@@ -266,6 +263,7 @@ export async function runClawsAddCommand(
   };
   let plan = await buildClawAddPlan({
     manifest: result.manifest,
+    openClawProfile: result.openClawProfile,
     source: result.source,
     diagnostics: result.diagnostics,
     context: basePlanContext,
@@ -282,6 +280,7 @@ export async function runClawsAddCommand(
       (resumeRecord.status === "workspace_ready" && committedAgent !== undefined);
     plan = await buildClawAddPlan({
       manifest: result.manifest,
+      openClawProfile: result.openClawProfile,
       source: result.source,
       diagnostics: result.diagnostics,
       context: {
@@ -406,162 +405,7 @@ export async function runClawsStatusCommand(
   }
 }
 
-export async function runClawsUpdateCommand(
-  target: string,
-  opts: ClawsUpdateOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-): Promise<void> {
-  assertExperimentalClawsEnabled();
-  if (!opts.dryRun) {
-    const message =
-      "Claw update is read-only in this implementation slice; pass --dry-run to preview changes.";
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        ok: false,
-        error: { code: "update_preview_required", message },
-      });
-    } else {
-      runtime.error(message);
-    }
-    runtime.exit(1);
-    return;
-  }
-
-  const listedMcpServers = await listConfiguredMcpServers();
-  if (!listedMcpServers.ok) {
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        dryRun: true,
-        mutationAllowed: false,
-        valid: false,
-        diagnostics: [
-          {
-            level: "error",
-            code: "mcp_config_unavailable",
-            phase: "plan",
-            path: "$.mcpServers",
-            message: listedMcpServers.error,
-          },
-        ],
-      });
-    } else {
-      runtime.error(listedMcpServers.error);
-    }
-    runtime.exit(1);
-    return;
-  }
-
-  let source = opts.from;
-  if (!source) {
-    const database = openExistingOpenClawStateDatabaseReadOnly();
-    let status: Awaited<ReturnType<typeof readClawStatus>> | { records: never[] } = {
-      records: [],
-    };
-    if (database) {
-      try {
-        const hasClawInstalls =
-          database.db /* sqlite-allow-raw: read-only Claw install table-existence probe. */
-            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_installs'")
-            .get();
-        if (hasClawInstalls) {
-          status = await readClawStatus(target, {
-            database,
-            readOnly: true,
-            sourceMcpServers: listedMcpServers.mcpServers,
-          });
-        }
-      } finally {
-        database.walMaintenance.close();
-      }
-    }
-    if (status.records.length !== 1) {
-      const message =
-        status.records.length === 0
-          ? `No installed Claw agent matches ${JSON.stringify(target)}.`
-          : `Claw name ${JSON.stringify(target)} matches multiple agents; use an agent id.`;
-      if (opts.json) {
-        writeRuntimeJson(runtime, {
-          schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
-          stability: CLAW_OUTPUT_STABILITY,
-          dryRun: true,
-          mutationAllowed: false,
-          valid: false,
-          diagnostics: [
-            {
-              level: "error",
-              code: status.records.length === 0 ? "claw_not_found" : "claw_ambiguous",
-              phase: "plan",
-              path: "$",
-              message,
-            },
-          ],
-        });
-      } else {
-        runtime.error(message);
-      }
-      runtime.exit(1);
-      return;
-    }
-    const recorded = status.records[0]!.install.claw;
-    source = recorded.kind === "package" ? recorded.packageRoot : recorded.manifestPath;
-  }
-
-  const loaded = await readClawManifestFile(source);
-  if (!loaded.ok) {
-    const diagnostics = opts.from
-      ? loaded.diagnostics
-      : [
-          ...loaded.diagnostics,
-          {
-            level: "error" as const,
-            code: "recorded_source_unavailable",
-            phase: "plan" as const,
-            path: "$",
-            message: "The recorded Claw source is unavailable; pass --from to override it.",
-          },
-        ];
-    if (opts.json) {
-      writeRuntimeJson(runtime, {
-        schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        dryRun: true,
-        mutationAllowed: false,
-        valid: false,
-        diagnostics,
-      });
-    } else {
-      runtime.error(formatDiagnostics(diagnostics));
-    }
-    runtime.exit(1);
-    return;
-  }
-
-  const plan = await buildClawUpdatePlan({
-    agentId: target,
-    targetManifest: loaded.manifest,
-    targetSource: loaded.source,
-    config: getRuntimeConfig(),
-    sourceMcpServers: listedMcpServers.mcpServers,
-    packagePreflight: preflightClawPackage,
-    diagnostics: loaded.diagnostics,
-  });
-  if (opts.json) {
-    writeRuntimeJson(runtime, plan);
-  } else {
-    logExperimentalWarning(runtime);
-    runtime.log(
-      `Claw update plan: ${plan.currentClaw?.name ?? target} ${plan.currentClaw?.version ?? "unknown"} -> ${plan.targetClaw?.version ?? "unknown"}`,
-    );
-    logClawUpdatePlanSummary(plan, runtime);
-  }
-  if (plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
-    runtime.exit(1);
-  }
-}
+export { runClawsUpdateCommand } from "./claws-update-cli.runtime.js";
 
 export async function runClawsRemoveCommand(
   target: string,

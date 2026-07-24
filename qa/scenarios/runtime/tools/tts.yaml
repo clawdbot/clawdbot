@@ -3,7 +3,7 @@ title: "Runtime tool fixture — tts"
 scenario:
   id: runtime-tool-tts
   surface: runtime-tools
-  runtimeParityTier: optional
+  runtimePairLane: extended
   coverage:
     primary:
       - media.generated-audio-persistence-and-delivery

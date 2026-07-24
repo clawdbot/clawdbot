@@ -13,6 +13,7 @@ import {
 } from "../../infra/outbound/targets.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { extractDeliveryInfoMock } = vi.hoisted(() => ({
   extractDeliveryInfoMock: vi.fn(),
@@ -197,10 +198,14 @@ function setLastSessionEntry(params: {
   setMainSessionEntry({
     sessionId: params.sessionId,
     updatedAt: 1000,
-    lastChannel: params.lastChannel,
-    lastTo: params.lastTo,
-    ...(params.lastThreadId ? { lastThreadId: params.lastThreadId } : {}),
-    ...(params.lastAccountId ? { lastAccountId: params.lastAccountId } : {}),
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: params.lastChannel,
+        to: params.lastTo,
+        threadId: params.lastThreadId,
+        accountId: params.lastAccountId,
+      },
+    }),
   });
 }
 

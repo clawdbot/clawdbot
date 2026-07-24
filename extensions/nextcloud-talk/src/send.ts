@@ -4,6 +4,10 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import {
+  FormatCapabilityProfile,
+  renderMarkdownWithMarkers,
+} from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
@@ -26,6 +30,19 @@ import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES = 8 * 1024;
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
 const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
+
+const NEXTCLOUD_TALK_FORMAT_PROFILE = FormatCapabilityProfile.define({
+  mechanism: "markdown",
+  chunk: { limit: 4000, unit: "chars", hardCap: 32_000 },
+});
+
+function renderNextcloudTalkMarkdown(markdown: string): string {
+  return renderMarkdownWithMarkers(
+    { text: markdown, styles: [], links: [] },
+    { styleMarkers: {}, escapeText: (text) => text },
+    NEXTCLOUD_TALK_FORMAT_PROFILE,
+  );
+}
 
 /** Collapses whitespace and caps an error-body prefix to a short, log-safe snippet. */
 function collapseErrorSnippet(text: string): string {
@@ -160,7 +177,7 @@ export async function sendMessageNextcloudTalk(
     channel: "nextcloud-talk",
     accountId: account.accountId,
   });
-  const message = convertMarkdownTables(text.trim(), tableMode);
+  const message = convertMarkdownTables(renderNextcloudTalkMarkdown(text.trim()), tableMode);
 
   const body: Record<string, unknown> = {
     message,

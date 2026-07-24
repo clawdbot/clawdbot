@@ -51,6 +51,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
           candidates: [
             {
               kind: "codex-cli",
+              brandId: "openai",
               label: "Codex CLI",
               detail: "Signed in locally",
               modelRef: "openai/gpt-5",
@@ -92,6 +93,7 @@ describeControlUiE2e("Control UI Model Setup mocked Gateway E2E", () => {
       expect(response?.status()).toBe(200);
       await page.getByRole("heading", { name: "Connect your AI" }).waitFor();
       const candidate = page.locator('[data-candidate-kind="codex-cli"]');
+      await expect.poll(() => candidate.locator('[data-provider-icon="codex"]').count()).toBe(1);
       await candidate.getByRole("button", { name: "Test & use" }).click();
 
       const detect = await gateway.waitForRequest("openclaw.setup.detect");

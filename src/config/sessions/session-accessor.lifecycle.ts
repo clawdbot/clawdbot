@@ -16,6 +16,17 @@ import {
   replaceSessionEntry,
   patchSessionEntry,
 } from "./session-accessor.entry.js";
+import type {
+  DeleteSessionEntryLifecycleResult,
+  ResetSessionEntryLifecycleResult,
+  DeletedAgentSessionEntryPurgeParams,
+  SessionArchivedTranscriptCleanupRule,
+  SessionEntryLifecycleMutationResult,
+  SessionEntryLifecycleRemoval,
+  SessionEntryLifecycleUpsert,
+  SessionLifecycleArtifactCleanupParams,
+  SessionLifecycleArtifactCleanupResult,
+} from "./session-accessor.lifecycle-types.js";
 import {
   applySqliteSessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements,
@@ -48,17 +59,6 @@ import type {
 } from "./session-accessor.types.js";
 import { resolveProjectionExistingEntry } from "./session-entry-selection.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
-import type {
-  DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleResult,
-  DeletedAgentSessionEntryPurgeParams,
-  SessionArchivedTranscriptCleanupRule,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-  SessionLifecycleArtifactCleanupParams,
-  SessionLifecycleArtifactCleanupResult,
-} from "./store.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 type TemporarySessionMappingSnapshot =
@@ -166,7 +166,7 @@ async function applySessionCompactionCheckpointMutation(
 /**
  * Forks checkpoint transcript content and persists a new branch entry in one
  * storage-sized mutation. SQLite adapters implement the transcript row copy
- * and `session_entries.entry_json` insert inside the same write transaction.
+ * and `session_nodes.entry_json` insert inside the same write transaction.
  */
 export async function branchSessionFromCompactionCheckpoint(
   params: BranchSessionFromCompactionCheckpointParams,
@@ -184,7 +184,7 @@ export async function branchSessionFromCompactionCheckpoint(
 /**
  * Forks checkpoint transcript content and replaces the current entry in one
  * storage-sized mutation. SQLite adapters implement the transcript row copy
- * and `session_entries.entry_json` update inside the same write transaction.
+ * and `session_nodes.entry_json` update inside the same write transaction.
  */
 export async function restoreSessionFromCompactionCheckpoint(
   params: RestoreSessionFromCompactionCheckpointParams,
@@ -208,6 +208,8 @@ export async function applySessionPatchProjection<
   TFailure extends SessionPatchProjectionFailure,
 >(params: {
   agentId?: string;
+  /** Revalidates request-scoped authorization after the writer slot is held. */
+  assertCurrent?: () => void;
   storePath: string;
   resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
   project: (
@@ -239,7 +241,15 @@ export async function applySessionPatchProjection<
     removals: candidateKeys
       .filter((sessionKey) => sessionKey !== target.primaryKey)
       .map((sessionKey) => ({ sessionKey })),
-    upserts: [{ sessionKey: target.primaryKey, entry: projected.entry }],
+    upserts: [
+      {
+        sessionKey: target.primaryKey,
+        buildEntry: () => {
+          params.assertCurrent?.();
+          return projected.entry;
+        },
+      },
+    ],
     skipMaintenance: true,
   });
   return { ...projected, entry: structuredClone(projected.entry) };

@@ -62,9 +62,8 @@ function createHarness(initialScopeId: string) {
   });
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as GatewayBrowserClient,
-    connected: true,
+    phase: "connected",
     offlineStable: false,
-    reconnecting: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: "main",

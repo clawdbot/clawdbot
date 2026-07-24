@@ -3,7 +3,7 @@ title: "Runtime tool fixture — bash"
 scenario:
   id: runtime-tool-bash
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
       - tools.exec-routing-bash

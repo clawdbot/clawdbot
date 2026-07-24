@@ -35,6 +35,7 @@ import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mjs";
+import { classifyReleaseTrain } from "./lib/release-version.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -297,9 +298,7 @@ function resolveNpmProvenanceVerificationPolicy(
   const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
   // A month's final patch >=33 releases stay on its canonical .33 maintenance branch.
   const isExpectedExtendedStableRef =
-    parsedVersion.channel === "stable" &&
-    parsedVersion.correctionNumber === undefined &&
-    parsedVersion.patch >= 33 &&
+    classifyReleaseTrain(parsedVersion) === "extended-stable" &&
     workflowRef === `refs/heads/extended-stable/${parsedVersion.year}.${parsedVersion.month}.33`;
   const protectedReleasePublishMatch =
     /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(workflowRef ?? "");

@@ -29,7 +29,10 @@ import {
   type ExecAuthorizationPlan,
 } from "../infra/exec-authorization-plan.js";
 import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
-import { resolvePolicyTargetCandidatePath } from "../infra/exec-command-resolution.js";
+import {
+  buildHashedArgPatternFromArgv,
+  resolvePolicyTargetCandidatePath,
+} from "../infra/exec-command-resolution.js";
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -1363,6 +1366,7 @@ describe("processGatewayAllowlist", () => {
       env,
       autoReview: false,
     });
+    const expectedGitArgPattern = buildHashedArgPatternFromArgv(["/usr/bin/git", "status"]);
 
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
@@ -1370,7 +1374,7 @@ describe("processGatewayAllowlist", () => {
       allowAlwaysPersistence: {
         kind: "patterns",
         commandText: "sh -c 'git status'",
-        patterns: [{ pattern: "/usr/bin/git", argPattern: undefined }],
+        patterns: [{ pattern: "/usr/bin/git", argPattern: expectedGitArgPattern }],
       },
     });
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
@@ -1387,7 +1391,7 @@ describe("processGatewayAllowlist", () => {
         allowAlwaysDecision: {
           kind: "patterns",
           commandText: "sh -c 'git status'",
-          patterns: [{ pattern: "/usr/bin/git", argPattern: undefined }],
+          patterns: [{ pattern: "/usr/bin/git", argPattern: expectedGitArgPattern }],
         },
       }),
     );

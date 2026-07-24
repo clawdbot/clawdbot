@@ -387,7 +387,7 @@ Clients (macOS app and Control UI) can render steps without re-implementing onbo
 - Downloads the appropriate release asset from the official `signal-cli` GitHub releases (native build, Linux x86-64 only)
 - On other platforms (macOS, non-x64 Linux), installs via Homebrew instead
 - Stores the release-asset install under `~/.openclaw/tools/signal-cli/<version>/`
-- Writes `channels.signal.cliPath` in config
+- Writes `channels.signal.transport.cliPath` with `kind: "managed-native"` in config
 - Native Windows is not supported yet; run onboarding inside WSL2 to get the Linux install path
 
 ## Related docs

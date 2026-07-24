@@ -60,6 +60,11 @@ vi.mock("./agent-runtime-config.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  isPluginMetadataSnapshotCompatible: () => false,
+  resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
+}));
+
 vi.mock("./agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   return {
@@ -78,10 +83,6 @@ vi.mock("./agent-scope.js", async () => {
     resolveAgentWorkspaceDir: () => state.workspaceDir ?? "/tmp/openclaw-workspace",
   };
 });
-
-vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot: () => ({ plugins: [] }),
-}));
 
 vi.mock("./model-catalog.js", () => ({
   loadManifestModelCatalog: (params: LoadManifestModelCatalogParams) =>

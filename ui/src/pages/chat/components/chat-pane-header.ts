@@ -40,7 +40,9 @@ type ChatPaneHeaderProps = {
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
+  presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
+  sharingControl?: TemplateResult | typeof nothing;
   boardDockAction?: TemplateResult | typeof nothing;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
@@ -164,6 +166,15 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             >${icons.globe}</span
           >`
         : nothing}
+      ${props.session?.incognito
+        ? html`<span
+            class="chat-pane__incognito"
+            role="img"
+            aria-label=${t("chat.sessionHeader.incognito")}
+            title=${t("chat.sessionHeader.incognito")}
+            >${icons.lock}</span
+          >`
+        : nothing}
       ${props.editing
         ? html`<input
             class="chat-pane__session-title-input"
@@ -195,7 +206,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               ${props.title}
             </button>`}
       ${renderSessionOwnerChip(
-        props.showOwnerChip ? props.session?.createdBy : undefined,
+        props.showOwnerChip ? props.session?.createdActor : undefined,
         "header",
       )}
       ${!props.catalog && props.workspaceLabel
@@ -239,7 +250,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             </wa-dropdown>
           `
         : nothing}
-      ${props.faceControl ?? nothing}
+      ${props.presence ?? nothing} ${props.faceControl ?? nothing}
+      ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
         ? html`
             <wa-dropdown

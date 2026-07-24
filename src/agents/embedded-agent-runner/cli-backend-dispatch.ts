@@ -14,7 +14,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { OPENCLAW_MCP_TOOL_PREFIX, stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
+import { stripOpenClawMcpToolPrefix } from "../cli-runner/tool-policy.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
@@ -99,7 +99,7 @@ async function runEmbeddedAgentViaCliBackend(
   // unreachable, matching disableMessageTool intent.
   const cliToolAvailability = {
     native: [] as [],
-    mcp: dispatch.toolsAllow.map((name) => `${OPENCLAW_MCP_TOOL_PREFIX}${name}`),
+    openClaw: dispatch.toolsAllow,
   };
   const onAgentToolResult = params.onAgentToolResult;
   // The CLI backend writes no OpenClaw session records; mirror the run into
@@ -193,6 +193,7 @@ async function runEmbeddedAgentViaCliBackend(
       agentDir: params.agentDir,
       config: params.config,
       prompt: params.prompt,
+      imagePrompt: params.prompt,
       media: params.media,
       provider: dispatch.provider,
       model: params.model,

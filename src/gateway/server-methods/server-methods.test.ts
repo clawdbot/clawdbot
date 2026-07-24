@@ -37,6 +37,7 @@ import {
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createChatRunState } from "../server-chat-state.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -2955,7 +2956,7 @@ describe("exec approval handlers", () => {
         broadcasts.push({ event, payload });
       },
       hasExecApprovalClients: () => true,
-      chatAbortedRuns: new Map<string, number>(),
+      chatRunState: createChatRunState(),
     };
     return { manager, handlers, broadcasts, respond, context };
   }
@@ -3144,7 +3145,7 @@ describe("exec approval handlers", () => {
 
   it("rejects approval registration after the owning run was aborted", async () => {
     const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    context.chatAbortedRuns.set("run-aborted", Date.now());
+    context.chatRunState.getOrCreate("run-aborted").abortMarker = Date.now();
 
     await requestExecApproval({
       handlers,
@@ -3194,7 +3195,7 @@ describe("exec approval handlers", () => {
       "approval-allowed-before-abort",
     );
     expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
-    context.chatAbortedRuns.set("run-allowed-before-abort", Date.now());
+    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker = Date.now();
     await requestPromise;
 
     const waitRespond = vi.fn();

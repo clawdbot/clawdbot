@@ -7,10 +7,11 @@ read_when:
 title: "1Password"
 ---
 
-OpenClaw pairs with **1Password** in two independent ways:
+OpenClaw pairs with **1Password** in three independent ways:
 
 - **Config secrets:** any [SecretRef](/gateway/secrets) field in `openclaw.json` can resolve through the `op` CLI at runtime, so API keys never live in the config file.
 - **Agent workflows:** the bundled `1password` skill teaches agents to sign in and read or inject secrets with `op` for their own tasks.
+- **Browser sign-in:** the `claude-cli` backend can use Claude Code's Chrome integration with [1Password for Claude](https://support.1password.com/1password-claude/), letting the agent sign in to websites without the password ever reaching the model or OpenClaw.
 
 ## Requirements
 
@@ -75,6 +76,22 @@ Service account reads require the vault to be named explicitly in the `op://` re
 OpenClaw bundles a `1password` skill that turns agents into competent `op` operators: it detects the available auth mode (service account, desktop app integration, or standalone sign-in), verifies access with `op whoami` before reading anything, and prefers `op run` / `op inject` over writing secret values to disk. The skill requires the `op` binary and offers a Homebrew install when it is missing.
 
 Agents use it for their own workflows, for example reading a deploy token mid-task or injecting env vars into a command. It is independent of config secret resolution; the Gateway resolves SecretRefs without any skill involved.
+
+## Browser sign-in with 1Password for Claude
+
+[1Password for Claude](https://support.1password.com/1password-claude/) lets Claude request a login while the 1Password browser extension fills the credential directly into the page over an encrypted channel. The secret never enters the model context, the transcript, or OpenClaw. When OpenClaw runs the [`claude-cli` backend](/gateway/cli-backends#claude-cli-specifics) with Claude Code's Chrome integration enabled, agent tasks can use that flow for websites that need a real signed-in session.
+
+What this requires, beyond the backend itself:
+
+- A macOS gateway host with Chrome, the [Claude in Chrome extension](https://code.claude.com/docs/en/chrome) connected, the 1Password desktop app, and the 1Password browser extension (both 8.12.28 or later).
+- Claude Code signed in to a direct Anthropic plan (Pro, Max, Team, or Enterprise). Chrome integration is not available through Amazon Bedrock, Google Cloud, or other third-party providers.
+- The one-time 1Password connection on the Anthropic side: 1Password for Claude is set up through the Claude desktop app or extension flow described in [1Password's guide](https://support.1password.com/1password-claude/), and it is currently a macOS beta. On 1Password Business, an administrator must first enable "Allow AI agents to autofill for users" under Policies; Anthropic Team/Enterprise plans also ship with the integration off until an Owner enables it.
+- A [CLI backend plugin](/plugins/cli-backend-plugins) that adds `--chrome` to the Claude launch args; the bundled backend does not enable Chrome.
+- A person at the gateway host: every credential use shows a 1Password prompt confirmed there (for example with Touch ID). Under a restrictive exec policy the browser tool calls themselves are also relayed to your channel as OpenClaw approvals first.
+
+Before wiring this into OpenClaw, verify the pieces in an interactive session on the gateway host: run `claude --chrome`, confirm the extension connects, and check that the `claude-in-chrome` tools include the credential tools. If they do not appear there, they will not appear through OpenClaw either.
+
+One-time passcodes are filled by 1Password on the same page; never relay verification codes or passwords through chat. Headless or remote gateways cannot use this flow today because the approval and the browser both live on the gateway host.
 
 ## Security notes
 

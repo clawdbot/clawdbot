@@ -14,7 +14,11 @@ import {
 } from "./accounts.js";
 import type { ChannelPlugin } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
-import { slackSetupAdapter, createSlackSetupWizardProxy } from "./setup-core.js";
+import {
+  slackSetupAdapter,
+  slackSetupContract,
+  createSlackSetupWizardProxy,
+} from "./setup-core.js";
 import {
   describeSlackSetupAccount,
   isSlackSetupAccountConfigured,
@@ -83,4 +87,5 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     describeAccount: (account) => describeSlackSetupAccount(account),
   },
   setup: slackSetupAdapter,
+  setupContract: slackSetupContract,
 };

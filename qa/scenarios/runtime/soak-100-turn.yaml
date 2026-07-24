@@ -3,7 +3,7 @@ title: 100-turn runtime parity soak
 scenario:
   id: runtime-soak-100-turn
   surface: runtime
-  runtimeParityTier: soak
+  runtimePairLane: soak
   coverage:
     primary:
       - agent-runtime.terminal-long-run-stability

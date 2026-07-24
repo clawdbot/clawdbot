@@ -263,8 +263,8 @@ describe("AppSidebar session catalog pagination", () => {
       expect(
         section()?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
       ).toContain("Second page unavailable");
-      expect(sidebar.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
-      expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+      expect(sidebar.sessionData.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
       expect(loadMore()?.disabled).toBe(false);
 
       loadMore()?.click();

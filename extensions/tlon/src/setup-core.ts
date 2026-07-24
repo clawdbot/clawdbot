@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Tlon plugin module implements setup core behavior.
 import {
   DEFAULT_ACCOUNT_ID,
@@ -245,3 +246,43 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
       input: input as TlonSetupInput,
     }),
 };
+
+export const tlonSetupContract = defineChannelSetupContract({
+  fields: {
+    ship: { kind: "string", cli: { flags: "--ship <ship>", description: "Tlon ship" } },
+    url: { kind: "string", cli: { flags: "--url <url>", description: "Tlon URL" } },
+    code: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--code <code>", description: "Tlon login code" },
+    },
+    dangerouslyAllowPrivateNetwork: {
+      kind: "boolean",
+      cli: {
+        flags: "--dangerously-allow-private-network",
+        description: "Allow private-network Tlon URLs",
+      },
+    },
+    groupChannels: {
+      kind: "string-list",
+      cli: { flags: "--group-channels <list>", description: "Tlon group channels" },
+    },
+    dmAllowlist: {
+      kind: "string-list",
+      cli: { flags: "--dm-allowlist <list>", description: "Tlon DM allowlist" },
+    },
+    autoDiscoverChannels: {
+      kind: "boolean",
+      cli: {
+        flags: "--auto-discover-channels",
+        negatedFlags: "--no-auto-discover-channels",
+        description: "Auto-discover Tlon group channels",
+      },
+    },
+    ownerShip: {
+      kind: "string",
+      cli: { flags: "--owner-ship <ship>", description: "Tlon owner ship" },
+    },
+  },
+  legacyAdapter: tlonSetupAdapter,
+});

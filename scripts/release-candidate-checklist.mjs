@@ -1200,10 +1200,7 @@ export function validatePreflightManifest(manifest, params) {
   if (!manifest.tarballName || !manifest.tarballSha256) {
     throw new Error("npm preflight manifest missing tarball metadata");
   }
-  if (!Array.isArray(manifest.dependencyTarballs)) {
-    throw new Error("npm preflight manifest missing dependency tarball metadata");
-  }
-  for (const dependency of manifest.dependencyTarballs) {
+  for (const dependency of preflightCorePackageTarballs(manifest)) {
     if (
       !dependency?.packageName ||
       !dependency.packageVersion ||
@@ -1214,6 +1211,17 @@ export function validatePreflightManifest(manifest, params) {
       throw new Error("npm preflight manifest contains invalid dependency tarball metadata");
     }
   }
+}
+
+export function preflightCorePackageTarballs(manifest) {
+  const hasCorePackageTarballs = Object.hasOwn(manifest, "corePackageTarballs");
+  const tarballs = hasCorePackageTarballs
+    ? manifest.corePackageTarballs
+    : manifest.dependencyTarballs;
+  if (!Array.isArray(tarballs)) {
+    throw new Error("npm preflight manifest missing dependency tarball metadata");
+  }
+  return tarballs;
 }
 
 export function validateFullManifest(manifest, params) {
@@ -1534,7 +1542,7 @@ async function main() {
       `prepared tarball digest mismatch: expected ${npmManifest.tarballSha256}, got ${actualTarballSha}`,
     );
   }
-  const dependencyTarballPaths = npmManifest.dependencyTarballs.map((dependency) => {
+  const dependencyTarballPaths = preflightCorePackageTarballs(npmManifest).map((dependency) => {
     const dependencyPath = join(npmDir, dependency.tarballName);
     if (!existsSync(dependencyPath)) {
       throw new Error(`prepared dependency tarball missing: ${dependencyPath}`);

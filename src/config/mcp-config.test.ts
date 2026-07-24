@@ -136,6 +136,33 @@ describe("config mcp config", () => {
     );
   });
 
+  it("only replaces a server that still matches the expected config", async () => {
+    await withMcpConfigHome(
+      { mcp: { servers: { docs: { command: "node", args: ["current.mjs"] } } } },
+      async () => {
+        const stale = await setConfiguredMcpServer({
+          name: "docs",
+          server: { command: "uvx", args: ["docs@2"] },
+          expectedServer: { command: "node", args: ["stale.mjs"] },
+        });
+        expect(stale).toMatchObject({ ok: false, error: expect.stringContaining("changed") });
+
+        const replaced = await setConfiguredMcpServer({
+          name: "docs",
+          server: { command: "uvx", args: ["docs@2"] },
+          expectedServer: { command: "node", args: ["current.mjs"] },
+        });
+        expect(replaced.ok).toBe(true);
+
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok && loaded.mcpServers.docs).toEqual({
+          command: "uvx",
+          args: ["docs@2"],
+        });
+      },
+    );
+  });
+
   it("does not remove a server that changed after ownership inspection", async () => {
     await withMcpConfigHome(
       { mcp: { servers: { docs: { command: "node", args: ["changed.mjs"] } } } },

@@ -223,7 +223,11 @@ export const environmentsHandlers: GatewayRequestHandlers = {
           throw new Error("cloud worker placement control is unavailable");
         }
         const destroyed = params.force
-          ? await placementService!.forceDestroyEnvironment!(params.environmentId)
+          ? await placementService!.forceDestroyEnvironment!(params.environmentId, (error) => {
+              context.logGateway.warn(
+                `worker environment forced teardown cleanup failed: ${formatForLog(error)}`,
+              );
+            })
           : await service.destroyUnattached(params.environmentId);
         // Destruction is authoritative. Project the dead worker into its owning
         // placement before returning, or immediate session deletion stays fenced.

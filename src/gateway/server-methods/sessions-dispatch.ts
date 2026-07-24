@@ -9,6 +9,7 @@ import {
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import {
   isWorkerPlacementSessionRuntimeSupported,
@@ -23,7 +24,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionDispatchHandlers: GatewayRequestHandlers = {
-  "sessions.dispatch": async ({ params, respond, context }) => {
+  "sessions.dispatch": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsDispatchParams, "sessions.dispatch", respond)) {
       return;
     }
@@ -132,6 +133,9 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      // Dispatch is session-id addressed after this point; reject a replacement before handing
+      // the captured instance to the asynchronous worker service.
+      sessionMutationAuthorization?.assertCurrent();
       const placement = await dispatchService.dispatch({
         sessionId,
         sessionKey: target.canonicalKey,
@@ -149,6 +153,9 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
       respond(
         false,
         undefined,
@@ -159,7 +166,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "sessions.reclaim": async ({ params, respond, context }) => {
+  "sessions.reclaim": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsReclaimParams, "sessions.reclaim", respond)) {
       return;
     }
@@ -240,6 +247,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      sessionMutationAuthorization?.assertCurrent();
       const placement = await placementService.reclaim({
         sessionId,
         sessionKey: target.canonicalKey,
@@ -256,6 +264,9 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
       respond(
         false,
         undefined,

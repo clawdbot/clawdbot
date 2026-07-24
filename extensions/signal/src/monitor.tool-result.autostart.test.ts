@@ -72,6 +72,36 @@ function expectWaitForTransportReadyTimeout(timeoutMs: number) {
 }
 
 describe("monitorSignalProvider autostart", () => {
+  it.each(["external-native", "container"] as const)(
+    "does not spawn a daemon for %s transport",
+    async (kind) => {
+      const abortController = createAutoAbortController();
+      setSignalToolResultTestConfig({
+        channels: {
+          signal: {
+            transport: { kind, url: `http://${kind}:8080` },
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+      });
+
+      await runMonitorWithMocks({
+        abortSignal: abortController.signal,
+        runtime: createMonitorRuntime(),
+      });
+
+      expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
+      expect(waitForTransportReadyMock).not.toHaveBeenCalled();
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseUrl: `http://${kind}:8080`,
+          transportKind: kind,
+        }),
+      );
+    },
+  );
+
   it("uses bounded readiness checks when auto-starting the daemon", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig();
@@ -115,7 +145,7 @@ describe("monitorSignalProvider autostart", () => {
     expectWaitForTransportReadyTimeout(90_000);
   });
 
-  it("passes channels.signal.configPath to signal-cli daemon startup", async () => {
+  it("passes managed transport configPath to signal-cli daemon startup", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig({ configPath: "~/.openclaw/signal-cli" });
     const abortController = createAutoAbortController();
@@ -134,24 +164,7 @@ describe("monitorSignalProvider autostart", () => {
     );
   });
 
-  it("passes a bare IPv6 bind host from an IPv6 daemon URL", async () => {
-    const runtime = createMonitorRuntime();
-    setSignalAutoStartConfig();
-    const abortController = createAutoAbortController();
-
-    await runMonitorWithMocks({
-      autoStart: true,
-      baseUrl: "http://[::1]:9090",
-      abortSignal: abortController.signal,
-      runtime,
-    });
-
-    expect(spawnSignalDaemonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ httpHost: "::1", httpPort: 9090 }),
-    );
-  });
-
-  it("omits configPath when channels.signal.configPath is blank", async () => {
+  it("omits configPath when managed transport configPath is blank", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig({ configPath: " " });
     const abortController = createAutoAbortController();

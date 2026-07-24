@@ -3,7 +3,7 @@ title: "Runtime tool fixture — apply-patch"
 scenario:
   id: runtime-tool-apply-patch
   surface: runtime-tools
-  runtimeParityTier: standard
+  runtimePairLane: core
   coverage:
     primary:
       - agent-runtime.tool-apply-patch

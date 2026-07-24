@@ -172,6 +172,12 @@ return await agents.run(
 `maxConcurrent` children for the group and queues the rest in submission
 order.
 
+Code Mode separately bounds concurrent guest bridge calls with
+`tools.codeMode.maxPendingToolCalls` (default `16`, maximum `128`). For very
+large groups, launch bounded batches below that limit and leave headroom for
+`phase()`, `log()`, and child wait transitions. `maxConcurrent` limits running
+children; it does not raise the guest bridge-call limit.
+
 ### Loop on a decision gate
 
 Use a bounded `while` loop when each pass decides whether another pass is
@@ -328,29 +334,39 @@ calls.
 Codex Code Mode automatically exposes eligible dynamic OpenClaw tools under
 `tools.*`. It does not use OpenClaw's QuickJS guest API or require
 `tools.codeMode`, but `tools.swarm` must still be enabled. Codex harness
-`agents_wait` calls support the full 600-second timeout. Use this pattern:
+`agents_wait` calls support the full 600-second timeout.
+
+With the currently supported Codex runtime, dynamic OpenClaw tool results reach
+Code Mode as JSON text. Parse each result before reading fields. Codex also
+serializes dynamic tool calls, so `Promise.all` does not submit several
+`sessions_spawn` calls concurrently. Launch collectors in a bounded loop;
+already-accepted children can still run while later launches are submitted.
 
 ```javascript
+function parseToolResult(value) {
+  if (typeof value !== "string") return value;
+  return JSON.parse(value);
+}
+
 const tasks = [
   "Check the authentication path.",
   "Check the storage path.",
   "Check the recovery path.",
 ];
+const launches = [];
 
-const launches = await Promise.all(
-  tasks.map((task, index) =>
-    tools.sessions_spawn({
+for (const [index, task] of tasks.entries()) {
+  const launch = parseToolResult(
+    await tools.sessions_spawn({
       task,
       collect: true,
       label: `review-${index + 1}`,
     }),
-  ),
-);
-
-for (const launch of launches) {
+  );
   if (launch.status !== "accepted") {
     throw new Error(launch.error ?? "Collector spawn was not accepted.");
   }
+  launches.push(launch);
 }
 
 const pending = new Set(launches.map((launch) => launch.runId));
@@ -358,10 +374,12 @@ const completed = [];
 
 while (pending.size > 0) {
   const ids = [...pending].slice(0, 1000);
-  const batch = await tools.agents_wait({
-    ids,
-    timeoutSeconds: 30,
-  });
+  const batch = parseToolResult(
+    await tools.agents_wait({
+      ids,
+      timeoutSeconds: 30,
+    }),
+  );
 
   // Rotate this bounded window behind ids that have not been checked yet.
   for (const runId of ids) {

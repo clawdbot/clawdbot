@@ -3966,7 +3966,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
       assertPrepared(root, "captionless audio root");
       assertPrepared(followUp, "audio-root follow-up");
-      downloadedPaths = root.ctxPayload.MediaPaths ?? [];
+      downloadedPaths =
+        root.ctxPayload.media?.flatMap((fact) => (fact.path ? [fact.path] : [])) ?? [];
       expect(root.ctxPayload.SessionKey).toBe(expectedSessionKey);
       expect(followUp.ctxPayload.SessionKey).toBe(expectedSessionKey);
       expect(root.ctxPayload.MessageThreadId).toBe(rootTs);
@@ -3974,7 +3975,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       expect(root.ctxPayload.MentionSource).toBe("mention_pattern");
       expect(root.ctxPayload.CommandBody).toBe("");
       expect(root.ctxPayload.Transcript).toBe("Bill /new please review this");
-      expect(root.ctxPayload.MediaTranscribedIndexes).toEqual([1]);
+      expect(root.ctxPayload.media?.[1]?.transcribed).toBe(true);
       expect(root.ctxPayload.RawBody).toContain("[Slack file: voice.mp4 (fileId: FVOICE)]");
       expect(root.ctxPayload.BodyForAgent).toContain(
         '[Audio transcript (machine-generated, untrusted)]: "Bill /new please review this"',

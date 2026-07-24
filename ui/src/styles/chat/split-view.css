@@ -189,7 +189,8 @@ openclaw-chat-pane {
   }
 }
 
-.chat-pane__cloud {
+.chat-pane__cloud,
+.chat-pane__incognito {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -197,6 +198,7 @@ openclaw-chat-pane {
 }
 
 .chat-pane__cloud svg,
+.chat-pane__incognito svg,
 .chat-pane__workspace-chip svg {
   width: 14px;
   height: 14px;
@@ -281,6 +283,12 @@ openclaw-chat-pane {
   text-overflow: ellipsis;
 }
 
+.chat-pane__presence {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
 .chat-pane__actions {
   display: flex;
   align-items: center;
@@ -290,6 +298,28 @@ openclaw-chat-pane {
      action cluster stays pinned to the right edge (and doubles as the
      native window-drag surface between chip and actions). */
   margin-left: auto;
+}
+
+.chat-pane__sharing-menu {
+  flex: 0 0 auto;
+}
+
+.chat-pane__sharing-title,
+.chat-pane__sharing-status {
+  padding: 6px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chat-pane__sharing-status--error {
+  max-width: 260px;
+  color: var(--danger);
+  white-space: normal;
+}
+
+.chat-pane__draft-indicator {
+  font-size: 13px;
 }
 
 @media (max-width: 480px) {
@@ -302,18 +332,28 @@ openclaw-chat-pane {
   .chat-pane__workspace-chip span {
     display: none;
   }
+
+  .chat-pane__presence {
+    display: none;
+  }
 }
 
-/* Plain web with the nav collapsed: the floating sidebar-expand pill
-   (.shell-nav-expand, fixed 10px/10px, 32px wide) overlays the first pane
-   header's left edge; 52px clears it so the session title stays readable.
-   Native shells below reserve larger insets for their own window chrome. */
+/* Plain web shell chrome overlays the first pane header. Expanded navigation
+   shows toggle + search; collapsed navigation adds new-thread between them. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .chat-pane__header {
+  padding-left: 88px;
+}
+
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
   .shell--nav-collapsed:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
   .chat-pane__header {
-  padding-left: 52px;
+  padding-left: 124px;
 }
 
 /* Native macOS desktop shells: the pane header is the window's top surface,

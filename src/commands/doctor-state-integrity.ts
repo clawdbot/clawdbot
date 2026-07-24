@@ -30,11 +30,13 @@ import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
 } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import {
+  loadLegacySessionStore,
+  updateLegacySessionStore,
+} from "../infra/state-migrations.legacy-session-store.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -1277,10 +1279,9 @@ export async function noteStateIntegrity(
     );
   }
 
-  // Read-only diagnostic load: skip the cache and the defensive return clone so a
-  // very large monolithic sessions.json is materialized once, not several times.
-  // Re-cloning a multi-hundred-MB store here is what made `doctor` OOM (#56827).
-  const store = loadSessionStore(storePath, { skipCache: true, clone: false });
+  // The doctor importer is uncached and returns one mutable parse, avoiding the
+  // duplicate materialization that made large legacy stores OOM (#56827).
+  const store = loadLegacySessionStore(storePath);
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   const canonicalEntryCount = await noteMainSessionRecoveryIntegrity({
@@ -1343,7 +1344,7 @@ export async function noteStateIntegrity(
       if (repairWedged) {
         let repaired = 0;
         const repairedAt = Date.now();
-        await updateSessionStore(absoluteStorePath, (currentStore) => {
+        await updateLegacySessionStore(absoluteStorePath, (currentStore) => {
           for (const [key] of wedgedSubagentSessions) {
             const current = currentStore[key];
             if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {

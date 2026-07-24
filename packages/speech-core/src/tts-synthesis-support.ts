@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -43,7 +44,7 @@ export function sanitizeTtsErrorForLog(err: unknown): string {
   return redactSensitiveText(raw).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 
-export function buildTtsFailureResult(
+function buildTtsFailureResult(
   errors: string[],
   attemptedProviders?: string[],
   attempts?: TtsProviderAttempt[],
@@ -80,7 +81,7 @@ type TtsProviderReadyResolution =
       personaBinding?: "missing";
     };
 
-export function resolveReadySpeechProvider(params: {
+function resolveReadySpeechProvider(params: {
   provider: TtsProvider;
   cfg: OpenClawConfig;
   config: ResolvedTtsConfig;
@@ -151,7 +152,7 @@ export function resolveReadySpeechProvider(params: {
   };
 }
 
-export async function prepareSpeechSynthesis(params: {
+async function prepareSpeechSynthesis(params: {
   provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
   text: string;
   cfg: OpenClawConfig;
@@ -238,11 +239,187 @@ export function resolveTtsRequestSetup(params: {
   };
 }
 
+type ReadySpeechProvider = Extract<TtsProviderReadyResolution, { kind: "ready" }>;
+type PreparedSpeechSynthesis = Awaited<ReturnType<typeof prepareSpeechSynthesis>>;
+type TtsProviderOperation<TSynthesis> =
+  | {
+      kind: "ready";
+      synthesize: (params: {
+        prepared: PreparedSpeechSynthesis;
+        cfg: OpenClawConfig;
+        target: "audio-file" | "voice-note" | "telephony";
+        timeoutMs: number;
+      }) => Promise<TSynthesis>;
+    }
+  | {
+      kind: "skip";
+      reasonCode: TtsProviderAttempt["reasonCode"];
+      message: string;
+    };
+type TtsProviderSuccess<TSynthesis> = {
+  synthesis: TSynthesis;
+  latencyMs: number;
+  provider: string;
+  providerModel?: string;
+  providerVoice?: string;
+  persona?: string;
+  fallbackFrom?: string;
+  attemptedProviders: string[];
+  attempts: TtsProviderAttempt[];
+};
+
+export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
+  cfg: OpenClawConfig;
+  config: ResolvedTtsConfig;
+  persona?: ResolvedTtsPersona;
+  providers: VoiceProviderCandidate[];
+  synthesisText: string;
+  providerOverrides?: Record<string, SpeechProviderOverrides>;
+  timeoutMs?: number;
+  target: "audio-file" | "voice-note" | "telephony";
+  logLabel: string;
+  requireTelephony?: boolean;
+  selectOperation: (params: {
+    provider: TtsProvider;
+    resolvedProvider: ReadySpeechProvider;
+  }) => TtsProviderOperation<TSynthesis>;
+  buildSuccess: (params: TtsProviderSuccess<TSynthesis>) => TResult;
+}): Promise<TResult | ReturnType<typeof buildTtsFailureResult>> {
+  const { cfg, config, persona, providers } = params;
+  const errors: string[] = [];
+  const attemptedProviders: string[] = [];
+  const attempts: TtsProviderAttempt[] = [];
+  const primaryProvider = providers[0]?.provider;
+  logVerbose(
+    `${params.logLabel}: starting with provider ${primaryProvider}, fallbacks: ${
+      providers
+        .slice(1)
+        .map((entry) => entry.provider)
+        .join(", ") || "none"
+    }`,
+  );
+
+  for (const { provider, voiceModel } of providers) {
+    attemptedProviders.push(provider);
+    const providerStart = Date.now();
+    try {
+      const resolvedProvider = resolveReadySpeechProvider({
+        provider,
+        cfg,
+        config,
+        persona,
+        voiceModel,
+        requireTelephony: params.requireTelephony,
+      });
+      if (resolvedProvider.kind === "skip") {
+        errors.push(resolvedProvider.message);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: resolvedProvider.reasonCode,
+          persona: persona?.id,
+          ...(resolvedProvider.personaBinding
+            ? { personaBinding: resolvedProvider.personaBinding }
+            : {}),
+          error: resolvedProvider.message,
+        });
+        logVerbose(
+          `${params.logLabel}: provider ${provider} skipped (${resolvedProvider.message})`,
+        );
+        continue;
+      }
+
+      const operation = params.selectOperation({ provider, resolvedProvider });
+      if (operation.kind === "skip") {
+        errors.push(operation.message);
+        attempts.push({
+          provider,
+          outcome: "skipped",
+          reasonCode: operation.reasonCode,
+          persona: persona?.id,
+          personaBinding: resolvedProvider.personaBinding,
+          error: operation.message,
+        });
+        logVerbose(`${params.logLabel}: provider ${provider} skipped (${operation.message})`);
+        continue;
+      }
+
+      const timeoutMs = resolveSpeechProviderTimeoutMs({
+        timeoutMs: params.timeoutMs ?? voiceModel?.timeoutMs,
+        config,
+        provider: resolvedProvider.provider,
+      });
+      const prepared = await prepareSpeechSynthesis({
+        provider: resolvedProvider.provider,
+        text: params.synthesisText,
+        cfg,
+        providerConfig: resolvedProvider.providerConfig,
+        providerOverrides: params.providerOverrides?.[resolvedProvider.provider.id],
+        persona: resolvedProvider.synthesisPersona,
+        personaProviderConfig: resolvedProvider.personaProviderConfig,
+        target: params.target,
+        timeoutMs,
+      });
+      const synthesis = await operation.synthesize({
+        prepared,
+        cfg,
+        target: params.target,
+        timeoutMs,
+      });
+      const latencyMs = Date.now() - providerStart;
+      attempts.push({
+        provider,
+        outcome: "success",
+        reasonCode: "success",
+        persona: persona?.id,
+        personaBinding: resolvedProvider.personaBinding,
+        latencyMs,
+      });
+      return params.buildSuccess({
+        synthesis,
+        latencyMs,
+        provider,
+        providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
+        providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
+        persona: persona?.id,
+        fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
+        attemptedProviders,
+        attempts,
+      });
+    } catch (err) {
+      const errorMsg = formatTtsProviderError(provider, err);
+      const latencyMs = Date.now() - providerStart;
+      errors.push(errorMsg);
+      attempts.push({
+        provider,
+        outcome: "failed",
+        reasonCode:
+          err instanceof Error && err.name === "AbortError" ? "timeout" : "provider_error",
+        latencyMs,
+        persona: persona?.id,
+        personaBinding: resolvePersonaBinding(persona, provider),
+        error: errorMsg,
+      });
+      const rawError = sanitizeTtsErrorForLog(err);
+      if (provider === primaryProvider) {
+        const hasFallbacks = providers.length > 1;
+        logVerbose(
+          `${params.logLabel}: primary provider ${provider} failed (${rawError})${hasFallbacks ? "; trying fallback providers." : "; no fallback providers configured."}`,
+        );
+      } else {
+        logVerbose(`${params.logLabel}: ${provider} failed (${rawError}); trying next provider.`);
+      }
+    }
+  }
+
+  return buildTtsFailureResult(errors, attemptedProviders, attempts, persona?.id);
+}
+
 function readTtsResultString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-export function resolveTtsResultModel(
+function resolveTtsResultModel(
   providerConfig: SpeechProviderConfig,
   providerOverrides?: SpeechProviderOverrides,
 ): string | undefined {
@@ -254,7 +431,7 @@ export function resolveTtsResultModel(
   );
 }
 
-export function resolveTtsResultVoice(
+function resolveTtsResultVoice(
   providerConfig: SpeechProviderConfig,
   providerOverrides?: SpeechProviderOverrides,
 ): string | undefined {
@@ -272,7 +449,7 @@ export function resolveTtsResultVoice(
   );
 }
 
-export function resolvePersonaBinding(
+function resolvePersonaBinding(
   persona: ResolvedTtsPersona | undefined,
   provider: string,
 ): "applied" | "missing" | "none" {

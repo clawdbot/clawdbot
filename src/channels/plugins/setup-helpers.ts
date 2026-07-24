@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
  *
  * Applies account names and validates setup results for channel onboarding adapters.
  */
-import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { resolveSingleAccountKeysToMove } from "./setup-promotion-helpers.js";
@@ -174,14 +173,16 @@ export function applySetupAccountConfigPatch(params: {
 }
 
 /** Creates a setup adapter that turns validated setup input into an account config patch. */
-export function createPatchedAccountSetupAdapter(params: {
+export function createPatchedAccountSetupAdapter<
+  Input extends { name?: string } = ChannelSetupInput,
+>(params: {
   channelKey: string;
   alwaysUseAccounts?: boolean;
   ensureChannelEnabled?: boolean;
   ensureAccountEnabled?: boolean;
-  validateInput?: ChannelSetupAdapter["validateInput"];
-  buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
-}): ChannelSetupAdapter {
+  validateInput?: ChannelSetupAdapter<Input>["validateInput"];
+  buildPatch: (input: Input) => Record<string, unknown>;
+}): ChannelSetupAdapter<Input> {
   return {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
@@ -217,30 +218,6 @@ export function createPatchedAccountSetupAdapter(params: {
   };
 }
 
-function createZodSetupInputValidator<T extends ChannelSetupInput>(params: {
-  schema: ZodType<T>;
-  validate?: (params: { cfg: OpenClawConfig; accountId: string; input: T }) => string | null;
-}): NonNullable<ChannelSetupAdapter["validateInput"]> {
-  return (inputParams) => {
-    const parsed = params.schema.safeParse(inputParams.input);
-    if (!parsed.success) {
-      return parsed.error.issues[0]?.message ?? "invalid input";
-    }
-    return (
-      params.validate?.({
-        ...inputParams,
-        input: parsed.data,
-      }) ?? null
-    );
-  };
-}
-
-const GenericSetupInputSchema = z
-  .object({
-    useEnv: z.boolean().optional(),
-  })
-  .passthrough() as ZodType<ChannelSetupInput>;
-
 type SetupInputPresenceRequirement = {
   someOf: string[];
   message: string;
@@ -253,37 +230,32 @@ function hasPresentSetupValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-export function createSetupInputPresenceValidator(params: {
+export function createSetupInputPresenceValidator<
+  Input extends { name?: string; useEnv?: boolean } = ChannelSetupInput,
+>(params: {
   defaultAccountOnlyEnvError?: string;
   whenNotUseEnv?: SetupInputPresenceRequirement[];
-  validate?: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    input: ChannelSetupInput;
-  }) => string | null;
-}): NonNullable<ChannelSetupAdapter["validateInput"]> {
-  return createZodSetupInputValidator({
-    schema: GenericSetupInputSchema,
-    validate: (inputParams) => {
-      if (
-        params.defaultAccountOnlyEnvError &&
-        inputParams.input.useEnv &&
-        inputParams.accountId !== DEFAULT_ACCOUNT_ID
-      ) {
-        return params.defaultAccountOnlyEnvError;
-      }
-      if (!inputParams.input.useEnv) {
-        const inputRecord = inputParams.input as Record<string, unknown>;
-        for (const requirement of params.whenNotUseEnv ?? []) {
-          if (requirement.someOf.some((key) => hasPresentSetupValue(inputRecord[key]))) {
-            continue;
-          }
-          return requirement.message;
+  validate?: (params: { cfg: OpenClawConfig; accountId: string; input: Input }) => string | null;
+}): NonNullable<ChannelSetupAdapter<Input>["validateInput"]> {
+  return (inputParams) => {
+    if (
+      params.defaultAccountOnlyEnvError &&
+      inputParams.input.useEnv &&
+      inputParams.accountId !== DEFAULT_ACCOUNT_ID
+    ) {
+      return params.defaultAccountOnlyEnvError;
+    }
+    if (!inputParams.input.useEnv) {
+      const inputRecord = inputParams.input as Record<string, unknown>;
+      for (const requirement of params.whenNotUseEnv ?? []) {
+        if (requirement.someOf.some((key) => hasPresentSetupValue(inputRecord[key]))) {
+          continue;
         }
+        return requirement.message;
       }
-      return params.validate?.(inputParams) ?? null;
-    },
-  });
+    }
+    return params.validate?.(inputParams) ?? null;
+  };
 }
 
 /** Creates a setup adapter that supports env-backed default account auth and patched credentials. */

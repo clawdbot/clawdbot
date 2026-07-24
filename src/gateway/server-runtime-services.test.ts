@@ -54,6 +54,9 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
+  resolveHeartbeatAgents: (cfg: { agents?: { defaults?: { heartbeat?: unknown } } }) => [
+    { agentId: "main", heartbeat: cfg.agents?.defaults?.heartbeat },
+  ],
   startHeartbeatRunner: hoisted.startHeartbeatRunner,
 }));
 
@@ -223,6 +226,48 @@ describe("server-runtime-services", () => {
     services.heartbeatRunner.stop();
     expect(hoisted.stopSessionUpstreamMonitor).toHaveBeenCalledTimes(1);
     expect(hoisted.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
+    const warn = vi.fn();
+    const log = {
+      child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
+      error: vi.fn(),
+    };
+
+    activateGatewayScheduledServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cronState: createTestCronState(createTestCron(), false),
+      cronReconciliation: createTestCronReconciliation(),
+      logCron: { error: vi.fn() },
+      log,
+    });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("cron scheduler is disabled"));
+  });
+
+  it("does not warn about disabled cron when heartbeat cadence is disabled", () => {
+    const warn = vi.fn();
+    const log = {
+      child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
+      error: vi.fn(),
+    };
+
+    activateGatewayScheduledServices({
+      minimalTestGateway: false,
+      cfgAtStart: { agents: { defaults: { heartbeat: { every: "0m" } } } } as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cronState: createTestCronState(createTestCron(), false),
+      cronReconciliation: createTestCronReconciliation(),
+      logCron: { error: vi.fn() },
+      log,
+    });
+
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("runs cron start, watcher reconciliation, and hook completion in order", async () => {

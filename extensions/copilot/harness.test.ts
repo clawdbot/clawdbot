@@ -16,6 +16,8 @@ import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness
 import type { resolvePoolAcquire } from "./src/attempt.js";
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
+type CanonicalAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }>;
+
 const COPILOT_BYOK_PROVIDER_ERROR =
   "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
 
@@ -59,15 +61,9 @@ function asAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptRes
   return value as unknown as AgentHarnessAttemptResult;
 }
 
-function asCompleteAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptResult {
+function asCompleteAttemptResult(value: Record<string, unknown>): CanonicalAttemptResult {
   return asAttemptResult({
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [],
     assistantTexts: [],
@@ -81,14 +77,14 @@ function asCompleteAttemptResult(value: Record<string, unknown>): AgentHarnessAt
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
     ...value,
-  });
+  }) as CanonicalAttemptResult;
 }
 
 const ATTEMPT_PARAMS = asAttemptParams({
   provider: "github-copilot",
   model: "gpt-4.1",
 });
-const ATTEMPT_RESULT = asAttemptResult({ ok: true });
+const ATTEMPT_RESULT = asCompleteAttemptResult({ ok: true });
 const TEST_POOL_KEY = {
   agentId: "test",
   authMode: "useLoggedInUser",
@@ -404,7 +400,7 @@ describe("createCopilotAgentHarness", () => {
   it("finalizes settled tools by resuming the compatible SDK session in isolated mode", async () => {
     const pool = makePoolMock();
     const client = createMockCopilotClient({ deleteSession: vi.fn() });
-    const settledResult = asAttemptResult({ assistantTexts: [] });
+    const settledResult = asCompleteAttemptResult({ assistantTexts: [] });
     const finalAssistant = {
       role: "assistant" as const,
       content: [{ type: "text" as const, text: "final answer" }],

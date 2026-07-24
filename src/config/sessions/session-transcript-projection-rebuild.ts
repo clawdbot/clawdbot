@@ -18,7 +18,7 @@ import {
 
 type TranscriptProjectionDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "sessions" | "session_transcript_index_state" | "transcript_events"
+  "session_windows" | "session_transcript_index_state" | "transcript_events"
 > & {
   session_transcript_active_events: OpenClawAgentKyselyDatabase["session_transcript_active_events"] & {
     rowid: Generated<number>;
@@ -164,7 +164,7 @@ export function prepareSessionTranscriptProjection(
       const session = executeSqliteQueryTakeFirstSync(
         db,
         kysely
-          .selectFrom("sessions")
+          .selectFrom("session_windows")
           .select("transcript_updated_at")
           .where("session_id", "=", sessionId),
       );
@@ -230,7 +230,7 @@ function sourceSnapshotMatches(
   const session = executeSqliteQueryTakeFirstSync(
     db,
     kysely
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select("transcript_updated_at")
       .where("session_id", "=", plan.sessionId),
   );

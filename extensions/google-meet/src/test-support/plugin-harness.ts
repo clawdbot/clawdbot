@@ -1,7 +1,18 @@
 // Google Meet plugin module implements plugin harness behavior.
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import { vi } from "vitest";
+import type { GoogleMeetCalendarLookupResult } from "../calendar.js";
+import { listGoogleMeetCalendarEvents } from "../calendar.js";
+import type { GoogleMeetExportManifest } from "../cli-shared.js";
+import type {
+  GoogleMeetArtifactsResult,
+  GoogleMeetAttendanceResult,
+  GoogleMeetLatestConferenceRecordResult,
+} from "../meet-api.js";
+import type { GoogleMeetRuntime } from "../runtime.js";
+import { MEET_URL } from "./fixtures.test-helpers.js";
 
 type GoogleMeetTestPluginEntry = {
   register(api: OpenClawPluginApi): void;
@@ -72,7 +83,7 @@ export function setupGoogleMeetPlugin(
   } = {},
 ) {
   const methods = new Map<string, unknown>();
-  const tools: unknown[] = [];
+  const tools: AnyAgentTool[] = [];
   const cliRegistrations: unknown[] = [];
   const nodeHostCommands: unknown[] = [];
   const nodeInvokePolicies: unknown[] = [];
@@ -105,7 +116,7 @@ export function setupGoogleMeetPlugin(
             result: {
               targetId: "tab-1",
               title: "Meet",
-              url: proxy.body?.url ?? "https://meet.google.com/abc-defg-hij",
+              url: proxy.body?.url ?? MEET_URL,
             },
           },
         };
@@ -121,7 +132,7 @@ export function setupGoogleMeetPlugin(
                   inCall: true,
                   micMuted: false,
                   title: "Meet call",
-                  url: "https://meet.google.com/abc-defg-hij",
+                  url: MEET_URL,
                 },
               ),
             },
@@ -177,12 +188,13 @@ export function setupGoogleMeetPlugin(
     } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
     registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
-    registerTool: (tool: unknown) => {
-      tools.push(
-        typeof tool === "function"
-          ? (tool as (ctx: Record<string, unknown>) => unknown)(options.toolContext ?? {})
-          : tool,
-      );
+    registerTool: (tool) => {
+      const registered = typeof tool === "function" ? tool(options.toolContext ?? {}) : tool;
+      if (Array.isArray(registered)) {
+        tools.push(...registered);
+      } else if (registered) {
+        tools.push(registered);
+      }
     },
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
@@ -209,6 +221,51 @@ export function setupGoogleMeetPlugin(
     nodeInvokePolicies,
     gatewayRequest,
   };
+}
+
+type GoogleMeetToolError = {
+  error?: string;
+  manualActionRequired?: boolean;
+  manualActionReason?: string;
+};
+
+type GoogleMeetToolDetails = {
+  join: Awaited<ReturnType<GoogleMeetRuntime["join"]>>;
+  test_speech: Awaited<ReturnType<GoogleMeetRuntime["testSpeech"]>>;
+  test_listen: Awaited<ReturnType<GoogleMeetRuntime["testListen"]>>;
+  status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>;
+  transcript: Awaited<ReturnType<GoogleMeetRuntime["transcript"]>>;
+  recover_current_tab: Awaited<ReturnType<GoogleMeetRuntime["recoverCurrentTab"]>>;
+  setup_status: Awaited<ReturnType<GoogleMeetRuntime["setupStatus"]>>;
+  latest: GoogleMeetLatestConferenceRecordResult & {
+    calendarEvent?: GoogleMeetCalendarLookupResult;
+  };
+  calendar_events: Awaited<ReturnType<typeof listGoogleMeetCalendarEvents>>;
+  artifacts: GoogleMeetArtifactsResult;
+  attendance: GoogleMeetAttendanceResult;
+  export: {
+    dryRun?: boolean;
+    files?: string[];
+    manifest?: GoogleMeetExportManifest;
+    zipFile?: string;
+  };
+  leave: Awaited<ReturnType<GoogleMeetRuntime["leave"]>>;
+  speak: Awaited<ReturnType<GoogleMeetRuntime["speak"]>>;
+};
+
+type GoogleMeetTestTool = Omit<AnyAgentTool, "execute"> & {
+  execute<Action extends keyof GoogleMeetToolDetails>(
+    toolCallId: string,
+    params: { action: Action } & Record<string, unknown>,
+  ): Promise<AgentToolResult<GoogleMeetToolDetails[Action] & GoogleMeetToolError>>;
+};
+
+export function getMeetTool(harness: Pick<ReturnType<typeof setupGoogleMeetPlugin>, "tools">) {
+  const tool = harness.tools[0];
+  if (!tool) {
+    throw new Error("Expected Google Meet tool registration");
+  }
+  return tool as GoogleMeetTestTool;
 }
 
 export async function invokeGoogleMeetGatewayMethodForTest(

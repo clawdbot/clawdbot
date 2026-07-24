@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import {
@@ -74,6 +75,7 @@ import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-reque
 import type {
   PendingFinalDeliveryPayload,
   RequesterSettleWakeState,
+  SubagentCompletionRequest,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
@@ -84,6 +86,7 @@ import {
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import { updateSwarmCollectorCompletion } from "./swarm-collector.js";
 import { releaseSwarmRun } from "./swarm-scheduler.js";
+import { peekSwarmStructuredOutput } from "./tools/structured-output-tool.js";
 
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -174,6 +177,7 @@ export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
   subagentAnnounceTimeoutMs: number;
+  getRuntimeConfig(): OpenClawConfig;
   persist(): void;
   persistOrThrow(): void;
   clearPendingLifecycleError(runId: string): void;
@@ -1737,21 +1741,7 @@ export function createSubagentRegistryLifecycleController(params: {
     return true;
   };
 
-  type CompleteSubagentRunParams = {
-    runId: string;
-    endedAt?: number;
-    outcome: SubagentRunOutcome;
-    reason: SubagentLifecycleEndedReason;
-    sendFarewell?: boolean;
-    accountId?: string;
-    triggerCleanup: boolean;
-    startedAt?: number;
-    suppressSessionEffects?: boolean;
-    completionSnapshot?: { resultText: string | null; capturedAt: number };
-    recoverInterrupted?: true;
-  };
-
-  const completeSubagentRunAttempt = async (completeParams: CompleteSubagentRunParams) => {
+  const completeSubagentRunAttempt = async (completeParams: SubagentCompletionRequest) => {
     const releaseCompletionLock = await acquireTerminalCompletionLock(completeParams.runId);
     let entry: SubagentRunRecord | undefined;
     let terminalGeneration = 0;
@@ -1906,6 +1896,25 @@ export function createSubagentRegistryLifecycleController(params: {
       let endedAt = requestedEndedAt;
       let completionOutcome =
         shouldDrainExistingTerminal && entry.outcome ? entry.outcome : completeParams.outcome;
+      const liveStructuredOutput = entry.collect
+        ? (entry.structuredOutput ??
+          peekSwarmStructuredOutput(entry.runId) ??
+          (entry.swarmRunId ? peekSwarmStructuredOutput(entry.swarmRunId) : undefined))
+        : undefined;
+      if (!entry.structuredOutput && liveStructuredOutput) {
+        entry.structuredOutput = liveStructuredOutput;
+        mutated = true;
+      }
+      if (
+        liveStructuredOutput?.structured !== undefined &&
+        completionOutcome.status === "error" &&
+        completionOutcome.error === "completed"
+      ) {
+        // Tool-only collector turns use this runner sentinel after the result is
+        // durably recorded. Normalize before every task/session/hook projection.
+        completionOutcome = { status: "ok" };
+        completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
+      }
       const observedStartedAt =
         !shouldDrainExistingTerminal &&
         typeof completeParams.startedAt === "number" &&
@@ -2085,7 +2094,7 @@ export function createSubagentRegistryLifecycleController(params: {
           mutated = true;
         }
       }
-      if (updateSwarmCollectorCompletion(entry)) {
+      if (updateSwarmCollectorCompletion(entry, params.getRuntimeConfig())) {
         mutated = true;
       }
       if (provisionalKillSnapshot) {
@@ -2359,7 +2368,7 @@ export function createSubagentRegistryLifecycleController(params: {
     startSubagentAnnounceCleanupFlow(completeParams.runId, entry);
   };
 
-  const completeSubagentRun = async (completeParams: CompleteSubagentRunParams) => {
+  const completeSubagentRun = async (completeParams: SubagentCompletionRequest) => {
     // Task finalization can make the run disappear from suspension blockers
     // before browser/MCP retirement and cleanup delivery hand off. Own this
     // entire transition as an independent root so that boundary stays atomic.

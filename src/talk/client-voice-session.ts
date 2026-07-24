@@ -2,10 +2,11 @@
 import { randomUUID } from "node:crypto";
 import {
   appendTranscriptMessage,
-  loadSessionEntry,
   loadSessionEntryReadOnly,
-  upsertSessionEntry,
+  patchSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -220,11 +221,19 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
   agentId: string;
   sessionKey: string;
 }): Promise<void> {
-  const existing = loadSessionEntry(params);
-  if (existing?.sessionId) {
-    return;
-  }
-  const created = await upsertSessionEntry(params, {});
+  const created = await patchSessionEntry(
+    params,
+    (_entry, context) => {
+      if (context.existingEntry?.sessionId) {
+        return null;
+      }
+      if (context.existingEntry) {
+        return { sessionId: randomUUID() };
+      }
+      return buildSessionCreationStamp({ via: "talk", actor: { type: "human" } });
+    },
+    { fallbackEntry: mergeSessionEntry(undefined, {}) },
+  );
   if (!created?.sessionId) {
     throw new Error(`agent session could not be initialized (${params.sessionKey})`);
   }

@@ -1,6 +1,7 @@
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionCreatorIdentity } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
@@ -51,7 +52,9 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
-  createdBy?: SessionCreatorIdentity;
+  incognito?: boolean;
+  createdActor?: SessionCreatedActor;
+  archivedBy?: SessionCreatedActor;
   label: string;
   meta: string;
   /** Compact repo/branch/node line for work sessions. */
@@ -65,6 +68,8 @@ export type SidebarRecentSession = {
   kind?: string;
   pinned: boolean;
   archived?: boolean;
+  visibility?: SessionVisibility;
+  draftOwnedBySelf?: boolean;
   icon?: string;
   category?: string;
   channel?: string;
@@ -140,6 +145,22 @@ export type SidebarSessionGroupMenuState = {
 export type SidebarSessionSortMode = "created" | "updated";
 export type SidebarSessionStatusFilter = "active" | "archived" | "all";
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
+
+export function resolveSidebarSessionsScrollState(
+  element: HTMLElement,
+): SidebarSessionsScrollState {
+  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+  if (maxScrollTop <= 1) {
+    return "none";
+  }
+  if (element.scrollTop <= 1) {
+    return "top";
+  }
+  if (element.scrollTop >= maxScrollTop - 1) {
+    return "bottom";
+  }
+  return "middle";
+}
 export type SidebarSessionGroupDropTarget = {
   group: string;
   position: "before" | "after";

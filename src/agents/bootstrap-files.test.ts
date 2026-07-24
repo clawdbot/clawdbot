@@ -190,7 +190,6 @@ describe("resolveBootstrapFilesForRun", () => {
       "TOOLS.md",
       "IDENTITY.md",
       "USER.md",
-      "HEARTBEAT.md",
       "BOOTSTRAP.md",
     ]);
     expect(warnings).toHaveLength(3);
@@ -398,9 +397,8 @@ describe("resolveBootstrapContextForRun", () => {
     expect(contextFileNames.has("AGENTS.md")).toBe(true);
   });
 
-  it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
+  it("keeps bootstrap context empty in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
@@ -409,8 +407,8 @@ describe("resolveBootstrapContextForRun", () => {
       runKind: "heartbeat",
     });
 
-    expect(files.map((file) => file.name)).toStrictEqual(["HEARTBEAT.md"]);
-    expect(files[0]?.content).toBe("check inbox");
+    // Heartbeat context comes from cron scratch via the heartbeat runner now.
+    expect(files).toStrictEqual([]);
   });
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
@@ -440,47 +438,8 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files.map((file) => file.name)).toContain("SOUL.md");
   });
 
-  it("keeps HEARTBEAT.md for non-heartbeat runs when heartbeat cadence is enabled", async () => {
+  it("never re-imports a leftover workspace HEARTBEAT.md into bootstrap context", async () => {
     const workspaceDir = await createHeartbeatAgentsWorkspace();
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            heartbeat: {},
-          },
-          list: [{ id: "main" }],
-        },
-      },
-    });
-
-    expect(files.map((file) => file.name)).toContain("HEARTBEAT.md");
-  });
-
-  it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat cadence is disabled", async () => {
-    const workspaceDir = await createHeartbeatAgentsWorkspace();
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            heartbeat: {
-              every: "0m",
-            },
-          },
-          list: [{ id: "main" }],
-        },
-      },
-    });
-
-    expectHeartbeatExcludedAndAgentsKept(files);
-  });
-
-  it("keeps HEARTBEAT.md for actual heartbeat runs", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
@@ -493,8 +452,7 @@ describe("resolveBootstrapContextForRun", () => {
       },
     });
 
-    const fileNames = files.map((file) => file.name);
-    expect(fileNames).toContain("HEARTBEAT.md");
+    expectHeartbeatExcludedAndAgentsKept(files);
   });
 });
 

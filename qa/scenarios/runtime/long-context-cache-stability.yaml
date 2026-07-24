@@ -3,7 +3,7 @@ title: Large tool-result prompt cache stability
 scenario:
   id: runtime-long-context-cache-stability
   surface: runtime
-  runtimeParityTier: soak
+  runtimePairLane: soak
   coverage:
     primary:
       - agent-runtime.reasoning-and-cache-controls

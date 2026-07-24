@@ -369,10 +369,12 @@ describe("AppSidebar interleaved zone", () => {
     dispatchDragEvent(target, "dragover", dataTransfer, 11);
     dispatchDragEvent(target, "drop", dataTransfer, 11);
 
-    expect(sessions.patch).toHaveBeenCalledWith(
-      "agent:main:alpha",
-      { pinned: true },
-      { agentId: "main" },
+    await waitForFast(() =>
+      expect(sessions.patch).toHaveBeenCalledWith(
+        "agent:main:alpha",
+        { pinned: true },
+        { agentId: "main" },
+      ),
     );
     // The slot write waits for the pin patch to land.
     await waitForFast(() =>

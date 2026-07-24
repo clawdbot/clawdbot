@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -30,12 +31,12 @@ import {
   collectSessionEntryLookupKeys,
   createSqliteSessionIdentitySnapshot,
   deleteLegacySessionEntryRows,
-  deleteSqliteLifecycleTargetRows,
   readExactSessionEntryRow,
   readSessionEntryRow,
   readSqliteLifecycleTargetSnapshot,
   readSqliteSessionEntrySelectionSnapshot,
   readSqliteSessionIdentitySnapshot,
+  rehomeSqliteSessionWindows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { listSqliteTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
@@ -64,6 +65,7 @@ import {
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
+import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
@@ -118,7 +120,7 @@ export function resolveSqliteSessionKeyBySessionId(
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select("session_key")
       .where("session_id", "=", resolved.sessionId)
       .limit(1),
@@ -156,8 +158,8 @@ function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
   const rows = executeSqliteQuerySync(
     database.db,
     db
-      .selectFrom("session_entries")
-      .select(["session_key", "entry_json", "session_id", "updated_at"])
+      .selectFrom("session_nodes")
+      .select(["session_key", "entry_json", "current_session_id", "updated_at"])
       .orderBy("session_key", "asc"),
   ).rows;
   return rows
@@ -304,11 +306,15 @@ export async function patchSqliteSessionEntry(
             previous: writeBase,
             sessionKey: resolved.sessionKey,
           });
-      writeSessionEntry(writeDatabase, resolved.sessionKey, next);
+      const selectedPreviousEntry = fresh.selected?.entry ?? writeBase;
+      writeSessionEntry(writeDatabase, resolved.sessionKey, next, {
+        previousEntry: selectedPreviousEntry,
+      });
       deleteLegacySessionEntryRows(
         writeDatabase,
         fresh.selected?.legacyKeys ?? [],
         resolved.sessionKey,
+        { rehomeMembers: selectedPreviousEntry.sessionId === next.sessionId },
       );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {
@@ -383,8 +389,17 @@ export async function patchSqliteSessionEntryTarget(
             previous: writeBase,
             sessionKey: scope.target.canonicalKey,
           });
-      deleteSqliteLifecycleTargetRows(writeDatabase, scope.target);
-      writeSessionEntry(writeDatabase, scope.target.canonicalKey, next);
+      const selectedPreviousEntry = fresh.primary?.entry ?? writeBase;
+      writeSessionEntry(writeDatabase, scope.target.canonicalKey, next, {
+        previousEntry: selectedPreviousEntry,
+      });
+      rehomeSqliteSessionWindows(writeDatabase, scope.target.canonicalKey, scope.target.storeKeys);
+      deleteLegacySessionEntryRows(
+        writeDatabase,
+        scope.target.storeKeys,
+        scope.target.canonicalKey,
+        { rehomeMembers: selectedPreviousEntry.sessionId === next.sessionId },
+      );
       maintenancePlans.push(
         applySqliteSessionEntryMaintenance(writeDatabase, {
           activeSessionKey: scope.target.canonicalKey,
@@ -419,13 +434,27 @@ export async function recordSqliteInboundSessionMeta(params: {
   const createIfMissing = params.createIfMissing ?? true;
   return await patchSqliteSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
-    (_entry, context) =>
-      deriveSessionMetaPatch({
+    (_entry, context) => {
+      const metadataPatch = deriveSessionMetaPatch({
         ctx: params.ctx,
         sessionKey: params.sessionKey,
         existing: context.existingEntry,
         groupResolution: params.groupResolution,
-      }),
+      });
+      if (context.existingEntry) {
+        return metadataPatch;
+      }
+      const senderId = params.ctx.From?.trim();
+      return {
+        ...buildSessionCreationStamp(
+          params.ctx.SessionCreation ?? {
+            via: "channel",
+            actor: { type: "human", ...(senderId ? { id: senderId } : {}) },
+          },
+        ),
+        ...metadataPatch,
+      };
+    },
     {
       // Inbound metadata must not refresh activity timestamps; idle reset
       // evaluation relies on updatedAt from actual session turns.
@@ -439,11 +468,11 @@ export async function recordSqliteInboundSessionMeta(params: {
 export async function updateSqliteSessionLastRoute(params: {
   storePath: string;
   sessionKey: string;
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;
-  route?: SessionEntry["route"];
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: GroupKeyResolution | null;
@@ -452,8 +481,8 @@ export async function updateSqliteSessionLastRoute(params: {
   const createIfMissing = params.createIfMissing ?? true;
   return await patchSqliteSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
-    (_entry, context) =>
-      deriveLastRoutePatch({
+    (_entry, context) => {
+      const routePatch = deriveLastRoutePatch({
         channel: params.channel,
         to: params.to,
         accountId: params.accountId,
@@ -464,7 +493,23 @@ export async function updateSqliteSessionLastRoute(params: {
         groupResolution: params.groupResolution,
         existing: context.existingEntry,
         sessionKey: params.sessionKey,
-      }),
+      });
+      if (context.existingEntry) {
+        return routePatch;
+      }
+      const senderId = params.ctx?.From?.trim();
+      return {
+        ...buildSessionCreationStamp(
+          params.ctx?.SessionCreation ?? {
+            via: "channel",
+            ...(params.ctx
+              ? { actor: { type: "human" as const, ...(senderId ? { id: senderId } : {}) } }
+              : {}),
+          },
+        ),
+        ...routePatch,
+      };
+    },
     {
       // Route updates must not refresh activity timestamps (#49515).
       preserveActivity: true,

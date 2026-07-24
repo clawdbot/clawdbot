@@ -5,6 +5,11 @@ import {
   importConfigMachineState,
   updateConfigMachineState,
 } from "../state/config-machine-state.js";
+import {
+  CONTROL_UI_DEVICE_AUTH_MIGRATION_STATE_KEY,
+  isLegacyControlUiDeviceAuthMigrationInput,
+  type ControlUiDeviceAuthMigrationState,
+} from "../state/control-ui-device-auth-migration.js";
 
 const BUNDLED_DISCOVERY_STATE_CUTOVER_VERSION = "2026.7.2";
 
@@ -21,7 +26,22 @@ export function migrateLegacyConfigMachineState(params: {
 }): { changes: string[]; warnings: string[] } {
   const raw = params.config as Record<string, unknown>;
   const entries: Array<readonly [string, unknown]> = [];
+  const controlUi = record(record(raw.gateway)?.controlUi);
   const meta = record(raw.meta);
+  if (
+    isLegacyControlUiDeviceAuthMigrationInput({
+      disabledDeviceAuth: controlUi?.dangerouslyDisableDeviceAuth === true,
+      lastTouchedVersion:
+        typeof meta?.lastTouchedVersion === "string" ? meta.lastTouchedVersion : undefined,
+    })
+  ) {
+    const pending: ControlUiDeviceAuthMigrationState = {
+      version: 1,
+      status: "pending",
+      detectedAtMs: Date.now(),
+    };
+    entries.push([CONTROL_UI_DEVICE_AUTH_MIGRATION_STATE_KEY, pending]);
+  }
   if (meta && Object.hasOwn(meta, "lastTouchedAt")) {
     entries.push(["config.lastTouchedAt", meta.lastTouchedAt]);
   }

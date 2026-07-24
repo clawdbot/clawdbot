@@ -86,7 +86,8 @@ describe("plugins cli uninstall", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("shows uninstall dry-run preview without mutating config", async () => {
+  it("shows uninstall dry-run preview without mutating config or acquiring write mode", async () => {
+    process.env.OPENCLAW_NIX_MODE = "1";
     loadConfig.mockReturnValue({
       plugins: {
         entries: {
@@ -198,12 +199,12 @@ describe("plugins cli uninstall", () => {
           entries: {},
         },
       },
-      writeOptions: {
+      writeOptions: expect.objectContaining({
         allowConfigSizeDrop: true,
         auditOrigin: "plugin-install",
         afterWrite: { mode: "restart", reason: "plugin source changed" },
         unsetPaths: [["plugins", "installs"]],
-      },
+      }),
     });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: {
@@ -450,16 +451,78 @@ describe("plugins cli uninstall", () => {
     const configWriteOrder = writeConfigFile.mock.invocationCallOrder[0] ?? 0;
     const deleteOrder =
       applyPluginUninstallDirectoryRemoval.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const finalConfigWriteOrder =
+      writeConfigFile.mock.invocationCallOrder[1] ?? Number.MAX_SAFE_INTEGER;
     const refreshOrder =
       refreshPluginRegistry.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(writeConfigFile).toHaveBeenCalledTimes(2);
     expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledTimes(1);
     expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
     expect(deleteOrder).toBeGreaterThan(configWriteOrder);
-    expect(refreshOrder).toBeGreaterThan(deleteOrder);
+    expect(finalConfigWriteOrder).toBeGreaterThan(deleteOrder);
+    expect(refreshOrder).toBeGreaterThan(finalConfigWriteOrder);
     expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledWith({
       target: ALPHA_INSTALL_PATH,
     });
+  });
+
+  it("keeps the install tracked and disabled when directory removal fails", async () => {
+    const installPath = tempDirs.make("openclaw-plugin-uninstall-failure-");
+    const installRecords = {
+      alpha: {
+        source: "npm",
+        spec: "alpha@1.0.0",
+        installPath,
+      },
+    } as const;
+    const baseConfig = {
+      plugins: {
+        entries: {
+          alpha: { enabled: true },
+        },
+        installs: installRecords,
+      },
+    } as OpenClawConfig;
+    loadConfig.mockReturnValue(baseConfig);
+    setInstalledPluginIndexInstallRecords(installRecords);
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [{ id: "alpha", name: "alpha" }],
+      diagnostics: [],
+    });
+    planPluginUninstall.mockReturnValue({
+      ok: true,
+      config: { plugins: { entries: {}, installs: {} } } as OpenClawConfig,
+      actions: {
+        entry: true,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        directory: false,
+      },
+      directoryRemoval: { target: installPath },
+    });
+    applyPluginUninstallDirectoryRemoval.mockResolvedValue({
+      directoryRemoved: false,
+      warnings: ["simulated removal failure"],
+    });
+
+    await expect(runPluginsCommand(["plugins", "uninstall", "alpha", "--force"])).rejects.toThrow(
+      "remains disabled and tracked",
+    );
+
+    expect(writeConfigFile).toHaveBeenCalledWith({
+      plugins: {
+        entries: {
+          alpha: { enabled: false },
+        },
+        installs: installRecords,
+      },
+    });
+    expect(writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("cleans stale policy refs even when plugin is absent from the current registry", async () => {

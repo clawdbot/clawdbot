@@ -20,7 +20,11 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  resolvePluginMetadataSnapshot,
+} from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
@@ -38,6 +42,8 @@ import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import {
@@ -327,10 +333,10 @@ function buildSessionStatusRouteDetails(params: {
 }): SessionStatusRouteDetails {
   const origin = compactOriginDetails({
     provider:
-      readStringValue(params.entry.origin?.provider) ??
+      readStringValue(sessionDeliveryOrigin(params.entry)?.provider) ??
       inferOriginProviderFromSessionKey(params.sessionKey),
-    accountId: readStringValue(params.entry.origin?.accountId),
-    threadId: params.entry.origin?.threadId,
+    accountId: readStringValue(sessionDeliveryOrigin(params.entry)?.accountId),
+    threadId: sessionDeliveryOrigin(params.entry)?.threadId,
   });
   const deliveryContext = normalizeStatusDeliveryContext(deliveryContextFromSession(params.entry));
   const active = params.isLiveRunSession
@@ -441,6 +447,7 @@ async function resolveModelOverride(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<
   | { kind: "reset" }
   | {
@@ -475,13 +482,24 @@ async function resolveModelOverride(params: {
       ? { workspaceDir: params.sessionEntry.spawnedWorkspaceDir }
       : {}),
   });
-  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
-    config: params.cfg,
-    workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
-    env: process.env,
-  });
+  const workspaceDir = params.sessionEntry?.spawnedWorkspaceDir ?? params.workspaceDir;
+  const manifestMetadataSnapshot =
+    params.metadataSnapshot &&
+    params.metadataSnapshot.pluginIds === undefined &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: params.metadataSnapshot,
+      config: params.cfg,
+      env: process.env,
+      workspaceDir,
+    })
+      ? params.metadataSnapshot
+      : resolvePluginMetadataSnapshot({
+          config: params.cfg,
+          ...(workspaceDir ? { workspaceDir } : {}),
+          env: process.env,
+        });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot.plugins,
+    manifestPlugins: manifestMetadataSnapshot?.plugins,
   };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
@@ -532,6 +550,7 @@ export function createSessionStatusTool(opts?: {
   sandboxed?: boolean;
   activeModelProvider?: string;
   activeModelId?: string;
+  metadataSnapshot?: PluginMetadataSnapshot;
   /** Active live-run route, kept separate from the persisted/origin delivery route. */
   activeDeliveryContext?: DeliveryContext;
 }): AnyAgentTool {
@@ -845,6 +864,7 @@ export function createSessionStatusTool(opts?: {
               agentId,
               agentDir: selectedAgentDir,
               workspaceDir: selectedWorkspaceDir,
+              metadataSnapshot: opts?.metadataSnapshot,
             });
             const modelSelection =
               selection.kind === "reset"
@@ -991,11 +1011,7 @@ export function createSessionStatusTool(opts?: {
             parentSessionKey: statusSessionEntry.parentSessionKey,
             sessionScope: cfg.session?.scope,
             storePath,
-            statusChannel:
-              statusSessionEntry.channel ??
-              statusSessionEntry.lastChannel ??
-              statusSessionEntry.origin?.provider ??
-              "unknown",
+            statusChannel: sessionDeliveryChannel(statusSessionEntry) ?? "unknown",
             workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
             provider: providerForCard,
             model: defaultModelForCard,

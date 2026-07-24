@@ -3,6 +3,7 @@
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
 import { isAdminOnlyNodeInvokeCommand } from "../infra/node-commands.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
 import {
@@ -108,9 +109,17 @@ function resolveSessionsCreateRequiredScopes(params: unknown): OperatorScope[] {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return [WRITE_SCOPE];
   }
-  // cwd targets arbitrary host checkouts; execNode routes exec onto a paired
-  // node host. Both match the sessions.patch execNode admin bar.
-  if (Object.hasOwn(params, "cwd") || Object.hasOwn(params, "execNode")) {
+  const record = params as { incognito?: unknown; key?: unknown; parentSessionKey?: unknown };
+  // Incognito creation and inheritance expose process-only session state; cwd and
+  // execNode target privileged host resources. All require operator.admin.
+  if (
+    record.incognito === true ||
+    (typeof record.key === "string" && isIncognitoSessionKey(record.key)) ||
+    (typeof record.parentSessionKey === "string" &&
+      isIncognitoSessionKey(record.parentSessionKey)) ||
+    Object.hasOwn(params, "cwd") ||
+    Object.hasOwn(params, "execNode")
+  ) {
     return [ADMIN_SCOPE];
   }
   return [WRITE_SCOPE];

@@ -58,6 +58,13 @@ type GatewayRequestContextParams = {
   ) => void;
   disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
+  claimControlUiDeviceAuthMigration?: (deviceId: string) => boolean;
+  releaseControlUiDeviceAuthMigrationClaim?: (deviceId: string) => void;
+  completeControlUiDeviceAuthMigration?: (device: {
+    deviceId: string;
+    publicKey: string;
+    scopes: string[];
+  }) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
   workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   workerSessionPlacementService?: GatewayRequestContext["workerSessionPlacementService"];
@@ -66,15 +73,7 @@ type GatewayRequestContextParams = {
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns: GatewayRequestContext["chatQueuedTurns"];
-  chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
-  chatRunBuffers: GatewayRequestContext["chatRunBuffers"];
-  chatRunPlanSnapshots?: GatewayRequestContext["chatRunPlanSnapshots"];
-  chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
-  chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"];
-  chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
-  agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"];
-  bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"];
-  clearChatRunState: GatewayRequestContext["clearChatRunState"];
+  chatRunState: GatewayRequestContext["chatRunState"];
   addChatRun: GatewayRequestContext["addChatRun"];
   removeChatRun: GatewayRequestContext["removeChatRun"];
   subscribeSessionEvents: GatewayRequestContext["subscribeSessionEvents"];
@@ -289,6 +288,9 @@ export function createGatewayRequestContext(
     },
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
+    claimControlUiDeviceAuthMigration: params.claimControlUiDeviceAuthMigration,
+    releaseControlUiDeviceAuthMigrationClaim: params.releaseControlUiDeviceAuthMigrationClaim,
+    completeControlUiDeviceAuthMigration: params.completeControlUiDeviceAuthMigration,
     nodeRegistry: params.nodeRegistry,
     ...(params.workerEnvironmentService
       ? { workerEnvironmentService: params.workerEnvironmentService }
@@ -303,15 +305,7 @@ export function createGatewayRequestContext(
     agentRunSeq: params.agentRunSeq,
     chatAbortControllers: params.chatAbortControllers,
     chatQueuedTurns: params.chatQueuedTurns,
-    chatAbortedRuns: params.chatAbortedRuns,
-    chatRunBuffers: params.chatRunBuffers,
-    chatRunPlanSnapshots: params.chatRunPlanSnapshots,
-    chatDeltaSentAt: params.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: params.agentDeltaSentAt,
-    bufferedAgentEvents: params.bufferedAgentEvents,
-    clearChatRunState: params.clearChatRunState,
+    chatRunState: params.chatRunState,
     addChatRun: params.addChatRun,
     removeChatRun: params.removeChatRun,
     subscribeSessionEvents: params.subscribeSessionEvents,

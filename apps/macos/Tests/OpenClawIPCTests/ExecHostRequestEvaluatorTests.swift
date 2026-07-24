@@ -474,7 +474,7 @@ struct ExecHostRequestEvaluatorTests {
             allowlistSatisfied: false,
             skillAllow: false,
             boundCommand: ["/usr/bin/printf", "ok"],
-            allowAlwaysPatterns: ["/usr/bin/printf"])
+            allowAlwaysPatterns: [ExecAllowAlwaysPattern(pattern: "/usr/bin/printf", argPattern: "^ok$")])
         let durable = ExecApprovalExecutionCommit.build(
             context: durableContext,
             effectiveSecurity: .allowlist,
@@ -538,7 +538,7 @@ struct ExecHostRequestEvaluatorTests {
         allowlistSatisfied: Bool,
         skillAllow: Bool,
         boundCommand: [String]? = nil,
-        allowAlwaysPatterns: [String] = []) -> ExecApprovalEvaluation
+        allowAlwaysPatterns: [ExecAllowAlwaysPattern] = []) -> ExecApprovalEvaluation
     {
         ExecApprovalEvaluation(
             displayCommand: "/usr/bin/echo hi",

@@ -15,6 +15,7 @@ import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  truncatePluginApprovalDetail,
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
@@ -100,10 +101,15 @@ function buildPluginApprovalPresentation(params: {
     request.severity === "info" || request.severity === "warning" || request.severity === "critical"
       ? request.severity
       : "warning";
+  const rawDetail = normalizeOptionalString(request.detail);
+  const detail = rawDetail
+    ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
+    : null;
   return {
     kind: "plugin",
     title,
     description,
+    ...(detail ? { detail } : {}),
     severity,
     pluginId: sanitizeOptionalSingleLine(request.pluginId),
     toolName: sanitizeOptionalSingleLine(request.toolName),

@@ -2194,6 +2194,29 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
+        "scripts/lib/release-version.mjs",
+        [
+          "test/release-version.test.ts",
+          "test/npm-publish-plan.test.ts",
+          "test/openclaw-npm-release-check.test.ts",
+          "test/openclaw-npm-postpublish-verify.test.ts",
+          "test/plugin-npm-release.test.ts",
+          "test/plugin-clawhub-release.test.ts",
+          "test/scripts/android-version.test.ts",
+          "test/scripts/android-pin-version.test.ts",
+          "test/scripts/docker-release-policy.test.ts",
+          "test/scripts/ios-version.test.ts",
+          "test/scripts/openclaw-npm-extended-stable-release.test.ts",
+          "test/scripts/openclaw-npm-publish.test.ts",
+          "test/scripts/release-preflight.test.ts",
+          "test/scripts/release-prepare.test.ts",
+          "test/scripts/release-upgrade-baseline.test.ts",
+          "test/scripts/release-version.test.ts",
+          "test/scripts/upgrade-survivor-baselines.test.ts",
+          "test/scripts/upgrade-survivor-config-recipe.test.ts",
+        ],
+      ],
+      [
         "scripts/lib/npm-pack-budget.mjs",
         ["test/release-check.test.ts", "test/scripts/test-install-sh-docker.test.ts"],
       ],
@@ -2825,7 +2848,10 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.unit-fast-isolated.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/android-version.test.ts"],
+        includePatterns: [
+          "test/scripts/android-version.test.ts",
+          "test/scripts/ios-release-plan.test.ts",
+        ],
         watchMode: false,
       },
       {
@@ -2983,7 +3009,10 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.unit-fast-isolated.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/android-version.test.ts"],
+        includePatterns: [
+          "test/scripts/android-version.test.ts",
+          "test/scripts/ios-release-plan.test.ts",
+        ],
         watchMode: false,
       },
       {
@@ -3717,7 +3746,11 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes Google Meet CLI edits to the lightweight CLI tests", () => {
     expect(resolveChangedTestTargetPlan(["extensions/google-meet/src/cli.ts"])).toEqual({
       mode: "targets",
-      targets: ["extensions/google-meet/src/cli.test.ts"],
+      targets: [
+        "extensions/google-meet/src/cli-artifacts.test.ts",
+        "extensions/google-meet/src/cli-runtime.test.ts",
+        "extensions/google-meet/src/cli.test.ts",
+      ],
     });
   });
 
@@ -4890,6 +4923,16 @@ describe("scripts/test-projects full-suite sharding", () => {
         reason: "path-does-not-exist",
       },
     ]);
+  });
+
+  it("rejects unmatched extensionless test prefixes with the attempted pattern", () => {
+    const target = "extensions/telegram/src/no-such-prefix";
+    const [unmatched] = findUnmatchedExplicitTestTargets([target]);
+    expect(unmatched).toEqual({
+      target,
+      reason: "path-does-not-exist",
+      includePattern: `${target}{,.*}.{test,spec}.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`,
+    });
   });
 
   it("rejects watch mode with multiple explicit leaf project config targets", () => {

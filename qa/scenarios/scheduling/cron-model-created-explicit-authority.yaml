@@ -3,14 +3,14 @@ title: Model-created cron explicit authority
 scenario:
   id: cron-model-created-explicit-authority
   surface: cron
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
-      - scheduling.cron
+      - automation.model-authored-cron-jobs
     secondary:
-      - agents.tool-use
-      - scheduling.persistence
-      - channels.qa-channel
+      - automation.agent-cron-tool
+      - automation.scheduler-persistence
+      - automation.agent-cron-tool-qa-channel
   gatewayConfigPatch:
     commands:
       ownerAllowFrom:
@@ -45,6 +45,7 @@ scenario:
     channel: qa-channel
     summary: Ask a live model with only read and cron tools to create a policy matrix, then inspect and restart the persisted jobs.
     config:
+      requiredProviderMode: live-frontier
       conversationId: qa-cron-authority
       sessionKey: agent:qa:qa-channel:group:group:qa-cron-authority
 

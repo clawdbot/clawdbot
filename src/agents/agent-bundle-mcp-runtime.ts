@@ -12,6 +12,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
@@ -158,8 +159,8 @@ async function connectWithTimeout(
   }
 }
 
-function redactErrorUrls(error: unknown): string {
-  return redactSensitiveUrlLikeString(String(error));
+function redactMcpDiagnosticError(error: unknown): string {
+  return redactToolPayloadText(redactSensitiveUrlLikeString(String(error)));
 }
 
 async function listAllTools(client: Client, timeoutMs: number) {
@@ -627,7 +628,7 @@ export function createSessionMcpRuntime(params: {
                         onChanged: (error) => {
                           if (error) {
                             logWarn(
-                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactMcpDiagnosticError(error)}`,
                             );
                           }
                           catalogInvalidationGeneration += 1;
@@ -752,7 +753,7 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
-                const message = redactErrorUrls(error);
+                const message = redactMcpDiagnosticError(error);
                 if (!disposed) {
                   const action = reusedSession ? "refresh" : "start";
                   logWarn(

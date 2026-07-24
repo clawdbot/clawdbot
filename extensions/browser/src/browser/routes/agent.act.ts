@@ -6,7 +6,7 @@ import { setTimeout as sleep } from "node:timers/promises";
  * control or Chrome MCP existing-session operations with navigation guards.
  */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   ChromeMcpDocumentUnavailableError,
   clickChromeMcpElement,
@@ -185,7 +185,7 @@ async function runExistingSessionActionWithNavigationGuard<T>(params: {
   }
 
   if (actionError) {
-    throw toLintErrorObject(actionError, "Non-Error thrown");
+    throw toErrorObject(actionError, "Non-Error thrown");
   }
 
   return result as T;
@@ -864,17 +864,4 @@ export function registerBrowserAgentActRoutes(
   });
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

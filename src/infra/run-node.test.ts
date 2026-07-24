@@ -1303,7 +1303,7 @@ describe("run-node script", () => {
           "--json",
           "--tools",
           "--summary",
-          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+          ".artifacts/qa-e2e/runtime-pair-core/qa-suite-summary.json",
         ],
         env: {
           ...process.env,
@@ -1324,7 +1324,7 @@ describe("run-node script", () => {
           "--json",
           "--tools",
           "--summary",
-          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+          ".artifacts/qa-e2e/runtime-pair-core/qa-suite-summary.json",
         ],
       ]);
     });

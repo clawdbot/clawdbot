@@ -31,6 +31,7 @@ export { isValidAgentId, normalizeAgentId };
 
 export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
+const INCOGNITO_SESSION_RE = /^(?:dashboard|subagent|internal-session-effects):incognito-[^:]+$/u;
 type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 function normalizeToken(value: string | undefined | null): string {
@@ -148,6 +149,12 @@ export function classifySessionKeyShape(sessionKey: string | undefined | null): 
 export function isUnscopedSessionKeySentinel(sessionKey: string | undefined | null): boolean {
   const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
   return lowered === "global" || lowered === "unknown";
+}
+
+/** Classifies process-only session keys without consulting runtime registry state. */
+export function isIncognitoSessionKey(sessionKey: string | undefined | null): boolean {
+  const rest = parseAgentSessionKey(sessionKey)?.rest;
+  return typeof rest === "string" && INCOGNITO_SESSION_RE.test(rest);
 }
 
 export function scopeLegacySessionKeyToAgent(params: {

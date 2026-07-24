@@ -55,9 +55,8 @@ export function createApplicationGateway(
   };
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
-    connected: false,
+    phase: "stopped",
     offlineStable: false,
-    reconnecting: false,
     hello: null,
     assistantAgentId: "main",
     sessionKey: settings.sessionKey,
@@ -102,18 +101,23 @@ export function createApplicationGateway(
     }
   };
   const scheduleOfflineIndicator = () => {
-    if (stopped || snapshot.connected || snapshot.offlineStable || offlineIndicatorTimer !== null) {
+    if (
+      stopped ||
+      snapshot.phase === "connected" ||
+      snapshot.offlineStable ||
+      offlineIndicatorTimer !== null
+    ) {
       return;
     }
     offlineIndicatorTimer = globalThis.setTimeout(() => {
       offlineIndicatorTimer = null;
-      if (!stopped && !snapshot.connected) {
+      if (!stopped && snapshot.phase !== "connected") {
         setSnapshot({ ...snapshot, offlineStable: true });
       }
     }, OFFLINE_INDICATOR_DELAY_MS);
   };
   const setSnapshot = (next: ApplicationGatewaySnapshot) => {
-    if (next.connected) {
+    if (next.phase === "connected") {
       clearOfflineIndicatorTimer();
       snapshot = next.offlineStable ? { ...next, offlineStable: false } : next;
     } else {
@@ -229,8 +233,7 @@ export function createApplicationGateway(
         setSnapshot({
           ...snapshot,
           client: nextClient,
-          connected: true,
-          reconnecting: false,
+          phase: "connected",
           hello,
           assistantAgentId: sessionDefaults?.defaultAgentId ?? "main",
           sessionKey,
@@ -243,7 +246,7 @@ export function createApplicationGateway(
         });
       },
       onRecoveryScopeChange: () => {
-        if (client !== nextClient || !snapshot.connected) {
+        if (client !== nextClient || snapshot.phase !== "connected") {
           return;
         }
         setSnapshot({ ...snapshot });
@@ -255,8 +258,13 @@ export function createApplicationGateway(
         setSnapshot({
           ...snapshot,
           client: nextClient,
-          connected: false,
-          reconnecting: everConnected && willRetry,
+          phase: everConnected
+            ? willRetry
+              ? "reconnecting"
+              : "offline"
+            : willRetry
+              ? "connecting"
+              : "stopped",
           hello: null,
           selfUser: null,
           lastError: error?.message ?? `disconnected (${code}): ${reason || "no reason"}`,
@@ -281,10 +289,9 @@ export function createApplicationGateway(
     setSnapshot({
       ...snapshot,
       client: nextClient,
-      connected: false,
       // Keep the shell mounted while a fresh client attempts event-gap
       // recovery or a manual retry when a session already existed.
-      reconnecting: everConnected,
+      phase: everConnected ? "reconnecting" : "connecting",
       hello: null,
       selfUser: null,
       sessionKey: nextSessionKey,
@@ -328,9 +335,8 @@ export function createApplicationGateway(
       setSnapshot({
         ...snapshot,
         client: null,
-        connected: false,
+        phase: "stopped",
         offlineStable: false,
-        reconnecting: false,
         hello: null,
         selfUser: null,
         lastError: null,

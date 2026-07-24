@@ -35,6 +35,7 @@ import {
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
   isPluginInstallRecordUpdateSource,
@@ -170,8 +171,7 @@ async function assertRecordsOnlyUpdateConfigFresh(params: {
   }
 }
 
-/** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
-export async function runPluginUpdateCommand(params: {
+type RunPluginUpdateCommandParams = {
   id?: string;
   opts: {
     all?: boolean;
@@ -179,7 +179,21 @@ export async function runPluginUpdateCommand(params: {
     dryRun?: boolean;
     dangerouslyForceUnsafeInstall?: boolean;
   };
-}) {
+};
+
+/** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
+export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParams) {
+  assertConfigWriteAllowedInCurrentMode();
+  if (params.opts.dryRun) {
+    return await runPluginUpdateCommandUnlocked(params);
+  }
+  return await withPluginLifecycleLease(
+    {},
+    async () => await runPluginUpdateCommandUnlocked(params),
+  );
+}
+
+async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandParams) {
   assertConfigWriteAllowedInCurrentMode();
 
   const sourceSnapshotPromise = readConfigFileSnapshotForWrite()

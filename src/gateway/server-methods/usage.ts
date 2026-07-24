@@ -57,6 +57,10 @@ import type {
   SessionsUsageAggregates,
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
+import {
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
@@ -1466,8 +1470,9 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
-      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
+      const channel = sessionDeliveryChannel(merged.storeEntry);
+      const chatType =
+        merged.storeEntry?.chatType ?? sessionDeliveryOrigin(merged.storeEntry)?.chatType;
 
       if (usage) {
         if (usage.messageCounts) {
@@ -1598,7 +1603,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           channel,
           chatType,
-          origin: merged.storeEntry?.origin,
+          origin: sessionDeliveryOrigin(merged.storeEntry),
           modelOverride: merged.storeEntry?.modelOverride,
           providerOverride: merged.storeEntry?.providerOverride,
           modelProvider: merged.storeEntry?.modelProvider,

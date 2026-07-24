@@ -130,8 +130,6 @@ export type AgentConfig = {
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent typing start policy. */
   typingMode?: AgentDefaultsConfig["typingMode"];
-  /** Optional per-agent typing keepalive cadence. */
-  typingIntervalSeconds?: AgentDefaultsConfig["typingIntervalSeconds"];
   /** Optional per-agent TTS overrides, deep-merged over top-level tts. */
   /** Per-agent TTS overrides. prefsPath remains scoped because agents may use distinct preference stores. */
   tts?: TtsConfig & { prefsPath?: string };

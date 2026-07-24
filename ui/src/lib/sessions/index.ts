@@ -23,6 +23,7 @@ import type {
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
@@ -159,7 +160,7 @@ type SessionResetResult = "completed" | "not-started" | "uncertain";
 type SessionGateway = {
   readonly snapshot: {
     client: GatewayBrowserClient | null;
-    connected: boolean;
+    phase: ApplicationGatewayPhase;
     hello: GatewayHelloOk | null;
     assistantAgentId?: string | null;
     sessionKey?: string;
@@ -189,7 +190,7 @@ export type SessionMessageSubscription = {
 
 export type SessionCapability = {
   readonly state: SessionState;
-  /** Advances only when a canonical sessions.list response is published. */
+  /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
   setCreatorFilter: (creatorId: string | null) => Promise<void>;
@@ -828,7 +829,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   let disposed = false;
   let connectionEpoch = 0;
   let connectionClient = gateway.snapshot.client;
-  let connectionConnected = gateway.snapshot.connected;
+  let connectionConnected = gateway.snapshot.phase === "connected";
   const pendingModelPatches = new Map<
     string,
     { token: symbol; previous: string | null | undefined }
@@ -846,7 +847,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const captureConnection = (): SessionConnectionScope | null => {
     const snapshot = gateway.snapshot;
-    return !disposed && snapshot.connected && snapshot.client
+    return !disposed && snapshot.phase === "connected" && snapshot.client
       ? { client: snapshot.client, epoch: connectionEpoch }
       : null;
   };
@@ -856,7 +857,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return (
       !disposed &&
       connectionEpoch === scope.epoch &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       snapshot.client === scope.client
     );
   };
@@ -869,7 +870,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return null;
     }
     const result = await requestSessionList(scope.client, options);
-    return isCurrentConnection(scope) ? (result ?? null) : null;
+    return isCurrentConnection(scope) ? swarmActivity.decorate(result ?? null) : null;
   };
 
   const publish = (next: SessionState) => {
@@ -1045,7 +1046,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
 
   const refresh = (options: SessionRefreshOptions = {}) => {
-    if (!gateway.snapshot.connected || !gateway.snapshot.client || disposed) {
+    if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
       return Promise.resolve();
     }
     if (inFlight) {
@@ -1419,7 +1420,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     payload: unknown,
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
-    swarmActivity.observe(payload);
     const base = reconcileSessionChanged(state.result, payload, options);
     const result = swarmActivity.decorate(base.result);
     const reconciled =
@@ -1770,10 +1770,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const stopGateway = gateway.subscribe((next) => {
     const previousClient = connectionClient;
-    const connectionChanged =
-      next.client !== connectionClient || next.connected !== connectionConnected;
+    const connected = next.phase === "connected";
+    const connectionChanged = next.client !== connectionClient || connected !== connectionConnected;
     connectionClient = next.client;
-    connectionConnected = next.connected;
+    connectionConnected = connected;
     if (connectionChanged) {
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       connectionEpoch += 1;
@@ -1790,11 +1790,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       pullRequestEpochs.clear();
       // A connected client replacement needs its own invalidation publish;
       // disconnects publish the cleared state in the branch immediately below.
-      if (hadPullRequestSummaries && next.connected && next.client) {
+      if (hadPullRequestSummaries && connected && next.client) {
         publish({ ...state });
       }
     }
-    if (!next.connected || !next.client) {
+    if (!connected || !next.client) {
       subscribedClient = null;
       publish({
         result: null,

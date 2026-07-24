@@ -1,4 +1,9 @@
 // Model Catalog Core helper module supports model catalog normalize behavior.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import {
   buildModelCatalogMergeKey,
   buildModelCatalogRef,
@@ -46,31 +51,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Reject object keys that can mutate prototypes when copied into records. */
 function isBlockedObjectKey(key: string): boolean {
   return key === "__proto__" || key === "prototype" || key === "constructor";
-}
-
-/** Normalize optional catalog strings. */
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-/** Normalize arrays of trimmed strings, dropping invalid entries. */
-function normalizeTrimmedStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((entry) => {
-    const normalized = normalizeOptionalString(entry);
-    return normalized ? [normalized] : [];
-  });
-}
-
-function normalizeOptionalTrimmedStringList(value: unknown): string[] | undefined {
-  const normalized = normalizeTrimmedStringList(value);
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 function normalizeModelCatalogThinkingLevelMap(
@@ -761,4 +741,3 @@ export function normalizeModelCatalogProviderRows(params: {
 
   return rows.toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

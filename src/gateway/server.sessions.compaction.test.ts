@@ -1120,7 +1120,7 @@ test("sessions.reset waits for terminal compaction before replacing the session"
   expect(reset.ok).toBe(true);
   const resetSessionId = reset.payload?.entry.sessionId;
   expect(resetSessionId).toBeTruthy();
-  expect(resetSessionId).not.toBe("sess-compact-reset");
+  expect(resetSessionId).toBe("sess-compact-reset");
   const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(resetEntry?.sessionId).toBe(resetSessionId);
   ws.close();

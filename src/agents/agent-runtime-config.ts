@@ -7,6 +7,8 @@ import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.j
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { listAgentEntries } from "./agent-scope.js";
@@ -22,6 +24,7 @@ export async function resolveAgentRuntimeConfig(
   loadedRaw: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   cfg: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }> {
   const loadedRaw = getRuntimeConfig();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
@@ -31,15 +34,18 @@ export async function resolveAgentRuntimeConfig(
     includeChannelTargets,
     channel: channelSecretScope?.channel,
   });
+  let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
   const sourceConfig = await (async () => {
     try {
-      const { snapshot } = await readConfigFileSnapshotForWrite();
+      const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
       if (snapshot.valid) {
+        pluginMetadataSnapshot = writeOptions.basePluginMetadataSnapshot;
         return snapshot.resolved;
       }
     } catch {
       // Fall back to runtime-loaded config when source snapshot is unavailable.
     }
+    pluginMetadataSnapshot = resolvePluginMetadataSnapshot({ config: loadedRaw });
     return loadedRaw;
   })();
   const cfg = hasRuntimeSecretRefs
@@ -77,7 +83,12 @@ export async function resolveAgentRuntimeConfig(
     });
     secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
   }
-  return { loadedRaw, sourceConfig, cfg };
+  return {
+    loadedRaw,
+    sourceConfig,
+    cfg,
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+  };
 }
 
 function hasNestedSecretRef(value: unknown): boolean {

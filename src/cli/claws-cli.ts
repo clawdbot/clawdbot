@@ -17,7 +17,13 @@ export type ClawsAddOptions = {
 };
 
 export type ClawsStatusOptions = { json?: boolean };
-export type ClawsUpdateOptions = { from?: string; dryRun?: boolean; json?: boolean };
+export type ClawsUpdateOptions = {
+  from?: string;
+  dryRun?: boolean;
+  yes?: boolean;
+  planIntegrity?: string;
+  json?: boolean;
+};
 export type ClawsRemoveOptions = {
   dryRun?: boolean;
   yes?: boolean;
@@ -80,6 +86,8 @@ export function registerClawsCli(program: Command) {
     .argument("<claw-or-agent>", "Installed package name or final agent id")
     .option("--from <source>", "Override the target source recorded at Claw add time")
     .option("--dry-run", "Preview update actions without mutating state", false)
+    .option("--yes", "Confirm the exact supported update plan", false)
+    .option("--plan-integrity <digest>", "Bind consent to an exact update plan")
     .option("--json", "Print JSON", false)
     .action(async (target: string, opts: ClawsUpdateOptions) => {
       const { runClawsUpdateCommand } = await import("./claws-cli.runtime.js");

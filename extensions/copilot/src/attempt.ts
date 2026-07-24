@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import type { MessageOptions, SessionConfig, Tool as SdkTool } from "@github/copilot-sdk";
 import type {
   AgentHarnessAttemptParams,
-  AgentHarnessAttemptResult,
+  AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
   AgentMessage,
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -15,6 +15,7 @@ import {
   embeddedAgentLog,
   getModelProviderRequestTransport,
   isHostScopedAgentToolActive,
+  projectAgentHarnessTranscriptMessageForDisplay,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptSpawnWorkspaceDir,
@@ -77,7 +78,30 @@ const COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE =
 
 type CopilotAttemptOperation = "attempt" | "settled-tool-finalization";
 
+type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
+type AttemptTerminal = AgentHarnessAttemptResult["terminal"];
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
+
+function readAttemptTerminal(terminal: AttemptTerminal) {
+  const failure =
+    terminal.kind === "failed"
+      ? { error: terminal.error }
+      : terminal.kind === "ok"
+        ? undefined
+        : terminal.failure;
+  return {
+    aborted: terminal.kind === "aborted" && terminal.source !== "yield_cleanup",
+    failed: failure !== undefined,
+    promptError: failure?.error,
+    timedOut: terminal.kind === "timeout" && terminal.source !== "observation",
+  };
+}
+
+function withPromptFailure(terminal: AttemptTerminal, error: unknown): AttemptTerminal {
+  return terminal.kind === "aborted" || terminal.kind === "timeout"
+    ? { ...terminal, failure: { source: "prompt", error } }
+    : { kind: "failed", source: "prompt", error };
+}
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
 export type CopilotSessionConfig = Pick<
@@ -248,13 +272,14 @@ async function finalizeCopilotAttempt(
   attemptStartedAt: number,
   now: () => number,
 ): Promise<AgentHarnessAttemptResult> {
+  const terminal = readAttemptTerminal(result.terminal);
   await runCopilotAgentEndHook(params, {
     event: {
       messages: result.messagesSnapshot,
-      success: !result.aborted && !result.promptError && !result.timedOut,
-      ...(result.promptError
-        ? { error: toError(result.promptError).message }
-        : result.timedOut
+      success: !terminal.aborted && !terminal.failed && !terminal.timedOut,
+      ...(terminal.failed
+        ? { error: toError(terminal.promptError).message }
+        : terminal.timedOut
           ? { error: "Copilot SDK turn timed out." }
           : {}),
       durationMs: now() - attemptStartedAt,
@@ -1045,6 +1070,7 @@ export async function runCopilotAttempt(
         throw new Error("Copilot runtime is not waiting for user input.");
       },
       isStreaming: () => !settled && !aborted,
+      isAborted: () => aborted,
       isCompacting: () => bridge?.isCompacting() ?? false,
       sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
       cancel: () => {
@@ -1245,25 +1271,34 @@ export async function runCopilotAttempt(
     if (syntheticUserText !== tailUserText || index !== tailUserIndex) {
       return message;
     }
-    return attachCopilotMirrorIdentity(
-      { ...message, idempotencyKey: `${input.runId}:user` } as unknown as AgentMessage,
-      `${input.runId}:prompt`,
-    );
+    return projectAgentHarnessTranscriptMessageForDisplay({
+      hidden: input.trigger === "memory",
+      message: attachCopilotMirrorIdentity(
+        { ...message, idempotencyKey: `${input.runId}:user` } as unknown as AgentMessage,
+        `${input.runId}:prompt`,
+      ),
+    });
   });
   const syntheticUser: AgentMessage | undefined =
     syntheticUserText && syntheticUserText !== tailUserText
-      ? attachCopilotMirrorIdentity(
-          {
-            role: "user",
-            content: syntheticUserText,
-            timestamp: now(),
-            idempotencyKey: `${input.runId}:user`,
-          } as unknown as AgentMessage,
-          `${input.runId}:prompt`,
-        )
+      ? projectAgentHarnessTranscriptMessageForDisplay({
+          hidden: input.trigger === "memory",
+          message: attachCopilotMirrorIdentity(
+            {
+              role: "user",
+              content: syntheticUserText,
+              timestamp: now(),
+              idempotencyKey: `${input.runId}:user`,
+            } as unknown as AgentMessage,
+            `${input.runId}:prompt`,
+          ),
+        })
       : undefined;
   const taggedLastAssistant = lastAssistant
-    ? attachCopilotMirrorIdentity(lastAssistant, `${input.runId}:assistant:final`)
+    ? projectAgentHarnessTranscriptMessageForDisplay({
+        hidden: input.trigger === "memory",
+        message: attachCopilotMirrorIdentity(lastAssistant, `${input.runId}:assistant:final`),
+      })
     : undefined;
   const messagesSnapshot: AgentMessage[] = [
     ...currentTurnMessages,
@@ -1383,7 +1418,10 @@ export async function runCopilotAttempt(
     if (!settledToolFinalization) {
       await finalizeCopilotAttempt(
         input,
-        { ...result, promptError: releaseError },
+        {
+          ...result,
+          terminal: withPromptFailure(result.terminal, releaseError),
+        },
         hookContext,
         attemptStartedAt,
         now,
@@ -1433,8 +1471,23 @@ function createResult(
           thisAttemptDowngradedFromResume: state.downgradedFromResume,
           thisAttemptResumeFailureRecovered: state.resumeFailureRecovered,
         });
+  const interruption = timedOut
+    ? {
+        kind: "timeout" as const,
+        phase: state.timedOutDuringCompaction ? ("compaction" as const) : ("prompt" as const),
+        source: state.externalAbort ? ("external" as const) : ("runtime" as const),
+        ...(state.aborted ? { aborted: true as const } : {}),
+      }
+    : state.aborted
+      ? {
+          kind: "aborted" as const,
+          source: state.externalAbort ? ("external" as const) : ("runtime" as const),
+        }
+      : { kind: "ok" as const };
+  const terminal =
+    promptError !== undefined ? withPromptFailure(interruption, promptError) : interruption;
   return {
-    aborted: state.aborted === true,
+    terminal,
     ...(state.sdkSessionId ? { sdkSessionId: state.sdkSessionId } : {}),
     assistantTexts: state.assistantTexts ?? [],
     attemptUsage: state.usage,
@@ -1442,8 +1495,6 @@ function createResult(
     currentAttemptAssistant: state.currentAttemptAssistant,
     currentAttemptCompletedAssistant: state.currentAttemptCompletedAssistant,
     didSendViaMessagingTool: false,
-    externalAbort: state.externalAbort === true,
-    idleTimedOut: false,
     itemLifecycle: state.itemLifecycle ?? {
       activeCount: 0,
       completedCount: 0,
@@ -1455,13 +1506,9 @@ function createResult(
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
     messagingToolSentTexts: [],
-    promptError,
-    promptErrorSource: promptError ? "prompt" : null,
     replayMetadata,
     sessionFileUsed: readString(params.sessionFile),
     sessionIdUsed: state.sessionIdUsed ?? readString(params.sessionId) ?? "copilot-session",
-    timedOut,
-    timedOutDuringCompaction: state.timedOutDuringCompaction === true,
     toolMetas,
     yieldDetected: state.yieldDetected === true,
   };
@@ -1739,6 +1786,7 @@ async function resolvePromptImages(
     model: resolveImageCapabilityModel(params),
     existingImages: Array.isArray(params.images) ? params.images : undefined,
     imageOrder: Array.isArray(params.imageOrder) ? params.imageOrder : undefined,
+    media: Array.isArray(params.media) ? params.media : undefined,
     config: params.config,
     workspaceOnly: context.workspaceOnly,
     localRoots,

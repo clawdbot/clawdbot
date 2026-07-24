@@ -392,12 +392,15 @@ describe("createOpenClawTools cron context wiring", () => {
 
     expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+      agentAccountId: "bot-a",
+      creatorToolAllowlist: undefined,
       currentDeliveryContext: {
         channel: "matrix",
         to: "room:!AbCdEf1234567890:example.org",
         accountId: "bot-a",
         threadId: "$RootEvent:Example.Org",
       },
+      runId: undefined,
     });
   });
 
@@ -414,12 +417,15 @@ describe("createOpenClawTools cron context wiring", () => {
 
     expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+      agentAccountId: "bot-a",
+      creatorToolAllowlist: undefined,
       currentDeliveryContext: {
         channel: "matrix",
         to: "room:!FallbackRoom:Example.Org",
         accountId: "bot-a",
         threadId: "$FallbackThread:Example.Org",
       },
+      runId: undefined,
     });
   });
 

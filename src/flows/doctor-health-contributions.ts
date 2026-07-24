@@ -86,7 +86,6 @@ const loadDoctorCoreChecksModule = async () => await import("./doctor-core-check
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
-const loadCatalogLookupModule = async () => await import("../agents/model-catalog.js");
 const loadPreparedModelCatalogModule = async () =>
   await import("../agents/prepared-model-catalog.js");
 const loadModelSelectionModule = async () => await import("../agents/model-selection.js");
@@ -842,167 +841,6 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   }
 }
 
-type ToolResultCapTarget = {
-  agentId?: string;
-  configuredCap?: number;
-  path?: string;
-  scopeLabel: string;
-  target?: string;
-};
-
-async function collectToolResultCapFindings(
-  cfg: OpenClawConfig,
-): Promise<readonly HealthFinding[]> {
-  const { resolveAgentContextLimits } = await loadAgentScopeModule();
-  const { normalizeAgentId } = await import("../routing/session-key.js");
-  const targets: ToolResultCapTarget[] = [];
-  const defaultsConfiguredCap = cfg.agents?.defaults?.contextLimits?.toolResultMaxChars;
-  if (defaultsConfiguredCap !== undefined) {
-    targets.push({
-      configuredCap: defaultsConfiguredCap,
-      path: "agents.defaults.contextLimits.toolResultMaxChars",
-      scopeLabel: "defaults",
-      target: "agents.defaults",
-    });
-  }
-  for (const entry of cfg.agents?.list ?? []) {
-    const normalizedAgentId = normalizeAgentId(entry.id);
-    if (
-      !normalizedAgentId ||
-      (defaultsConfiguredCap === undefined && entry.contextLimits?.toolResultMaxChars === undefined)
-    ) {
-      continue;
-    }
-    targets.push({
-      agentId: normalizedAgentId,
-      configuredCap: resolveAgentContextLimits(cfg, normalizedAgentId)?.toolResultMaxChars,
-      path:
-        entry.contextLimits?.toolResultMaxChars === undefined
-          ? "agents.defaults.contextLimits.toolResultMaxChars"
-          : `agents.list.${normalizedAgentId}.contextLimits.toolResultMaxChars`,
-      scopeLabel: `agent "${normalizedAgentId}"`,
-      target: `agents.list.${normalizedAgentId}`,
-    });
-  }
-  if (targets.length === 0) {
-    return [];
-  }
-
-  const { collectToolResultCapDoctorIssues, toolResultCapDoctorIssueToHealthFinding } =
-    await import("./doctor-tool-result-cap-advice.js");
-
-  return collectToolResultCapTargetAdvice({
-    cfg,
-    readOnlyCatalog: true,
-    targets,
-  }).then((entries) =>
-    entries.flatMap((entry) =>
-      collectToolResultCapDoctorIssues(entry).map(toolResultCapDoctorIssueToHealthFinding),
-    ),
-  );
-}
-
-async function collectToolResultCapTargetAdvice(params: {
-  cfg: OpenClawConfig;
-  readOnlyCatalog?: boolean;
-  targets: readonly ToolResultCapTarget[];
-}): Promise<
-  Array<{
-    contextWindowTokens: number;
-    modelKey: string;
-    configuredCap?: number;
-    deep?: boolean;
-    path?: string;
-    scopeLabel?: string;
-    target?: string;
-  }>
-> {
-  const { DEFAULT_CONTEXT_TOKENS } = await loadAgentDefaultsModule();
-  const { findModelCatalogEntry } = await loadCatalogLookupModule();
-  const { loadPreparedModelCatalog } = await loadPreparedModelCatalogModule();
-  const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
-  const { resolveDefaultModelForAgent, modelKey } = await loadModelSelectionModule();
-  const catalog = await loadPreparedModelCatalog({
-    config: params.cfg,
-    ...(params.readOnlyCatalog ? { readOnly: true } : {}),
-  });
-
-  return params.targets.map((target) => {
-    const modelRef = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: target.agentId,
-    });
-    const entry = findModelCatalogEntry(catalog, {
-      provider: modelRef.provider,
-      modelId: modelRef.model,
-    });
-    const contextWindow = resolveContextWindowInfo({
-      cfg: params.cfg,
-      provider: modelRef.provider,
-      modelId: modelRef.model,
-      modelContextTokens: entry?.contextTokens,
-      modelContextWindow: entry?.contextWindow,
-      defaultTokens: DEFAULT_CONTEXT_TOKENS,
-    });
-    return {
-      contextWindowTokens: contextWindow.tokens,
-      modelKey: modelKey(modelRef.provider, modelRef.model),
-      configuredCap: target.configuredCap,
-      path: target.path,
-      scopeLabel: target.scopeLabel,
-      target: target.target,
-    };
-  });
-}
-
-async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { resolveAgentContextLimits } = await loadAgentScopeModule();
-  const { normalizeAgentId } = await import("../routing/session-key.js");
-  const targets: ToolResultCapTarget[] = [];
-  const defaultsConfiguredCap = ctx.cfg.agents?.defaults?.contextLimits?.toolResultMaxChars;
-  if (ctx.options.deep === true || defaultsConfiguredCap !== undefined) {
-    targets.push({
-      configuredCap: defaultsConfiguredCap,
-      scopeLabel: "defaults",
-    });
-  }
-  for (const entry of ctx.cfg.agents?.list ?? []) {
-    const normalizedAgentId = normalizeAgentId(entry.id);
-    if (
-      !normalizedAgentId ||
-      (ctx.options.deep !== true &&
-        defaultsConfiguredCap === undefined &&
-        entry.contextLimits?.toolResultMaxChars === undefined)
-    ) {
-      continue;
-    }
-    targets.push({
-      agentId: normalizedAgentId,
-      configuredCap: resolveAgentContextLimits(ctx.cfg, normalizedAgentId)?.toolResultMaxChars,
-      scopeLabel: `agent "${normalizedAgentId}"`,
-    });
-  }
-  if (targets.length === 0) {
-    return;
-  }
-
-  const { buildToolResultCapDoctorAdvice } = await import("./doctor-tool-result-cap-advice.js");
-  const { note } = await loadNoteModule();
-  const entries = await collectToolResultCapTargetAdvice({
-    cfg: ctx.cfg,
-    targets,
-  });
-  const lines = entries.flatMap((entry) =>
-    buildToolResultCapDoctorAdvice({
-      ...entry,
-      deep: ctx.options.deep === true,
-    }),
-  );
-  if (lines.length > 0) {
-    note(lines.join("\n"), "Tool result cap");
-  }
-}
-
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
@@ -1127,12 +965,33 @@ async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<voi
   await noteBootstrapFileSize(ctx.cfg);
 }
 
-async function runHeartbeatTemplateRepairHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairHeartbeatTemplate } =
-    await import("../commands/doctor-heartbeat-template-repair.js");
-  await maybeRepairHeartbeatTemplate({
+async function runHeartbeatCadenceMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatCadenceToCron } =
+    await import("../commands/doctor-heartbeat-cadence-migration.js");
+  await maybeMigrateHeartbeatCadenceToCron({
     cfg: ctx.cfg,
     shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
+
+async function runHeartbeatScratchMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatFilesToScratch } =
+    await import("../commands/doctor-heartbeat-scratch-migration.js");
+  await maybeMigrateHeartbeatFilesToScratch({
+    cfg: ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
+
+async function runHeartbeatTaskMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatTasksToCron } =
+    await import("../commands/doctor-heartbeat-task-migration.js");
+  await maybeMigrateHeartbeatTasksToCron({
+    cfg: ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
   });
 }
 
@@ -2066,18 +1925,6 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runHooksModelHealth,
     }),
     createDoctorHealthContribution({
-      id: "doctor:tool-result-cap",
-      label: "Tool result cap",
-      healthChecks: {
-        id: "core/doctor/tool-result-cap",
-        description:
-          "Detect explicit toolResultMaxChars settings that fight model-window defaults.",
-        defaultEnabled: false,
-        detect: async (ctx) => collectToolResultCapFindings(ctx.cfg),
-      },
-      run: runToolResultCapHealth,
-    }),
-    createDoctorHealthContribution({
       id: "doctor:provider-catalog-projection",
       label: "Provider catalog projection",
       healthCheckIds: ["core/doctor/provider-catalog-projection"],
@@ -2183,19 +2030,49 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runBootstrapSizeHealth,
     }),
     createDoctorHealthContribution({
-      id: "doctor:heartbeat-template-repair",
-      label: "Heartbeat template repair",
+      id: "doctor:heartbeat-cadence-migration",
+      label: "Heartbeat cadence migration",
       healthChecks: {
-        id: "core/doctor/heartbeat-template",
-        description: "Legacy HEARTBEAT.md documentation templates are findings.",
-        defaultEnabled: false,
+        id: "core/doctor/heartbeat-cadence-migration",
+        description: "Heartbeat cadence config must be materialized in cron monitor rows.",
+        defaultEnabled: true,
         async detect(ctx) {
-          const { collectHeartbeatTemplateHealthFindings } =
-            await import("../commands/doctor-heartbeat-template-repair.js");
-          return await collectHeartbeatTemplateHealthFindings(ctx.cfg);
+          const { collectHeartbeatCadenceMigrationFindings } =
+            await import("../commands/doctor-heartbeat-cadence-migration.js");
+          return await collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
         },
       },
-      run: runHeartbeatTemplateRepairHealth,
+      run: runHeartbeatCadenceMigrationHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:heartbeat-scratch-migration",
+      label: "Heartbeat scratch migration",
+      healthChecks: {
+        id: "core/doctor/heartbeat-scratch-migration",
+        description: "Workspace HEARTBEAT.md files must migrate into cron-owned scratch.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectHeartbeatScratchMigrationFindings } =
+            await import("../commands/doctor-heartbeat-scratch-migration.js");
+          return await collectHeartbeatScratchMigrationFindings(ctx.cfg);
+        },
+      },
+      run: runHeartbeatScratchMigrationHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:heartbeat-task-cron-migration",
+      label: "Heartbeat task cron migration",
+      healthChecks: {
+        id: "core/doctor/heartbeat-task-cron-migration",
+        description: "Heartbeat scratch task blocks must migrate into cron jobs.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectHeartbeatTaskMigrationFindings } =
+            await import("../commands/doctor-heartbeat-task-migration.js");
+          return await collectHeartbeatTaskMigrationFindings(ctx.cfg, ctx.env);
+        },
+      },
+      run: runHeartbeatTaskMigrationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:shell-completion",

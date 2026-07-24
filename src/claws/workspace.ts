@@ -10,7 +10,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
 
-const CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION = "openclaw.clawWorkspaceFileRecord.v1" as const;
+export const CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION =
+  "openclaw.clawWorkspaceFileRecord.v1" as const;
 
 const MAX_CLAW_WORKSPACE_FILE_BYTES = 1024 * 1024;
 
@@ -90,25 +91,27 @@ function persistWorkspaceFile(
 ): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     // sqlite-allow-raw: this Claw prototype state-table write is scoped to one owned row.
-    db.prepare(
-      `INSERT INTO claw_workspace_files (
+    db /* sqlite-allow-raw: Claw workspace-file provenance write. */
+      .prepare(
+        `INSERT INTO claw_workspace_files (
          agent_id, target_path, schema_version, workspace, source_path,
          content_digest, status, created_at_ms, updated_at_ms
        ) VALUES (
          @agent_id, @target_path, @schema_version, @workspace, @source_path,
          @content_digest, @status, @created_at_ms, @updated_at_ms
        )`,
-    ).run({
-      agent_id: record.agentId,
-      target_path: record.path,
-      schema_version: record.schemaVersion,
-      workspace: record.workspace,
-      source_path: record.sourcePath,
-      content_digest: record.contentDigest,
-      status: record.status,
-      created_at_ms: record.createdAtMs,
-      updated_at_ms: record.updatedAtMs,
-    });
+      )
+      .run({
+        agent_id: record.agentId,
+        target_path: record.path,
+        schema_version: record.schemaVersion,
+        workspace: record.workspace,
+        source_path: record.sourcePath,
+        content_digest: record.contentDigest,
+        status: record.status,
+        created_at_ms: record.createdAtMs,
+        updated_at_ms: record.updatedAtMs,
+      });
   }, options);
 }
 
@@ -203,6 +206,55 @@ function updateWorkspaceFileStatus(
         `Claw workspace file ${JSON.stringify(record.path)} changed ownership state concurrently.`,
       );
     }
+  }, options);
+}
+
+export function upsertClawWorkspaceFile(
+  record: PersistedClawWorkspaceFile,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    db /* sqlite-allow-raw: Claw workspace-file provenance write. */
+      .prepare(
+        `INSERT INTO claw_workspace_files (
+         agent_id, target_path, schema_version, workspace, source_path,
+         content_digest, status, created_at_ms, updated_at_ms
+       ) VALUES (
+         @agent_id, @target_path, @schema_version, @workspace, @source_path,
+         @content_digest, @status, @created_at_ms, @updated_at_ms
+       )
+       ON CONFLICT(agent_id, target_path) DO UPDATE SET
+         schema_version = excluded.schema_version,
+         workspace = excluded.workspace,
+         source_path = excluded.source_path,
+         content_digest = excluded.content_digest,
+         status = excluded.status,
+         created_at_ms = excluded.created_at_ms,
+         updated_at_ms = excluded.updated_at_ms`,
+      )
+      .run({
+        agent_id: record.agentId,
+        target_path: record.path,
+        schema_version: record.schemaVersion,
+        workspace: record.workspace,
+        source_path: record.sourcePath,
+        content_digest: record.contentDigest,
+        status: record.status,
+        created_at_ms: record.createdAtMs,
+        updated_at_ms: record.updatedAtMs,
+      });
+  }, options);
+}
+
+export function deleteClawWorkspaceFileRecord(
+  agentId: string,
+  path: string,
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  runOpenClawStateWriteTransaction(({ db }) => {
+    db /* sqlite-allow-raw: Claw workspace-file provenance write. */
+      .prepare("DELETE FROM claw_workspace_files WHERE agent_id = ? AND target_path = ?")
+      .run(agentId, path);
   }, options);
 }
 

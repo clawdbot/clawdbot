@@ -185,7 +185,7 @@ export class CustodianPage extends OpenClawLightDomElement {
 
   private synchronizeClient(): void {
     const snapshot = this.context.gateway.snapshot;
-    const client = snapshot.connected ? snapshot.client : null;
+    const client = snapshot.phase === "connected" ? snapshot.client : null;
     const chatSupported =
       client !== null && isGatewayMethodAdvertised(snapshot, "openclaw.chat") === true;
     const historyAvailable =

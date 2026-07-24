@@ -92,7 +92,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     CHANNEL_PAIRING_POLL_INTERVAL_MS,
     () => {
       const gateway = this.context?.gateway.snapshot;
-      if (gateway?.connected && hasOperatorPairingAccess(gateway.hello?.auth ?? null)) {
+      if (gateway?.phase === "connected" && hasOperatorPairingAccess(gateway.hello?.auth ?? null)) {
         void this.context.channels.refreshPairing();
       }
     },
@@ -158,7 +158,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   ) {
     const clientChanged = this.hasGatewaySnapshot && this.gatewayClient !== snapshot.client;
     const connectionChanged =
-      this.hasGatewaySnapshot && this.gatewayConnected !== snapshot.connected;
+      this.hasGatewaySnapshot && this.gatewayConnected !== (snapshot.phase === "connected");
     const pairingAccess = hasOperatorPairingAccess(snapshot.hello?.auth ?? null);
     const pairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
     const pairingAuthChanged =
@@ -166,14 +166,14 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!this.hasGatewaySnapshot || sourceChanged || clientChanged || connectionChanged) {
       this.nostrOperationGeneration += 1;
     }
-    if (sourceChanged || clientChanged || !snapshot.connected) {
+    if (sourceChanged || clientChanged || snapshot.phase !== "connected") {
       this.clearNostrForm();
     }
     if (
       sourceChanged ||
       clientChanged ||
       pairingAuthChanged ||
-      !snapshot.connected ||
+      snapshot.phase !== "connected" ||
       !pairingAccess
     ) {
       this.pairingPrompt = null;
@@ -183,10 +183,10 @@ class ChannelsPage extends OpenClawLightDomElement {
     }
     this.hasGatewaySnapshot = true;
     this.gatewayClient = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
+    this.gatewayConnected = snapshot.phase === "connected";
     this.gatewayPairingAuthSignature = pairingAuthSignature;
     this.syncPairingPolling(snapshot);
-    if (snapshot.connected && snapshot.client) {
+    if (snapshot.phase === "connected" && snapshot.client) {
       this.ensureInitialData();
       if (
         (sourceChanged || clientChanged || connectionChanged || pairingAuthChanged) &&
@@ -201,7 +201,7 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private syncPairingPolling(snapshot: ApplicationContext["gateway"]["snapshot"]) {
     if (
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       snapshot.client &&
       hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
     ) {
@@ -215,7 +215,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     const context = this.context;
     const gateway = context.gateway.snapshot;
     const client = gateway.client;
-    if (!gateway.connected || !client) {
+    if (gateway.phase !== "connected" || !client) {
       return;
     }
 
@@ -319,7 +319,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       !this.isConnected ||
       this.gatewaySource !== gateway ||
       this.channelsSource !== channels ||
-      !gateway.snapshot.connected ||
+      gateway.snapshot.phase !== "connected" ||
       !client
     ) {
       return null;
@@ -347,7 +347,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.context.gateway !== operation.gateway ||
       this.context.channels !== operation.channels ||
       operation.gateway.snapshot.client !== operation.client ||
-      !operation.gateway.snapshot.connected
+      operation.gateway.snapshot.phase !== "connected"
     ) {
       return null;
     }

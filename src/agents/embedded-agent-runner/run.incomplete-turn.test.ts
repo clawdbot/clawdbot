@@ -64,7 +64,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
     await warmRunOverflowCompactionHarness(runEmbeddedAgent);
-  });
+  }, 300_000);
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();

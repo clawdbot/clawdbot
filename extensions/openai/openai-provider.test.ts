@@ -680,7 +680,7 @@ describe("buildOpenAIProvider", () => {
       ).not.toContainEqual({ id: "ultra" });
       expect(openai?.models.find((model) => model.id === "gpt-5.6-terra")).toMatchObject({
         contextWindow: 372_000,
-        contextTokens: 372_000,
+        contextTokens: 272_000,
       });
       expect(openai?.models.find((model) => model.id === "gpt-5.3-codex-spark")).toMatchObject({
         name: "GPT-5.3 Codex Spark",
@@ -840,6 +840,51 @@ describe("buildOpenAIProvider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("caps base and forward-compatible GPT-5.6 Codex catalog rows", async () => {
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: Response.json({
+        models: [
+          {
+            slug: "gpt-5.6",
+            display_name: "GPT-5.6",
+            visibility: "list",
+            context_window: 372_000,
+            max_context_window: 1_050_000,
+          },
+          {
+            slug: "gpt-5.6-preview-2026-07-22",
+            display_name: "GPT-5.6 Preview",
+            visibility: "list",
+            context_window: 400_000,
+            max_context_window: 1_050_000,
+          },
+        ],
+      }),
+      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      release: async () => undefined,
+    }));
+
+    const provider = await buildOpenAICodexLiveProviderConfig({
+      discoveryApiKey: "oauth-token",
+      fetchGuard,
+    });
+
+    expect(provider.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "gpt-5.6",
+          contextWindow: 1_050_000,
+          contextTokens: 272_000,
+        }),
+        expect.objectContaining({
+          id: "gpt-5.6-preview-2026-07-22",
+          contextWindow: 1_050_000,
+          contextTokens: 272_000,
+        }),
+      ]),
+    );
+  });
+
   it("keeps an explicit empty Codex reasoning catalog authoritative", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
@@ -909,7 +954,7 @@ describe("buildOpenAIProvider", () => {
     expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6");
     expect(provider.models.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
       contextWindow: 372_000,
-      contextTokens: 372_000,
+      contextTokens: 272_000,
       thinkingLevelMap: { off: null },
       compat: {
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
@@ -1455,6 +1500,7 @@ describe("buildOpenAIProvider", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
       contextWindow: 1_050_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
     });
     expectFields(unprojectedOauthModel, {
@@ -1661,7 +1707,7 @@ describe("buildOpenAIProvider", () => {
       id: "gpt-5.5",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-      contextWindow: 1_000_000,
+      contextWindow: 1_050_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
       mediaInput: {
@@ -1724,7 +1770,7 @@ describe("buildOpenAIProvider", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
       contextWindow: 1_050_000,
-      contextTokens: 1_050_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
       cost,
       thinkingLevelMap,
@@ -1761,7 +1807,8 @@ describe("buildOpenAIProvider", () => {
       id: "gpt-5.5-pro",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-      contextWindow: 1_000_000,
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
       cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
     });

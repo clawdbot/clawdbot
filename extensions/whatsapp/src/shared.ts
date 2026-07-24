@@ -107,6 +107,7 @@ export function createWhatsAppPluginBase(params: {
   groups: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["groups"]>;
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
 }) {
   const collectWhatsAppSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
@@ -211,6 +212,7 @@ export function createWhatsAppPluginBase(params: {
     },
     doctor: whatsappDoctor,
     setup: params.setup,
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
     groups: params.groups,
   });
   return {

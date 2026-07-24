@@ -4,6 +4,7 @@ import type {
   ChannelsPairingListResult,
   ChannelsStatusSnapshot,
 } from "../../api/types.ts";
+import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -20,7 +21,7 @@ type ChannelLogoutResult = {
 
 type ChannelGatewaySnapshot = {
   client: ChannelGatewayClient | null;
-  connected: boolean;
+  phase: ApplicationGatewayPhase;
   hello?: {
     auth?: { role?: string; scopes?: readonly string[] } | null;
   } | null;
@@ -107,7 +108,7 @@ function channelSnapshotAllowsScope(
 function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = {}): ChannelsState {
   return {
     client: snapshot.client ?? null,
-    connected: snapshot.connected ?? false,
+    connected: snapshot.phase === "connected",
     channelsLoading: false,
     channelsLoadingProbe: null,
     channelsRefreshSeq: 0,
@@ -596,7 +597,8 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
   };
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
-    const connectionChanged = state.connected !== snapshot.connected;
+    const connected = snapshot.phase === "connected";
+    const connectionChanged = state.connected !== connected;
     const nextChannelReadAccess = channelSnapshotAllowsScope(snapshot, "operator.read");
     const channelReadAccessChanged = currentChannelReadAccess !== nextChannelReadAccess;
     currentChannelReadAccess = nextChannelReadAccess;
@@ -607,7 +609,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     const whatsappAdminAccessChanged = currentWhatsAppAdminAccess !== nextWhatsAppAdminAccess;
     currentWhatsAppAdminAccess = nextWhatsAppAdminAccess;
     state.client = snapshot.client;
-    state.connected = snapshot.connected;
+    state.connected = connected;
     const lifecycle = getChannelsLifecycle(state);
     if (clientChanged || connectionChanged || channelReadAccessChanged) {
       state.channelsLoading = false;
