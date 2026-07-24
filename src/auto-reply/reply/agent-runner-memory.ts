@@ -43,6 +43,7 @@ import {
   readTranscriptStatsSync,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -464,11 +465,15 @@ function deriveTranscriptUsageSnapshot(
 function readLatestNonzeroUsageFromTranscriptEvents(
   events: readonly unknown[],
 ): ReturnType<typeof normalizeUsage> | undefined {
-  for (const event of events.toReversed()) {
+  const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
+  for (const event of activeEvents.toReversed()) {
     if (!event || typeof event !== "object" || Array.isArray(event)) {
       continue;
     }
-    const record = event as { message?: unknown; usage?: UsageLike };
+    const record = event as { message?: unknown; type?: unknown; usage?: UsageLike };
+    if (record.type === "compaction" || record.type === "reset") {
+      return undefined;
+    }
     const message =
       record.message && typeof record.message === "object" && !Array.isArray(record.message)
         ? (record.message as { usage?: UsageLike })

@@ -104,7 +104,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtimeAuthState: runtime.runtimeAuthState,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
-  const resolvedSessionTarget = resolvedSessionKey
+  const resolvedTranscriptTarget = resolvedSessionKey
     ? await resolveSessionTranscriptRuntimeReadTarget({
         agentId: workspaceResolution.agentId,
         sessionId: sessionPromptState.sessionId,
@@ -113,6 +113,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           agentId: workspaceResolution.agentId,
         }),
       })
+    : undefined;
+  const resolvedSessionTarget = resolvedTranscriptTarget
+    ? { ...sessionPromptState.sessionTarget, ...resolvedTranscriptTarget }
     : sessionPromptState.sessionTarget;
   const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
