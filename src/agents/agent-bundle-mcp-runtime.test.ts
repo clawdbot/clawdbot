@@ -2423,6 +2423,148 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it(
+    "reuses runtime-owned initialize work after its operation waiter aborts",
+    { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
+    async () => {
+      const tempDir = tempDirTracker.make("bundle-mcp-connect-deadline-");
+      const serverPath = path.join(tempDir, "connect-deadline.mjs");
+      const logPath = path.join(tempDir, "server.log");
+      const pidPath = path.join(tempDir, "server.pid");
+      await writeListToolsMcpServer({
+        filePath: serverPath,
+        logPath,
+        pidPath,
+        initializeDelayMs: 300,
+      });
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-connect-deadline",
+        sessionKey: "agent:test:session-connect-deadline",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              slowInitialize: {
+                command: process.execPath,
+                args: [serverPath],
+                connectionTimeoutMs: 2_000,
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        const waiter = new AbortController();
+        const catalogPromise = runtime.getCatalog({ signal: waiter.signal });
+        await waitForFileText(logPath, "recv initialize", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+        await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+        const firstPid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+
+        waiter.abort(new Error("catalog waiter aborted during initialize"));
+        await expect(catalogPromise).rejects.toThrow("catalog waiter aborted during initialize");
+        expect(runtime.peekCatalog()).toBeNull();
+
+        await waitForPredicate(
+          () => runtime.peekCatalog() !== null,
+          "runtime-owned initialize to populate the catalog",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        expect(process.kill(firstPid, 0)).toBe(true);
+        expect(Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10)).toBe(firstPid);
+        expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual([
+          "slow_tool",
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    },
+  );
+
+  it(
+    "finishes queued runtime-owned connections after the operation waiter aborts",
+    { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
+    async () => {
+      const tempDir = tempDirTracker.make("bundle-mcp-queued-deadline-");
+      const activeConnectionCount = 6;
+      const servers = Array.from({ length: activeConnectionCount + 2 }, (_, index) => ({
+        serverName: `queuedServer${index}`,
+        serverPath: path.join(tempDir, `server-${index}.mjs`),
+        logPath: path.join(tempDir, `server-${index}.log`),
+        pidPath: path.join(tempDir, `server-${index}.pid`),
+      }));
+      await Promise.all(
+        servers.map((server) =>
+          writeListToolsMcpServer({
+            filePath: server.serverPath,
+            logPath: server.logPath,
+            pidPath: server.pidPath,
+            initializeDelayMs: 300,
+          }),
+        ),
+      );
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-queued-connect-deadline",
+        sessionKey: "agent:test:session-queued-connect-deadline",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: Object.fromEntries(
+              servers.map((server) => [
+                server.serverName,
+                {
+                  command: process.execPath,
+                  args: [server.serverPath],
+                  connectionTimeoutMs: 2_000,
+                },
+              ]),
+            ),
+          },
+        },
+      });
+
+      try {
+        const waiter = new AbortController();
+        const catalogPromise = runtime.getCatalog({ signal: waiter.signal });
+        await Promise.all(
+          servers
+            .slice(0, activeConnectionCount)
+            .map((server) =>
+              waitForFileText(server.logPath, "recv initialize", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS),
+            ),
+        );
+        const activePids = await Promise.all(
+          servers.slice(0, activeConnectionCount).map(async (server) => {
+            await waitForFileText(server.pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+            return Number.parseInt((await fs.readFile(server.pidPath, "utf8")).trim(), 10);
+          }),
+        );
+
+        waiter.abort(new Error("catalog waiter aborted before queued connections"));
+        await expect(catalogPromise).rejects.toThrow(
+          "catalog waiter aborted before queued connections",
+        );
+        await waitForPredicate(
+          () => runtime.peekCatalog()?.tools.length === servers.length,
+          "runtime-owned queued catalog work to populate the cache",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        const finalPids = await Promise.all(
+          servers.map(async (server) => {
+            await waitForFileText(server.pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+            return Number.parseInt((await fs.readFile(server.pidPath, "utf8")).trim(), 10);
+          }),
+        );
+        expect(finalPids.slice(0, activeConnectionCount)).toEqual(activePids);
+        expect((await runtime.getCatalog()).tools).toHaveLength(servers.length);
+      } finally {
+        await runtime.dispose();
+      }
+    },
+  );
+
   it("isolates a cyclic tool catalog while a healthy bundle MCP sibling survives", async () => {
     const tempDir = tempDirTracker.make("bundle-mcp-tool-cycle-");
     const loopingPath = path.join(tempDir, "looping.mjs");
@@ -6114,7 +6256,7 @@ process.on("SIGINT", shutdown);`,
               slow: {
                 command: process.execPath,
                 args: [slowServerPath],
-                connectionTimeoutMs: 150,
+                connectionTimeoutMs: 750,
               },
             },
           },
