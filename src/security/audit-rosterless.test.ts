@@ -35,6 +35,36 @@ describe("security audit rosterless configs", () => {
     ).resolves.toEqual(expect.objectContaining({ findings: expect.any(Array) }));
   });
 
+  it("distinguishes an authored empty roster from an absent pre-roster source", async () => {
+    const { stateDir, workspaceDir } = makeAuditPaths("authored-empty-roster");
+    const config = { agents: { entries: { main: { default: true } } } } as never;
+    const baseOptions = {
+      config,
+      stateDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+      workspaceDir,
+      env: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+    };
+
+    const authoredEmpty = await runSecurityAudit({
+      ...baseOptions,
+      sourceConfig: { agents: { entries: {} } } as never,
+    });
+    expect(authoredEmpty.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "config.agent_roster.invalid_default_count",
+        detail: expect.stringContaining("found 0"),
+      }),
+    );
+
+    const absent = await runSecurityAudit({ ...baseOptions, sourceConfig: {} });
+    expect(absent.findings).not.toContainEqual(
+      expect.objectContaining({ checkId: "config.agent_roster.invalid_default_count" }),
+    );
+  });
+
   it.each([
     {
       label: "an explicitly empty roster",

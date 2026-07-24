@@ -24,6 +24,13 @@ describe("agent roster resolution", () => {
 
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {
     expect(tryResolveDefaultAgentId({ agents: { list: [{ id: "alpha" }] } })).toBeUndefined();
+    for (const marker of ["false", 1]) {
+      expect(
+        tryResolveDefaultAgentId({
+          agents: { entries: { alpha: { default: marker } } },
+        } as OpenClawConfig),
+      ).toBeUndefined();
+    }
   });
 
   it("copies own __proto__ fields without changing the listed entry prototype", () => {

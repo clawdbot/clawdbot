@@ -10,7 +10,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawConfig } from "../config.js";
 import { resolveStorePath } from "./paths.js";
-import { replaceSessionEntry } from "./session-accessor.js";
+import { listSessionEntriesReadOnly, replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   listKnownSessionStoreAgentIds,
@@ -211,8 +211,67 @@ describe("resolveSessionStoreTargets", () => {
 
       expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env, diagnostics })).toEqual([
         { agentId: "main", storePath },
+        { agentId: "ops", storePath },
       ]);
-      expect(diagnostics).toContainEqual(expect.stringContaining('ignored owner(s): "ops"'));
+      expect(diagnostics).toContainEqual(expect.stringContaining('suffixed owner(s): "ops"'));
+    });
+  });
+
+  it("lands colliding fixed-store writes in distinct owner databases", async () => {
+    await withTempHome(async (home) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
+      const storePath = path.join(home, "ops.json");
+
+      await replaceSessionEntry(
+        {
+          agentId: "main",
+          defaultAgentId: "main",
+          env,
+          storePath,
+          sessionKey: "agent:main:main",
+        },
+        { sessionId: "main-session", updatedAt: 1 },
+      );
+      await replaceSessionEntry(
+        {
+          agentId: "ops",
+          defaultAgentId: "main",
+          env,
+          storePath,
+          sessionKey: "agent:ops:main",
+        },
+        { sessionId: "ops-session", updatedAt: 2 },
+      );
+
+      const mainPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "main",
+        defaultAgentId: "main",
+        env,
+      }).path;
+      const opsPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "ops",
+        defaultAgentId: "main",
+        env,
+      }).path;
+      expect(mainPath).not.toBe(opsPath);
+      await expect(fs.stat(mainPath)).resolves.toBeDefined();
+      await expect(fs.stat(opsPath)).resolves.toBeDefined();
+      expect(
+        listSessionEntriesReadOnly({
+          agentId: "main",
+          defaultAgentId: "main",
+          env,
+          storePath,
+        }).map(({ sessionKey }) => sessionKey),
+      ).toEqual(["agent:main:main"]);
+      expect(
+        listSessionEntriesReadOnly({
+          agentId: "ops",
+          defaultAgentId: "main",
+          env,
+          storePath,
+        }).map(({ sessionKey }) => sessionKey),
+      ).toEqual(["agent:ops:main"]);
     });
   });
 
@@ -225,19 +284,80 @@ describe("resolveSessionStoreTargets", () => {
         session: { store: storePath },
         agents: { entries: { main: { default: true }, ops: {} } },
       };
+      const unsuffixedPath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+      registerOpenClawAgentDatabase({ agentId: "ops", env, path: unsuffixedPath });
       await replaceSessionEntry(
-        { agentId: "ops", env, storePath, sessionKey: "main" },
+        {
+          agentId: "ops",
+          defaultAgentId: "main",
+          env,
+          storePath,
+          sessionKey: "main",
+        },
         { sessionId: "ops-session", updatedAt: 1 },
       );
       const diagnostics: string[] = [];
 
       expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env, diagnostics })).toEqual([
+        { agentId: "main", storePath },
         { agentId: "ops", storePath },
       ]);
       expect(diagnostics).toContainEqual(
         expect.stringContaining('owner "ops" selected by database-registry'),
       );
       expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "main", { env })).toEqual([]);
+    });
+  });
+
+  it("honors durable database ownership after its registry row is removed", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storePath = path.join(home, "ops.json");
+      await replaceSessionEntry(
+        {
+          agentId: "ops",
+          defaultAgentId: "ops",
+          env,
+          storePath,
+          sessionKey: "agent:ops:main",
+        },
+        { sessionId: "ops-session", updatedAt: 1 },
+      );
+      const unsuffixedPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "ops",
+        defaultAgentId: "ops",
+        env,
+      }).path;
+      unregisterOpenClawAgentDatabase({ agentId: "ops", env, path: unsuffixedPath });
+
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "ops",
+          defaultAgentId: "main",
+          env,
+        }).path,
+      ).toBe(unsuffixedPath);
+      expect(
+        resolveSqliteTargetFromSessionStorePath(storePath, {
+          agentId: "main",
+          defaultAgentId: "main",
+          env,
+        }).path,
+      ).toBe(path.join(home, "ops.main.sqlite"));
+
+      const diagnostics: string[] = [];
+      const cfg: OpenClawConfig = {
+        session: { store: storePath },
+        agents: { entries: { main: { default: true }, ops: {} } },
+      };
+      expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env, diagnostics })).toEqual([
+        { agentId: "main", storePath },
+        { agentId: "ops", storePath },
+      ]);
+      expect(diagnostics).toContainEqual(
+        expect.stringContaining('owner "ops" selected by database-path'),
+      );
     });
   });
 
@@ -266,18 +386,13 @@ describe("resolveSessionStoreTargets", () => {
     });
   });
 
-  it("drops a fixed-store target when registry ownership is ambiguous", async () => {
+  it("falls back to the configured default when registry ownership is ambiguous", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const storePath = path.join(home, "ops.json");
-      const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-        agentId: "ops",
-      }).path;
-      await replaceSessionEntry(
-        { agentId: "ops", env, storePath, sessionKey: "main" },
-        { sessionId: "ops-session", updatedAt: 1 },
-      );
+      const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+      registerOpenClawAgentDatabase({ agentId: "ops", env, path: databasePath });
       registerOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       const cfg: OpenClawConfig = {
         session: { store: storePath },
@@ -285,11 +400,12 @@ describe("resolveSessionStoreTargets", () => {
       };
       const diagnostics: string[] = [];
 
-      expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env, diagnostics })).toEqual(
-        [],
-      );
+      expect(resolveSessionStoreTargets(cfg, { allAgents: true }, { env, diagnostics })).toEqual([
+        { agentId: "main", storePath },
+        { agentId: "ops", storePath },
+      ]);
       expect(diagnostics).toContainEqual(
-        expect.stringContaining("registry ownership is ambiguous"),
+        expect.stringContaining('owner "main" selected by configured-default'),
       );
     });
   });

@@ -914,7 +914,10 @@ describe("session accessor seam", () => {
     const resolved = resolveSessionEntryCandidateTarget({
       agentId: "support",
       candidateKeys: ["agent:support:main"],
-      cfg: { session: { store: storeTemplate } },
+      cfg: {
+        session: { store: storeTemplate },
+        agents: { entries: { support: { default: true } } },
+      },
     });
 
     expect(resolved).toMatchObject({
@@ -942,7 +945,10 @@ describe("session accessor seam", () => {
     );
 
     const resolved = resolveSessionEntryAccessTarget({
-      cfg: { session: { store: storeTemplate } },
+      cfg: {
+        session: { store: storeTemplate },
+        agents: { entries: { support: { default: true } } },
+      },
       sessionKey: "agent:support:main",
     });
 

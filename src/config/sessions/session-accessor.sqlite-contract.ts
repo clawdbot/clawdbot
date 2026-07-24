@@ -19,6 +19,7 @@ import type { SessionEntry } from "./types.js";
 export type SessionAccessScope = {
   agentId?: string;
   clone?: boolean;
+  defaultAgentId?: string;
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   readConsistency?: "latest";

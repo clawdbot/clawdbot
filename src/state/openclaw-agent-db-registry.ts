@@ -189,3 +189,18 @@ export function listOpenClawRegisteredAgentDatabases(
     database.close();
   }
 }
+
+/** Resolve the normalized owners recorded for one physical agent database path. */
+export function resolveOpenClawRegisteredAgentDatabaseOwners(
+  pathname: string,
+  options: OpenClawStateDatabaseOptions = {},
+): string[] {
+  const resolvedPath = path.resolve(pathname);
+  return [
+    ...new Set(
+      listOpenClawRegisteredAgentDatabases(options)
+        .filter((entry) => path.resolve(entry.path) === resolvedPath)
+        .map((entry) => normalizeAgentId(entry.agentId)),
+    ),
+  ];
+}

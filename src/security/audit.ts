@@ -1337,7 +1337,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   const auditNonDeep = await loadAuditNonDeepModule();
 
   findings.push(...auditNonDeep.collectAttackSurfaceSummaryFindings(cfg));
-  findings.push(...collectAgentRosterFindings(cfg));
+  findings.push(...collectAgentRosterFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(

@@ -67,13 +67,37 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     onDiagnostic?: (diagnostic: SessionStoreTargetCollisionDiagnostic) => void;
   },
 ): SessionStoreTarget[] {
+  // Ownership must not fall back while the authoritative registry is unreadable:
+  // doing so can project the same physical DB under a different configured default.
+  const registeredDatabases = listOpenClawRegisteredAgentDatabases({ env: options.env });
   const grouped = new Map<
     string,
     Array<{ target: SessionStoreTarget; databaseOwnerAgentId?: string }>
   >();
+  const logicalGroups = new Map<
+    string,
+    Array<{
+      target: SessionStoreTarget;
+      ownerSource?: SessionStoreTargetCollisionDiagnostic["ownerSource"];
+      unsuffixedOwnerAgentId?: string;
+    }>
+  >();
   for (const target of targets) {
+    const unsuffixedPath = path.resolve(
+      resolveSqliteTargetFromSessionStorePath(target.storePath, {
+        defaultAgentId: options.defaultAgentId,
+        env: options.env,
+        registeredOwnerAgentIds: [],
+      }).path ?? target.storePath,
+    );
+    const registeredOwnerAgentIds = registeredDatabases
+      .filter((entry) => path.resolve(entry.path) === unsuffixedPath)
+      .map((entry) => entry.agentId);
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
+      defaultAgentId: options.defaultAgentId,
+      env: options.env,
+      registeredOwnerAgentIds,
     });
     const sqlitePath = path.resolve(resolved.path ?? target.storePath);
     const group = grouped.get(sqlitePath) ?? [];
@@ -82,10 +106,41 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       ...(resolved.agentId ? { databaseOwnerAgentId: normalizeAgentId(resolved.agentId) } : {}),
     });
     grouped.set(sqlitePath, group);
+    const logicalGroup = logicalGroups.get(unsuffixedPath) ?? [];
+    logicalGroup.push({
+      target,
+      ...(resolved.ownerSource ? { ownerSource: resolved.ownerSource } : {}),
+      ...(resolved.unsuffixedOwnerAgentId
+        ? { unsuffixedOwnerAgentId: resolved.unsuffixedOwnerAgentId }
+        : {}),
+    });
+    logicalGroups.set(unsuffixedPath, logicalGroup);
   }
-  // Ownership must not fall back while the authoritative registry is unreadable:
-  // doing so can project the same physical DB under a different configured default.
-  const registeredDatabases = listOpenClawRegisteredAgentDatabases({ env: options.env });
+  for (const [sqlitePath, group] of logicalGroups) {
+    const agentIds = [...new Set(group.map(({ target }) => normalizeAgentId(target.agentId)))];
+    if (agentIds.length <= 1 || group.some((entry) => !entry.ownerSource)) {
+      continue;
+    }
+    const ownerAgentId = group[0]?.unsuffixedOwnerAgentId;
+    const ownerSource = group[0]?.ownerSource ?? "configured-default";
+    const ignoredAgentIds = ownerAgentId
+      ? agentIds.filter((agentId) => agentId !== ownerAgentId)
+      : agentIds;
+    const diagnostic: SessionStoreTargetCollisionDiagnostic = {
+      message: ownerAgentId
+        ? `Session store target collision at ${sqlitePath}: owner "${ownerAgentId}" selected by ${ownerSource}; suffixed owner(s): ${ignoredAgentIds.map((id) => `"${id}"`).join(", ")}.`
+        : `Session store target collision at ${sqlitePath}: registry ownership is ambiguous; all claimant(s) use suffixed targets: ${ignoredAgentIds.map((id) => `"${id}"`).join(", ")}.`,
+      sqlitePath,
+      ...(ownerAgentId ? { ownerAgentId } : {}),
+      ignoredAgentIds,
+      ownerSource,
+    };
+    if (options.onDiagnostic) {
+      options.onDiagnostic(diagnostic);
+    } else {
+      log.warn(diagnostic.message);
+    }
+  }
   const deduped: SessionStoreTarget[] = [];
   for (const [sqlitePath, group] of grouped) {
     const byAgentId = new Map(
@@ -218,11 +273,16 @@ export function listKnownSessionStoreAgentIds(
   params: { env?: NodeJS.ProcessEnv } = {},
 ): string[] {
   const env = params.env ?? process.env;
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   const ids = new Set(listConfiguredSessionStoreAgentIds(cfg));
   for (const registered of listOpenClawRegisteredAgentDatabases({ env })) {
     const agentId = normalizeAgentId(registered.agentId);
     const storePath = resolveStorePath(cfg.session?.store, { agentId, env });
-    const expectedPath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
+    const expectedPath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId,
+      defaultAgentId,
+      env,
+    }).path;
     if (path.resolve(registered.path) === path.resolve(expectedPath)) {
       ids.add(agentId);
     }
@@ -464,6 +524,7 @@ export function resolveExistingAgentSessionStoreTargetsSync(
   const env = params.env ?? process.env;
   const requested = normalizeAgentId(agentId);
   const storeConfig = cfg.session?.store;
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   if (!isPerAgentSessionStoreConfig(storeConfig)) {
     const fixedTarget = {
       agentId: requested,
@@ -477,7 +538,7 @@ export function resolveExistingAgentSessionStoreTargetsSync(
       configuredTargets.push(fixedTarget);
     }
     const ownedTarget = dedupeSessionStoreTargetsBySqliteTarget(configuredTargets, {
-      defaultAgentId: resolveDefaultAgentId(cfg),
+      defaultAgentId,
       env,
     }).find((target) => normalizeAgentId(target.agentId) === requested);
     if (!ownedTarget) {
@@ -485,6 +546,8 @@ export function resolveExistingAgentSessionStoreTargetsSync(
     }
     const sqlitePath = resolveSqliteTargetFromSessionStorePath(fixedTarget.storePath, {
       agentId: requested,
+      defaultAgentId,
+      env,
     }).path;
     if (sqlitePath && fsSync.existsSync(sqlitePath)) {
       try {
@@ -523,7 +586,7 @@ export function resolveExistingAgentSessionStoreTargetsSync(
   const validatedRequestedTarget = resolveValidatedExistingSessionStoreTargetSync(requestedTarget);
   return dedupeSessionStoreTargetsBySqliteTarget(
     [...(validatedRequestedTarget ? [validatedRequestedTarget] : []), ...discoveredTargets],
-    { defaultAgentId: resolveDefaultAgentId(cfg), env },
+    { defaultAgentId, env },
   );
 }
 

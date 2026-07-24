@@ -141,7 +141,7 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   if (agents.length === 0) {
     throw new Error("No agents configured. Run `openclaw onboard` or `openclaw agents add` first.");
   }
-  const defaults = agents.filter((agent) => agent?.default);
+  const defaults = agents.filter((agent) => agent?.default === true);
   if (defaults.length !== 1) {
     throw new Error(
       `Invalid agent roster: expected exactly one default=true entry, found ${defaults.length}. Run \`openclaw doctor --fix\`.`,
