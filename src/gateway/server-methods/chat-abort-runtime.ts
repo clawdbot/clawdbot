@@ -39,7 +39,7 @@ type AbortedPartialSnapshot = {
 
 function collectSessionAbortPartials(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunBuffers: Map<string, string>;
+  chatRunState: GatewayRequestContext["chatRunState"];
   runIds: ReadonlySet<string>;
   abortOrigin: AbortOrigin;
 }): AbortedPartialSnapshot[] {
@@ -48,7 +48,7 @@ function collectSessionAbortPartials(params: {
     if (!params.runIds.has(runId)) {
       continue;
     }
-    const text = params.chatRunBuffers.get(runId);
+    const text = params.chatRunState.runs.get(runId)?.buffer;
     if (!text || !text.trim()) {
       continue;
     }
@@ -105,9 +105,7 @@ export async function persistAbortedPartials(params: {
 export function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
-    chatRunBuffers: context.chatRunBuffers,
-    chatAbortedRuns: context.chatAbortedRuns,
-    clearChatRunState: context.clearChatRunState,
+    chatRunState: context.chatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     getRuntimeConfig: context.getRuntimeConfig,
@@ -263,7 +261,7 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
   const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
-    chatRunBuffers: params.context.chatRunBuffers,
+    chatRunState: params.context.chatRunState,
     runIds: authorizedRunIdSet,
     abortOrigin: params.abortOrigin,
   });

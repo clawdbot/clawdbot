@@ -9,6 +9,7 @@ import {
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import {
@@ -59,8 +60,7 @@ type IncompleteTurnAttempt = Pick<
   | "itemLifecycle"
   | "messagesSnapshot"
   | "replayMetadata"
-  | "promptErrorSource"
-  | "timedOutDuringCompaction"
+  | "terminal"
   | "toolMetas"
 > &
   Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
@@ -89,7 +89,7 @@ type SilentToolResultAttempt = Pick<
 
 type RunLivenessAttempt = Pick<
   EmbeddedRunAttemptResult,
-  "lastAssistant" | "promptErrorSource" | "replayMetadata" | "timedOutDuringCompaction"
+  "lastAssistant" | "replayMetadata" | "terminal"
 >;
 
 const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"] = {
@@ -496,10 +496,11 @@ export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
 }): boolean {
+  const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
   return (
     !resolveAttemptReplayMetadata(params.attempt).replaySafe ||
-    params.attempt.promptErrorSource === "compaction" ||
-    params.attempt.timedOutDuringCompaction ||
+    terminal.promptErrorSource === "compaction" ||
+    terminal.timedOutDuringCompaction ||
     Boolean(params.incompleteTurnText)
   );
 }
@@ -515,10 +516,8 @@ export function resolveRunLivenessState(params: {
   if (params.incompleteTurnText) {
     return "abandoned";
   }
-  if (
-    params.attempt.promptErrorSource === "compaction" ||
-    params.attempt.timedOutDuringCompaction
-  ) {
+  const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  if (terminal.promptErrorSource === "compaction" || terminal.timedOutDuringCompaction) {
     return "paused";
   }
   if ((params.aborted || params.timedOut) && params.payloadCount === 0) {

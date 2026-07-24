@@ -89,6 +89,21 @@ If a manifest field is still accepted, keep using it until docs and
 diagnostics say otherwise. New code should prefer the documented replacement;
 existing plugins should not break during ordinary minor releases.
 
+### Published channel setup compatibility
+
+Slack, Discord, Signal, and Microsoft Teams packages published through
+`2026.7.1` import channel-specific config schemas from
+`openclaw/plugin-sdk/bundled-channel-config-schema`. The published Slack and
+Discord packages also import `createLegacyCompatChannelDmPolicy` and
+`promptLegacyChannelAllowFromForAccount` from
+`openclaw/plugin-sdk/setup-runtime`.
+
+Those exports remain available as deprecated runtime compatibility adapters.
+New and republished plugins should own their config schemas and setup policy
+locally, using generic primitives from `channel-config-schema` and
+`setup-runtime`. The compatibility exports can be removed only after the
+minimum supported published package versions no longer import them.
+
 ### Channel setup input field compatibility
 
 `ChannelSetupInput` now keeps only the cross-channel setup envelope typed

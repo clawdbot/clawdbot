@@ -2302,7 +2302,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}new?agent=research`);
       await page.getByRole("heading", { name: "Research" }).waitFor();
       await gateway.setOnline(false);
-      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=research&catalog=claude");
@@ -2416,7 +2416,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await gateway.setOnline(false);
-      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
       await gateway.setMethodResponse("agents.list", {
         agents: [
           {
@@ -2473,7 +2473,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const branchesBeforeSameWorkspaceReconnect = (await gateway.getRequests("worktrees.branches"))
         .length;
       await gateway.setOnline(false);
-      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
       await gateway.setOnline(true);
 
       await expect
@@ -2537,7 +2537,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
       await gateway.deferNext("worktrees.branches");
       await gateway.setOnline(false);
-      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
       await gateway.setOnline(true);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
@@ -2606,7 +2606,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
       await gateway.setOnline(false);
-      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
       await gateway.setOnline(true);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
@@ -2664,7 +2664,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
       await gateway.setOnline(false);
-      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
       await gateway.setOnline(true);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
@@ -2729,7 +2729,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
       await gateway.setOnline(false);
-      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
       await gateway.setOnline(true);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
@@ -2805,7 +2805,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const nodeRequestsBefore = (await gateway.getRequests("node.list")).length;
 
       await gateway.setOnline(false);
-      await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+      await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
       await gateway.deferNext("node.list");
       await gateway.setOnline(true);
       await expect
@@ -3034,7 +3034,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         } else {
           const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
           await gateway.setOnline(false);
-          await page.locator(".sidebar-footer-bar__status").waitFor({ timeout: 10_000 });
+          await page.locator(".sidebar-identity-card__subtitle").waitFor({ timeout: 10_000 });
           await gateway.setOnline(true);
           await expect
             .poll(async () => (await gateway.getRequests("agents.list")).length)

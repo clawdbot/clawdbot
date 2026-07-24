@@ -1,20 +1,13 @@
 /** Heartbeat prompt defaults, token stripping, task parsing, and due-time helpers. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
-/** YAML-like task entry parsed from heartbeat monitor scratch. */
-export type HeartbeatTask = {
-  name: string;
-  interval: string;
-  prompt: string;
-};
-
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
-const HEARTBEAT_CONTEXT_PROMPT =
-  "Follow the heartbeat monitor scratch context when provided. Do not infer or repeat old tasks from prior chats.";
+export const HEARTBEAT_CRON_TASK_GUIDANCE =
+  "Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch.";
+const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context when provided. ${HEARTBEAT_CRON_TASK_GUIDANCE} Do not infer or repeat old tasks from prior chats.`;
 /** Default prompt for heartbeat turns when config does not override it. */
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply HEARTBEAT_OK.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
@@ -249,114 +242,4 @@ export function stripHeartbeatToken(
   }
 
   return { shouldSkip: false, text: rest, didStrip: true };
-}
-
-/**
- * Parse heartbeat tasks from HEARTBEAT.md content.
- * Supports YAML-like task definitions:
- *
- * tasks:
- *   - name: email-check
- *     interval: 30m
- *     prompt: "Check for urgent unread emails"
- */
-export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
-  const tasks: HeartbeatTask[] = [];
-  const lines = stripHeartbeatHtmlComments(content);
-  let inTasksBlock = false;
-
-  for (const [i, line] of lines.entries()) {
-    const trimmed = line.trim();
-
-    // Detect tasks block start.
-    if (trimmed === "tasks:") {
-      inTasksBlock = true;
-      continue;
-    }
-
-    if (!inTasksBlock) {
-      continue;
-    }
-
-    // End of tasks block is any new top-level content that is not a task field.
-    const isTaskField =
-      trimmed.startsWith("interval:") ||
-      trimmed.startsWith("prompt:") ||
-      trimmed.startsWith("- name:");
-    if (
-      !isTaskField &&
-      !trimmed.startsWith(" ") &&
-      !trimmed.startsWith("\t") &&
-      trimmed &&
-      !trimmed.startsWith("-")
-    ) {
-      inTasksBlock = false;
-      continue;
-    }
-
-    // Parse a task entry and scan following indented fields.
-    if (trimmed.startsWith("- name:")) {
-      const name = trimmed
-        .replace("- name:", "")
-        .trim()
-        .replace(/^["']|["']$/g, "");
-      let interval = "";
-      let prompt = "";
-
-      // Look ahead for interval and prompt
-      for (const nextLine of lines.slice(i + 1)) {
-        const nextTrimmed = nextLine.trim();
-
-        // End of this task
-        if (nextTrimmed.startsWith("- name:")) {
-          break;
-        }
-
-        // Check for task fields BEFORE checking for end of block
-        if (
-          nextTrimmed.startsWith("interval:") &&
-          (nextLine.startsWith(" ") || nextLine.startsWith("\t"))
-        ) {
-          interval = nextTrimmed
-            .replace("interval:", "")
-            .trim()
-            .replace(/^["']|["']$/g, "");
-        } else if (
-          nextTrimmed.startsWith("prompt:") &&
-          (nextLine.startsWith(" ") || nextLine.startsWith("\t"))
-        ) {
-          prompt = nextTrimmed
-            .replace("prompt:", "")
-            .trim()
-            .replace(/^["']|["']$/g, "");
-        } else if (!nextTrimmed.startsWith(" ") && !nextTrimmed.startsWith("\t") && nextTrimmed) {
-          // End of tasks block
-          inTasksBlock = false;
-          break;
-        }
-      }
-
-      if (name && interval && prompt) {
-        tasks.push({ name, interval, prompt });
-      }
-    }
-  }
-
-  return tasks;
-}
-
-/**
- * Check if a task is due based on its interval and last run time.
- */
-export function isTaskDue(lastRunMs: number | undefined, interval: string, nowMs: number): boolean {
-  if (lastRunMs === undefined) {
-    return true; // Never run, always due
-  }
-
-  try {
-    const intervalMs = parseDurationMs(interval, { defaultUnit: "m" });
-    return nowMs - lastRunMs >= intervalMs;
-  } catch {
-    return false;
-  }
 }

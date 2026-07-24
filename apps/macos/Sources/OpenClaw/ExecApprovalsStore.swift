@@ -791,7 +791,7 @@ extension ExecApprovalsStore {
                     source: item.source,
                     argPattern: item.argPattern,
                     lastUsedAt: now,
-                    lastUsedCommand: command,
+                    lastUsedCommand: self.shouldRecordLastUsedCommand(for: item) ? command : nil,
                     lastResolvedPath: use.resolvedPath)
             }
             if entryChanged {
@@ -804,6 +804,10 @@ extension ExecApprovalsStore {
             file.agents = agents
         }
         return changed
+    }
+
+    private static func shouldRecordLastUsedCommand(for entry: ExecAllowlistEntry) -> Bool {
+        !(entry.argPattern?.hasPrefix("sha256:argv:") ?? false)
     }
 
     @discardableResult

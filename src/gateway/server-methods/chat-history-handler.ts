@@ -576,6 +576,9 @@ async function handleChatHistoryRequest({
   });
   sessionInfo.hasActiveRun = activeRunState.active;
   sessionInfo.activeRunIds = activeRunState.runIds;
+  if (Object.hasOwn(historyPage, "activeLeafEntryId")) {
+    sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
+  }
   const defaults = getSessionDefaults(cfg, defaultModelCatalog, {
     allowPluginNormalization: false,
   });
@@ -587,8 +590,7 @@ async function handleChatHistoryRequest({
   // can restore the in-flight assistant text on switch-back.
   const inFlightRun = resolveInFlightRunSnapshot({
     chatAbortControllers: context.chatAbortControllers,
-    chatRunBuffers: context.chatRunBuffers,
-    chatRunPlanSnapshots: context.chatRunPlanSnapshots,
+    chatRunState: context.chatRunState,
     requestedSessionKey: sessionKey,
     canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
     agentId: activeRunAgentId,

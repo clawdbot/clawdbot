@@ -93,24 +93,17 @@ describe("report-test-temp-creations", () => {
         reason: "new mkdtemp temp directory creation",
         source: bareTempSource,
       },
-      {
-        file: "test/helper.test-support.mjs",
+      ...[
+        "test/helper.test-support.mjs",
+        "test/helpers/temp-fixture.ts",
+        "packages/foo/__tests__/helper.ts",
+        "extensions/discord/src/monitor/message-handler.test-helpers.ts",
+      ].map((file) => ({
+        file,
         line: 2,
         reason: "new mkdtemp temp directory creation",
         source: mkdtempSource,
-      },
-      {
-        file: "test/helpers/temp-fixture.ts",
-        line: 2,
-        reason: "new mkdtemp temp directory creation",
-        source: mkdtempSource,
-      },
-      {
-        file: "packages/foo/__tests__/helper.ts",
-        line: 2,
-        reason: "new mkdtemp temp directory creation",
-        source: mkdtempSource,
-      },
+      })),
     ]);
   });
 

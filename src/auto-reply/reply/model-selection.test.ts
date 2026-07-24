@@ -752,6 +752,7 @@ describe("resolveContextTokens", () => {
 const makeEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
   sessionId: "session-id",
   updatedAt: Date.now(),
+  delivery: { kind: "none" },
   ...overrides,
 });
 

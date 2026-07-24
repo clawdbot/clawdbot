@@ -2008,22 +2008,12 @@ function resolveManagedOutgoingImageRequesterSessionKey(source: string): string 
   }
 }
 
-function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): string {
-  if (!source.startsWith("/")) {
-    return source;
-  }
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  return `${normalizedBasePath}${source}`;
-}
-
 function resolveManagedOutgoingImageBlobUrlCacheKey(
   source: string,
   opts?: ImageRenderOptions,
 ): string {
   const authToken = opts?.authToken?.trim() ?? "";
-  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
-  return `${fetchUrl}::${authToken}`;
+  return `${source}::${authToken}`;
 }
 
 function readManagedOutgoingImageBlobUrl(
@@ -2038,7 +2028,6 @@ async function resolveManagedOutgoingImageBlobUrl(
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
   const authToken = opts?.authToken?.trim() ?? "";
-  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
   const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(source, opts);
   const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
@@ -2065,7 +2054,9 @@ async function resolveManagedOutgoingImageBlobUrl(
         );
       }, MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS);
       try {
-        const res = await fetch(fetchUrl, {
+        // Managed media is a Gateway API at the origin root. Rebasing it under
+        // the Control UI mount path serves the HTML shell instead of image bytes.
+        const res = await fetch(source, {
           method: "GET",
           headers,
           credentials: "same-origin",

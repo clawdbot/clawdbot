@@ -283,34 +283,18 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
-  it.each([
-    {
-      source: "deliveryContext.accountId",
-      accountId: "thinker",
-      session: {
-        key: "agent:main:discord:channel:target-room",
-        kind: "group",
+  it("uses the projected delivery context for the Discord announce account", async () => {
+    const accountId = "thinker";
+    const session = {
+      key: "agent:main:discord:channel:target-room",
+      kind: "group",
+      channel: "discord",
+      deliveryContext: {
         channel: "discord",
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:target-room",
-          accountId: "thinker",
-        },
-      } satisfies GatewaySessionListRow,
-    },
-    {
-      source: "lastAccountId",
-      accountId: "scout",
-      session: {
-        key: "agent:main:discord:channel:target-room",
-        kind: "group",
-        channel: "discord",
-        lastChannel: "discord",
-        lastTo: "channel:target-room",
-        lastAccountId: "scout",
-      } satisfies GatewaySessionListRow,
-    },
-  ])("uses Discord session $source for announce accountId", async ({ accountId, session }) => {
+        to: "channel:target-room",
+        accountId,
+      },
+    } satisfies GatewaySessionListRow;
     sessionListRows = [session];
 
     await runSessionsSendA2AFlow({

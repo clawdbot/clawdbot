@@ -2685,6 +2685,7 @@ describe("loadChatHistory filtering", () => {
       thinkingLevel: "low",
       verboseLevel: "full",
       sessionInfo: {
+        activeLeafEntryId: "leaf-rendered",
         key: "main",
         sessionId: "session-main",
         effectiveQueueMode: "interrupt",
@@ -2704,10 +2705,31 @@ describe("loadChatHistory filtering", () => {
 
     expect(result?.sessionInfo?.sessionId).toBe("session-main");
     expect(state.currentSessionId).toBe("session-main");
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-rendered");
     expect(state.chatThinkingLevel).toBe("medium");
     expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatQueueModeOverride).toBe("interrupt");
     expect(state.chatEffectiveQueueMode).toBe("interrupt");
+  });
+
+  it("preserves the displayed leaf when history metadata is not authoritative for it", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [],
+      sessionInfo: {
+        key: "main",
+        sessionId: "session-main",
+        updatedAt: 123,
+      },
+    });
+    const state = createState({
+      chatDisplayedLeafEntryId: "leaf-from-tail",
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-from-tail");
   });
 
   it("omits literal global agentId until selected/default agent is known", async () => {

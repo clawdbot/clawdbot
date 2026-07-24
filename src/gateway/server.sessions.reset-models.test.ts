@@ -6,8 +6,10 @@ import path from "node:path";
 import { expect, test } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -21,7 +23,7 @@ type ResetSessionEntry = {
   sessionId?: string;
   sessionFile?: string;
   chatType?: string;
-  channel?: string;
+  delivery?: SessionEntry["delivery"];
   groupId?: string;
   subject?: string;
   groupChannel?: string;
@@ -75,12 +77,6 @@ type ResetSessionEntry = {
   >;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string;
-  };
   label?: string;
 };
 
@@ -122,7 +118,15 @@ test("sessions.reset stamps provenance when it materializes a missing row", asyn
 
 const ownedChildMetadata = {
   chatType: "group",
-  channel: "discord",
+  delivery: normalizeSessionDeliveryState({
+    context: {
+      channel: "discord",
+      to: "discord:child",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    },
+    origin: { provider: "discord", chatType: "group" },
+  }),
   groupId: "group-1",
   subject: "Ops Thread",
   groupChannel: "dev",
@@ -166,12 +170,6 @@ const ownedChildMetadata = {
     },
   },
   claudeCliSessionId: "cli-session-123",
-  deliveryContext: {
-    channel: "discord",
-    to: "discord:child",
-    accountId: "acct-1",
-    threadId: "thread-1",
-  },
   label: "owned child",
 } satisfies SessionEntryOverrides & ResetSessionEntry;
 

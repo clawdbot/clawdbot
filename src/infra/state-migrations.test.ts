@@ -1424,7 +1424,11 @@ describe("state migrations", () => {
     >;
     for (const { legacyKey, canonicalKey, sessionId, runtimeSessionName } of cases) {
       expect(store[legacyKey]).toBeUndefined();
-      expect(store[canonicalKey]).toEqual({ sessionId, updatedAt: 10 });
+      expect(store[canonicalKey]).toEqual({
+        sessionId,
+        updatedAt: 10,
+        delivery: { kind: "none" },
+      });
       expect(
         readAcpSessionMetaForEntry({
           sessionKey: canonicalKey,

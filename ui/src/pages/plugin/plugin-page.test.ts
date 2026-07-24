@@ -98,7 +98,6 @@ function externalPluginConfig(
     localMediaPreviewRoots: [],
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
-    chatMessageMaxWidth: null,
     terminalEnabled: false,
     pluginFrameGrants,
   };

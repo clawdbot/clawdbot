@@ -1,7 +1,8 @@
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { loadChatHistory, type ChatState } from "./chat-history.ts";
+import { loadChatBranches, loadChatHistory, type ChatState } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
   resumeStoredChatOutboxes as resumeStoredChatOutboxesDrain,
@@ -20,7 +21,11 @@ import {
   reconnectSafeQueuedSendState,
   setChatError,
 } from "./chat-send-queue-state.ts";
-import { requestChatSend } from "./chat-send-request.ts";
+import {
+  isActiveLeafChangedError,
+  requestChatSend,
+  resolveDisplayedLeafEntryId,
+} from "./chat-send-request.ts";
 import { chatOutboxDrainDependencies, sendQueuedChatMessage } from "./chat-send.ts";
 import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -54,16 +59,29 @@ export async function sendChatMessageWithGeneratedRunId(
     setChatError(state, null);
   }
   const runId = options.runId ?? generateUUID();
+  // Only an authoritative history/cache commit can advance this token. Optimistic
+  // sends do not know their persisted leaf id; direct sends must fail closed while
+  // restored outbox drains intentionally omit the precondition.
+  const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
   try {
     return await requestChatSend(state, {
       message: msg,
       attachments,
       runId,
+      ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
       ...(options.queueMode ? { queueMode: options.queueMode } : {}),
     });
   } catch (err) {
     if (canApplyError()) {
-      setChatError(state, formatConnectError(err));
+      setChatError(
+        state,
+        isActiveLeafChangedError(err)
+          ? t("chat.sendErrors.activeLeafChanged")
+          : formatConnectError(err),
+      );
+      if (isActiveLeafChangedError(err)) {
+        void Promise.all([loadChatHistory(state), loadChatBranches(state)]);
+      }
     }
     return null;
   }

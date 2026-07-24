@@ -89,6 +89,13 @@ export async function listSqliteSessionBranches(
   }
 }
 
+/** Resolves the active branch leaf from the same transcript tree used by branch listing. */
+export function resolveSessionTranscriptActiveLeafEntryId(
+  events: readonly TranscriptEvent[],
+): string | undefined {
+  return scanSessionTranscriptTree(events).leafId ?? undefined;
+}
+
 export async function rewindSqliteSessionToMessage(
   params: SessionMessageCutMutationParams,
 ): Promise<SessionMessageCutMutationResult> {

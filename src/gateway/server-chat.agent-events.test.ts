@@ -258,7 +258,7 @@ describe("agent event handler", () => {
       },
       { ts: 1_000 },
     );
-    expect(chatRunState.planSnapshots.get("client-run")).toEqual({
+    expect(chatRunState.runs.get("client-run")?.planSnapshot).toEqual({
       explanation: "Initial plan",
       steps: [
         { step: "Legacy step", status: "pending" },
@@ -273,7 +273,7 @@ describe("agent event handler", () => {
       { phase: "update", steps: [{ step: "Replacement", status: "completed" }] },
       { seq: 2, ts: 1_100 },
     );
-    expect(chatRunState.planSnapshots.get("client-run")).toEqual({
+    expect(chatRunState.runs.get("client-run")?.planSnapshot).toEqual({
       steps: [{ step: "Replacement", status: "completed" }],
     });
 
@@ -287,13 +287,13 @@ describe("agent event handler", () => {
         ts: 1_200,
       },
     );
-    expect(chatRunState.planSnapshots.get("client-run")).toEqual({ steps: [] });
+    expect(chatRunState.runs.get("client-run")?.planSnapshot).toEqual({ steps: [] });
 
-    chatRunState.planSnapshots.set("client-run", {
+    chatRunState.getOrCreate("client-run").planSnapshot = {
       steps: [{ step: "Temporary", status: "pending" }],
-    });
+    };
     chatRunState.clearRun("client-run");
-    expect(chatRunState.planSnapshots.has("client-run")).toBe(false);
+    expect(chatRunState.runs.get("client-run")?.planSnapshot).toBeUndefined();
   });
 
   it.each([
@@ -608,7 +608,7 @@ describe("agent event handler", () => {
         receivedAtMs: 0,
       },
     });
-    chatRunState.buffers.set("client-final", "Final only reply");
+    chatRunState.getOrCreate("client-final").buffer = "Final only reply";
 
     emitAgentEvent(handler, "run-final-only", "lifecycle", { phase: "end" });
 
@@ -2493,7 +2493,7 @@ describe("agent event handler", () => {
       });
     agentRunSeq.set("shared-run", 4);
     registerChatRun(chatRunState, "shared-run", "session-recovery", "shared-run");
-    chatRunState.buffers.set("shared-run", "new retry output");
+    chatRunState.getOrCreate("shared-run").buffer = "new retry output";
 
     emitAgentEvent(
       handler,
@@ -2513,7 +2513,7 @@ describe("agent event handler", () => {
     );
 
     expect(chatRunState.registry.peek("shared-run")).toBeDefined();
-    expect(chatRunState.buffers.get("shared-run")).toBe("new retry output");
+    expect(chatRunState.runs.get("shared-run")?.buffer).toBe("new retry output");
     expect(agentRunSeq.get("shared-run")).toBe(4);
     expect(clearAgentRunContext).not.toHaveBeenCalled();
     expect(clearTrackedActiveRun).not.toHaveBeenCalled();
@@ -2717,7 +2717,7 @@ describe("agent event handler", () => {
   it("keeps aborted chat run markers through terminal lifecycle cleanup", () => {
     const { broadcast, chatRunState, handler } = createHarness();
     registerNamedChatRun(chatRunState, "aborted");
-    chatRunState.abortedRuns.set("client-aborted", createChatAbortMarker());
+    chatRunState.getOrCreate("client-aborted").abortMarker = createChatAbortMarker();
 
     emitAgentEvent(
       handler,
@@ -2727,7 +2727,7 @@ describe("agent event handler", () => {
       { seq: 2, ts: 1_500 },
     );
 
-    expect(chatRunState.abortedRuns.has("client-aborted")).toBe(true);
+    expect(chatRunState.runs.get("client-aborted")?.abortMarker).toBeDefined();
     expect(chatRunState.registry.peek("run-aborted")).toBeUndefined();
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
   });
@@ -2874,7 +2874,7 @@ describe("agent event handler", () => {
     "ignores stale aborted markers from older same-key runs for fresh chat lifecycle events ($name)",
     ({ marker }) => {
       const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({ now: 2_000 });
-      chatRunState.abortedRuns.set("client-stale-abort", marker());
+      chatRunState.getOrCreate("client-stale-abort").abortMarker = marker();
       registerNamedChatRun(chatRunState, "stale-abort");
 
       emitAgentEvent(
@@ -2899,7 +2899,7 @@ describe("agent event handler", () => {
       expect(deltaPayload.state).toBe("delta");
       expect(finalPayload.state).toBe("final");
       expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
-      expect(chatRunState.abortedRuns.has("client-stale-abort")).toBe(true);
+      expect(chatRunState.runs.get("client-stale-abort")?.abortMarker).toBeDefined();
       expect(chatRunState.registry.peek("run-stale-abort")).toBeUndefined();
     },
   );
@@ -2907,7 +2907,7 @@ describe("agent event handler", () => {
   it("honors same-millisecond abort markers from the current same-key run", () => {
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness({ now: 3_000 });
     registerNamedChatRun(chatRunState, "current-abort");
-    chatRunState.abortedRuns.set("client-current-abort", createChatAbortMarker());
+    chatRunState.getOrCreate("client-current-abort").abortMarker = createChatAbortMarker();
 
     emitAgentEvent(
       handler,
@@ -2926,7 +2926,7 @@ describe("agent event handler", () => {
 
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
-    expect(chatRunState.abortedRuns.has("client-current-abort")).toBe(true);
+    expect(chatRunState.runs.get("client-current-abort")?.abortMarker).toBeDefined();
     expect(chatRunState.registry.peek("run-current-abort")).toBeUndefined();
   });
 
@@ -3855,7 +3855,7 @@ describe("agent event handler", () => {
       isControlUiVisible: false,
       verboseLevel: "off",
     });
-    chatRunState.abortedRuns.set("run-hidden-commentary-aborted", 1_000);
+    chatRunState.getOrCreate("run-hidden-commentary-aborted").abortMarker = 1_000;
 
     emitAgentEvent(handler, "run-hidden-commentary-aborted", "assistant", {
       text: "This aborted commentary must not be mirrored.",

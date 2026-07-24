@@ -71,16 +71,25 @@ type SidebarAgentMenuParams = {
 };
 
 type SidebarIdentityMenuParams = {
-  position: { x: number; bottom: number } | null;
+  position: { x: number; bottom: number; width: number } | null;
   canPairDevice: boolean;
   basePath: string;
   gatewayVersion: string | null;
+  selfName?: string;
+  selfEmail?: string;
+  offline: boolean;
   themeMode: ThemeMode;
+  triggerWidth: number;
   onTabAway: () => void;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
+  onRetryConnect?: () => void;
 };
+
+function isApplePlatform(): boolean {
+  return /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? "");
+}
 
 /** Rows for the chip switcher. Small rosters list everything; past
     QUICK_SWITCH_AGENT_LIMIT the menu shows pinned agents (plus the active
@@ -356,10 +365,12 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
   if (!position) {
     return nothing;
   }
+  const profileLabel = params.selfEmail ?? params.selfName;
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
         class="sidebar-customize-menu sidebar-identity-menu"
+        style=${`--sidebar-identity-menu-min-width: ${params.triggerWidth}px`}
         .open=${true}
         placement="top-start"
         .distance=${0}
@@ -385,11 +396,20 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
             case `${COMMAND_VALUE_PREFIX}profile`:
               params.onNavigate("profile", { hash: "#settings-profile-identity" });
               break;
+            case `${COMMAND_VALUE_PREFIX}settings`:
+              params.onNavigate("config");
+              break;
+            case `${COMMAND_VALUE_PREFIX}usage`:
+              params.onNavigate("usage");
+              break;
             case `${COMMAND_VALUE_PREFIX}pair-mobile`:
               params.onPairMobile();
               break;
             case `${COMMAND_VALUE_PREFIX}apps`:
               params.onNavigate("apps");
+              break;
+            case `${COMMAND_VALUE_PREFIX}retry-connect`:
+              params.onRetryConnect?.();
               break;
           }
         }}
@@ -405,9 +425,22 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           aria-label=${t("profilePage.identity.menuLabel")}
           style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
-        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:profile">
-          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
-          <span class="sidebar-customize-menu__text">${titleForRoute("profile")}</span>
+        ${profileLabel
+          ? html`<wa-dropdown-item class="sidebar-identity-menu__header" value="command:profile">
+                ${profileLabel}
+              </wa-dropdown-item>
+              <div class="sidebar-customize-menu__separator" role="separator"></div>`
+          : nothing}
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
+          <span class="sidebar-customize-menu__text">${t("nav.settings")}</span>
+          <span slot="details" class="session-menu__shortcut" aria-hidden="true"
+            >${isApplePlatform() ? "⌘⇧," : "Ctrl+Shift+,"}</span
+          >
+        </wa-dropdown-item>
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:usage">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.coins}</span>
+          <span class="sidebar-customize-menu__text">${titleForRoute("usage")}</span>
         </wa-dropdown-item>
         <wa-dropdown-item
           class="sidebar-customize-menu__item sidebar-pair-mobile"
@@ -432,6 +465,15 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
           <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
           ${renderIdentityMenuHelpSubmenu()}
         </wa-dropdown-item>
+        ${params.offline
+          ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>
+              <wa-dropdown-item
+                class="sidebar-customize-menu__item sidebar-identity-menu__retry"
+                value="command:retry-connect"
+              >
+                <span class="sidebar-customize-menu__text">${t("connection.retryNow")}</span>
+              </wa-dropdown-item>`
+          : nothing}
         <div class="sidebar-customize-menu__separator" role="separator"></div>
         <div class="sidebar-identity-menu__footer">
           <openclaw-sidebar-build-chip

@@ -625,7 +625,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                 errorMessage: returnedAgentErrorMessage,
               });
             }
-            if (!context.chatAbortedRuns.has(clientRunId)) {
+            if (!context.chatRunState.hasAbortMarker(clientRunId)) {
               const returnedAgentError = shouldBroadcastAgentError
                 ? errorShape(
                     ErrorCodes.UNAVAILABLE,
@@ -663,7 +663,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
           },
           dispatchStartedAtMs,
         );
-        if (queuedFollowupEnqueued && !context.chatAbortedRuns.has(clientRunId)) {
+        if (queuedFollowupEnqueued && !context.chatRunState.hasAbortMarker(clientRunId)) {
           // Successful queue admission ends this client run. The later
           // aggregate/followup owns its own run id.
           broadcastChatFinal({

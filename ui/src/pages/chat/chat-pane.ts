@@ -11,6 +11,12 @@ import {
   type SessionDiscussionInfo,
   type SessionDiscussionState,
   type SessionObserverDigest,
+  type SessionSharingRole,
+  type SessionSuggestion,
+  type SessionSuggestionEvent,
+  type SessionSuggestionResolution,
+  type SessionSuggestionsListResult,
+  type SessionTypingEvent,
   type SessionsCatalogContinueResult,
   type SessionsCatalogReadResult,
   type SessionsFilesRevealResult,
@@ -27,7 +33,7 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
   SessionMembersListResult,
@@ -74,7 +80,10 @@ import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import { icons } from "../../components/icons.ts";
 import { listSessionCreators } from "../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
-import { hasSessionPresenceViewers } from "../../components/viewer-facepile.ts";
+import {
+  hasMultiplePresenceIdentities,
+  hasSessionPresenceViewers,
+} from "../../components/viewer-facepile.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 import {
@@ -659,6 +668,18 @@ class ChatPane extends OpenClawLightDomElement {
   private readonly taskSuggestionBusyIds = new Set<string>();
   private readonly taskSuggestionOperations = new Map<string, symbol>();
   private taskSuggestionsRequestVersion = 0;
+  private sessionSuggestions: SessionSuggestion[] = [];
+  private sessionSuggestionRole: SessionSharingRole | undefined;
+  private readonly sessionSuggestionBusyIds = new Set<string>();
+  private sessionSuggestionsRequestVersion = 0;
+  private sessionSuggestionsRefreshPromise: Promise<void> | undefined;
+  private sessionSuggestionsRefreshVersion: number | undefined;
+  private sessionSuggestionsRefreshQueued = false;
+  private sessionSuggestionTargetSignature = "";
+  private sessionSuggestionAddOperation: symbol | undefined;
+  private sessionSuggestionEditOperation: symbol | undefined;
+  private readonly typingActors = new Map<string, { label: string; expiresAt: number }>();
+  private readonly typingTimers = new Map<string, number>();
   private sessionPullRequests: ControlUiSessionPullRequest[] = [];
   private sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   private sessionPullRequestsRateLimited = false;
@@ -745,6 +766,413 @@ class ChatPane extends OpenClawLightDomElement {
         suggestion.agentId,
       ),
     );
+  }
+
+  private hasMultipleIdentities(): boolean {
+    return hasMultiplePresenceIdentities(this.presencePayload);
+  }
+
+  private sessionSuggestionMatchesCurrentSession(suggestion: SessionSuggestion): boolean {
+    const state = this.state;
+    return Boolean(
+      state?.connected &&
+      uiSessionEventMatches(
+        {
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+          sessionKey: state.sessionKey,
+        },
+        suggestion.sessionKey,
+        suggestion.agentId,
+      ),
+    );
+  }
+
+  private isCurrentSessionArchived(state: ChatPageHost): boolean {
+    return (
+      state.selectedChatSessionArchived ||
+      state.sessionsResult?.sessions.some(
+        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
+      ) === true
+    );
+  }
+
+  private resetSessionSuggestions(): void {
+    this.sessionSuggestionsRequestVersion += 1;
+    this.sessionSuggestionsRefreshQueued = false;
+    this.sessionSuggestions = [];
+    this.sessionSuggestionRole = undefined;
+    this.sessionSuggestionBusyIds.clear();
+    this.sessionSuggestionAddOperation = undefined;
+    this.sessionSuggestionEditOperation = undefined;
+  }
+
+  private syncSessionSuggestionTarget(
+    agentId: string,
+    session: GatewaySessionRow | undefined,
+  ): void {
+    const signature = session
+      ? `${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
+      : "";
+    if (signature === this.sessionSuggestionTargetSignature) {
+      return;
+    }
+    this.sessionSuggestionTargetSignature = signature;
+    this.resetSessionSuggestions();
+    this.clearTypingActors();
+    void this.refreshSessionSuggestions();
+  }
+
+  private refreshSessionSuggestions(): Promise<void> {
+    if (this.sessionSuggestionsRefreshPromise) {
+      if (this.sessionSuggestionsRefreshVersion !== this.sessionSuggestionsRequestVersion) {
+        this.sessionSuggestionsRefreshQueued = true;
+      }
+      return this.sessionSuggestionsRefreshPromise;
+    }
+    const requestVersion = ++this.sessionSuggestionsRequestVersion;
+    this.sessionSuggestionsRefreshVersion = requestVersion;
+    const refresh = this.loadSessionSuggestions(requestVersion);
+    const tracked = refresh.finally(() => {
+      if (this.sessionSuggestionsRefreshPromise !== tracked) {
+        return;
+      }
+      this.sessionSuggestionsRefreshPromise = undefined;
+      this.sessionSuggestionsRefreshVersion = undefined;
+      if (this.sessionSuggestionsRefreshQueued) {
+        this.sessionSuggestionsRefreshQueued = false;
+        void this.refreshSessionSuggestions();
+      }
+    });
+    this.sessionSuggestionsRefreshPromise = tracked;
+    return tracked;
+  }
+
+  private async loadSessionSuggestions(requestVersion: number): Promise<void> {
+    const targetSignature = this.sessionSuggestionTargetSignature;
+    const scope = this.captureConnectionScope();
+    const row = scope?.state.sessionsResult?.sessions.find((candidate) =>
+      areUiSessionKeysEquivalent(candidate.key, scope.state.sessionKey),
+    );
+    // Solo dormancy intentionally hides persisted rows too; when a second identity
+    // returns, the presence transition below triggers a fresh authoritative list.
+    if (
+      !scope ||
+      !row ||
+      !this.hasMultipleIdentities() ||
+      !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "session.suggestions.list")
+    ) {
+      this.sessionSuggestions = [];
+      this.sessionSuggestionRole = undefined;
+      this.requestUpdate();
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    try {
+      const result = await scope.client.request<SessionSuggestionsListResult>(
+        "session.suggestions.list",
+        {
+          sessionKey,
+          ...scopedAgentParamsForSession(scope.state, sessionKey),
+        },
+      );
+      if (!this.isConnectionScopeCurrent(scope) || scope.state.sessionKey !== sessionKey) {
+        return;
+      }
+      if (
+        requestVersion !== this.sessionSuggestionsRequestVersion ||
+        targetSignature !== this.sessionSuggestionTargetSignature
+      ) {
+        return;
+      }
+      this.sessionSuggestions = result.suggestions;
+      this.sessionSuggestionRole = result.role;
+      this.requestUpdate();
+    } catch {
+      if (
+        requestVersion === this.sessionSuggestionsRequestVersion &&
+        targetSignature === this.sessionSuggestionTargetSignature
+      ) {
+        this.sessionSuggestions = [];
+        this.sessionSuggestionRole = undefined;
+        this.requestUpdate();
+      }
+    }
+  }
+
+  private handleSessionSuggestionEvent(event: SessionSuggestionEvent): void {
+    if (
+      !this.hasMultipleIdentities() ||
+      !this.sessionSuggestionMatchesCurrentSession(event.suggestion)
+    ) {
+      return;
+    }
+    const shouldRefresh =
+      this.sessionSuggestionsRefreshPromise !== undefined ||
+      this.sessionSuggestionRole !== undefined;
+    this.sessionSuggestionsRequestVersion += 1;
+    const selfId = this.context.gateway.snapshot.selfUser?.id;
+    if (this.sessionSuggestionRole === "viewer" && event.suggestion.author.id !== selfId) {
+      return;
+    }
+    if (event.action === "added") {
+      this.sessionSuggestions = [
+        ...this.sessionSuggestions.filter((item) => item.id !== event.suggestion.id),
+        event.suggestion,
+      ].toSorted(
+        (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
+      );
+    } else if (event.suggestion.author.id === selfId) {
+      this.sessionSuggestions = this.sessionSuggestions.map((item) =>
+        item.id === event.suggestion.id ? event.suggestion : item,
+      );
+    } else {
+      this.sessionSuggestions = this.sessionSuggestions.filter(
+        (item) => item.id !== event.suggestion.id,
+      );
+    }
+    this.sessionSuggestionBusyIds.delete(event.suggestion.id);
+    this.requestUpdate();
+    if (shouldRefresh) {
+      void this.refreshSessionSuggestions();
+    }
+  }
+
+  private async addCurrentSessionSuggestion(): Promise<void> {
+    const scope = this.captureConnectionScope();
+    const text = scope?.state.chatMessage ?? "";
+    if (
+      !scope ||
+      !text.trim() ||
+      this.sessionSuggestionAddOperation ||
+      !this.hasMultipleIdentities()
+    ) {
+      return;
+    }
+    if (scope.state.chatAttachments.length > 0) {
+      scope.state.chatError = t("chat.sessionSuggestions.attachmentsUnsupported");
+      scope.state.lastError = scope.state.chatError;
+      scope.state.requestUpdate?.();
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    const operation = Symbol();
+    this.sessionSuggestionAddOperation = operation;
+    this.requestUpdate();
+    try {
+      const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
+        "session.suggestions.add",
+        {
+          sessionKey,
+          text,
+          ...scopedAgentParamsForSession(scope.state, sessionKey),
+        },
+      );
+      if (
+        this.sessionSuggestionAddOperation !== operation ||
+        !this.isConnectionScopeCurrent(scope) ||
+        scope.state.sessionKey !== sessionKey
+      ) {
+        return;
+      }
+      if (scope.state.chatMessage === text) {
+        scope.state.handleChatDraftChange("");
+      }
+      this.sessionSuggestions = [
+        ...this.sessionSuggestions.filter((item) => item.id !== result.suggestion.id),
+        result.suggestion,
+      ];
+    } catch (error) {
+      if (
+        this.sessionSuggestionAddOperation === operation &&
+        this.isConnectionScopeCurrent(scope)
+      ) {
+        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.lastError = scope.state.chatError;
+      }
+    } finally {
+      if (this.sessionSuggestionAddOperation === operation) {
+        this.sessionSuggestionAddOperation = undefined;
+        this.requestUpdate();
+      }
+    }
+  }
+
+  private async resolveCurrentSessionSuggestion(
+    suggestion: SessionSuggestion,
+    resolution: SessionSuggestionResolution,
+  ): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (
+      !scope ||
+      this.sessionSuggestionBusyIds.has(suggestion.id) ||
+      (resolution === "edit" && this.sessionSuggestionEditOperation !== undefined) ||
+      !this.sessionSuggestionMatchesCurrentSession(suggestion)
+    ) {
+      return;
+    }
+    if (this.isCurrentSessionArchived(scope.state) && resolution !== "dismiss") {
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    const targetSignature = this.sessionSuggestionTargetSignature;
+    const isCurrentTarget = () =>
+      this.isConnectionScopeCurrent(scope) &&
+      scope.state.sessionKey === sessionKey &&
+      this.sessionSuggestionTargetSignature === targetSignature;
+    const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
+    const editOperation = resolution === "edit" ? Symbol() : undefined;
+    if (editOperation) {
+      this.sessionSuggestionEditOperation = editOperation;
+    }
+    this.sessionSuggestionBusyIds.add(suggestion.id);
+    if (resolution === "edit") {
+      scope.state.handleChatDraftChange(suggestion.text);
+      queueMicrotask(() =>
+        this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+          preventScroll: true,
+        }),
+      );
+    }
+    this.requestUpdate();
+    try {
+      const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
+        "session.suggestions.resolve",
+        {
+          sessionKey,
+          id: suggestion.id,
+          resolution,
+          ...scopedAgentParamsForSession(scope.state, sessionKey),
+        },
+      );
+      if (!isCurrentTarget()) {
+        return;
+      }
+      if (result.suggestion.author.id === this.context.gateway.snapshot.selfUser?.id) {
+        this.sessionSuggestions = [
+          ...this.sessionSuggestions.filter((item) => item.id !== suggestion.id),
+          result.suggestion,
+        ].toSorted(
+          (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
+        );
+      } else {
+        this.sessionSuggestions = this.sessionSuggestions.filter(
+          (item) => item.id !== suggestion.id,
+        );
+      }
+    } catch (error) {
+      if (isCurrentTarget()) {
+        if (
+          resolution === "edit" &&
+          error instanceof GatewayRequestError &&
+          previousEditDraft !== undefined &&
+          scope.state.chatMessage === suggestion.text
+        ) {
+          scope.state.handleChatDraftChange(previousEditDraft);
+        }
+        scope.state.chatError = error instanceof Error ? error.message : String(error);
+        scope.state.lastError = scope.state.chatError;
+      }
+    } finally {
+      if (isCurrentTarget()) {
+        if (this.sessionSuggestionEditOperation === editOperation) {
+          this.sessionSuggestionEditOperation = undefined;
+        }
+        this.sessionSuggestionBusyIds.delete(suggestion.id);
+        this.requestUpdate();
+      }
+    }
+  }
+
+  private clearTypingActors(): void {
+    for (const timer of this.typingTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    this.typingTimers.clear();
+    this.typingActors.clear();
+  }
+
+  private handleSessionTypingEvent(event: SessionTypingEvent): void {
+    const selfId = this.context.gateway.snapshot.selfUser?.id;
+    const state = this.state;
+    const selectedSession = state?.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
+    if (
+      !this.hasMultipleIdentities() ||
+      event.actor.id === selfId ||
+      !state ||
+      selectedSession?.sessionId !== event.sessionId ||
+      !uiSessionEventMatches(
+        {
+          agentsList: this.context.agents.state.agentsList,
+          hello: this.context.gateway.snapshot.hello,
+          sessionKey: state.sessionKey,
+        },
+        event.sessionKey,
+        event.agentId,
+      )
+    ) {
+      return;
+    }
+    const priorTimer = this.typingTimers.get(event.actor.id);
+    if (priorTimer !== undefined) {
+      window.clearTimeout(priorTimer);
+      this.typingTimers.delete(event.actor.id);
+    }
+    if (!event.typing) {
+      this.typingActors.delete(event.actor.id);
+      this.requestUpdate();
+      return;
+    }
+    const expiresAt = Date.now() + 2_500;
+    this.typingActors.set(event.actor.id, {
+      label: event.actor.label ?? event.actor.id,
+      expiresAt,
+    });
+    this.typingTimers.set(
+      event.actor.id,
+      window.setTimeout(() => {
+        if (this.typingActors.get(event.actor.id)?.expiresAt === expiresAt) {
+          this.typingActors.delete(event.actor.id);
+          this.typingTimers.delete(event.actor.id);
+          this.requestUpdate();
+        }
+      }, 2_500),
+    );
+    this.requestUpdate();
+  }
+
+  private typingLabel(): string | null {
+    const names = [...this.typingActors.values()].map((actor) => actor.label).toSorted();
+    if (names.length === 0) {
+      return null;
+    }
+    return names.length === 1
+      ? t("chat.sessionSuggestions.typing", { name: names[0] ?? "" })
+      : t("chat.sessionSuggestions.typingMany", { names: names.join(", ") });
+  }
+
+  private sendTypingState(typing: boolean): void {
+    const scope = this.captureConnectionScope();
+    if (!scope || !this.hasMultipleIdentities()) {
+      return;
+    }
+    const sessionKey = scope.state.sessionKey;
+    const sessionId = scope.state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, sessionKey),
+    )?.sessionId;
+    if (!sessionId) {
+      return;
+    }
+    void scope.client
+      .request("session.typing", {
+        sessionKey,
+        sessionId,
+        typing,
+        ...scopedAgentParamsForSession(scope.state, sessionKey),
+      })
+      .catch(() => undefined);
   }
 
   private async refreshTaskSuggestions(): Promise<void> {
@@ -1114,6 +1542,8 @@ class ChatPane extends OpenClawLightDomElement {
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
+    this.resetSessionSuggestions();
+    this.clearTypingActors();
     this.resetSessionPullRequests();
     if (catalogKey) {
       this.openCatalogSession(catalogKey, state);
@@ -1138,6 +1568,7 @@ class ChatPane extends OpenClawLightDomElement {
     }
     state.requestUpdate();
     void this.refreshTaskSuggestions();
+    void this.refreshSessionSuggestions();
     void this.refreshSessionPullRequests();
     const scheduleHistoryScroll = () => {
       if (state.sessionKey !== nextSessionKey) {
@@ -2488,6 +2919,7 @@ class ChatPane extends OpenClawLightDomElement {
           pageState.chatMessages = snapshot.messages;
           pageState.chatHistoryPagination = snapshot.pagination;
           pageState.currentSessionId = snapshot.sessionId;
+          pageState.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;
         }
         admitInitialUserMessageHandoff(pageState.initialUserMessage, pageState, initialSessionKey);
       }
@@ -2524,8 +2956,15 @@ class ChatPane extends OpenClawLightDomElement {
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
         if (event.event === "presence") {
+          const hadMultipleIdentities = this.hasMultipleIdentities();
           const presence = readPresenceEntries(event.payload);
           this.presencePayload = presence ? { presence } : undefined;
+          if (!this.hasMultipleIdentities()) {
+            this.resetSessionSuggestions();
+            this.clearTypingActors();
+          } else if (!hadMultipleIdentities) {
+            void this.refreshSessionSuggestions();
+          }
         }
         if (state) {
           handleQuestionPromptEvent(this.questionPromptState, event);
@@ -2533,6 +2972,12 @@ class ChatPane extends OpenClawLightDomElement {
         if (state && !parseCatalogSessionKey(state.sessionKey)) {
           if (event.event === "task.suggestion" && event.payload) {
             this.handleTaskSuggestionEvent(event.payload as TaskSuggestionEvent);
+          }
+          if (event.event === "session.suggestion" && event.payload) {
+            this.handleSessionSuggestionEvent(event.payload as SessionSuggestionEvent);
+          }
+          if (event.event === "session.typing" && event.payload) {
+            this.handleSessionTypingEvent(event.payload as SessionTypingEvent);
           }
           if (event.event === "session.observer" && event.payload) {
             this.recordObserverDigest(event.payload as SessionObserverDigest);
@@ -2649,6 +3094,8 @@ class ChatPane extends OpenClawLightDomElement {
     this.taskSuggestions = [];
     this.taskSuggestionBusyIds.clear();
     this.taskSuggestionOperations.clear();
+    this.resetSessionSuggestions();
+    this.clearTypingActors();
     this.resetSessionPullRequests();
     this.resetOlderMessagesViewport();
     this.nativeDraftCleanup?.();
@@ -2708,6 +3155,10 @@ class ChatPane extends OpenClawLightDomElement {
     if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
     }
+    this.syncSessionSuggestionTarget(
+      stateValue.agentId ?? resolveChatAgentId(state) ?? "main",
+      selectedSession,
+    );
     if (selectedSessionDeleted) {
       const agentId =
         parseAgentSessionKey(state.sessionKey)?.agentId ??
@@ -2763,15 +3214,13 @@ class ChatPane extends OpenClawLightDomElement {
       !rootsChanged &&
       state.terminalAvailable === previousTerminalAvailable &&
       state.embedSandboxMode === config.embedSandboxMode &&
-      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
-      state.chatMessageMaxWidth === config.chatMessageMaxWidth
+      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls
     ) {
       return;
     }
     state.localMediaPreviewRoots = config.localMediaPreviewRoots;
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
-    state.chatMessageMaxWidth = config.chatMessageMaxWidth;
     state.requestUpdate?.();
   }
 
@@ -2802,6 +3251,8 @@ class ChatPane extends OpenClawLightDomElement {
       this.taskSuggestions = [];
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
+      this.resetSessionSuggestions();
+      this.clearTypingActors();
       this.sessionDiscussionStates.clear();
       this.sessionDiscussionOpenUrls.clear();
       this.sessionParticipationTracker.reset();
@@ -2935,6 +3386,7 @@ class ChatPane extends OpenClawLightDomElement {
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
       void this.refreshTaskSuggestions();
+      void this.refreshSessionSuggestions();
       void this.refreshSessionPullRequests();
     }
     this.reconcileWaitingApprovalSnapshot();
@@ -3543,20 +3995,37 @@ class ChatPane extends OpenClawLightDomElement {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
-    const selectedSessionArchived =
-      state.selectedChatSessionArchived ||
-      state.sessionsResult?.sessions.some(
-        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
-      ) === true;
+    const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
       listLoading: state.sessionsLoading,
       sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
       session: selectedSession,
     });
-    const disabledReason = sessionParticipationBlocked
-      ? t("chat.sessionSharing.readOnlyNotice")
-      : null;
+    const multiIdentity = this.hasMultipleIdentities();
+    const suggestionViewer =
+      multiIdentity &&
+      !selectedSessionArchived &&
+      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+      selectedSession?.visibility === "suggest" &&
+      selectedSession.sharingRole === "viewer" &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.add") ===
+        true &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.list") === true;
+    const disabledReason =
+      sessionParticipationBlocked && !suggestionViewer
+        ? t("chat.sessionSharing.readOnlyNotice")
+        : null;
+    const typingEnabled =
+      multiIdentity &&
+      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+      !catalogKey &&
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.typing") === true &&
+      hasSessionPresenceViewers(
+        this.presencePayload,
+        this.context.gateway.snapshot.client?.instanceId,
+        state.sessionKey,
+      );
     // Never flash "view-only" while metadata loads; after loading, anything short
     // of a continuable session (failed lookups too) explains the disabled composer.
     const catalogDisabledReason =
@@ -3620,7 +4089,7 @@ class ChatPane extends OpenClawLightDomElement {
       showToolCalls: state.settings.chatShowToolCalls,
       persistCommentary: state.settings.chatPersistCommentary !== false,
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
-      sending: state.chatSending,
+      sending: state.chatSending || this.sessionSuggestionAddOperation !== undefined,
       canAbort: sessionParticipationBlocked ? false : hasAbortableSessionRun(state),
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
@@ -3680,9 +4149,12 @@ class ChatPane extends OpenClawLightDomElement {
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
+      suggestionComposer: suggestionViewer,
+      typingLabel: multiIdentity ? this.typingLabel() : null,
+      onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
-        : !selectedSessionArchived && !sessionParticipationBlocked,
+        : !selectedSessionArchived && (!sessionParticipationBlocked || suggestionViewer),
       disabledReason: catalogDisabledReason ?? disabledReason,
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
@@ -3779,6 +4251,17 @@ class ChatPane extends OpenClawLightDomElement {
       },
       onDismissPullRequest: this.dismissSessionPullRequest,
       taskSuggestionBusyIds: this.taskSuggestionBusyIds,
+      sessionSuggestions: multiIdentity ? this.sessionSuggestions : [],
+      sessionSuggestionRole: this.sessionSuggestionRole,
+      sessionSuggestionBusyIds: this.sessionSuggestionBusyIds,
+      sessionSuggestionsArchived: selectedSessionArchived,
+      canResolveSessionSuggestions:
+        state.connected &&
+        hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.suggestions.resolve") ===
+          true,
+      onResolveSessionSuggestion: (suggestion, resolution) =>
+        void this.resolveCurrentSessionSuggestion(suggestion, resolution),
       canAcceptTaskSuggestions:
         state.connected &&
         hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
@@ -3817,7 +4300,11 @@ class ChatPane extends OpenClawLightDomElement {
         state.requestUpdate?.();
       },
       onSend: () =>
-        catalogKey ? void this.continueCatalogSession(catalogKey) : void state.handleSendChat(),
+        catalogKey
+          ? void this.continueCatalogSession(catalogKey)
+          : suggestionViewer
+            ? void this.addCurrentSessionSuggestion()
+            : void state.handleSendChat(),
       onCompact: () => void state.handleSendChat("/compact"),
       onOpenSessionCheckpoints: () => {
         const search = new URLSearchParams({ session: state.sessionKey });
@@ -3946,7 +4433,7 @@ class ChatPane extends OpenClawLightDomElement {
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-      chatMessageMaxWidth: state.chatMessageMaxWidth,
+      chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       basePath: state.basePath,
       gatewayUrl: state.settings.gatewayUrl,

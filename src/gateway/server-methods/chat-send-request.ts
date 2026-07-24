@@ -53,6 +53,7 @@ type ChatSendRequestParams = {
   systemInputProvenance?: InputProvenance;
   systemProvenanceReceipt?: string;
   suppressCommandInterpretation?: boolean;
+  expectedLeafEntryId?: string | null;
   expectedSessionRoutingContract?: string;
   idempotencyKey: string;
 };

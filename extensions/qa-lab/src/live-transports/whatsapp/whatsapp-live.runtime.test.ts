@@ -2182,7 +2182,7 @@ describe("WhatsApp QA live runtime", () => {
     });
 
     expect(cfg.channels?.whatsapp?.accounts?.sut?.replyToMode).toBe("all");
-    expect(cfg.channels?.whatsapp?.accounts?.sut?.debounceMs).toBe(250);
+    expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(250);
     expect(cfg.channels?.whatsapp?.ackReaction).toMatchObject({
       direct: true,
       emoji: "👀",
@@ -2252,7 +2252,7 @@ describe("WhatsApp QA live runtime", () => {
     expect(supportedHistoryLimit).toEqual(expect.any(Number));
     expect(supportedHistoryLimit).toBeGreaterThan(0);
     expect(cfg.channels?.whatsapp?.accounts?.sut?.replyToMode).toBe("all");
-    expect(cfg.channels?.whatsapp?.accounts?.sut?.debounceMs).toBe(0);
+    expect(cfg.messages?.inbound?.byChannel?.whatsapp).toBe(0);
     expect(cfg.channels?.whatsapp?.accounts?.sut?.groups?.[groupJid]?.requireMention).toBe(true);
   });
 

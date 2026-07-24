@@ -373,7 +373,11 @@ export async function applyClawPackageRemovals(
     return await applyClawPackageRemovalsUnlocked(decisions, options);
   }
   return await withPluginLifecycleLease(
-    {},
+    {
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.path ? { path: options.path } : {}),
+      ...(options.database ? { database: options.database } : {}),
+    },
     async () => await applyClawPackageRemovalsUnlocked(decisions, options),
   );
 }

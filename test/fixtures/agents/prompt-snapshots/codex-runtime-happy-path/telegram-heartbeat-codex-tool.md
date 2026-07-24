@@ -217,24 +217,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 60257,
-    "roughTokens": 15065
+    "chars": 60458,
+    "roughTokens": 15115
   },
   "openClawDeveloperInstructions": {
     "chars": 2469,
     "roughTokens": 618
   },
   "totalTextOnly": {
-    "chars": 26885,
-    "roughTokens": 6722
+    "chars": 27014,
+    "roughTokens": 6754
   },
   "totalWithDynamicToolsJson": {
-    "chars": 87144,
-    "roughTokens": 21786
+    "chars": 87474,
+    "roughTokens": 21869
   },
   "userInputText": {
-    "chars": 1259,
-    "roughTokens": 315
+    "chars": 1388,
+    "roughTokens": 347
   }
 }
 ```
@@ -515,7 +515,7 @@ Conversation info (untrusted metadata):
 }
 ```
 
-Follow the heartbeat monitor scratch context when provided. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
+Follow the heartbeat monitor scratch context when provided. Recurring tasks are cron jobs; create or change their schedules with cron tools or the openclaw cron CLI, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
 ````
 
 ### Tools: Dynamic Tool Catalog
@@ -679,7 +679,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   },
   {
     "deferLoading": true,
-    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
+    "description": "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -704,6 +704,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "scratch": {
+          "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
           "type": "string"
         },
         "summary": {

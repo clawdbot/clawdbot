@@ -69,6 +69,7 @@ export type SidebarRecentSession = {
   pinned: boolean;
   archived?: boolean;
   visibility?: SessionVisibility;
+  draftOwnedBySelf?: boolean;
   icon?: string;
   category?: string;
   channel?: string;

@@ -20,6 +20,7 @@ vi.mock("./jsonl-socket.js", () => ({
 }));
 
 import type { ExecApprovalsFile } from "./exec-approvals.js";
+import { buildHashedArgPatternFromArgv } from "./exec-command-resolution.js";
 
 type ExecApprovalsModule = typeof import("./exec-approvals.js");
 
@@ -2065,6 +2066,7 @@ describe("exec approvals store helpers", () => {
       approvals,
       agentId: "worker",
       commandText: "/usr/bin/tool ok",
+      platform: "linux",
       segments: [
         {
           raw: "/usr/bin/tool ok",
@@ -2085,13 +2087,38 @@ describe("exec approvals store helpers", () => {
       ],
     });
 
-    expect(completePatterns).toEqual([{ pattern: "/usr/bin/tool" }]);
+    const expectedArgPattern = buildHashedArgPatternFromArgv(["/usr/bin/tool", "ok"]);
+    expect(completePatterns).toEqual([
+      { pattern: "/usr/bin/tool", argPattern: expectedArgPattern },
+    ]);
+    expect(expectedArgPattern).not.toContain("ok");
     let allowlist = allowlistEntries(dir, "worker");
     expect(allowlist.map((entry) => entry.pattern)).toEqual([
       "/usr/bin/tool",
       expect.stringMatching(/^=node-command:[0-9a-f]{16}$/),
     ]);
     expect(allowlist.some((entry) => entry.lastUsedCommand === "/usr/bin/tool ok")).toBe(false);
+
+    vi.spyOn(Date, "now").mockReturnValue(654_323);
+    recordAllowlistMatchesUseSync({
+      approvals: readExecApprovalsSnapshot().file,
+      agentId: "worker",
+      matches: [
+        { pattern: "/usr/bin/tool", source: "allow-always", argPattern: expectedArgPattern },
+      ],
+      command: "/usr/bin/tool ok",
+      resolvedPath: "/usr/bin/tool",
+    });
+    allowlist = allowlistEntries(dir, "worker");
+    const hashedEntry = allowlist.find((entry) => entry.pattern === "/usr/bin/tool");
+    expect(hashedEntry).toMatchObject({
+      pattern: "/usr/bin/tool",
+      source: "allow-always",
+      argPattern: expectedArgPattern,
+      lastUsedAt: 654_323,
+      lastResolvedPath: "/usr/bin/tool",
+    });
+    expect(hashedEntry).not.toHaveProperty("lastUsedCommand");
 
     const partialPatterns = persistAllowAlwaysPatterns({
       approvals,

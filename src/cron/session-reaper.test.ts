@@ -183,6 +183,7 @@ describe("sweepCronRunSessions", () => {
       [sessionKey]: {
         sessionId: "pending-run",
         updatedAt: now - 25 * 3_600_000,
+        delivery: { kind: "none" },
         cronRunContinuation: { lifecycleRevision: "revision-1", phase: "ready" },
       },
     };

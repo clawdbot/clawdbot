@@ -848,6 +848,28 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     expect(navigate).toHaveBeenCalledWith("config", undefined);
   });
 
+  it("opens Settings with Ctrl-Shift-Comma", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
+    shell.runtime = {
+      context: {
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+    const event = new KeyboardEvent("keydown", {
+      key: "<",
+      code: "Comma",
+      ctrlKey: true,
+      shiftKey: true,
+      cancelable: true,
+    });
+
+    shell.handleDocumentKeydown(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(navigate).toHaveBeenCalledWith("config", undefined);
+  });
+
   it("toggles the navigation sidebar when the native macOS titlebar button fires", () => {
     const snapshot = { navCollapsed: false };
     const update = vi.fn((next: { navCollapsed: boolean }) => {

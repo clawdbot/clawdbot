@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
@@ -840,7 +841,10 @@ describe("isProtectedSessionMaintenanceEntry", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:cron:job:run:123", {
         ...makeEntry(Date.now()),
-        origin: { chatType: "group" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "group:test" },
+          origin: { chatType: "group" },
+        }),
       }),
     ).toBe(false);
   });

@@ -5,6 +5,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
+  normalizeChatMessageMaxWidth,
   persistSessionToken,
   resolvePageGatewaySettings,
   saveSettings,
@@ -402,7 +403,7 @@ describe("loadSettings default gateway URL derivation", () => {
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
-    expect(loadSettings().sidebarEntries).toEqual(["route:usage", "route:cron", "route:plugins"]);
+    expect(loadSettings().sidebarEntries).toEqual(["route:cron", "route:plugins"]);
     expect(loadSettings().navWidth).toBe(258);
   });
 
@@ -625,6 +626,26 @@ describe("loadSettings default gateway URL derivation", () => {
     saveSettings({ ...loadSettings(), showAdvancedSettings: false });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "showAdvancedSettings",
+    );
+  });
+
+  it("normalizes and persists browser-local chat message width", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+
+    expect(normalizeChatMessageMaxWidth("  min(1280px,   82%)  ")).toBe("min(1280px, 82%)");
+    expect(normalizeChatMessageMaxWidth("960px; color: red")).toBeUndefined();
+
+    saveSettings({ ...loadSettings(), chatMessageMaxWidth: "  min(1280px,   82%)  " });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatMessageMaxWidth).toBe(
+      "min(1280px, 82%)",
+    );
+    expect(loadSettings().chatMessageMaxWidth).toBe("min(1280px, 82%)");
+
+    saveSettings({ ...loadSettings(), chatMessageMaxWidth: undefined });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "chatMessageMaxWidth",
     );
   });
 

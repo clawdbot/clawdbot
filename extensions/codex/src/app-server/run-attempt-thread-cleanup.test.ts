@@ -7,6 +7,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt } from "./run-attempt.js";
 import {
@@ -215,7 +216,7 @@ describe("Codex app-server main thread cleanup", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(request).toHaveBeenCalledWith(
       "thread/unsubscribe",
       { threadId: "thread-1" },

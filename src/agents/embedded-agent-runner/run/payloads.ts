@@ -517,6 +517,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   assistantMessageIndex?: number;
   assistantTranscriptOwned?: boolean;
+  assistantTranscriptIdempotencyKey?: string;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
@@ -891,6 +892,11 @@ export function buildEmbeddedRunPayloads(params: {
             ? { assistantMessageIndex: params.assistantMessageIndex }
             : {}),
           ...(params.assistantTranscriptOwned === true ? { assistantTranscriptOwned: true } : {}),
+          ...(params.assistantTranscriptIdempotencyKey
+            ? {
+                assistantTranscriptIdempotencyKey: params.assistantTranscriptIdempotencyKey,
+              }
+            : {}),
         });
       }
       if (item.replyToId) {

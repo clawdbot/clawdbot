@@ -3,6 +3,15 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
+export function canStartSessionAsDraft(params: {
+  allowedVisibilities?: readonly string[];
+  hasMultipleIdentities?: boolean;
+}): boolean {
+  return (
+    params.allowedVisibilities?.includes("draft") === true && params.hasMultipleIdentities === true
+  );
+}
+
 export function isWorktreeNameValid(value: string): boolean {
   const name = value.trim();
   return !name || WORKTREE_NAME_PATTERN.test(name);
@@ -24,6 +33,7 @@ export function buildDraftSessionCreateParams(draft: {
   workspace?: string;
   execNode?: string;
   catalogId?: string;
+  startAsDraft?: boolean;
 }): Record<string, unknown> {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
@@ -37,6 +47,7 @@ export function buildDraftSessionCreateParams(draft: {
     agentId: normalizeAgentId(draft.agentId),
     message: draft.message,
     ...(draft.incognito ? { incognito: true } : {}),
+    ...(draft.startAsDraft ? { visibility: "draft" } : {}),
     ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
     ...(!catalogId && model ? { model } : {}),

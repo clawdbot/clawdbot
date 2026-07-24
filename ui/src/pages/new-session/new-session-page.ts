@@ -29,7 +29,11 @@ import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery
 import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
 import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
-import { buildDraftSessionCreateParams, isWorktreeNameValid } from "./create-params.ts";
+import {
+  buildDraftSessionCreateParams,
+  canStartSessionAsDraft,
+  isWorktreeNameValid,
+} from "./create-params.ts";
 import {
   type BrowserTarget,
   type DraftCloudProfile,
@@ -43,7 +47,7 @@ import { NewSessionModelControl } from "./model-control.ts";
 import { isAbsolutePath } from "./path.ts";
 import { renderPlaceSelect } from "./place-picker.ts";
 import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
-import { renderAgentSelect } from "./target-controls.ts";
+import { renderAgentSelect, renderStartAsDraftToggle } from "./target-controls.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
 
@@ -58,6 +62,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private worktree = false;
   @state() private incognito = false;
   @state() private worktreeName = "";
+  @state() private startAsDraft = false;
   @state() private baseRef = "";
   @state() private repository: DraftRepositoryState = { kind: "idle" };
   @state() private nodes: DraftNode[] = [];
@@ -173,6 +178,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.gatewayRecoveryScope = recoveryScope.next;
     this.gatewayRecoveryScopeReady = snapshot.client?.recoveryScopeReady === true;
     this.gatewayConnected = connected;
+    if (this.startAsDraft && !this.canStartAsDraft()) {
+      this.startAsDraft = false;
+    }
     if (gatewayUrlChanged || identityChanged || connectionChanged || recoveryScope.changed) {
       this.invalidateGatewayDiscovery(gatewayUrlChanged || recoveryScope.changed);
     }
@@ -235,6 +243,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.worktree = false;
     this.incognito = false;
     this.worktreeName = "";
+    this.startAsDraft = false;
     this.baseRefEditGeneration += 1;
     this.nodes = [];
     this.execNode = "";
@@ -410,6 +419,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     return hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null);
   }
 
+  private canStartAsDraft(): boolean {
+    return canStartSessionAsDraft({
+      allowedVisibilities: this.context?.gateway.snapshot.hello?.policy?.allowedSessionVisibilities,
+      hasMultipleIdentities:
+        this.context?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities,
+    });
+  }
+
   private workspacePath(): string {
     return normalizeOptionalString(this.selectedAgent()?.workspace) ?? "";
   }
@@ -455,6 +472,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.worktree = false;
     this.incognito = false;
     this.worktreeName = "";
+    this.startAsDraft = false;
     this.baseRef = "";
     this.repository = { kind: "idle" };
     this.execNode = "";
@@ -797,6 +815,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         workspace: this.workspacePath(),
         execNode: this.execNode,
         catalogId: this.data?.catalogId,
+        startAsDraft: this.startAsDraft && this.canStartAsDraft(),
       });
       const cloudCreateParams = cloudProfileId
         ? pendingCloud
@@ -1349,6 +1368,17 @@ class NewSessionPage extends OpenClawLightDomElement {
       data: this.data,
       agentSelect: agents.length > 1 ? this.renderAgentSelect(agents) : nothing,
       placeSelect: this.renderPlaceSelect(),
+      draftVisibilityControl: this.canStartAsDraft()
+        ? renderStartAsDraftToggle({
+            checked: this.startAsDraft,
+            disabled: this.submitting || Boolean(this.pendingCloud.sessionKey),
+            onChange: (checked) => {
+              if (!this.submitting && !this.pendingCloud.sessionKey) {
+                this.startAsDraft = checked;
+              }
+            },
+          })
+        : nothing,
       retrying: this.catalogRetrying,
       onRetry: this.handleCatalogRetry,
     });

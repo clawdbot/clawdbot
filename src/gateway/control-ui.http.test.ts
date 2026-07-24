@@ -99,7 +99,6 @@ describe("handleControlUiHttpRequest", () => {
       assistantAgentId: string;
       devGitBranch?: string;
       localMediaPreviewRoots?: string[];
-      chatMessageMaxWidth?: string;
       seamColor?: string;
       timeFormat?: "auto" | "12" | "24";
       terminalEnabled: boolean;
@@ -1103,7 +1102,6 @@ describe("handleControlUiHttpRequest", () => {
             config: {
               agents: { defaults: { workspace: tmp } },
               ui: {
-                prefs: { chatMessageMaxWidth: "min(1280px, 82%)" },
                 seamColor: "#1A2b3C",
                 assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" },
               },
@@ -1118,7 +1116,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatarStatus).toBe("none");
         expect(parsed.assistantAvatarReason).toBe("missing");
         expect(parsed.assistantAgentId).toBe("main");
-        expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("auto");
         expect(parsed.terminalEnabled).toBe(false);

@@ -19,6 +19,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
@@ -1596,7 +1597,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
     const result = await runCodexAppServerAttempt(params);
 
-    expect(result.promptError).toContain("codex app-server client is closed");
+    expect(readAttemptTerminal(result).promptError).toContain("codex app-server client is closed");
     expect(result.codexAppServerFailure).toEqual({
       kind: "client_closed_before_turn_completed",
       transport: "stdio",
@@ -1750,7 +1751,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     });
     const result = await run;
 
-    expect(result.promptError).toBe("Codex ran out of room in the model's context window");
+    expect(readAttemptTerminal(result).promptError).toBe(
+      "Codex ran out of room in the model's context window",
+    );
     expect(compact).not.toHaveBeenCalled();
     expect(harness.requests.map((request) => request.method)).toEqual([
       "thread/resume",

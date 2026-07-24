@@ -9,15 +9,23 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let name: String
     }
 
-    private static let screenshotTargets = [
-        ScreenshotTarget(initialTab: "control", initialDestination: "overview", name: "01-control-connected"),
-        ScreenshotTarget(initialTab: "chat", initialDestination: "chat", name: "02-chat-connected"),
-        ScreenshotTarget(initialTab: "agent", initialDestination: "agents", name: "03-agent-connected"),
-        ScreenshotTarget(initialTab: "settings", initialDestination: "settings", name: "04-settings-connected"),
-    ]
+    private static let controlScreenshotTarget = ScreenshotTarget(
+        initialTab: "control",
+        initialDestination: "overview",
+        name: "01-control-connected")
+    private static let chatScreenshotTarget = ScreenshotTarget(
+        initialTab: "chat",
+        initialDestination: "chat",
+        name: "02-chat-connected")
+    private static let agentScreenshotTarget = ScreenshotTarget(
+        initialTab: "agent",
+        initialDestination: "agents",
+        name: "03-agent-connected")
+    private static let settingsScreenshotTarget = ScreenshotTarget(
+        initialTab: "settings",
+        initialDestination: "settings",
+        name: "04-settings-connected")
     private static let appReadinessAccessibilityIdentifier = "RootTabs.Ready"
-    private static let releaseScreenshotLaunchArguments = ["-sidebar.pinnedPages", "overview,agents"]
-    private static let screenshotLaunchRetryThreshold: TimeInterval = 30
 
     private var app: XCUIApplication?
 
@@ -31,20 +39,31 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try super.tearDownWithError()
     }
 
-    func testConnectedGatewayTabs() throws {
-        let initialTarget = try XCTUnwrap(Self.screenshotTargets.first)
-        self.launchApp(
-            for: initialTarget,
-            additionalArguments: Self.releaseScreenshotLaunchArguments)
+    func testReleaseControlScreenshot() {
+        self.captureReleaseScreenshot(Self.controlScreenshotTarget)
+    }
 
-        for (index, target) in Self.screenshotTargets.enumerated() {
-            if index > 0 {
-                try self.selectReleaseScreenshotDestination(target)
-            }
-            self.waitForReleaseScreenshotTarget(target)
-            snapshot(target.name, timeWaitingForIdle: 5)
-            self.attachScreenshot(named: target.name)
-        }
+    func testReleaseChatScreenshot() {
+        self.captureReleaseScreenshot(Self.chatScreenshotTarget)
+    }
+
+    func testReleaseAgentScreenshot() {
+        self.captureReleaseScreenshot(Self.agentScreenshotTarget)
+    }
+
+    func testReleaseSettingsScreenshot() {
+        self.captureReleaseScreenshot(Self.settingsScreenshotTarget)
+    }
+
+    func testAgentsNavigateToSettingsThroughSidebar() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
+        self.launchApp(for: Self.agentScreenshotTarget)
+
+        XCTAssertTrue(self.app?.buttons["agent-status-filter-menu"].waitForExistence(timeout: 8) == true)
+        try self.selectSidebarDestination("Settings")
+        XCTAssertTrue(
+            self.app?.descendants(matching: .any)["settings-system-agent-row"]
+                .waitForExistence(timeout: 8) == true)
     }
 
     func testAutomationManagementScreenshot() {
@@ -929,40 +948,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
     {
         self.terminateCurrentApp()
 
-        var app = self.configuredApp(
+        let app = self.configuredApp(
             for: target,
             appearance: appearance,
             screenshotMode: screenshotMode,
             additionalArguments: additionalArguments)
-        let launchDuration = self.launchDuration(app)
-        if screenshotMode,
-           launchDuration >= Self.screenshotLaunchRetryThreshold || app.state != .runningForeground
-        {
-            // A slow XCUIApplication launch can return with the scene inactive and its
-            // accessibility tree wedged. Recover before making any element query.
-            self.attachStalledLaunchScreenshot(duration: launchDuration)
-            app.terminate()
-            guard app.wait(for: .notRunning, timeout: 5) else {
-                self.app = app
-                XCTFail("OpenClaw did not terminate after a stalled screenshot launch")
-                return
-            }
-
-            app = self.configuredApp(
-                for: target,
-                appearance: appearance,
-                screenshotMode: screenshotMode,
-                additionalArguments: additionalArguments)
-            let retryDuration = self.launchDuration(app)
-            guard retryDuration < Self.screenshotLaunchRetryThreshold,
-                  app.state == .runningForeground
-            else {
-                self.app = app
-                XCTFail("Screenshot app launch stalled again after one recovery attempt")
-                return
-            }
-        }
-
+        app.launch()
         self.app = app
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
         let readiness = app.descendants(matching: .any)[Self.appReadinessAccessibilityIdentifier]
@@ -999,19 +990,11 @@ final class OpenClawSnapshotUITests: XCTestCase {
         return app
     }
 
-    private func launchDuration(_ app: XCUIApplication) -> TimeInterval {
-        let startedAt = Date()
-        app.launch()
-        return Date().timeIntervalSince(startedAt)
-    }
-
-    private func attachStalledLaunchScreenshot(duration: TimeInterval) {
-        XCTContext.runActivity(named: "Recover stalled screenshot launch") { activity in
-            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-            attachment.name = "stalled-screenshot-launch-\(Int(duration.rounded()))s"
-            attachment.lifetime = .keepAlways
-            activity.add(attachment)
-        }
+    private func captureReleaseScreenshot(_ target: ScreenshotTarget) {
+        self.launchApp(for: target)
+        self.waitForReleaseScreenshotTarget(target)
+        snapshot(target.name, timeWaitingForIdle: 5)
+        self.attachScreenshot(named: target.name)
     }
 
     private func waitForReleaseScreenshotTarget(_ target: ScreenshotTarget) {
@@ -1032,60 +1015,6 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(
             anchor.waitForExistence(timeout: 8),
             "Screenshot target \(target.name) did not render its readiness anchor")
-    }
-
-    private func selectReleaseScreenshotDestination(
-        _ target: ScreenshotTarget,
-        file: StaticString = #filePath,
-        line: UInt = #line) throws
-    {
-        let app = try XCTUnwrap(self.app, file: file, line: line)
-        let destination = target.initialDestination
-        let destinationButton = app.buttons["RootTabs.Sidebar.Destination.\(destination)"]
-        let showSidebar = app.buttons["RootTabs.Sidebar.Show"]
-        let hideSidebar = app.buttons["RootTabs.Sidebar.Hide"]
-        if showSidebar.isHittable {
-            showSidebar.tap()
-            self.waitForHittable(true, of: hideSidebar)
-        } else if !destinationButton.isHittable {
-            XCTAssertTrue(showSidebar.waitForExistence(timeout: 5), file: file, line: line)
-            XCTAssertTrue(showSidebar.isHittable, file: file, line: line)
-            showSidebar.tap()
-            self.waitForHittable(true, of: hideSidebar)
-        }
-
-        XCTAssertTrue(destinationButton.waitForExistence(timeout: 5), file: file, line: line)
-        XCTAssertTrue(destinationButton.isHittable, file: file, line: line)
-        let transitionStartedAt = Date()
-        destinationButton.tap()
-        let transitionDuration = Date().timeIntervalSince(transitionStartedAt)
-        let readiness = app.descendants(matching: .any)[Self.appReadinessAccessibilityIdentifier]
-        let reachedDestination = transitionDuration < Self.screenshotLaunchRetryThreshold &&
-            app.state == .runningForeground &&
-            self.element(readiness, hasValue: "ready:\(destination)", timeout: 8)
-        if !reachedDestination {
-            // XCTest can spend its full idle timeout after a synthesized navigation
-            // event. Relaunch only the affected destination, before another AX query.
-            self.attachStalledTransitionScreenshot(target: target, duration: transitionDuration)
-            self.launchApp(for: target, additionalArguments: Self.releaseScreenshotLaunchArguments)
-            return
-        }
-
-        // Drawer layouts collapse after selection. Split layouts do not, so close
-        // them explicitly to keep every App Store capture sidebar-free.
-        if hideSidebar.isHittable {
-            hideSidebar.tap()
-        }
-        self.waitForHittable(true, of: showSidebar)
-    }
-
-    private func attachStalledTransitionScreenshot(target: ScreenshotTarget, duration: TimeInterval) {
-        XCTContext.runActivity(named: "Recover stalled screenshot transition") { activity in
-            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-            attachment.name = "stalled-\(target.initialDestination)-transition-\(Int(duration.rounded()))s"
-            attachment.lifetime = .keepAlways
-            activity.add(attachment)
-        }
     }
 
     private func terminateCurrentApp(

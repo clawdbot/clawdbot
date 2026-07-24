@@ -165,14 +165,22 @@ export type ChannelDeliveryIntent = {
   queuePolicy: OutboundDeliveryQueuePolicy;
 };
 
-/** Result returned after delivering one channel reply payload. */
-export type ChannelDeliveryResult = {
+/** Provider-accepted outcome for one logical channel reply payload. */
+export type ChannelDeliveryOutcome = {
   messageIds?: string[];
   receipt?: MessageReceipt;
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
+  /** Final provider-visible text used for this logical payload's terminal observation. */
+  content?: string;
+};
+
+/** Result returned after delivering one channel reply payload. */
+export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
   deliveryIntent?: ChannelDeliveryIntent;
+  /** Same-payload native settlement; resolved fields override this result before observation. */
+  finalization?: Promise<ChannelDeliveryOutcome>;
 };
 
 /** Durable outbound delivery options available to channel turn delivery adapters. */
@@ -210,6 +218,8 @@ export type ChannelEventDeliveryAdapter = {
     info: ChannelDeliveryInfo,
     result: ChannelDeliveryResult | void,
   ) => Promise<void> | void;
+  /** Let core emit the one canonical `message_sent` after non-durable provider settlement. */
+  observeMessageSent?: true;
   onError?: (err: unknown, info: { kind: string }) => void;
 };
 

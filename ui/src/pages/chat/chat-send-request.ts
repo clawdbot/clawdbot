@@ -1,4 +1,5 @@
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   isUiGlobalSessionKey,
@@ -19,6 +20,7 @@ export async function requestChatSend(
     agentId?: string;
     queueMode?: QueueMode;
     replyToId?: string;
+    expectedLeafEntryId?: string | null;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
@@ -36,6 +38,9 @@ export async function requestChatSend(
     deliver: false,
     ...(params.replyToId ? { replyToId: params.replyToId } : {}),
     ...(params.queueMode ? { queueMode: params.queueMode } : {}),
+    ...(params.expectedLeafEntryId !== undefined
+      ? { expectedLeafEntryId: params.expectedLeafEntryId }
+      : {}),
     idempotencyKey: params.runId,
     attachments: buildChatApiAttachments(params.attachments),
   });
@@ -43,6 +48,31 @@ export async function requestChatSend(
     state.reconnectResumeSessionId = null;
   }
   return normalizeChatSendAck(payload, params.runId);
+}
+
+export function resolveDisplayedLeafEntryId(
+  state: Pick<ChatState, "chatDisplayedLeafEntryId">,
+): string | null | undefined {
+  if (state.chatDisplayedLeafEntryId === null) {
+    return null;
+  }
+  const leafEntryId = state.chatDisplayedLeafEntryId?.trim();
+  return leafEntryId || undefined;
+}
+
+const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
+
+export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
+  if (!(err instanceof GatewayRequestError)) {
+    return false;
+  }
+  const details = err.details;
+  return (
+    typeof details === "object" &&
+    details !== null &&
+    !Array.isArray(details) &&
+    (details as { reason?: unknown }).reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
+  );
 }
 
 function resolveChatSendRouting(

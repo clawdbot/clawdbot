@@ -13,7 +13,7 @@ import {
   ensureAbsoluteDirectory,
   isPathInside,
 } from "../infra/fs-safe.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveSqliteFilesystemPath } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -275,6 +275,7 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
       const result = await createVerifiedSqliteSnapshot({
         sourcePath,
         targetPath: artifactPath,
+        requireNonEmptySource: identity.role !== "generic",
         transform:
           identity.role === "global"
             ? sanitizeOpenClawGlobalStateSnapshot
@@ -645,7 +646,7 @@ async function verifySnapshotDatabaseFile(
       );
       assertArtifactMatchesManifest(validationPath, validationArtifact, manifest);
       const sqlite = requireNodeSqlite();
-      const database = new sqlite.DatabaseSync(validationPath, {
+      const database = new sqlite.DatabaseSync(resolveSqliteFilesystemPath(validationPath), {
         allowExtension: true,
         readOnly: true,
       });

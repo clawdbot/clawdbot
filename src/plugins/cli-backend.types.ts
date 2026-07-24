@@ -113,6 +113,10 @@ export type CliBackendPrepareExecutionContext = {
   contextTokenBudget?: number;
   authProfileId?: string;
   executionMode?: CliBackendExecutionMode;
+  /** Exact runtime tool surface the backend must enforce for this run. */
+  toolAvailability?: CliBackendToolAvailability;
+  /** Core-prepared environment, including any bundled MCP settings path. */
+  env?: Readonly<Record<string, string>>;
 };
 
 export type CliBackendPreparedExecution = {
@@ -124,6 +128,8 @@ export type CliBackendPreparedExecution = {
    */
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Positive acknowledgement for `prepare-execution` tool enforcement. */
+  toolAvailabilityEnforced?: true;
 };
 
 export type CliBackendThinkingLevel =
@@ -138,26 +144,17 @@ export type CliBackendThinkingLevel =
 
 export type CliBackendExecutionMode = "agent" | "side-question";
 
-/** Exact backend-native surface plus host-isolated MCP permissions for one CLI run. */
+/** Exact backend-native plus canonical OpenClaw tool surface for one CLI run. */
 export type CliBackendToolAvailability = {
   native: readonly string[];
-  /** MCP tools already isolated by the host transport that may be auto-approved. */
+  /** Canonical OpenClaw tool names served through the host-isolated transport. */
+  openClaw: readonly string[];
+  /**
+   * @deprecated Compatibility projection for CLI backend plugins built against
+   * v2026.7.2-beta.1 through v2026.7.2-beta.3. Use `openClaw` for canonical names.
+   */
   mcp: readonly string[];
 };
-
-export type CliBackendResolveRuntimeToolAvailabilityContext = {
-  /** Normalized, group-expanded OpenClaw runtime allowlist. */
-  toolsAllow: readonly string[];
-};
-
-export type CliBackendRuntimeToolAvailability = {
-  /** Host-isolated MCP tools selected from the OpenClaw runtime allowlist. */
-  mcp: readonly string[];
-};
-
-export type CliBackendResolveRuntimeToolAvailability = (
-  ctx: CliBackendResolveRuntimeToolAvailabilityContext,
-) => CliBackendRuntimeToolAvailability | null | undefined;
 
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;
@@ -179,6 +176,9 @@ export type CliBackendResolveExecutionArgs = (
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
 export type CliBackendNativeToolMode = "none" | "always-on" | "selectable";
+
+/** Backend-owned mechanism that enforces exact per-run tool availability. */
+export type CliBackendToolAvailabilityEnforcement = "execution-args" | "prepare-execution";
 
 export type CliBackendSideQuestionToolMode = "disabled";
 
@@ -333,20 +333,12 @@ export type CliBackendPlugin = {
    * native effort flag.
    */
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
-  /**
-   * Translate an OpenClaw runtime allowlist into the host-isolated MCP tools
-   * this backend can expose for one run. OpenClaw disables all native tools.
-   *
-   * Return null/undefined when the backend cannot enforce the requested cap.
-   * Omitting an allowed tool is safe; adding MCP authority absent from the
-   * allowlist is not.
-   */
-  resolveRuntimeToolAvailability?: CliBackendResolveRuntimeToolAvailability;
+  /** How this backend enforces an exact per-run `toolAvailability` contract. */
+  toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
-   * catalog. `selectable` backends must enforce `toolAvailability` through
-   * `resolveExecutionArgs`; `always-on` backends fail closed for restricted
-   * callers.
+   * catalog. Exact restricted runs require `selectable` plus a declared
+   * `toolAvailabilityEnforcement`; `always-on` backends fail closed.
    */
   nativeToolMode?: CliBackendNativeToolMode;
   /**

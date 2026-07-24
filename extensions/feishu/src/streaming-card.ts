@@ -44,6 +44,23 @@ type FeishuStreamingDeps = {
 
 type CardKitResponse = { code?: number; msg?: string };
 
+type FeishuStreamingCloseResult = {
+  visibleReplySent: boolean;
+  content?: string;
+  messageId?: string;
+};
+
+/** Provider finalization failed after a streaming card may already be visible. */
+export class FeishuStreamingFinalizationError extends Error {
+  readonly result: FeishuStreamingCloseResult;
+
+  constructor(cause: unknown, result: FeishuStreamingCloseResult) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "FeishuStreamingFinalizationError";
+    this.result = result;
+  }
+}
+
 /** Options for customising the initial streaming card appearance. */
 type StreamingCardOptions = {
   /** Optional header with title and color template. */
@@ -178,26 +195,19 @@ function truncateSummary(text: string, max = 50): string {
     return "";
   }
   const clean = text.replace(/\n/g, " ").trim();
-  // Slice on a code-point boundary so a surrogate pair (emoji / astral char)
-  // straddling the limit is dropped whole, instead of leaving a lone surrogate
-  // half that Feishu renders as the replacement char.
+  // Slice on a code-point boundary so CardKit never receives a lone surrogate at the limit.
   return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
 }
 
-function hasNaturalStreamingBoundary(text: string): boolean {
-  return /[\n。！？!?；;：:]$/.test(text);
-}
-
 function shouldPushStreamingUpdate(previousText: string, nextText: string): boolean {
-  if (!previousText) {
-    return true;
-  }
-  if (hasNaturalStreamingBoundary(nextText)) {
-    return true;
-  }
-  return nextText.length - previousText.length >= STREAMING_SIGNIFICANT_DELTA_CHARS;
+  return (
+    !previousText ||
+    /[\n。！？!?；;：:]$/.test(nextText) ||
+    nextText.length - previousText.length >= STREAMING_SIGNIFICANT_DELTA_CHARS
+  );
 }
 
+/** Merges cumulative or overlapping streaming snapshots without duplicating content. */
 export function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
@@ -210,27 +220,18 @@ export function mergeStreamingText(
   if (!previous || next === previous) {
     return next;
   }
-  if (next.startsWith(previous)) {
+  if (next.startsWith(previous) || next.includes(previous)) {
     return next;
   }
-  if (previous.startsWith(next)) {
+  if (previous.startsWith(next) || previous.includes(next)) {
     return previous;
   }
-  if (next.includes(previous)) {
-    return next;
-  }
-  if (previous.includes(next)) {
-    return previous;
-  }
-
-  // Merge partial overlaps, e.g. "这" + "这是" => "这是".
   const maxOverlap = Math.min(previous.length, next.length);
   for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
     if (previous.slice(-overlap) === next.slice(0, overlap)) {
       return `${previous}${next.slice(overlap)}`;
     }
   }
-  // Fallback for fragmented partial chunks: append as-is to avoid losing tokens.
   return `${previous}${next}`;
 }
 
@@ -612,9 +613,12 @@ export class FeishuStreamingSession {
       .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
-  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
+  async closeWithResult(
+    finalText?: string,
+    options?: { note?: string },
+  ): Promise<FeishuStreamingCloseResult> {
     if (!this.state || this.closed) {
-      return false;
+      return { visibleReplySent: false };
     }
     this.closed = true;
     this.clearFlushTimer();
@@ -625,15 +629,20 @@ export class FeishuStreamingSession {
     // A failed final rewrite does not erase previously accepted visible content.
     // sentText advances only for an accepted write; the return value reports any visible content.
     let visibleContentSent = Boolean(this.state.sentText.trim());
+    let finalWriteError: unknown;
 
     // Only send final update if content differs from what's already displayed.
     // An explicit empty final text clears a transient preview before closeout.
     if ((text || finalText !== undefined) && text !== this.state.sentText) {
       const sent = text.startsWith(this.state.sentText)
-        ? await this.updateCardContent(text, (e) => this.log?.(`Final update failed: ${String(e)}`))
-        : await this.replaceCardContent(text, (e) =>
-            this.log?.(`Final replace failed: ${String(e)}`),
-          );
+        ? await this.updateCardContent(text, (e) => {
+            finalWriteError = e;
+            this.log?.(`Final update failed: ${String(e)}`);
+          })
+        : await this.replaceCardContent(text, (e) => {
+            finalWriteError = e;
+            this.log?.(`Final replace failed: ${String(e)}`);
+          });
       this.state.currentText = text;
       if (sent) {
         this.state.sentText = text;
@@ -650,50 +659,82 @@ export class FeishuStreamingSession {
     // A rejected final write must not advertise content that CardKit never accepted.
     const acceptedText = this.state.sentText;
     this.state.sequence += 1;
-    await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
-      init: {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds, {
-            fetchImpl: this.fetchImpl,
-            lookupFn: this.lookupFn,
-          })}`,
-          "Content-Type": "application/json; charset=utf-8",
-          "User-Agent": getFeishuUserAgent(),
-        },
-        body: JSON.stringify({
-          settings: JSON.stringify({
-            config: { streaming_mode: false, summary: { content: truncateSummary(acceptedText) } },
+    let closeError: unknown;
+    try {
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+        init: {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds, {
+              fetchImpl: this.fetchImpl,
+              lookupFn: this.lookupFn,
+            })}`,
+            "Content-Type": "application/json; charset=utf-8",
+            "User-Agent": getFeishuUserAgent(),
+          },
+          body: JSON.stringify({
+            settings: JSON.stringify({
+              config: {
+                streaming_mode: false,
+                summary: { content: truncateSummary(acceptedText) },
+              },
+            }),
+            sequence: this.state.sequence,
+            uuid: `c_${this.state.cardId}_${this.state.sequence}`,
           }),
-          sequence: this.state.sequence,
-          uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      },
-      fetchImpl: this.fetchImpl,
-      lookupFn: this.lookupFn,
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-      auditContext: "feishu.streaming-card.close",
-      timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
-    })
-      .then(async ({ response, release }) => {
-        try {
-          await assertSuccessfulCardKitResponse(
-            response,
-            "feishu.streaming-card.close",
-            "Close streaming card",
-          );
-        } finally {
-          await release();
-        }
-      })
-      .catch((e: unknown) => this.log?.(`Close failed: ${String(e)}`));
+        },
+        fetchImpl: this.fetchImpl,
+        lookupFn: this.lookupFn,
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.close",
+        timeoutMs: this.creds.httpTimeoutMs ?? FEISHU_HTTP_TIMEOUT_MS,
+      });
+      try {
+        await assertSuccessfulCardKitResponse(
+          response,
+          "feishu.streaming-card.close",
+          "Close streaming card",
+        );
+      } finally {
+        await release();
+      }
+    } catch (error: unknown) {
+      closeError = error;
+      this.log?.(`Close failed: ${String(error)}`);
+    }
     const finalState = this.state;
     this.state = null;
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
-    return visibleContentSent;
+    const result: FeishuStreamingCloseResult = {
+      visibleReplySent: visibleContentSent,
+      ...(visibleContentSent ? { content: finalState.sentText } : {}),
+      messageId: finalState.messageId,
+    };
+    if (finalWriteError !== undefined || closeError !== undefined) {
+      const cause =
+        finalWriteError !== undefined && closeError !== undefined
+          ? new AggregateError(
+              [finalWriteError, closeError],
+              "Feishu streaming card finalization failed",
+            )
+          : (finalWriteError ?? closeError);
+      throw new FeishuStreamingFinalizationError(cause, result);
+    }
+    return result;
+  }
+
+  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
+    try {
+      return (await this.closeWithResult(finalText, options)).visibleReplySent;
+    } catch (error: unknown) {
+      if (error instanceof FeishuStreamingFinalizationError) {
+        return error.result.visibleReplySent;
+      }
+      throw error;
+    }
   }
 
   async discard(): Promise<void> {

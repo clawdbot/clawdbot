@@ -112,8 +112,9 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
 /** Loads cron jobs from an existing SQLite store without creating or migrating state. */
 export async function loadCronJobsStoreWithConfigJobsReadOnly(
   storePath: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<LoadedCronStore> {
-  const statePath = resolveOpenClawStateSqlitePath(process.env);
+  const statePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(statePath)) {
     return emptyLoadedCronStore();
   }

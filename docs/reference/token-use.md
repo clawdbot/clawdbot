@@ -71,19 +71,17 @@ Runtime-heavy surfaces have their own explicit caps under
 | Key                      | Purpose                                                                  |
 | ------------------------ | ------------------------------------------------------------------------ |
 | `memoryGetMaxChars`      | Max characters `memory_get` returns before truncation.                   |
-| `memoryGetDefaultLines`  | Default `memory_get` line window when a request omits `lines`.           |
-| `toolResultMaxChars`     | Advanced ceiling for a single live tool result (up to `1000000` chars).  |
 | `postCompactionMaxChars` | Max characters retained from `AGENTS.md` during post-compaction refresh. |
 
 These are bounded runtime excerpts and injected runtime-owned blocks,
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
-`toolResultMaxChars` is unset by default, so OpenClaw derives the live
-tool-result cap from the effective model context window: `16000` chars below
+OpenClaw derives the live tool-result cap from the effective model context
+window: `16000` chars below
 100K tokens, `32000` chars at 100K+ tokens, `64000` chars at 200K+ tokens.
-The runtime context-share guard still caps a single tool result at 30% of the
-context window even when a larger explicit ceiling is configured.
+The runtime context-share guard also caps a single tool result at 30% of the
+context window.
 
 Large provider windows are not enabled automatically when they materially
 change cost or latency. For example, direct OpenAI GPT-5.5 and GPT-5.6 models

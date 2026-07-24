@@ -26,6 +26,7 @@ export function heartbeatMonitorAgentId(job: CronJob): string | undefined {
 export function resolveHeartbeatMonitorSpecs(
   cfg: OpenClawConfig,
   existingJobs: readonly CronJob[],
+  options: { schedulerSeed?: string } = {},
 ): Array<{ agentId: string; input: CronJobCreate }> {
   const existingByAgentId = new Map<string, CronJob>();
   for (const job of existingJobs) {
@@ -35,7 +36,7 @@ export function resolveHeartbeatMonitorSpecs(
     }
   }
 
-  const schedulerSeed = resolveHeartbeatSchedulerSeed();
+  const schedulerSeed = resolveHeartbeatSchedulerSeed(options.schedulerSeed);
   return resolveHeartbeatAgents(cfg).flatMap((agent) => {
     // Unset config already resolves to the 30m default here, so this is null
     // only for an explicitly disabled cadence ("0m"/invalid). The fallbacks

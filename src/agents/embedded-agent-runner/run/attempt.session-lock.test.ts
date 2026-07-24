@@ -19,6 +19,7 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   SessionWriteLockStaleError,
@@ -2501,7 +2502,7 @@ describe("embedded attempt session lock lifecycle", () => {
       {
         sessionId,
         chatType: "direct",
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         spawnedCwd: dir,
         updatedAt: Date.now(),
       },

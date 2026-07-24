@@ -1,15 +1,25 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
-export function createCommandSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
+export type CommandSessionEntryFixture = Partial<SessionEntry> & {
+  channel?: string;
+  deliveryContext?: DeliveryContext;
+  lastThreadId?: string | number;
+};
+
+export function createCommandSessionEntry(
+  overrides: CommandSessionEntryFixture = {},
+): SessionEntry {
+  return normalizeLegacySessionEntryDelivery({
     sessionId: "session-1",
     updatedAt: 1,
     ...overrides,
-  };
+  } as SessionEntry);
 }
 
 export function createCommandSessionFixture(
-  overrides: Partial<SessionEntry> = {},
+  overrides: CommandSessionEntryFixture = {},
   sessionKey = "agent:main:main",
 ): { entry: SessionEntry; store: Record<string, SessionEntry> } {
   const entry = createCommandSessionEntry({

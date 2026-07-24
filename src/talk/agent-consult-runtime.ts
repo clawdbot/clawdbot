@@ -15,6 +15,7 @@ import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admissi
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
+  normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import {
@@ -110,11 +111,7 @@ function resolveDeliverySessionFields(context?: DeliveryContext): Partial<Sessio
     return {};
   }
   return {
-    deliveryContext: normalized,
-    lastChannel: normalized.channel,
-    lastTo: normalized.to,
-    lastAccountId: normalized.accountId,
-    lastThreadId: normalized.threadId,
+    delivery: normalizeSessionDeliveryState({ context: normalized }),
   };
 }
 

@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import type { CronConfig } from "../../config/types.cron.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { compileSafeRegexDetailed } from "../../security/safe-regex.js";
 import { isCronJobActive } from "../active-jobs.js";
@@ -18,6 +19,11 @@ import {
   computeNextRunAtMs,
   computePreviousRunAtMs,
 } from "../schedule.js";
+import {
+  createTrustedCronScheduledToolPolicy,
+  resolveCronScheduledToolPolicy,
+  type CronScheduledToolPolicy,
+} from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
 import {
@@ -1045,8 +1051,58 @@ export function nextWakeAtMs(state: CronServiceState) {
   }, first);
 }
 
+/** Applies one canonical server-authored authority envelope to a tool-bearing job. */
+function stampScheduledToolPolicy(
+  job: CronJob,
+  scheduledToolPolicy: CronScheduledToolPolicy | undefined,
+): void {
+  if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
+    delete job.scheduledToolPolicy;
+    return;
+  }
+  const policy = scheduledToolPolicy ?? createTrustedCronScheduledToolPolicy();
+  if (
+    policy.mode === "account" &&
+    (job.owner?.sessionKey !== policy.ownerSessionKey ||
+      job.owner?.accountId !== policy.ownerAccountId)
+  ) {
+    throw new Error("scheduled account policy must match the persisted job owner");
+  }
+  job.scheduledToolPolicy = structuredClone(policy);
+}
+
+function reconcileScheduledToolPolicy(params: {
+  job: CronJob;
+  previouslyUsedToolRuntime: boolean;
+  explicitlyMutatesToolsAllow: boolean;
+  scheduledToolPolicy?: CronScheduledToolPolicy;
+}): void {
+  const { job } = params;
+  if (!cronJobUsesToolRuntime(job) || job.payload.toolsAllow === undefined) {
+    delete job.scheduledToolPolicy;
+    return;
+  }
+  const current = resolveCronScheduledToolPolicy({
+    toolsAllow: job.payload.toolsAllow,
+    scheduledToolPolicy: job.scheduledToolPolicy,
+    owner: job.owner,
+  });
+  if (current) {
+    job.scheduledToolPolicy = current;
+    return;
+  }
+  delete job.scheduledToolPolicy;
+  if (params.explicitlyMutatesToolsAllow || !params.previouslyUsedToolRuntime) {
+    stampScheduledToolPolicy(job, params.scheduledToolPolicy);
+  }
+}
+
 /** Creates a normalized cron job row from public add input and computes its initial schedule. */
-export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
+export function createJob(
+  state: CronServiceState,
+  input: CronJobCreate,
+  opts?: { scheduledToolPolicy?: CronScheduledToolPolicy },
+): CronJob {
   const now = state.deps.nowMs();
   const id = normalizeOptionalString(input.id) ?? crypto.randomUUID();
   const schedule =
@@ -1097,15 +1153,17 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   }
   const ownerAgentId = normalizeOptionalAgentId(input.owner?.agentId);
   const ownerSessionKey = normalizeOptionalString(input.owner?.sessionKey);
+  const ownerAccountId = normalizeOptionalAccountId(input.owner?.accountId);
   const job: CronJob = {
     id,
     ...(declarationKey ? { declarationKey } : {}),
     ...(displayName ? { displayName } : {}),
-    ...(ownerAgentId || ownerSessionKey
+    ...(ownerAgentId || ownerSessionKey || ownerAccountId
       ? {
           owner: {
             ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
             ...(ownerSessionKey ? { sessionKey: ownerSessionKey } : {}),
+            ...(ownerAccountId ? { accountId: ownerAccountId } : {}),
           },
         }
       : {}),
@@ -1138,6 +1196,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   // New trusted jobs are explicit by construction. Agent-runtime callers are
   // required to arrive with a creator cap before the service can apply this default.
   applyDefaultCronToolsAllow(job);
+  stampScheduledToolPolicy(job, opts?.scheduledToolPolicy);
   assertSupportedJobSpec(job);
   assertPacingSupport(job);
   assertTriggerSupport(job, {
@@ -1168,6 +1227,7 @@ export function applyJobPatch(
     defaultAgentId?: string;
     scheduleValidationNowMs?: number;
     cronConfig?: CronConfig;
+    scheduledToolPolicy?: CronScheduledToolPolicy;
   },
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
@@ -1265,6 +1325,13 @@ export function applyJobPatch(
     // Ordinary edits to an existing capless job intentionally remain legacy.
     applyDefaultCronToolsAllow(job);
   }
+  reconcileScheduledToolPolicy({
+    job,
+    previouslyUsedToolRuntime,
+    explicitlyMutatesToolsAllow:
+      patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
+    scheduledToolPolicy: opts?.scheduledToolPolicy,
+  });
   if (patch.delivery) {
     const implicitMode = resolveCronDeliveryPlan(job).mode;
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery, implicitMode);
@@ -1349,9 +1416,11 @@ export function applyDeclarativeJobSpec(
     enabledExplicit: boolean;
     nowMs: number;
     cronConfig?: CronConfig;
+    scheduledToolPolicy?: CronScheduledToolPolicy;
   },
 ) {
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
+  const explicitlyDeclaresToolsAllow = input.payload.toolsAllow !== undefined;
   const previousToolsAllow = job.payload.toolsAllow;
   const previousToolsAllowIsDefault = job.payload.toolsAllowIsDefault;
   // Name, target, routing, owner, and run policy remain outside declaration
@@ -1421,6 +1490,12 @@ export function applyDeclarativeJobSpec(
       applyDefaultCronToolsAllow(job);
     }
   }
+  reconcileScheduledToolPolicy({
+    job,
+    previouslyUsedToolRuntime,
+    explicitlyMutatesToolsAllow: explicitlyDeclaresToolsAllow,
+    scheduledToolPolicy: opts.scheduledToolPolicy,
+  });
   const delivery = resolveInitialCronDelivery(input);
   if (delivery) {
     job.delivery = structuredClone(delivery);

@@ -25,6 +25,7 @@ import {
   migrateLegacyAgentTurnCommandPayload,
   migrateLegacyCronPayload,
 } from "./payload-migration.js";
+import { createScheduledToolPolicyMigrationCollector } from "./scheduled-tool-policy-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -40,6 +41,7 @@ type CronStoreIssueKey =
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
   | "legacyDeliveryMode"
+  | "migratedScheduledToolPolicy"
   | "invalidSchedule"
   | "invalidPayload";
 
@@ -95,6 +97,8 @@ type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
   unresolvedAgentTurnCommandPromptJobs: string[];
   unresolvedAgentTurnShellToolPromptJobs: string[];
+  legacyScheduledToolPolicyJobs: string[];
+  invalidScheduledToolPolicyJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
   removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
@@ -306,6 +310,7 @@ export function normalizeStoredCronJobs(
   const issues: CronStoreIssues = {};
   const unresolvedAgentTurnCommandPromptJobs: string[] = [];
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
+  const scheduledToolPolicyMigrations = createScheduledToolPolicyMigrationCollector();
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
     shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
@@ -698,6 +703,11 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
+    const scheduledPolicyMutated = scheduledToolPolicyMigrations.migrate(raw, () =>
+      trackIssue("migratedScheduledToolPolicy"),
+    );
+    mutated ||= scheduledPolicyMutated;
+
     const invalidPersistedReason = getInvalidPersistedCronJobReason(raw);
     if (
       invalidPersistedReason === "missing-schedule" ||
@@ -729,6 +739,8 @@ export function normalizeStoredCronJobs(
     issues,
     unresolvedAgentTurnCommandPromptJobs,
     unresolvedAgentTurnShellToolPromptJobs,
+    legacyScheduledToolPolicyJobs: scheduledToolPolicyMigrations.legacyJobs,
+    invalidScheduledToolPolicyJobs: scheduledToolPolicyMigrations.invalidJobs,
     jobs,
     mutated,
     removedJobs,

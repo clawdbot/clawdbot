@@ -1,11 +1,21 @@
 // Loads node:sqlite with OpenClaw warning handling.
 import { createRequire } from "node:module";
+import path from "node:path";
 import { formatErrorMessage } from "./errors.js";
 import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 import { installProcessWarningFilter } from "./warning-filter.js";
 
 const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
+
+export function resolveSqliteFilesystemPath(pathname: string): string {
+  if (process.platform !== "win32") {
+    return pathname;
+  }
+  // Node's fs APIs normalize long paths, but node:sqlite passes filesystem
+  // names directly to SQLite's Windows VFS.
+  return path.toNamespacedPath(path.resolve(pathname));
+}
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
   if (isSqliteWalResetSafeVersion(version)) {

@@ -31,11 +31,12 @@ describe("server pref extraction", () => {
         configWithPrefs({
           theme: "knot",
           themeMode: "dark",
-          textScale: 125,
           locale: "de",
           chatShowThinking: false,
           chatSendShortcut: "modifier-enter",
+          textScale: 125,
           sidebarLiveActivity: false,
+          chatMessageMaxWidth: "82%",
           showAdvancedSettings: true,
           sidebarEntries: ["route:usage", "session:agent:main:test", "route:usage", 7],
           bogus: true,
@@ -46,11 +47,9 @@ describe("server pref extraction", () => {
     expect(onApplied).toHaveBeenCalledWith({
       theme: "knot",
       themeMode: "dark",
-      textScale: 125,
       locale: "de",
       chatShowThinking: false,
       chatSendShortcut: "modifier-enter",
-      sidebarLiveActivity: false,
       showAdvancedSettings: true,
       sidebarEntries: ["route:usage", "session:agent:main:test"],
     });
@@ -59,7 +58,7 @@ describe("server pref extraction", () => {
   it("ignores invalid values and configs without prefs", () => {
     const onApplied = vi.fn();
     expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "neon", textScale: 97, locale: "xx-YY" }), {
+      applyServerUiPrefs(configWithPrefs({ theme: "neon", locale: "xx-YY" }), {
         onApplied,
       }),
     ).toBe(false);
@@ -74,12 +73,11 @@ describe("server pref extraction", () => {
 describe("applyServerUiPrefs", () => {
   it("applies a server delta to the local mirror once", () => {
     const onApplied = vi.fn();
-    const config = configWithPrefs({ themeMode: "dark", textScale: 110 });
+    const config = configWithPrefs({ themeMode: "dark" });
 
     expect(applyServerUiPrefs(config, { onApplied })).toBe(true);
     expect(loadSettings().themeMode).toBe("dark");
-    expect(loadSettings().textScale).toBe(110);
-    expect(onApplied).toHaveBeenCalledWith({ themeMode: "dark", textScale: 110 });
+    expect(onApplied).toHaveBeenCalledWith({ themeMode: "dark" });
 
     // The same server value never re-applies, so a later local edit sticks.
     patchSettings({ themeMode: "light" });
@@ -111,15 +109,15 @@ describe("applyServerUiPrefs", () => {
 
   it("applies only the fields the server actually changed", () => {
     const onApplied = vi.fn();
-    applyServerUiPrefs(configWithPrefs({ themeMode: "dark", textScale: 100 }), { onApplied });
+    applyServerUiPrefs(configWithPrefs({ themeMode: "dark", locale: "de" }), { onApplied });
     // Unpushable local edit on one field...
     patchSettings({ themeMode: "light" });
 
     // ...survives a server change to a *different* field.
     expect(
-      applyServerUiPrefs(configWithPrefs({ themeMode: "dark", textScale: 125 }), { onApplied }),
+      applyServerUiPrefs(configWithPrefs({ themeMode: "dark", locale: "fr" }), { onApplied }),
     ).toBe(true);
-    expect(loadSettings().textScale).toBe(125);
+    expect(loadSettings().locale).toBe("fr");
     expect(loadSettings().themeMode).toBe("light");
   });
 
@@ -169,12 +167,16 @@ describe("changedServerUiPrefs", () => {
     ).toBeNull();
   });
 
-  it("syncs the live sidebar activity preference", () => {
+  it("does not sync browser-local presentation preferences", () => {
     const previous = loadSettings();
-    expect(previous.sidebarLiveActivity).toBe(true);
-    expect(changedServerUiPrefs(previous, { ...previous, sidebarLiveActivity: false })).toEqual({
-      sidebarLiveActivity: false,
-    });
+    expect(
+      changedServerUiPrefs(previous, {
+        ...previous,
+        textScale: 125,
+        sidebarLiveActivity: false,
+        chatMessageMaxWidth: "82%",
+      }),
+    ).toBeNull();
   });
 
   it("syncs the advanced settings visibility preference", () => {
@@ -314,7 +316,7 @@ describe("pushServerUiPrefs", () => {
     const client = { request } as unknown as Parameters<typeof pushServerUiPrefs>[0];
 
     pushServerUiPrefs(client, { themeMode: "dark" });
-    pushServerUiPrefs(client, { textScale: 125 });
+    pushServerUiPrefs(client, { locale: "de" });
     pushServerUiPrefs(client, { themeMode: "light" });
 
     await vi.waitFor(() => {
@@ -323,7 +325,7 @@ describe("pushServerUiPrefs", () => {
     // The first patch carries the first delta; the rest coalesce into one.
     expect(patched[0]).toBe(JSON.stringify({ ui: { prefs: { themeMode: "dark" } } }));
     expect(patched[1]).toBe(
-      JSON.stringify({ ui: { prefs: { textScale: 125, themeMode: "light" } } }),
+      JSON.stringify({ ui: { prefs: { locale: "de", themeMode: "light" } } }),
     );
   });
 
@@ -349,7 +351,7 @@ describe("pushServerUiPrefs", () => {
     const clientB = { request: requestB } as unknown as Parameters<typeof pushServerUiPrefs>[0];
 
     pushServerUiPrefs(clientA, { themeMode: "dark" });
-    pushServerUiPrefs(clientB, { textScale: 125 });
+    pushServerUiPrefs(clientB, { locale: "de" });
     resolveFirstGet?.({ hash: "a-1" });
 
     await vi.waitFor(() => {
@@ -359,7 +361,7 @@ describe("pushServerUiPrefs", () => {
     expect(requestA.mock.calls.filter(([method]) => method === "config.patch").length).toBe(0);
     expect(requestB).toHaveBeenCalledWith("config.patch", {
       baseHash: "b-1",
-      raw: JSON.stringify({ ui: { prefs: { textScale: 125 } } }),
+      raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
       note: "control-ui prefs sync",
     });
   });
@@ -378,7 +380,7 @@ describe("pushServerUiPrefs", () => {
     });
     const client = { request } as unknown as Parameters<typeof pushServerUiPrefs>[0];
 
-    pushServerUiPrefs(client, { textScale: 125 });
+    pushServerUiPrefs(client, { locale: "de" });
     await vi.waitFor(() => {
       expect(patchCalls).toBe(2);
     });

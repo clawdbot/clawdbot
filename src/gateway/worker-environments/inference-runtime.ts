@@ -571,7 +571,6 @@ async function resolveApprovedModel(params: {
       ...(selectedProfile ? { preferredProfile: selectedProfile.id } : {}),
       ...(selectedProfile ? { bindAuthOwner: true } : {}),
       allowMissingApiKeyModes: ["aws-sdk"],
-      useAsyncModelResolution: true,
       modelResolver,
     });
     return {

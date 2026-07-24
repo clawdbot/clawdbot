@@ -48,7 +48,6 @@ import {
   resolveLobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
-import { renderSessionCreatorFilter } from "./session-owner-chip.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
@@ -277,8 +276,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.onOpenNewSession?.(this.expandedAgentId());
   }
 
-  setVisibleSessionLimit(limit: number): void {
-    this.sessionData.setVisibleSessionLimit(limit);
+  setVisibleSessionLimit(sectionId: string, limit: number): void {
+    this.sessionData.setVisibleSessionLimit(sectionId, limit);
   }
 
   dismissSessionMutationError(): void {
@@ -318,24 +317,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         sidebarRowsByKey.set(row.key, navigationState.toSidebarSession(row));
       }
     }
-    const { sections, expandedRows, visibleRows } = this.zonedVisibleSections(visibleSessions);
+    const { sections } = this.zonedVisibleSections(visibleSessions);
     return renderSessionList({
       host: this,
       empty: visibleSessions.length === 0,
       sections,
-      expandedRows,
-      visibleRowCount: visibleRows.length,
       showDraft:
         Boolean(this.draftSessionAgentId) &&
         normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
-      creatorFilter: renderSessionCreatorFilter({
-        creators: this.sessionOwnershipVisible ? this.sessionCreatorOptions : [],
-        selectedId: this.sessionCreatorFilterActive ? this.sessionCreatorFilterId : null,
-        onChange: (creatorId) => {
-          this.sessionCreatorFilterId = creatorId;
-          void this.context?.sessions.setCreatorFilter(creatorId);
-        },
-      }),
       catalogs: {
         catalogs: this.sessionData.sessionCatalogs,
         basePath: this.basePath,
