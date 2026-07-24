@@ -2,9 +2,9 @@
  * Gateway config reload handler tests.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
@@ -91,6 +91,7 @@ function waitForFast<T>(
 }
 
 const tempDirs: string[] = [];
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const restartTesting = {
   resetSigusr1State() {
@@ -1755,8 +1756,7 @@ describe("gateway hot reload commit policy", () => {
   });
 
   it("preserves the active hook transform cache when hook preparation rejects the config", async () => {
-    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-rejected-hook-reload-"));
-    tempDirs.push(configDir);
+    const configDir = autoCleanupTempDirs.make("openclaw-rejected-hook-reload-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     const transformPath = path.join(transformsRoot, "reloadable.mjs");

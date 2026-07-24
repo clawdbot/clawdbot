@@ -4,10 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const hooksTempDirs: string[] = [];
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterAll(() => {
   cleanupTempDirs(hooksTempDirs);
@@ -658,7 +660,7 @@ describe("hooks mapping", () => {
   });
 
   it("uses one transform module instance per mapping reload", async () => {
-    const configDir = makeTempDir(hooksTempDirs, "openclaw-hooks-generation-");
+    const configDir = autoCleanupTempDirs.make("openclaw-hooks-generation-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     const modPath = path.join(transformsRoot, "same-generation.mjs");
@@ -720,7 +722,7 @@ describe("hooks mapping", () => {
   });
 
   it("reloads a transform when the module file changes", async () => {
-    const configDir = makeTempDir(hooksTempDirs, "openclaw-hooks-reload-");
+    const configDir = autoCleanupTempDirs.make("openclaw-hooks-reload-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     const modPath = path.join(transformsRoot, "reloadable.mjs");
@@ -768,7 +770,7 @@ describe("hooks mapping", () => {
   });
 
   it("does not invalidate the active transform cache while resolving a rejected reload", async () => {
-    const configDir = makeTempDir(hooksTempDirs, "openclaw-hooks-rejected-reload-");
+    const configDir = autoCleanupTempDirs.make("openclaw-hooks-rejected-reload-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     const modPath = path.join(transformsRoot, "reloadable.mjs");
@@ -824,7 +826,7 @@ describe("hooks mapping", () => {
   });
 
   it("does not let an older in-flight transform import repopulate the reload cache", async () => {
-    const configDir = makeTempDir(hooksTempDirs, "openclaw-hooks-overlap-");
+    const configDir = autoCleanupTempDirs.make("openclaw-hooks-overlap-");
     const transformsRoot = path.join(configDir, "hooks", "transforms");
     fs.mkdirSync(transformsRoot, { recursive: true });
     const modPath = path.join(transformsRoot, "reloadable.mjs");
