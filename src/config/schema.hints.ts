@@ -202,7 +202,7 @@ export function collectMatchingSchemaPaths(
   }
 
   if (currentSchema instanceof z.ZodPipe) {
-    collectMatchingSchemaPaths(currentSchema.out, path, matchesPath, paths);
+    collectMatchingSchemaPaths(currentSchema.out as unknown as z.ZodType, path, matchesPath, paths);
   } else if (currentSchema instanceof z.ZodObject) {
     const shape = currentSchema.shape;
     for (const key in shape) {
@@ -285,7 +285,7 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
   }
 
   if (currentSchema instanceof z.ZodPipe) {
-    mapSensitivePathsMut(currentSchema.out, path, hints);
+    mapSensitivePathsMut(currentSchema.out as unknown as z.ZodType, path, hints);
   } else if (currentSchema instanceof z.ZodObject) {
     const shape = currentSchema.shape;
     for (const key in shape) {

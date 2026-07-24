@@ -9,10 +9,7 @@ import {
   importSqliteSessionRows,
   loadExactSqliteSessionEntry,
 } from "../config/sessions/session-accessor.sqlite.js";
-import {
-  resolveSqliteTargetFromSessionStorePath,
-  resolveUnsuffixedSqliteTargetFromSessionStorePath,
-} from "../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
