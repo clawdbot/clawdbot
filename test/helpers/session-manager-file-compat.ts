@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { parseSessionEntries, SessionManager } from "../../src/agents/sessions/session-manager.js";
@@ -26,9 +27,10 @@ function installFileSessionManagerCompat(params: {
     getSessionFile: () => params.target(),
     newSession(options?: Parameters<SessionManager["newSession"]>[0]) {
       // The wrapped manager is in-memory, so identity changes cannot write the old target.
-      // Rotate only after the new id is minted, then serialize the new session once.
-      const result = originalNewSession(options);
-      params.rotateTarget?.(manager.getSessionId());
+      // Choose and rotate the new identity before initialization can persist anything.
+      const sessionId = options?.id ?? randomUUID();
+      params.rotateTarget?.(sessionId);
+      const result = originalNewSession({ ...options, id: sessionId });
       writeFullFile();
       return result;
     },

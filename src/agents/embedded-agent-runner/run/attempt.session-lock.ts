@@ -77,6 +77,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   }
   const noOpLock = { release: async () => {} } as SessionLock;
   let disposed = false;
+  let promptAborted = false;
   let takeoverDetected = false;
   let promptReleased = false;
   let promptSettled = Promise.resolve();
@@ -106,12 +107,17 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         settlePrompt = resolve;
       });
     },
-    releaseHeldLockForAbort: async () => {},
+    releaseHeldLockForAbort: async () => {
+      promptAborted = true;
+      promptReleased = false;
+      settlePrompt?.();
+      settlePrompt = undefined;
+    },
     refreshAfterOwnedSessionWrite: () => {},
     withOwnedSessionFileWrite: (run) => run(),
     reacquireAfterPrompt: async () =>
       await serializeLifecycle(async () => {
-        if (disposed) {
+        if (disposed || promptAborted) {
           settlePrompt?.();
           return;
         }
