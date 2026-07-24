@@ -17,6 +17,7 @@ minimumReleaseAgeExclude:
   - "axios"
   - "basic-ftp"
   - "baileys@7.0.0-rc13"
+  - "brace-expansion@5.0.8"
   - "hono"
   - "libopus-wasm@0.2.0"
   - "libsignal@6.0.0"
@@ -109,7 +110,8 @@ overrides:
   request: "npm:@cypress/request@3.0.10"
   request-promise: "npm:@cypress/request-promise@5.0.0"
   basic-ftp: 6.0.1
-  brace-expansion: 5.0.7
+  brace-expansion: 5.0.8
+  postcss: 8.5.21
   file-type: 22.0.1
   form-data: 2.5.6
   ip-address: 10.2.0
