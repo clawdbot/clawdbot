@@ -11,7 +11,7 @@ export const CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER = ["openclaw", "claude-cli-ap
 /** Default Claude CLI model ref for agent defaults and live tests. */
 export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-5`;
 /** Provider-relative model id for Anthropic runtime-policy resolution. */
-export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(
+const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(
   CLAUDE_CLI_BACKEND_ID.length + 1,
 );
 /** Canonical model ref routed to the Claude CLI backend by Anthropic setup. */
