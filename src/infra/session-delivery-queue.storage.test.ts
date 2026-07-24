@@ -78,6 +78,21 @@ describe("session-delivery queue storage", () => {
     ).run(JSON.stringify(entry), id);
   }
 
+  function rewriteSessionQueueEntryKind(
+    tempDir: string,
+    id: string,
+    entryKind: string | null,
+  ): void {
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+    });
+    db.prepare(
+      `UPDATE delivery_queue_entries
+          SET entry_kind = ?
+        WHERE queue_name = 'session' AND id = ?`,
+    ).run(entryKind, id);
+  }
+
   it("dedupes entries when an idempotency key is reused", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const firstId = await enqueueSessionDelivery(
@@ -369,6 +384,46 @@ describe("session-delivery queue storage", () => {
     });
   });
 
+  it("rejects invalid post-compaction snapshot bytes before durable enqueue", async () => {
+    const corruptions: Array<{
+      name: string;
+      attachments: Array<{ name: string; content: string; encoding?: "utf8" | "base64" }>;
+    }> = [
+      {
+        name: "unsafe name",
+        attachments: [{ name: "../escape", content: "snapshot" }],
+      },
+      {
+        name: "invalid base64",
+        attachments: [{ name: "brief.md", content: "not-base64!", encoding: "base64" }],
+      },
+      {
+        name: "oversized content",
+        attachments: [{ name: "brief.md", content: "x".repeat(1024 * 1024 + 1) }],
+      },
+    ];
+
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      for (const [sequence, corruption] of corruptions.entries()) {
+        await expect(
+          enqueuePostCompactionDelegateDelivery(
+            {
+              sessionKey: "agent:main:main",
+              delegate: {
+                task: `reject ${corruption.name}`,
+                createdAt: 600 + sequence,
+                attachments: corruption.attachments,
+              },
+              sequence,
+            },
+            tempDir,
+          ),
+        ).rejects.toThrow("invalid postCompactionDelegate delivery payload: invalid shape");
+      }
+      await expect(loadPendingSessionDeliveries(tempDir)).resolves.toEqual([]);
+    });
+  });
+
   it("dead-letters invalid post-compaction JSON without retaining raw bytes", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueuePostCompactionDelegateDelivery(
@@ -426,6 +481,88 @@ describe("session-delivery queue storage", () => {
         last_error: "invalid generic session delivery payload: invalid JSON",
       });
       expect(row?.entry_json).not.toContain(secret);
+    });
+  });
+
+  it("dead-letters post-compaction snapshots that fail byte-level attachment validation", async () => {
+    const corruptions: Array<{
+      name: string;
+      attachments: Array<Record<string, unknown>>;
+    }> = [
+      {
+        name: "unsafe name",
+        attachments: [{ name: "../unsafe", content: "snapshot" }],
+      },
+      {
+        name: "invalid base64",
+        attachments: [{ name: "brief.md", content: "not-base64!", encoding: "base64" }],
+      },
+      {
+        name: "oversized content",
+        attachments: [{ name: "brief.md", content: "x".repeat(1024 * 1024 + 1) }],
+      },
+    ];
+
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      for (const [sequence, corruption] of corruptions.entries()) {
+        const secret = `QUEUE_ATTACHMENT_VALIDATION_SECRET_${sequence}`;
+        const id = await enqueuePostCompactionDelegateDelivery(
+          {
+            sessionKey: "agent:main:main",
+            delegate: {
+              task: `recover ${corruption.name}`,
+              createdAt: 700 + sequence,
+              attachments: [{ name: "brief.md", content: secret }],
+            },
+            sequence,
+          },
+          tempDir,
+        );
+        rewriteSessionQueueEntry(tempDir, id, (entry) => {
+          entry.attachments = corruption.attachments;
+        });
+
+        await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toBeNull();
+        const row = readSessionQueueRow(tempDir, id);
+        expect(row).toMatchObject({
+          status: "failed",
+          last_error: "invalid postCompactionDelegate delivery payload: invalid shape",
+        });
+        expect(row?.entry_json).not.toContain(secret);
+        expect(row?.entry_json).not.toContain("not-base64!");
+      }
+    });
+  });
+
+  it("dead-letters raw post-compaction snapshots when entry_kind is missing or stale", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      for (const [sequence, entryKind] of [null, "agentTurn"].entries()) {
+        const secret = `STALE_ENTRY_KIND_SECRET_${sequence}`;
+        const id = await enqueuePostCompactionDelegateDelivery(
+          {
+            sessionKey: "agent:main:main",
+            delegate: {
+              task: "recover only matching post-compaction metadata",
+              createdAt: 800 + sequence,
+              attachments: [{ name: "brief.md", content: secret }],
+            },
+            sequence,
+          },
+          tempDir,
+        );
+        rewriteSessionQueueEntryKind(tempDir, id, entryKind);
+
+        await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toBeNull();
+        const row = readSessionQueueRow(tempDir, id);
+        expect(row).toMatchObject({
+          status: "failed",
+          last_error: "invalid postCompactionDelegate delivery payload: invalid shape",
+        });
+        expect(row?.entry_json).not.toContain(secret);
+        expect(row?.entry_json).not.toContain("attachments");
+        expect(row?.entry_json).not.toContain("task");
+        await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toBeNull();
+      }
     });
   });
 

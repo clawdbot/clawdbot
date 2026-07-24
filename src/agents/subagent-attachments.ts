@@ -9,30 +9,14 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { privateFileStore } from "../infra/private-file-store.js";
-import type { InlineAttachment } from "../shared/inline-attachments.js";
+import {
+  prepareInlineAttachmentSnapshots,
+  validateInlineAttachmentSnapshots,
+  type InlineAttachment,
+  type InlineAttachmentSnapshotLimits,
+  type PreparedInlineAttachmentSnapshot,
+} from "../shared/inline-attachments.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
-
-function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | null {
-  const maxEncodedBytes = Math.ceil(maxDecodedBytes / 3) * 4;
-  if (value.length > maxEncodedBytes * 2) {
-    return null;
-  }
-  const normalized = value.replace(/\s+/g, "");
-  if (!normalized || normalized.length % 4 !== 0) {
-    return null;
-  }
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
-    return null;
-  }
-  if (normalized.length > maxEncodedBytes) {
-    return null;
-  }
-  const decoded = Buffer.from(normalized, "base64");
-  if (decoded.byteLength > maxDecodedBytes) {
-    return null;
-  }
-  return decoded;
-}
 
 type SubagentInlineAttachment = InlineAttachment;
 
@@ -41,11 +25,8 @@ type AcpInlineImageAttachment = {
   data: string;
 };
 
-type AttachmentLimits = {
+type AttachmentLimits = InlineAttachmentSnapshotLimits & {
   enabled: boolean;
-  maxTotalBytes: number;
-  maxFiles: number;
-  maxFileBytes: number;
   retainOnSessionKeep: boolean;
 };
 
@@ -74,12 +55,7 @@ type MaterializeSubagentAttachmentsResult =
   | { status: "forbidden"; error: string }
   | { status: "error"; error: string };
 
-type PreparedSubagentAttachment = {
-  name: string;
-  mimeType: string;
-  buf: Buffer;
-  bytes: number;
-};
+type PreparedSubagentAttachment = PreparedInlineAttachmentSnapshot;
 
 type SubagentAttachmentRequest =
   | {
@@ -144,117 +120,12 @@ function resolveSubagentAttachmentRequest(params: {
   return { status: "ok", attachments: requestedAttachments, limits };
 }
 
-function failAttachment(error: string): never {
-  throw new Error(error);
-}
-
-function validateAttachmentName(name: string): void {
-  if (!name) {
-    failAttachment("attachments_invalid_name (empty)");
-  }
-  if (name.includes("/") || name.includes("\\") || name.includes("\u0000")) {
-    failAttachment(`attachments_invalid_name (${name})`);
-  }
-  if (
-    Array.from(name).some((char) => {
-      const code = char.codePointAt(0) ?? 0;
-      return code < 0x20 || code === 0x7f;
-    })
-  ) {
-    failAttachment(`attachments_invalid_name (${name})`);
-  }
-  if (name === "." || name === ".." || name === ".manifest.json") {
-    failAttachment(`attachments_invalid_name (${name})`);
-  }
-}
-
-function decodeAttachmentContent(params: {
-  name: string;
-  content: string;
-  encoding: "utf8" | "base64";
-  limits: AttachmentLimits;
-}): Buffer {
-  if (params.encoding === "base64") {
-    const strictBuf = decodeStrictBase64(params.content, params.limits.maxFileBytes);
-    if (strictBuf === null) {
-      failAttachment("attachments_invalid_base64_or_too_large");
-    }
-    return strictBuf;
-  }
-
-  const estimatedBytes = Buffer.byteLength(params.content, "utf8");
-  if (estimatedBytes > params.limits.maxFileBytes) {
-    failAttachment(
-      `attachments_file_bytes_exceeded (name=${params.name} bytes=${estimatedBytes} maxFileBytes=${params.limits.maxFileBytes})`,
-    );
-  }
-  return Buffer.from(params.content, "utf8");
-}
-
 function prepareSubagentAttachments(params: {
   attachments: SubagentInlineAttachment[];
   limits: AttachmentLimits;
   requireImageMime?: boolean;
 }): { attachments: PreparedSubagentAttachment[]; totalBytes: number } {
-  const seen = new Set<string>();
-  const attachments: PreparedSubagentAttachment[] = [];
-  let totalBytes = 0;
-
-  for (const raw of params.attachments) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      failAttachment("attachments_invalid_member (expected object)");
-    }
-    const item = raw as Record<string, unknown>;
-    if (typeof item.name !== "string" || typeof item.content !== "string") {
-      failAttachment("attachments_invalid_member (name and content must be strings)");
-    }
-    if (item.encoding !== undefined && item.encoding !== "utf8" && item.encoding !== "base64") {
-      failAttachment("attachments_invalid_member (encoding must be utf8 or base64)");
-    }
-    if (item.mimeType !== undefined && typeof item.mimeType !== "string") {
-      failAttachment("attachments_invalid_member (mimeType must be a string)");
-    }
-    const name = normalizeOptionalString(item.name) ?? "";
-    const content = item.content;
-    const encoding = item.encoding ?? "utf8";
-    const mimeType = normalizeOptionalString(item.mimeType) ?? "";
-
-    validateAttachmentName(name);
-    if (seen.has(name)) {
-      failAttachment(`attachments_duplicate_name (${name})`);
-    }
-    seen.add(name);
-
-    if (params.requireImageMime && !mimeType.startsWith("image/")) {
-      failAttachment(
-        `attachments_unsupported_for_acp (name=${name} mimeType=${mimeType || "unknown"})`,
-      );
-    }
-
-    const buf = decodeAttachmentContent({
-      name,
-      content,
-      encoding,
-      limits: params.limits,
-    });
-    const bytes = buf.byteLength;
-    if (bytes > params.limits.maxFileBytes) {
-      failAttachment(
-        `attachments_file_bytes_exceeded (name=${name} bytes=${bytes} maxFileBytes=${params.limits.maxFileBytes})`,
-      );
-    }
-
-    totalBytes += bytes;
-    if (totalBytes > params.limits.maxTotalBytes) {
-      failAttachment(
-        `attachments_total_bytes_exceeded (totalBytes=${totalBytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
-      );
-    }
-
-    attachments.push({ name, mimeType, buf, bytes });
-  }
-
-  return { attachments, totalBytes };
+  return prepareInlineAttachmentSnapshots(params);
 }
 
 export function validateSubagentAttachments(params: {
@@ -268,15 +139,10 @@ export function validateSubagentAttachments(params: {
   if (request.status !== "ok") {
     return request.error;
   }
-  try {
-    prepareSubagentAttachments({
-      attachments: request.attachments,
-      limits: request.limits,
-    });
-    return undefined;
-  } catch (err) {
-    return err instanceof Error ? err.message : "attachments_validation_failed";
-  }
+  return validateInlineAttachmentSnapshots({
+    attachments: request.attachments,
+    limits: request.limits,
+  });
 }
 
 export function resolveAcpSessionsSpawnImageAttachments(params: {

@@ -10,6 +10,7 @@ import type { SessionPostCompactionDelegate } from "../config/sessions/types.js"
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import {
   parseInlineAttachmentMountPath,
+  validateInlineAttachmentSnapshots,
   type InlineAttachment,
   type InlineAttachmentMount,
 } from "../shared/inline-attachments.js";
@@ -290,6 +291,13 @@ const QueuedPostCompactionDelegateSchema = z
         message: "fanoutMode cannot be combined with explicit target keys",
       });
     }
+    if (validateInlineAttachmentSnapshots({ attachments: entry.attachments })) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["attachments"],
+        message: "invalid inline attachment snapshot",
+      });
+    }
   })
   .transform(stripQueuedAttachmentMountWithoutAttachments);
 
@@ -324,9 +332,17 @@ function decodeLoadedSessionDelivery(
   stateDir?: string,
 ): QueuedSessionDelivery | null {
   const item = result.entry as typeof result.entry & { kind?: unknown };
-  const isPostCompaction =
-    result.entryKind === "postCompactionDelegate" || item.kind === "postCompactionDelegate";
-  if (!isPostCompaction) {
+  const metadataSaysPostCompaction = result.entryKind === "postCompactionDelegate";
+  const payloadSaysPostCompaction = item.kind === "postCompactionDelegate";
+  if (metadataSaysPostCompaction !== payloadSaysPostCompaction) {
+    failInvalidSessionDelivery({
+      entry: result.entry,
+      error: INVALID_POST_COMPACTION_DELIVERY_SHAPE,
+      stateDir,
+    });
+    return null;
+  }
+  if (!payloadSaysPostCompaction) {
     const normalized = normalizeQueuedAttachmentRefs(result.entry as QueuedSessionDelivery);
     if (normalized !== result.entry) {
       failInvalidSessionDelivery({
