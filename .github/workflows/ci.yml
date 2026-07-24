@@ -1506,17 +1506,31 @@ jobs:
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
       - name: Check adopted localization catalogs
         env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DIFF_BASE_REVISION: ${{ needs.preflight.outputs.diff_base_revision }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
         run: |
           if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["localization:catalogs:check"] ? 0 : 1)'; then
             generated_paths_output="$(
               node --import tsx scripts/localization-catalogs.ts paths targets
             )"
             mapfile -t generated_paths <<< "${generated_paths_output}"
+            source_paths_output="$(
+              node --import tsx scripts/localization-catalogs.ts paths sources
+            )"
+            mapfile -t source_paths <<< "${source_paths_output}"
             if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]] ||
               { [[ "$GITHUB_EVENT_NAME" == "pull_request" ]] &&
                 ! git diff --quiet "${DIFF_BASE_REVISION}" HEAD -- "${generated_paths[@]}"; }; then
               pnpm localization:catalogs:check
+            elif [[ "$GITHUB_EVENT_NAME" == "pull_request" &&
+              "$PR_BASE_REF" == "$DEFAULT_BRANCH" &&
+              "$PR_HEAD_REPOSITORY" == "$TARGET_REPOSITORY" ]] &&
+              ! git diff --quiet "${DIFF_BASE_REVISION}" HEAD -- \
+                localization/catalogs.json "${source_paths[@]}"; then
+              pnpm localization:catalogs:gate
             else
               pnpm localization:catalogs:detect
             fi

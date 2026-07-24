@@ -14,12 +14,17 @@ on:
       - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/localization-catalog-refresh.yml
   workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: Ready same-repository PR to refresh in place; leave blank to reconcile main.
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: localization-catalog-refresh
+  group: localization-catalog-refresh-${{ inputs.pull_request_number || 'main' }}
   cancel-in-progress: false
 
 jobs:
@@ -30,25 +35,70 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Resolve exact source commit
+      - name: Resolve trusted tooling and exact source
         id: source
         env:
+          ACTOR: ${{ github.actor }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          sha="$(timeout --signal=TERM --kill-after=10s 60s gh api "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)"
-          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Unable to resolve the localization source to an exact commit." >&2
+          trusted_sha="$(timeout --signal=TERM --kill-after=10s 60s gh api "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)"
+          if [[ ! "${trusted_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unable to resolve trusted localization tooling to an exact commit." >&2
             exit 1
           fi
-          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+          mode=main
+          source_sha="${trusted_sha}"
+          head_ref=""
+          if [[ -n "${PULL_REQUEST_NUMBER:-}" ]]; then
+            if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" || ! "${PULL_REQUEST_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "In-place refresh requires a numeric pull request number on workflow_dispatch." >&2
+              exit 1
+            fi
+            permission="$(timeout --signal=TERM --kill-after=10s 60s gh api "repos/${REPOSITORY}/collaborators/${ACTOR}/permission" --jq .permission)"
+            case "${permission}" in
+              admin | maintain | write) ;;
+              *)
+                echo "In-place localization refresh requires repository write permission." >&2
+                exit 1
+                ;;
+            esac
+            pr_file="${RUNNER_TEMP}/localization-pr.json"
+            timeout --signal=TERM --kill-after=10s 60s \
+              gh api "repos/${REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" > "${pr_file}"
+            if [[ "$(jq -r .state "${pr_file}")" != "open" || "$(jq -r .draft "${pr_file}")" != "false" ]]; then
+              echo "In-place localization refresh requires an open, ready pull request." >&2
+              exit 1
+            fi
+            if [[ "$(jq -r .base.repo.full_name "${pr_file}")" != "${REPOSITORY}" ||
+              "$(jq -r .head.repo.full_name "${pr_file}")" != "${REPOSITORY}" ||
+              "$(jq -r .base.ref "${pr_file}")" != "${DEFAULT_BRANCH}" ]]; then
+              echo "In-place refresh is limited to same-repository PRs targeting ${DEFAULT_BRANCH}." >&2
+              exit 1
+            fi
+            source_sha="$(jq -r .head.sha "${pr_file}")"
+            head_ref="$(jq -r .head.ref "${pr_file}")"
+            if [[ ! "${source_sha}" =~ ^[0-9a-f]{40}$ ]] ||
+              ! git check-ref-format "refs/heads/${head_ref}"; then
+              echo "Pull request head is not a valid exact branch revision." >&2
+              exit 1
+            fi
+            mode=pull-request
+          fi
+          {
+            echo "mode=${mode}"
+            echo "trusted_sha=${trusted_sha}"
+            echo "source_sha=${source_sha}"
+            echo "head_ref=${head_ref}"
+          } >> "${GITHUB_OUTPUT}"
 
-      - name: Checkout exact source
+      - name: Checkout trusted tooling
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ steps.source.outputs.sha }}
+          ref: ${{ steps.source.outputs.trusted_sha }}
           fetch-depth: 0
           persist-credentials: false
           submodules: false
@@ -57,6 +107,20 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Require current trusted-base catalogs
+        if: steps.source.outputs.mode == 'pull-request'
+        run: pnpm localization:catalogs:check
+
+      - name: Checkout exact pull request data
+        if: steps.source.outputs.mode == 'pull-request'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ steps.source.outputs.source_sha }}
+          path: .localization-source
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
 
       - name: Require a trusted translation provider
         env:
@@ -72,7 +136,8 @@ jobs:
 
       - name: Refresh adopted catalog targets
         env:
-          GITHUB_SHA: ${{ steps.source.outputs.sha }}
+          CATALOG_ROOT: ${{ steps.source.outputs.mode == 'pull-request' && '.localization-source' || '.' }}
+          GITHUB_SHA: ${{ steps.source.outputs.source_sha }}
           OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -80,25 +145,89 @@ jobs:
           OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.6-sol' }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
-        run: pnpm localization:catalogs:refresh
+        run: node --import tsx scripts/localization-catalogs.ts refresh --root "${CATALOG_ROOT}" --write
 
       - name: Validate generated catalog targets
-        run: pnpm localization:catalogs:check
+        env:
+          CATALOG_ROOT: ${{ steps.source.outputs.mode == 'pull-request' && '.localization-source' || '.' }}
+        run: node --import tsx scripts/localization-catalogs.ts check --root "${CATALOG_ROOT}"
 
       - name: Resolve registry-owned publication paths
         id: paths
+        env:
+          CATALOG_ROOT: ${{ steps.source.outputs.mode == 'pull-request' && '.localization-source' || '.' }}
         run: |
           set -euo pipefail
           {
             echo 'generated<<OPENCLAW_GENERATED_PATHS'
-            node --import tsx scripts/localization-catalogs.ts paths targets
+            node --import tsx scripts/localization-catalogs.ts paths targets --root "${CATALOG_ROOT}"
             echo 'OPENCLAW_GENERATED_PATHS'
             echo 'sources<<OPENCLAW_SOURCE_PATHS'
-            node --import tsx scripts/localization-catalogs.ts paths sources
+            node --import tsx scripts/localization-catalogs.ts paths sources --root "${CATALOG_ROOT}"
             echo 'OPENCLAW_SOURCE_PATHS'
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Create in-place branch token
+        if: steps.source.outputs.mode == 'pull-request'
+        id: branch-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          client-id: Iv23liOECG0slfuhz093
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Commit translations to the source pull request
+        if: steps.source.outputs.mode == 'pull-request'
+        working-directory: .localization-source
+        env:
+          CONTENTS_TOKEN: ${{ steps.branch-token.outputs.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EXPECTED_HEAD_SHA: ${{ steps.source.outputs.source_sha }}
+          GENERATED_PATHS: ${{ steps.paths.outputs.generated }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ steps.source.outputs.head_ref }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+        run: |
+          set -euo pipefail
+          generated_paths=()
+          while IFS= read -r generated_path; do
+            if [[ -n "${generated_path}" ]]; then
+              generated_paths+=("${generated_path}")
+            fi
+          done <<< "${GENERATED_PATHS}"
+          if [[ "${#generated_paths[@]}" -eq 0 || -z "${CONTENTS_TOKEN:-}" ]]; then
+            echo "In-place publication requires generated paths and a contents-write App token." >&2
+            exit 1
+          fi
+          git add -A -- "${generated_paths[@]}"
+          if git diff --cached --quiet -- "${generated_paths[@]}"; then
+            echo "No in-place localization changes were required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --no-gpg-sign --no-verify -m "chore(localization): refresh adopted catalogs"
+
+          current_head="$(timeout --signal=TERM --kill-after=10s 60s \
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}" \
+              --jq 'select(.state == "open" and .draft == false and .base.repo.full_name == env.GITHUB_REPOSITORY and .base.ref == env.DEFAULT_BRANCH and .head.repo.full_name == env.GITHUB_REPOSITORY and .head.ref == env.HEAD_REF) | .head.sha')"
+          if [[ "${current_head}" != "${EXPECTED_HEAD_SHA}" ]]; then
+            echo "Pull request head moved during translation; refusing to overwrite it." >&2
+            exit 1
+          fi
+          git_auth="$(printf 'x-access-token:%s' "${CONTENTS_TOKEN}" | base64 | tr -d '\n')"
+          printf '::add-mask::%s\n' "${git_auth}"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ${git_auth}"
+          unset git_auth
+          trap 'git config --local --unset-all http.https://github.com/.extraheader || true' EXIT
+          timeout --signal=TERM --kill-after=10s 60s git push \
+            "--force-with-lease=refs/heads/${HEAD_REF}:${EXPECTED_HEAD_SHA}" \
+            origin "HEAD:refs/heads/${HEAD_REF}"
+
       - name: Open or update generated catalog PR
+        if: steps.source.outputs.mode == 'main'
         uses: ./.github/actions/publish-generated-pr
         with:
           contents-client-id: Iv23liOECG0slfuhz093

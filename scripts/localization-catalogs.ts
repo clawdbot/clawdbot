@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -91,12 +91,49 @@ function expectStringMap(value: unknown, label: string): Record<string, string> 
   );
 }
 
-async function readJson(filePath: string): Promise<unknown> {
+async function resolveRepositoryFile(
+  root: string,
+  relativePath: string,
+  options: { allowMissing: boolean },
+): Promise<string> {
+  const canonicalRoot = await realpath(root);
+  const candidate = path.resolve(canonicalRoot, relativePath);
+  const relative = path.relative(canonicalRoot, candidate);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`${relativePath} must resolve inside the repository root`);
+  }
+  let current = canonicalRoot;
+  const segments = relative.split(path.sep);
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    try {
+      const stats = await lstat(current);
+      if (stats.isSymbolicLink()) {
+        throw new Error(`${relativePath} must not traverse a symbolic link`);
+      }
+      if (index < segments.length - 1 && !stats.isDirectory()) {
+        throw new Error(`${relativePath} has a non-directory parent`);
+      }
+      if (index === segments.length - 1 && !stats.isFile()) {
+        throw new Error(`${relativePath} must be a regular file`);
+      }
+    } catch (error) {
+      if (isRecord(error) && error.code === "ENOENT" && options.allowMissing) {
+        return candidate;
+      }
+      throw error;
+    }
+  }
+  return candidate;
+}
+
+async function readJson(root: string, relativePath: string): Promise<unknown> {
+  const filePath = await resolveRepositoryFile(root, relativePath, { allowMissing: false });
   return JSON.parse(await readFile(filePath, "utf8"));
 }
 
 async function readRegistry(root: string, registryPath: string): Promise<CatalogRegistry> {
-  const raw = await readJson(path.resolve(root, registryPath));
+  const raw = await readJson(root, registryPath);
   if (!isRecord(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.areas)) {
     throw new Error("localization catalog registry must use schemaVersion 1 and declare areas");
   }
@@ -183,7 +220,7 @@ export async function catalogWorkflowPaths(
 }
 
 async function readSource(root: string, area: CatalogArea): Promise<SourceCatalog> {
-  const raw = await readJson(path.resolve(root, area.source));
+  const raw = await readJson(root, area.source);
   if (!isRecord(raw) || raw.schemaVersion !== 1 || raw.area !== area.id) {
     throw new Error(`${area.source} must declare schemaVersion 1 and area ${area.id}`);
   }
@@ -199,7 +236,7 @@ async function readGenerated(
   area: CatalogArea,
   target: CatalogTarget,
 ): Promise<GeneratedCatalog> {
-  const raw = await readJson(path.resolve(root, target.path));
+  const raw = await readJson(root, target.path);
   if (
     !isRecord(raw) ||
     raw.schemaVersion !== 1 ||
@@ -451,12 +488,9 @@ export async function refreshCatalogs(options: {
       validateGenerated(area, source, generated);
       changed += 1;
       if (options.write) {
-        await mkdir(path.dirname(path.resolve(root, target.path)), { recursive: true });
-        await writeFile(
-          path.resolve(root, target.path),
-          `${JSON.stringify(generated, null, 2)}\n`,
-          "utf8",
-        );
+        const targetPath = await resolveRepositoryFile(root, target.path, { allowMissing: true });
+        await mkdir(path.dirname(targetPath), { recursive: true });
+        await writeFile(targetPath, `${JSON.stringify(generated, null, 2)}\n`, "utf8");
       }
     }
   }
@@ -468,6 +502,8 @@ type CliArgs = {
   pathKind?: "sources" | "targets";
   area?: string;
   locale?: string;
+  root?: string;
+  failOnDrift: boolean;
   write: boolean;
 };
 
@@ -475,10 +511,10 @@ function parseArgs(argv: readonly string[]): CliArgs {
   const command = argv[0];
   if (command !== "check" && command !== "detect" && command !== "paths" && command !== "refresh") {
     throw new Error(
-      "usage: localization-catalogs.ts check|detect [--area <id>] | paths sources|targets | refresh [--area <id>] [--locale <id>] --write",
+      "usage: localization-catalogs.ts check|detect [--area <id>] [--root <path>] [--fail-on-drift] | paths sources|targets [--root <path>] | refresh [--area <id>] [--locale <id>] [--root <path>] --write",
     );
   }
-  const args: CliArgs = { command, write: false };
+  const args: CliArgs = { command, failOnDrift: false, write: false };
   let startIndex = 1;
   if (command === "paths") {
     const pathKind = argv[1];
@@ -492,26 +528,33 @@ function parseArgs(argv: readonly string[]): CliArgs {
     const token = argv[index];
     if (token === "--write") {
       args.write = true;
-    } else if (token === "--area" || token === "--locale") {
+    } else if (token === "--fail-on-drift") {
+      args.failOnDrift = true;
+    } else if (token === "--area" || token === "--locale" || token === "--root") {
       const value = argv[index + 1];
       if (!value) {
         throw new Error(`${token} requires a value`);
       }
       if (token === "--area") {
         args.area = value;
-      } else {
+      } else if (token === "--locale") {
         args.locale = value;
+      } else {
+        args.root = value;
       }
       index += 1;
     } else {
       throw new Error(`unknown argument: ${token}`);
     }
   }
-  if (command === "paths" && (args.area || args.locale || args.write)) {
-    throw new Error("paths does not accept filters or --write");
+  if (command === "paths" && (args.area || args.locale || args.failOnDrift || args.write)) {
+    throw new Error("paths accepts only --root");
   }
   if ((command === "check" || command === "detect") && (args.locale || args.write)) {
-    throw new Error(`${command} accepts only --area`);
+    throw new Error(`${command} accepts only --area, --root, and detect's --fail-on-drift`);
+  }
+  if (command !== "detect" && args.failOnDrift) {
+    throw new Error("--fail-on-drift requires detect");
   }
   return args;
 }
@@ -519,20 +562,25 @@ function parseArgs(argv: readonly string[]): CliArgs {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "check") {
-    await checkCatalogs({ area: args.area });
+    await checkCatalogs({ area: args.area, root: args.root });
     process.stdout.write("localization catalogs are current\n");
     return;
   }
   if (args.command === "detect") {
-    const drift = await detectCatalogDrift({ area: args.area });
+    const drift = await detectCatalogDrift({ area: args.area, root: args.root });
     for (const finding of drift) {
-      process.stdout.write(`::warning::${finding}\n`);
+      process.stdout.write(`::${args.failOnDrift ? "error" : "warning"}::${finding}\n`);
     }
     process.stdout.write(`detected ${drift.length} stale localization catalog(s)\n`);
+    if (args.failOnDrift && drift.length > 0) {
+      throw new Error(
+        "ready same-repository PRs must run Localization Catalog Refresh before merge",
+      );
+    }
     return;
   }
   if (args.command === "paths") {
-    const paths = await catalogWorkflowPaths();
+    const paths = await catalogWorkflowPaths({ root: args.root });
     process.stdout.write(`${paths[args.pathKind ?? "sources"].join("\n")}\n`);
     return;
   }
@@ -546,6 +594,7 @@ async function main() {
   const changed = await refreshCatalogs({
     area: args.area,
     locale: args.locale,
+    root: args.root,
     sourceCommit,
     write: true,
   });

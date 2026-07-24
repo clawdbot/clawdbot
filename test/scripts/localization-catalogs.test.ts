@@ -1,5 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,10 +87,39 @@ describe("localization catalog authoring", () => {
       area: "wizard-core",
       messages: { "wizard.completion.title": "Shell completion setup" },
     });
-
     await expect(detectCatalogDrift({ root, registryPath: "registry.json" })).resolves.toEqual([
       expect.stringContaining("is stale"),
     ]);
+  });
+
+  it("exits nonzero when the ready-PR gate finds source drift", async () => {
+    await writeJson(SOURCE_PATH, {
+      schemaVersion: 1,
+      area: "wizard-core",
+      messages: { "wizard.completion.title": "Shell completion setup" },
+    });
+    await writeJson(
+      "localization/catalogs.json",
+      JSON.parse(await readFile(path.join(root, "registry.json"), "utf8")),
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/localization-catalogs.ts",
+        "detect",
+        "--root",
+        root,
+        "--fail-on-drift",
+      ],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout, result.stderr).toContain("::error::zh-CN/wizard-core is stale");
+    expect(result.stderr).toContain("must run Localization Catalog Refresh before merge");
   });
 
   it("reports a missing generated target so a new area can bootstrap asynchronously", async () => {
@@ -252,4 +282,22 @@ describe("localization catalog authoring", () => {
       "normalized repository-relative path",
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a source symlink before catalog contents can reach a provider",
+    async () => {
+      const outside = path.join(path.dirname(root), `${path.basename(root)}-outside.json`);
+      await writeFile(outside, `${JSON.stringify({ secret: "not catalog data" })}\n`, "utf8");
+      await rm(path.join(root, SOURCE_PATH));
+      await symlink(outside, path.join(root, SOURCE_PATH));
+
+      try {
+        await expect(detectCatalogDrift({ root, registryPath: "registry.json" })).rejects.toThrow(
+          "must not traverse a symbolic link",
+        );
+      } finally {
+        await rm(outside, { force: true });
+      }
+    },
+  );
 });
