@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -44,7 +44,7 @@ export function withOpenClawStateDatabaseReadOnly<T>(
     options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname), { readOnly: true });
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);

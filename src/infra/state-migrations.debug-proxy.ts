@@ -6,7 +6,7 @@ import { gunzipSync } from "node:zlib";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sha256Hex } from "./crypto-digest.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "./node-sqlite.js";
 
 const DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 
@@ -154,7 +154,9 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
   blobDirs: string[];
 } {
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(params.sourcePath, { readOnly: true });
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(params.sourcePath), {
+    readOnly: true,
+  });
   try {
     assertTableColumns(db, "capture_sessions", [
       "id",

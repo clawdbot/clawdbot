@@ -7,7 +7,7 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import * as tar from "tar";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
-import { requireNodeSqlite, resolveSqliteFilesystemPath } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isRecord, resolveUserPath } from "../utils.js";
@@ -691,7 +691,7 @@ async function verifySqliteSnapshots(params: {
           continue;
         }
         const sqlite = requireNodeSqlite();
-        database = new sqlite.DatabaseSync(resolveSqliteFilesystemPath(extractedPath), {
+        database = new sqlite.DatabaseSync(resolveNodeSqliteLocation(extractedPath), {
           allowExtension: true,
           readOnly: true,
         });

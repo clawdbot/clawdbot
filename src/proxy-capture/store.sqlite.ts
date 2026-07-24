@@ -7,7 +7,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { migrateSqliteSchemaToStrict } from "../infra/sqlite-strict.js";
@@ -129,7 +129,7 @@ function openPathBasedDebugProxyCaptureStore(
     }
   }
   const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(dbPath);
+  const db = new DatabaseSync(resolveNodeSqliteLocation(dbPath));
   let walMaintenance: SqliteWalMaintenance | undefined;
   try {
     if (fileBackedPath) {

@@ -1,5 +1,5 @@
 import { parentPort, workerData } from "node:worker_threads";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import {
   assertSqliteIntegrity,
   isTerminalSqliteIntegrityError,
@@ -39,7 +39,9 @@ export function verifyOpenClawDatabases(
   return targets.map((target) => {
     let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
     try {
-      database = new sqlite.DatabaseSync(target.path, { readOnly: true });
+      database = new sqlite.DatabaseSync(resolveNodeSqliteLocation(target.path), {
+        readOnly: true,
+      });
       database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       assertSqliteIntegrity(database, target.label);
       return { path: target.path, ok: true };

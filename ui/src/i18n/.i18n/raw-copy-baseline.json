@@ -492,46 +492,46 @@
       "text": "NIP-05"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Compacting context..."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Context compacted"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Enter"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Replying to"
     },
     {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
       "text": "Tab"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
+      "text": "Compacting context..."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-status.ts",
+      "text": "Context compacted"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-composer-view.ts",
+      "text": "Replying to"
     },
     {
       "count": 1,

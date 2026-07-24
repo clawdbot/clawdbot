@@ -1,7 +1,7 @@
 // Reads, normalizes, and inserts rows from the legacy task-runs SQLite sidecar.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "./node-sqlite.js";
 
 export type SqliteBindRow = Record<string, SQLInputValue>;
 
@@ -97,7 +97,7 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
 
 export function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(sourcePath), { readOnly: true });
   try {
     const columns = listSqliteColumns(db, "task_runs");
     if (columns.size === 0) {
@@ -146,7 +146,7 @@ export function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
 
 export function readLegacyTaskDeliveryRows(sourcePath: string): SqliteBindRow[] {
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(sourcePath), { readOnly: true });
   try {
     const columns = listSqliteColumns(db, "task_delivery_state");
     if (columns.size === 0) {

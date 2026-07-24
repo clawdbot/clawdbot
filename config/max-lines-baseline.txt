@@ -1079,7 +1079,6 @@ ui/src/pages/chat/chat-state.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-thread.ts
 ui/src/pages/chat/chat-view.test.ts
-ui/src/pages/chat/components/chat-composer.ts
 ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/components/chat-message.ts
 ui/src/pages/chat/components/chat-model-controls.ts
