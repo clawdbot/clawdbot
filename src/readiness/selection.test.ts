@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { PluginReadinessCriterionRegistration } from "../plugins/registry-types.js";
-import { createSelectedReadinessResolver } from "./selection.js";
+import {
+  applySelectedCanonicalRequirements,
+  createSelectedReadinessResolver,
+} from "./selection.js";
 
 function pluginCriterion(): PluginReadinessCriterionRegistration {
   return {
@@ -86,6 +89,79 @@ describe("createSelectedReadinessResolver", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  it("projects requirements onto canonical plugin and event-loop conditions", () => {
+    expect(
+      applySelectedCanonicalRequirements(
+        {
+          gateway: {
+            readiness: {
+              requiredCriteria: ["openclaw.plugins-loaded"],
+              advisoryCriteria: ["openclaw.event-loop-healthy"],
+            },
+          },
+        },
+        [
+          {
+            type: "PluginsLoaded",
+            status: "False",
+            requirement: "advisory",
+            reason: "PluginLoadFailures",
+            message: "A plugin failed to load.",
+          },
+          {
+            type: "EventLoopHealthy",
+            status: "False",
+            requirement: "advisory",
+            reason: "EventLoopDegraded",
+            message: "The event loop is degraded.",
+          },
+        ],
+      ),
+    ).toEqual([
+      expect.objectContaining({ type: "PluginsLoaded", requirement: "required" }),
+      expect.objectContaining({ type: "EventLoopHealthy", requirement: "advisory" }),
+    ]);
+  });
+
+  it("does not synthesize duplicate conditions for canonical selectors", async () => {
+    const resolve = createSelectedReadinessResolver();
+
+    await expect(
+      resolve({
+        config: {
+          gateway: {
+            readiness: {
+              requiredCriteria: ["openclaw.plugins-loaded"],
+              advisoryCriteria: ["openclaw.event-loop-healthy"],
+            },
+          },
+        },
+        registry: { readinessCriteria: [] },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("reports a selected canonical condition as unknown when its producer did not run", () => {
+    expect(
+      applySelectedCanonicalRequirements(
+        {
+          gateway: {
+            readiness: { requiredCriteria: ["openclaw.plugins-loaded"] },
+          },
+        },
+        [],
+      ),
+    ).toEqual([
+      {
+        type: "PluginsLoaded",
+        status: "Unknown",
+        requirement: "required",
+        reason: "CriterionEvaluationUnavailable",
+        message: "Readiness criterion PluginsLoaded was selected but could not be evaluated.",
+      },
+    ]);
   });
 
   it("maps activation selector ids and preserves the selected requirement", async () => {
