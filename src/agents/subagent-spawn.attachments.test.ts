@@ -131,7 +131,13 @@ describe("spawnSubagentDirect filename validation", () => {
 
   it.each([
     ["case-insensitive manifest alias", ".MANIFEST.JSON"],
+    ["manifest trailing-dot alias", ".manifest.json."],
+    ["trailing-space alias", "handoff.txt "],
     ["overlong UTF-8 basename", "é".repeat(128)],
+    ["Windows reserved device basename", "CON.txt"],
+    ["Windows portable forbidden character", "handoff?.txt"],
+    ["lone surrogate", "\uD800"],
+    ["replacement character", "\uFFFD"],
   ])("%s returns attachments_invalid_name", async (_label, name) => {
     const result = await spawnWithName(name);
     expect(result.status).toBe("error");
@@ -168,6 +174,22 @@ describe("spawnSubagentDirect filename validation", () => {
         attachments: [
           { name: "Café.txt", content: validContent, encoding: "base64" },
           { name: "cafe\u0301.TXT", content: validContent, encoding: "base64" },
+        ],
+      },
+      ctx,
+    );
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_duplicate_name/);
+  });
+
+  it("Unicode sigma case-fold aliases return attachments_duplicate_name", async () => {
+    const { spawnSubagentDirect } = subagentSpawnModule;
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [
+          { name: "Σ.txt", content: validContent, encoding: "base64" },
+          { name: "ς.txt", content: validContent, encoding: "base64" },
         ],
       },
       ctx,

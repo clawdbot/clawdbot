@@ -43,6 +43,22 @@ export const DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS = {
 /** Portable basename ceiling shared by supported local filesystems. */
 export const MAX_INLINE_ATTACHMENT_BASENAME_BYTES = 255;
 
+const PORTABLE_ATTACHMENT_NAME_FORBIDDEN = new Set([
+  "<",
+  ">",
+  ":",
+  '"',
+  "/",
+  "\\",
+  "|",
+  "?",
+  "*",
+  "%",
+  "!",
+]);
+const WINDOWS_RESERVED_ATTACHMENT_BASENAME =
+  /^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/u;
+
 export type InlineAttachmentSnapshotLimits = {
   maxTotalBytes: number;
   maxFiles: number;
@@ -75,11 +91,33 @@ function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | nu
   return decoded.byteLength <= maxDecodedBytes ? decoded : null;
 }
 
+function isWellFormedAttachmentName(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return false;
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function validateInlineAttachmentName(name: string): void {
   if (!name) {
     throw new Error("attachments_invalid_name (empty)");
   }
-  if (name.includes("/") || name.includes("\\") || name.includes("\u0000")) {
+  if (!isWellFormedAttachmentName(name) || name.includes("\uFFFD")) {
+    throw new Error("attachments_invalid_name (invalid Unicode)");
+  }
+  if (
+    name.includes("\u0000") ||
+    Array.from(name).some((char) => PORTABLE_ATTACHMENT_NAME_FORBIDDEN.has(char))
+  ) {
     throw new Error(`attachments_invalid_name (${name})`);
   }
   if (
@@ -95,7 +133,16 @@ function validateInlineAttachmentName(name: string): void {
       `attachments_invalid_name (too long: ${MAX_INLINE_ATTACHMENT_BASENAME_BYTES} bytes)`,
     );
   }
-  if (name === "." || name === ".." || name.toLowerCase() === ".manifest.json") {
+  if (/[. ]$/u.test(name)) {
+    throw new Error(`attachments_invalid_name (${name})`);
+  }
+  const filesystemKey = name.toUpperCase();
+  if (
+    name === "." ||
+    name === ".." ||
+    filesystemKey === ".MANIFEST.JSON" ||
+    WINDOWS_RESERVED_ATTACHMENT_BASENAME.test(filesystemKey)
+  ) {
     throw new Error(`attachments_invalid_name (${name})`);
   }
 }
@@ -132,12 +179,16 @@ export function prepareInlineAttachmentSnapshots(params: {
       throw new Error("attachments_invalid_member (mimeType must be a string)");
     }
 
-    const name = (normalizeOptionalString(item.name) ?? "").normalize("NFC");
+    const rawName = item.name;
+    if (!isWellFormedAttachmentName(rawName) || rawName.includes("\uFFFD")) {
+      throw new Error("attachments_invalid_name (invalid Unicode)");
+    }
+    const name = rawName.normalize("NFC");
     const content = item.content;
     const encoding = item.encoding ?? "utf8";
     const mimeType = normalizeOptionalString(item.mimeType) ?? "";
     validateInlineAttachmentName(name);
-    const canonicalNameKey = name.toLowerCase();
+    const canonicalNameKey = name.toUpperCase();
     if (seen.has(canonicalNameKey)) {
       throw new Error(`attachments_duplicate_name (${name})`);
     }
