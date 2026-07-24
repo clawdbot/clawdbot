@@ -54,6 +54,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     isRawModelRun,
     agentDedupeKeys,
     trustedRequestMessageId,
+    trustedRequestSenderId,
   } = preflight;
   const idem = runId;
   let resolvedGroupId: string | undefined = normalizedSpawned.groupId;
@@ -480,6 +481,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       runId,
       idempotencyKey: idem,
       requestMessageId,
+      requestSenderId: trustedRequestSenderId,
       agentDedupeKeys,
       spawnedBy: spawnedByValue,
       groupId: resolvedGroupId,

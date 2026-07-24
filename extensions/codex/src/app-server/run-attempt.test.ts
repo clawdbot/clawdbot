@@ -2253,6 +2253,7 @@ describe("runCodexAppServerAttempt", () => {
     params.agentAccountId = "slack-account-1";
     params.currentMessageId = "1784750000.000100";
     params.currentThreadTs = "1784750000.000099";
+    params.senderId = "U028EKM2A";
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await new Promise<void>((resolve) => {
@@ -2267,6 +2268,7 @@ describe("runCodexAppServerAttempt", () => {
       {
         accountId?: string;
         messageId?: string | number;
+        senderId?: string | null;
         threadId?: string | number;
         runId?: string;
         sessionId?: string;
@@ -2278,6 +2280,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(hookContext.sessionId).toBe("session-1");
     expect(hookContext.accountId).toBe("slack-account-1");
     expect(hookContext.messageId).toBe("1784750000.000100");
+    expect(hookContext.senderId).toBe("U028EKM2A");
     expect(hookContext.threadId).toBe("1784750000.000099");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;

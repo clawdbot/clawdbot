@@ -96,6 +96,10 @@ type RuntimeNodeInvokeParams = {
 };
 
 export type RuntimeGatewayRequestOptions = {
+  /** Wait for the terminal response frame instead of returning the accepted frame. */
+  expectFinal?: boolean;
+  /** Persist caller-owned acceptance state before waiting for a terminal frame. */
+  onAccepted?: (payload: unknown) => Promise<void> | void;
   timeoutMs?: number;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];

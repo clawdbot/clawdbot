@@ -236,13 +236,14 @@ type DispatchGatewayMethodInProcessOptions = {
   forceSyntheticClient?: boolean;
   internalDeliveryMediaUrls?: string[];
   internalDeliverySuppressText?: boolean;
-  onAccepted?: (payload: unknown) => void;
+  onAccepted?: (payload: unknown) => Promise<void> | void;
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
   trustedRequestMessageId?: string;
+  trustedRequestSenderId?: string;
 };
 
 export type GatewayMethodDispatchResponse = {
@@ -347,6 +348,18 @@ export async function dispatchGatewayMethodInProcessRaw(
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
       ? options.pluginRuntimeOwnerId.trim()
       : undefined;
+  let resolveAcceptedExecutionBarrier: (() => void) | undefined;
+  let rejectAcceptedExecutionBarrier: ((error: Error) => void) | undefined;
+  const agentAcceptedExecutionBarrier =
+    options?.expectFinal === true && options.onAccepted
+      ? new Promise<void>((resolve, reject) => {
+          resolveAcceptedExecutionBarrier = resolve;
+          rejectAcceptedExecutionBarrier = reject;
+        })
+      : undefined;
+  // Execution consumes this promise, but mark the rejection handled even if
+  // admission fails before the execution phase attaches its await.
+  void agentAcceptedExecutionBarrier?.catch(() => {});
   const syntheticClient = createSyntheticPluginRuntimeClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
     agentRunTracking: options?.agentRunTracking,
@@ -354,6 +367,8 @@ export async function dispatchGatewayMethodInProcessRaw(
     internalDeliveryMediaUrls: options?.internalDeliveryMediaUrls,
     internalDeliverySuppressText: options?.internalDeliverySuppressText,
     trustedRequestMessageId: options?.trustedRequestMessageId,
+    trustedRequestSenderId: options?.trustedRequestSenderId,
+    agentAcceptedExecutionBarrier,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     ...(options?.runtimePluginToolGrant
       ? { runtimePluginToolGrant: options.runtimePluginToolGrant }
@@ -362,10 +377,14 @@ export async function dispatchGatewayMethodInProcessRaw(
   });
   const scopedClient = mergePluginRuntimeClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId || options?.agentRunTracking || options?.runtimePluginToolGrant
+    pluginRuntimeOwnerId ||
+      options?.agentRunTracking ||
+      options?.runtimePluginToolGrant ||
+      agentAcceptedExecutionBarrier
       ? {
           ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
           ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+          ...(agentAcceptedExecutionBarrier ? { agentAcceptedExecutionBarrier } : {}),
           runtimePluginToolGrant: options?.runtimePluginToolGrant,
         }
       : undefined,
@@ -416,12 +435,30 @@ export async function dispatchGatewayMethodInProcessRaw(
       rejectFinalResponse?.(error);
     });
 
-  firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, deadlineMs);
+  try {
+    firstResponse = await waitForInProcessDispatch(method, firstResponsePromise, deadlineMs);
+  } catch (error) {
+    const firstResponseError = error instanceof Error ? error : new Error(String(error));
+    rejectAcceptedExecutionBarrier?.(firstResponseError);
+    throw firstResponseError;
+  }
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
     return firstResponse;
   }
-  options.onAccepted?.(firstResponse.payload);
+  const acceptedPayload = firstResponse.payload;
+  try {
+    await waitForInProcessDispatch(
+      method,
+      Promise.resolve().then(() => options.onAccepted?.(acceptedPayload)),
+      deadlineMs,
+    );
+    resolveAcceptedExecutionBarrier?.();
+  } catch (error) {
+    const acceptedError = error instanceof Error ? error : new Error(String(error));
+    rejectAcceptedExecutionBarrier?.(acceptedError);
+    throw acceptedError;
+  }
   if (postFirstResponseError) {
     throw postFirstResponseError;
   }
@@ -477,13 +514,35 @@ export async function dispatchGatewayMethodInProcess<T>(
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<T> {
   const trustedRequestMessageId = options?.trustedRequestMessageId?.trim();
-  if (!trustedRequestMessageId || method !== "agent") {
+  const trustedRequestSenderId = options?.trustedRequestSenderId?.trim();
+  if ((!trustedRequestMessageId && !trustedRequestSenderId) || method !== "agent") {
     return await dispatchGatewayMethod<T>(method, params, options);
+  }
+  if (trustedRequestSenderId && !trustedRequestMessageId) {
+    throw new Error("trustedRequestSenderId requires a trustedRequestMessageId.");
   }
   if (params.requestMessageId !== trustedRequestMessageId) {
     throw new Error("trustedRequestMessageId must match the agent request identity.");
   }
-  const { requestMessageId: _requestMessageId, ...gatewayParams } = params;
+  if (trustedRequestSenderId) {
+    if (params.requestSenderId !== trustedRequestSenderId) {
+      throw new Error("trustedRequestSenderId must match the agent request actor.");
+    }
+    const provenance =
+      params.inputProvenance &&
+      typeof params.inputProvenance === "object" &&
+      !Array.isArray(params.inputProvenance)
+        ? (params.inputProvenance as Record<string, unknown>)
+        : {};
+    if (provenance.kind !== "external_user") {
+      throw new Error("trustedRequestSenderId requires external_user input provenance.");
+    }
+  }
+  const {
+    requestMessageId: _requestMessageId,
+    requestSenderId: _requestSenderId,
+    ...gatewayParams
+  } = params;
   // Recovery identity is trusted process metadata, never a network RPC field.
   return await dispatchGatewayMethod<T>(method, gatewayParams, options);
 }
@@ -496,13 +555,16 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   const scope = getPluginRuntimeGatewayRequestScope();
   const pluginId = scope?.pluginId?.trim();
   const trustedOfficial = canTrustedOfficialPluginRequestScopes(scope ?? {});
+  const configuredPluginConfig =
+    pluginId && scope?.pluginOrigin === "config"
+      ? getFallbackGatewayContext()?.getRuntimeConfig().plugins?.entries?.[pluginId]?.config
+      : undefined;
   const configuredAgentDispatch = Boolean(
     method === "agent" &&
     pluginId &&
     scope?.pluginOrigin === "config" &&
     options?.scopes === undefined &&
-    getFallbackGatewayContext()?.getRuntimeConfig().plugins?.entries?.[pluginId]?.config
-      ?.gatewayAgentDispatchAllowed === true,
+    configuredPluginConfig?.gatewayAgentDispatchAllowed === true,
   );
   if (!trustedOfficial && !configuredAgentDispatch) {
     throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
@@ -513,12 +575,33 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     params.requestMessageId.trim()
       ? params.requestMessageId.trim()
       : undefined;
+  const trustedRequestSenderId =
+    method === "agent" &&
+    typeof params.requestSenderId === "string" &&
+    params.requestSenderId.trim()
+      ? params.requestSenderId.trim()
+      : undefined;
+  if (trustedRequestSenderId && !trustedRequestMessageId) {
+    throw new Error("requestSenderId requires requestMessageId.");
+  }
+  if (
+    trustedRequestSenderId &&
+    (!configuredAgentDispatch ||
+      configuredPluginConfig?.gatewayAgentSenderAssertionAllowed !== true)
+  ) {
+    throw new Error(
+      "Plugin sender assertions require a configured agent dispatcher with gatewayAgentSenderAssertionAllowed.",
+    );
+  }
   const syntheticScopes = trustedOfficial ? normalizeOperatorScopeList(options?.scopes) : undefined;
   return await dispatchGatewayMethodInProcess<T>(method, params, {
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
     ...(trustedRequestMessageId ? { trustedRequestMessageId } : {}),
+    ...(trustedRequestSenderId ? { trustedRequestSenderId } : {}),
     ...(syntheticScopes ? { syntheticScopes } : {}),
+    ...(options?.expectFinal !== undefined ? { expectFinal: options.expectFinal } : {}),
+    ...(options?.onAccepted ? { onAccepted: options.onAccepted } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
 }

@@ -27,6 +27,7 @@ import {
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
 import {
+  deleteGatewayDedupeEntries,
   resolveAbortedAgentStopReason,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
@@ -60,6 +61,7 @@ export function startAgentRunExecution(params: {
   runId: string;
   idempotencyKey: string;
   requestMessageId?: string;
+  requestSenderId?: string;
   agentDedupeKeys: readonly string[];
   spawnedBy?: string;
   groupId?: string;
@@ -92,9 +94,19 @@ export function startAgentRunExecution(params: {
     releaseGatewayRootContinuation = undefined;
   };
   void prepared.activeGatewayWorkAdmission.run(async () => {
-    await yieldAfterAgentAcceptedAck();
     let dispatched = false;
+    const acceptedExecutionBarrier = params.client?.internal?.agentAcceptedExecutionBarrier;
+    let acceptedExecutionBarrierPassed = !acceptedExecutionBarrier;
+    let rejectedBarrierResponse:
+      | {
+          error: ReturnType<typeof errorShape>;
+          payload: { runId: string; status: "error"; summary: string };
+        }
+      | undefined;
     try {
+      await acceptedExecutionBarrier;
+      acceptedExecutionBarrierPassed = true;
+      await yieldAfterAgentAcceptedAck();
       if (prepared.activeRunAbort.controller.signal.aborted) {
         const stopReason = resolveAbortedAgentStopReason(prepared.activeRunAbort.entry);
         setAbortedAgentDedupeEntries({
@@ -274,6 +286,7 @@ export function startAgentRunExecution(params: {
           runContext: {
             messageChannel: params.delivery.originMessageChannel,
             accountId: params.delivery.resolvedAccountId,
+            senderId: params.requestSenderId,
             groupId: params.groupId,
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
@@ -382,21 +395,43 @@ export function startAgentRunExecution(params: {
         status: "error" as const,
         summary: formatForLog(err),
       };
-      setGatewayDedupeEntries({
-        dedupe: params.context.dedupe,
-        keys: params.agentDedupeKeys,
-        entry: { ts: Date.now(), ok: false, payload, error },
-      });
-      params.respond(false, payload, error, {
-        runId: params.runId,
-        error: formatForLog(err),
-      });
+      if (acceptedExecutionBarrier && !acceptedExecutionBarrierPassed) {
+        rejectedBarrierResponse = { error, payload };
+      } else {
+        setGatewayDedupeEntries({
+          dedupe: params.context.dedupe,
+          keys: params.agentDedupeKeys,
+          entry: { ts: Date.now(), ok: false, payload, error },
+        });
+        params.respond(false, payload, error, {
+          runId: params.runId,
+          error: formatForLog(err),
+        });
+      }
     } finally {
       if (!dispatched) {
         try {
           await params.releaseCronContinuationClaimWithRecovery();
         } finally {
-          cleanupAdmittedRun({ force: true });
+          try {
+            cleanupAdmittedRun({ force: true });
+          } finally {
+            if (rejectedBarrierResponse) {
+              deleteGatewayDedupeEntries({
+                dedupe: params.context.dedupe,
+                keys: params.agentDedupeKeys,
+              });
+              params.respond(
+                false,
+                rejectedBarrierResponse.payload,
+                rejectedBarrierResponse.error,
+                {
+                  runId: params.runId,
+                  error: rejectedBarrierResponse.payload.summary,
+                },
+              );
+            }
+          }
         }
       }
     }

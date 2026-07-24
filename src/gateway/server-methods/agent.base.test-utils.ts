@@ -1662,19 +1662,133 @@ describe("gateway agent handler", () => {
     if (!client) {
       throw new Error("expected backend client");
     }
-    client.internal = { trustedRequestMessageId: "1784768109.234419" };
+    client.internal = {
+      trustedRequestMessageId: "1784768109.234419",
+      trustedRequestSenderId: "U028EKM2A",
+    };
 
     await invokeAgent(
       {
         message: "resume",
         sessionKey: "agent:main:main",
         idempotencyKey: "trusted-recovery-run",
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "slack",
+        },
       } as AgentParams,
       { client },
     );
 
-    const call = await waitForAgentCommandCall<{ requestMessageId?: string }>();
+    const call = await waitForAgentCommandCall<{
+      requestMessageId?: string;
+      runContext?: { senderId?: string };
+    }>();
     expect(call.requestMessageId).toBe("1784768109.234419");
+    expect(call.runContext?.senderId).toBe("U028EKM2A");
+  });
+
+  it("does not execute an accepted in-process run before its durable acceptance barrier", async () => {
+    primeMainAgentRun();
+    const client = backendGatewayClient();
+    if (!client) {
+      throw new Error("expected backend client");
+    }
+    let releaseAcceptance = () => {};
+    const agentAcceptedExecutionBarrier = new Promise<void>((resolve) => {
+      releaseAcceptance = resolve;
+    });
+    client.internal = {
+      trustedRequestMessageId: "1784768109.234420",
+      trustedRequestSenderId: "U028EKM2A",
+      agentAcceptedExecutionBarrier,
+    };
+    const callsBeforeAdmission = mocks.agentCommand.mock.calls.length;
+
+    await invokeAgent(
+      {
+        message: "resume after the durable checkpoint",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "trusted-recovery-barrier-run",
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "slack",
+        },
+      } as AgentParams,
+      { client },
+    );
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    const callsWhileBlocked = mocks.agentCommand.mock.calls.length;
+    releaseAcceptance();
+    expect(callsWhileBlocked).toBe(callsBeforeAdmission);
+    await vi.waitFor(() => {
+      expect(mocks.agentCommand.mock.calls.length).toBe(callsBeforeAdmission + 1);
+    });
+  });
+
+  it("rejected durable acceptance clears dedupe so the same idempotency key can retry once", async () => {
+    primeMainAgentRun();
+    const client = backendGatewayClient();
+    if (!client) {
+      throw new Error("expected backend client");
+    }
+    const context = makeContext();
+    let rejectAcceptance = (_error: Error) => {};
+    const agentAcceptedExecutionBarrier = new Promise<void>((_resolve, reject) => {
+      rejectAcceptance = reject;
+    });
+    void agentAcceptedExecutionBarrier.catch(() => {});
+    client.internal = {
+      trustedRequestMessageId: "1784768109.234421",
+      trustedRequestSenderId: "U028EKM2A",
+      agentAcceptedExecutionBarrier,
+    };
+    const callsBeforeAdmission = mocks.agentCommand.mock.calls.length;
+
+    await invokeAgent(
+      {
+        message: "must not run without the durable checkpoint",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "trusted-recovery-rejected-barrier-run",
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "slack",
+        },
+      } as AgentParams,
+      { client, context },
+    );
+
+    rejectAcceptance(new Error("durable acceptance checkpoint timed out"));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+    expect(mocks.agentCommand.mock.calls.length).toBe(callsBeforeAdmission);
+    expect(context.dedupe.has("agent:trusted-recovery-rejected-barrier-run")).toBe(false);
+
+    primeMainAgentRun();
+    client.internal = {
+      trustedRequestMessageId: "1784768109.234421",
+      trustedRequestSenderId: "U028EKM2A",
+      agentAcceptedExecutionBarrier: Promise.resolve(),
+    };
+    await invokeAgent(
+      {
+        message: "retry after the durable checkpoint is available",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "trusted-recovery-rejected-barrier-run",
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "slack",
+        },
+      } as AgentParams,
+      { client, context },
+    );
+    await vi.waitFor(() => {
+      expect(mocks.agentCommand.mock.calls.length).toBe(callsBeforeAdmission + 1);
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

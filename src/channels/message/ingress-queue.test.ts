@@ -343,6 +343,36 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("atomically blocks lanes held by claims outside the candidate snapshot", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("earlier", { text: "active" }, { laneKey: "thread-1", receivedAt: 1 });
+      await queue.enqueue("later", { text: "must wait" }, { laneKey: "thread-1", receivedAt: 2 });
+      await queue.enqueue(
+        "independent",
+        { text: "can run" },
+        { laneKey: "thread-2", receivedAt: 3 },
+      );
+      await queue.claim("earlier", { ownerId: "sibling-worker" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        candidateIds: ["later", "independent"],
+        blockClaimedLanes: true,
+      });
+
+      expect(claimed?.id).toBe("independent");
+      expect((await queue.listPending()).find((record) => record.id === "later")).toBeDefined();
+    });
+  });
+
   it("requires claim tokens before mutating claimed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<{ text: string }>({
@@ -384,14 +414,38 @@ describe("channel ingress queue", () => {
         throw new Error("Expected a claimed ingress event");
       }
 
-      expect(await queue.refreshClaim?.(claimed, { refreshedAt: 20 })).toBe(true);
+      expect(
+        await queue.refreshClaim?.(claimed, {
+          refreshedAt: 20,
+          lastError: "accepted:run-1",
+        }),
+      ).toBe(true);
       expect(
         (await queue.listClaims()).map((claim) => ({
           id: claim.id,
           claimedAt: claim.claim.claimedAt,
           updatedAt: claim.updatedAt,
+          lastError: claim.lastError,
         })),
-      ).toEqual([{ id: "event-1", claimedAt: 20, updatedAt: 20 }]);
+      ).toEqual([
+        {
+          id: "event-1",
+          claimedAt: 20,
+          updatedAt: 20,
+          lastError: "accepted:run-1",
+        },
+      ]);
+
+      expect(
+        await queue.refreshClaim?.(claimed, {
+          refreshedAt: 25,
+        }),
+      ).toBe(true);
+      expect((await queue.listClaims())[0]).toMatchObject({
+        claim: { claimedAt: 25 },
+        updatedAt: 25,
+        lastError: "accepted:run-1",
+      });
 
       expect(
         await queue.refreshClaim?.(
@@ -401,7 +455,7 @@ describe("channel ingress queue", () => {
           },
         ),
       ).toBe(false);
-      expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(20);
+      expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(25);
     });
   });
 
@@ -431,6 +485,67 @@ describe("channel ingress queue", () => {
         ownerId: "worker-2",
         claimedAt: 40,
       });
+    });
+  });
+
+  it("bounds stale-claim recovery scans and mutations per call", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => 10,
+      });
+
+      for (let index = 0; index < 5; index += 1) {
+        const id = `event-${index}`;
+        await queue.enqueue(id, { text: id }, { receivedAt: index + 1 });
+        expect(await queue.claim(id, { ownerId: `worker-${index}` })).not.toBeNull();
+      }
+
+      expect(await queue.recoverStaleClaims({ staleMs: 5, now: 20, limit: 2 })).toBe(2);
+      expect((await queue.listPending()).map((record) => record.id)).toEqual([
+        "event-0",
+        "event-1",
+      ]);
+      expect((await queue.listClaims()).map((record) => record.id)).toEqual([
+        "event-2",
+        "event-3",
+        "event-4",
+      ]);
+
+      expect(await queue.recoverStaleClaims({ staleMs: 5, now: 20, limit: 2 })).toBe(2);
+      expect(await queue.recoverStaleClaims({ staleMs: 5, now: 20, limit: 2 })).toBe(1);
+      expect(await queue.recoverStaleClaims({ staleMs: 5, now: 20, limit: 2 })).toBe(0);
+      expect((await queue.listClaims()).map((record) => record.id)).toEqual([]);
+    });
+  });
+
+  it("excludes active event ids before applying the stale recovery limit", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => 10,
+      });
+
+      for (let index = 0; index < 3; index += 1) {
+        const id = `event-${index}`;
+        await queue.enqueue(id, { text: id }, { receivedAt: index + 1 });
+        expect(await queue.claim(id, { ownerId: "same-process" })).not.toBeNull();
+      }
+
+      expect(
+        await queue.recoverStaleClaims({
+          staleMs: 5,
+          now: 20,
+          limit: 1,
+          excludedEventIds: ["event-0"],
+        }),
+      ).toBe(1);
+      expect((await queue.listClaims()).map((record) => record.id)).toEqual(["event-0", "event-2"]);
+      expect((await queue.listPending()).map((record) => record.id)).toEqual(["event-1"]);
     });
   });
 
@@ -1075,3 +1190,4 @@ describe("channel ingress queue", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
