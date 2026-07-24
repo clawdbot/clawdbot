@@ -1,4 +1,5 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
+import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import {
   calculateContextTokens,
@@ -264,9 +265,12 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     // compaction boundary. This prevents a stale pre-compaction usage/error
     // from retriggering compaction on the first prompt after compaction.
     const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+    const compactionTimestampMs =
+      compactionEntry === null
+        ? undefined
+        : parseStrictTimestampStringMs(compactionEntry.timestamp);
     const assistantIsFromBeforeCompaction =
-      compactionEntry !== null &&
-      assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
+      compactionTimestampMs !== undefined && assistantMessage.timestamp <= compactionTimestampMs;
     if (assistantIsFromBeforeCompaction) {
       return false;
     }
@@ -318,9 +322,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       // trigger compaction right after one just finished.
       const usageMsg = messages.at(estimate.lastUsageIndex);
       if (
-        compactionEntry &&
+        compactionTimestampMs !== undefined &&
         usageMsg?.role === "assistant" &&
-        usageMsg.timestamp <= new Date(compactionEntry.timestamp).getTime()
+        usageMsg.timestamp <= compactionTimestampMs
       ) {
         return false;
       }

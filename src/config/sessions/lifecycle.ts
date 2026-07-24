@@ -103,7 +103,7 @@ function parseTimestampMs(value: unknown): number | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  return parseStrictTimestampStringMs(value);
+  return resolveTimestamp(parseStrictTimestampStringMs(value));
 }
 
 function readFirstLine(filePath: string): string | undefined {

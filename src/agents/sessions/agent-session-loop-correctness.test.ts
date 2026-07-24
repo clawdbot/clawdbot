@@ -286,6 +286,47 @@ describe("AgentSession loop correctness", () => {
     );
   });
 
+  it("does not let a loose future compaction timestamp suppress threshold maintenance", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "old prompt",
+      timestamp: Date.now() - 2,
+    });
+    sessionManager.appendCompaction("older context", userId, 10);
+    const compaction = sessionManager.getEntries().find((entry) => entry.type === "compaction");
+    if (!compaction || compaction.type !== "compaction") {
+      throw new Error("expected compaction entry");
+    }
+    compaction.timestamp = "9999-12-31";
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
+    );
+  });
+
   it("does not retry a high-usage turn terminated by a tool result", async () => {
     const terminalTool: ToolDefinition = {
       name: "finish",

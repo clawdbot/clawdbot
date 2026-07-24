@@ -346,8 +346,8 @@ describe("session lifecycle timestamps", () => {
     }
   });
 
-  it.each(["01/02/03", "2026-02-29T00:00:00.000Z"])(
-    "does not recover session start time from invalid header %s",
+  it.each(["01/02/03", "2026-02-29T00:00:00.000Z", "1960-01-01T00:00:00.000Z"])(
+    "does not recover session start time from unsupported header %s",
     async (headerTimestamp) => {
       const dir = await fsPromises.mkdtemp("/tmp/openclaw-lifecycle-test-");
       try {

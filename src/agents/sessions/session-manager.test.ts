@@ -341,6 +341,22 @@ describe("SessionManager.open", () => {
     ).toMatchObject([{ content: "root" }, { content: "side middle" }, { content: "side leaf" }]);
   });
 
+  it("keeps out-of-range compaction timestamps non-fatal while rebuilding context", () => {
+    const manager = SessionManager.inMemory();
+    const userId = manager.appendMessage({ role: "user", content: "retained", timestamp: 1 });
+    manager.appendCompaction("older context", userId, 123);
+    const compaction = manager.getEntries().find((entry) => entry.type === "compaction");
+    if (!compaction || compaction.type !== "compaction") {
+      throw new Error("expected compaction entry");
+    }
+    compaction.timestamp = "+275760-09-13T00:00:00.001Z";
+
+    expect(manager.buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "older context", timestamp: 0 },
+      { role: "user", content: "retained" },
+    ]);
+  });
+
   it("normalizes session names to one line", () => {
     const manager = SessionManager.inMemory();
 
