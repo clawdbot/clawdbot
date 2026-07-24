@@ -39,11 +39,11 @@ describe("localization catalog authoring workflow", () => {
     expect(resolve.run).toContain("collaborators/${ACTOR}/permission");
     expect(resolve.run).toContain('.head.repo.full_name "${pr_file}"');
     expect(resolve.run).toContain('.draft "${pr_file}"');
-    expect(trustedCheckout.with.ref).toBe("${{ steps.source.outputs.trusted_sha }}");
-    expect(trustedCheckout.with["persist-credentials"]).toBe(false);
+    expect(trustedCheckout.with?.ref).toBe("${{ steps.source.outputs.trusted_sha }}");
+    expect(trustedCheckout.with?.["persist-credentials"]).toBe(false);
     expect(sourceCheckout.if).toBe("steps.source.outputs.mode == 'pull-request'");
-    expect(sourceCheckout.with.ref).toBe("${{ steps.source.outputs.source_sha }}");
-    expect(sourceCheckout.with.path).toBe(".localization-source");
+    expect(sourceCheckout.with?.ref).toBe("${{ steps.source.outputs.source_sha }}");
+    expect(sourceCheckout.with?.path).toBe(".localization-source");
     expect(baseCheck.if).toBe("steps.source.outputs.mode == 'pull-request'");
     expect(baseCheck.run).toBe("pnpm localization:catalogs:check");
     expect(refresh.run).toContain("scripts/localization-catalogs.ts refresh --root");
@@ -58,7 +58,7 @@ describe("localization catalog authoring workflow", () => {
     expect(update.run).toContain("--force-with-lease=refs/heads/${HEAD_REF}:${EXPECTED_HEAD_SHA}");
     expect(fallback.if).toBe("steps.source.outputs.mode == 'main'");
     expect(fallback.uses).toBe("./.github/actions/publish-generated-pr");
-    expect(fallback.with["auto-merge"]).toBe("false");
+    expect(fallback.with?.["auto-merge"]).toBe("false");
   });
 
   it("blocks stale default-base internal PRs and leaves other ready PRs advisory", () => {
