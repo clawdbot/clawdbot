@@ -13,6 +13,7 @@ import {
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
   moveSessionDeliveryToFailed,
+  type QueuedSessionDeliveryPayload,
 } from "./session-delivery-queue-storage.js";
 import {
   enqueueClaimedSessionDelivery,
@@ -102,6 +103,80 @@ describe("session-delivery queue storage", () => {
 
       expect(secondId).toBe(firstId);
       expect(await loadPendingSessionDeliveries(tempDir)).toHaveLength(1);
+    });
+  });
+
+  it("projects generic queue attachments to descriptor-only metadata before persistence", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const secret = "GENERIC_QUEUE_INLINE_SECRET";
+      const widenedRef = {
+        kind: "blob-sha256" as const,
+        sha256: "a".repeat(64),
+        mediaType: "text/plain",
+        content: secret,
+      };
+      const payloads: QueuedSessionDeliveryPayload[] = [
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "descriptor-only event",
+          attachments: [widenedRef],
+        },
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "descriptor-only turn",
+          messageId: "descriptor-only-turn",
+          attachments: [widenedRef],
+        },
+      ];
+
+      for (const payload of payloads) {
+        const id = await enqueueSessionDelivery(payload, tempDir);
+        await moveSessionDeliveryToFailed(id, tempDir);
+        const row = readSessionQueueRow(tempDir, id);
+        expect(row?.entry_json).not.toContain(secret);
+        expect(JSON.parse(row?.entry_json ?? "{}")).toMatchObject({
+          attachments: [
+            {
+              kind: "blob-sha256",
+              sha256: "a".repeat(64),
+              mediaType: "text/plain",
+            },
+          ],
+        });
+      }
+    });
+  });
+
+  it("scrubs widened generic attachment metadata during pending recovery", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const secret = "RECOVERED_GENERIC_QUEUE_SECRET";
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "recover descriptor metadata",
+        },
+        tempDir,
+      );
+      rewriteSessionQueueEntry(tempDir, id, (entry) => {
+        entry.attachments = [
+          {
+            kind: "blob-sha256",
+            sha256: "b".repeat(64),
+            content: secret,
+          },
+        ];
+      });
+
+      await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toBeNull();
+      const row = readSessionQueueRow(tempDir, id);
+      expect(row).toMatchObject({
+        status: "failed",
+        last_error: "invalid generic session delivery attachment metadata",
+      });
+      expect(row?.entry_json).not.toContain(secret);
     });
   });
 
@@ -272,6 +347,28 @@ describe("session-delivery queue storage", () => {
     });
   });
 
+  it("normalizes empty post-compaction attachments to absence", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueuePostCompactionDelegateDelivery(
+        {
+          sessionKey: "agent:main:main",
+          delegate: {
+            task: "continue without a snapshot",
+            createdAt: 123,
+            attachments: [],
+            attachAs: { mountPath: "unused" },
+          },
+          sequence: 0,
+        },
+        tempDir,
+      );
+
+      const entry = await loadPendingSessionDelivery(id, tempDir);
+      expect(entry).not.toHaveProperty("attachments");
+      expect(entry).not.toHaveProperty("attachAs");
+    });
+  });
+
   it("dead-letters invalid post-compaction JSON without retaining raw bytes", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueuePostCompactionDelegateDelivery(
@@ -297,6 +394,36 @@ describe("session-delivery queue storage", () => {
       expect(row).toMatchObject({
         status: "failed",
         last_error: "invalid postCompactionDelegate delivery payload: invalid JSON",
+      });
+      expect(row?.entry_json).not.toContain(secret);
+    });
+  });
+
+  it("dead-letters invalid generic JSON without retaining raw bytes", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "recover a generic event",
+        },
+        tempDir,
+      );
+      const secret = "CORRUPT_GENERIC_QUEUE_JSON_SECRET";
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+      });
+      db.prepare(
+        `UPDATE delivery_queue_entries
+            SET entry_json = ?
+          WHERE queue_name = 'session' AND id = ?`,
+      ).run(`{"attachments":[{"content":"${secret}"}]`, id);
+
+      await expect(loadPendingSessionDeliveries(tempDir)).resolves.toEqual([]);
+      const row = readSessionQueueRow(tempDir, id);
+      expect(row).toMatchObject({
+        status: "failed",
+        last_error: "invalid generic session delivery payload: invalid JSON",
       });
       expect(row?.entry_json).not.toContain(secret);
     });

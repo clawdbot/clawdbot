@@ -241,6 +241,65 @@ describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
     expect(serialized).toContain("reject a malformed attachment collection");
   });
 
+  it("projects attachAs to its closed mount-hint shape", () => {
+    const secret = "CONTINUE_ATTACH_AS_SECRET";
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_continue_attach_as",
+            name: "continue_delegate",
+            arguments: {
+              task: "use a mounted snapshot",
+              attachments: [{ name: "brief.md", content: "CONTINUE_CONTENT_SECRET" }],
+              attachAs: {
+                mountPath: "handoff",
+                unknown: secret,
+              },
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain("CONTINUE_CONTENT_SECRET");
+    expect(serialized).not.toContain('"unknown"');
+    expect(serialized).toContain('"attachAs":{"mountPath":"handoff"}');
+  });
+
+  it("removes mount hints when no attachment snapshot exists", () => {
+    const secret = "CONTINUE_UNUSED_ATTACH_AS_SECRET";
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "call_continue_unused_attach_as",
+            name: "continue_delegate",
+            input: {
+              task: "continue without a snapshot",
+              attach_as: {
+                mount_path: "unused",
+                unknown: secret,
+              },
+            },
+          },
+        ],
+      },
+    ]);
+
+    const serialized = JSON.stringify(sanitizeToolCallInputs(input));
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain('"attach_as":');
+    expect(serialized).toContain("continue without a snapshot");
+  });
+
   it("drops a signed-thinking turn when non-array attachments require sanitization", () => {
     const secret = "CONTINUE_SIGNED_NON_ARRAY_SECRET";
     const input = castAgentMessages([
@@ -259,6 +318,48 @@ describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
             input: {
               task: "reject a signed malformed attachment collection",
               attachments: { content: secret },
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["continue_delegate"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([]);
+    expect(JSON.stringify(out)).not.toContain(secret);
+  });
+
+  it("drops a signed-thinking turn when attachAs contains unknown fields", () => {
+    const secret = "CONTINUE_SIGNED_ATTACH_AS_SECRET";
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Use the mounted continuation snapshot.",
+            thinkingSignature: "sig_continue_delegate_attach_as",
+          },
+          {
+            type: "toolUse",
+            id: "call_continue_signed_attach_as",
+            name: "continue_delegate",
+            input: {
+              task: "reject signed unknown mount metadata",
+              attachments: [
+                {
+                  content: "__OPENCLAW_REDACTED__",
+                  name: "brief.md",
+                },
+              ],
+              attachAs: {
+                mountPath: "handoff",
+                unknown: secret,
+              },
             },
           },
         ],
@@ -298,6 +399,7 @@ describe("sanitizeToolCallInputs redacts continue_delegate snapshots", () => {
                   mimeType: "text/markdown",
                 },
               ],
+              attachAs: { mountPath: "handoff" },
             },
           },
         ],

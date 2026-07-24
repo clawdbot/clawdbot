@@ -186,7 +186,9 @@ function encodeDelegateState(delegate: PendingContinuationDelegate): PendingDele
     throw new Error("invalid continuation delegate attachment mount path");
   }
   const attachAs =
-    parsedMountPath.status === "valid" ? { mountPath: parsedMountPath.mountPath } : undefined;
+    delegate.attachments?.length && parsedMountPath.status === "valid"
+      ? { mountPath: parsedMountPath.mountPath }
+      : undefined;
   return {
     kind: "continuation_delegate",
     task: delegate.task,

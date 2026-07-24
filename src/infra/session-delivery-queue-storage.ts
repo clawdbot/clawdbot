@@ -36,6 +36,15 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { generateSecureUuid } from "./secure-random.js";
+import {
+  normalizeQueuedAttachmentRefs,
+  scrubTerminalQueuedAttachments,
+  stripQueuedAttachmentMountWithoutAttachments,
+  type QueuedSessionDeliveryCommonMetadata,
+  type QueuedSessionDeliveryPayloadMetadata,
+} from "./session-delivery-queue-attachment-metadata.js";
+
+export type { AttachmentRef } from "./session-delivery-queue-attachment-metadata.js";
 
 // Session delivery queue persists session-scoped messages until channel
 // delivery acknowledges them or recovery exhausts retry policy.
@@ -108,35 +117,6 @@ export type SessionDeliveryRoute = {
 };
 
 export type SessionDeliverySettledOutcome = "recovered" | "moved-to-failed";
-
-/** Payload variants that can be replayed by session delivery recovery. */
-export interface AttachmentRef {
-  kind: "blob-sha256";
-  sha256: string;
-  mediaType?: string;
-}
-
-type QueuedSessionDeliveryPayloadMetadata = {
-  /**
-   * W3C trace-context traceparent for chain-correlation runtime. This is the
-   * address-recipient shape; broadcast-mode surfaces use the same substrate
-   * with a different verb set.
-   */
-  traceparent?: string;
-  /** Runtime-owned provenance marker for post-compaction continuation trace context. */
-  traceparentProvenance?: "internal";
-  /**
-   * Descriptor-stub attachment references for sibling enrichment runtime.
-   * This is the address-recipient shape; broadcast mode uses the same substrate
-   * with a different verb set.
-   */
-  attachments?: AttachmentRef[];
-};
-
-type QueuedSessionDeliveryCommonMetadata = Omit<
-  QueuedSessionDeliveryPayloadMetadata,
-  "attachments"
->;
 
 /**
  * Durable payloads whose metadata can contain only descriptor references.
@@ -310,14 +290,17 @@ const QueuedPostCompactionDelegateSchema = z
         message: "fanoutMode cannot be combined with explicit target keys",
       });
     }
-  });
+  })
+  .transform(stripQueuedAttachmentMountWithoutAttachments);
 
 const INVALID_POST_COMPACTION_DELIVERY_JSON =
   "invalid postCompactionDelegate delivery payload: invalid JSON";
 const INVALID_POST_COMPACTION_DELIVERY_SHAPE =
   "invalid postCompactionDelegate delivery payload: invalid shape";
+const INVALID_GENERIC_DELIVERY_JSON = "invalid generic session delivery payload: invalid JSON";
+const INVALID_GENERIC_DELIVERY_ATTACHMENTS = "invalid generic session delivery attachment metadata";
 
-function failInvalidPostCompactionDelivery(params: {
+function failInvalidSessionDelivery(params: {
   entry: { id: string; enqueuedAt: number; retryCount: number };
   error: string;
   stateDir?: string;
@@ -344,13 +327,22 @@ function decodeLoadedSessionDelivery(
   const isPostCompaction =
     result.entryKind === "postCompactionDelegate" || item.kind === "postCompactionDelegate";
   if (!isPostCompaction) {
-    return result.entry as QueuedSessionDelivery;
+    const normalized = normalizeQueuedAttachmentRefs(result.entry as QueuedSessionDelivery);
+    if (normalized !== result.entry) {
+      failInvalidSessionDelivery({
+        entry: result.entry,
+        error: INVALID_GENERIC_DELIVERY_ATTACHMENTS,
+        stateDir,
+      });
+      return null;
+    }
+    return normalized;
   }
   const parsed = QueuedPostCompactionDelegateSchema.safeParse(result.entry);
   if (parsed.success) {
     return parsed.data as QueuedSessionDelivery;
   }
-  failInvalidPostCompactionDelivery({
+  failInvalidSessionDelivery({
     entry: result.entry,
     error: INVALID_POST_COMPACTION_DELIVERY_SHAPE,
     stateDir,
@@ -365,13 +357,14 @@ function decodeSessionDeliveryResult(
   if (result.status === "loaded") {
     return decodeLoadedSessionDelivery(result, stateDir);
   }
-  if (result.entry.entryKind === "postCompactionDelegate") {
-    failInvalidPostCompactionDelivery({
-      entry: result.entry,
-      error: INVALID_POST_COMPACTION_DELIVERY_JSON,
-      stateDir,
-    });
-  }
+  failInvalidSessionDelivery({
+    entry: result.entry,
+    error:
+      result.entry.entryKind === "postCompactionDelegate"
+        ? INVALID_POST_COMPACTION_DELIVERY_JSON
+        : INVALID_GENERIC_DELIVERY_JSON,
+    stateDir,
+  });
   return null;
 }
 
@@ -379,23 +372,13 @@ function normalizeSessionDeliveryForPersistence(
   entry: QueuedSessionDelivery,
 ): QueuedSessionDelivery {
   if (entry.kind !== "postCompactionDelegate") {
-    return entry;
+    return normalizeQueuedAttachmentRefs(entry);
   }
   const parsed = QueuedPostCompactionDelegateSchema.safeParse(entry);
   if (!parsed.success) {
     throw new Error(INVALID_POST_COMPACTION_DELIVERY_SHAPE);
   }
   return parsed.data as QueuedSessionDelivery;
-}
-
-function scrubTerminalSessionDeliveryPayload(entry: QueuedSessionDelivery): QueuedSessionDelivery {
-  if (entry.kind !== "postCompactionDelegate") {
-    return entry;
-  }
-  // Terminal settlement must not preserve parent-provided snapshot bytes if
-  // completion/failure finalization is interrupted.
-  const scrubbed = { ...entry, attachments: undefined, attachAs: undefined };
-  return scrubbed as QueuedSessionDelivery;
 }
 
 // Strip trailing whitespace per line and at end-of-string before hashing the
@@ -698,7 +681,7 @@ export async function markSessionDeliverySettlement(
   stateDir?: string,
 ): Promise<void> {
   try {
-    const terminalEntry = scrubTerminalSessionDeliveryPayload(entry);
+    const terminalEntry = scrubTerminalQueuedAttachments(entry);
     const settled = upsertDeliveryQueueEntry({
       queueName: QUEUE_NAME,
       entry: {

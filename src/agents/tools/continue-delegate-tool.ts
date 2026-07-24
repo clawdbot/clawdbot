@@ -200,7 +200,15 @@ function readAttachAsParam(params: Record<string, unknown>): InlineAttachmentMou
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new ToolInputError("attachAs must be an object.");
   }
-  const mountPath = readSnakeCaseParamRaw(raw as Record<string, unknown>, "mountPath");
+  const record = raw as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (
+    keys.some((key) => key !== "mountPath" && key !== "mount_path") ||
+    (Object.hasOwn(record, "mountPath") && Object.hasOwn(record, "mount_path"))
+  ) {
+    throw new ToolInputError("attachAs must contain only one mountPath field.");
+  }
+  const mountPath = readSnakeCaseParamRaw(record, "mountPath");
   if (mountPath !== undefined && typeof mountPath !== "string") {
     throw new ToolInputError("attachAs.mountPath must be a string.");
   }
@@ -261,7 +269,8 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         throw new ToolInputError("task must be a non-empty string describing the delegated work.");
       }
       const attachments = readInlineAttachmentsParam(params);
-      const attachAs = readAttachAsParam(params);
+      const requestedAttachAs = readAttachAsParam(params);
+      const attachAs = attachments ? requestedAttachAs : undefined;
       const runtimeConfig = getRuntimeConfig();
       const attachmentValidationError = validateSubagentAttachments({
         config: runtimeConfig,
@@ -272,7 +281,7 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
       }
       const attachmentFields = {
         ...(attachments ? { attachments } : {}),
-        ...(attachAs ? { attachAs } : {}),
+        ...(attachments && attachAs ? { attachAs } : {}),
       };
 
       const delaySeconds = readNumberParam(params, "delaySeconds");

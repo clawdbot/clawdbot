@@ -235,6 +235,44 @@ describe("spawnSubagentDirect filename validation", () => {
     ).toBe(attachmentContent);
   });
 
+  it("re-evaluates attachment policy when queued continuation input reaches spawn", async () => {
+    const queuedAttachments = [{ name: "handoff.txt", content: "queued child input" }];
+    configOverride = createSubagentSpawnTestConfig(workspaceDirOverride, {
+      tools: {
+        sessions_spawn: {
+          attachments: {
+            enabled: false,
+            maxFiles: 50,
+            maxFileBytes: 1 * 1024 * 1024,
+            maxTotalBytes: 5 * 1024 * 1024,
+          },
+        },
+      },
+    });
+
+    const result = await subagentSpawnModule.spawnSubagentDirect(
+      {
+        task: "read delegated input after policy reload",
+        drainsContinuationDelegateQueue: true,
+        continuationChainState: {
+          count: 1,
+          startedAt: Date.now(),
+          tokens: 0,
+          chainId: "attachment-policy-change",
+        },
+        attachments: queuedAttachments,
+      },
+      ctx,
+    );
+
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("attachments are disabled for sessions_spawn"),
+    });
+    expect(fs.existsSync(path.join(workspaceDirOverride, ".openclaw", "attachments"))).toBe(false);
+    expect(callGatewayMock).not.toHaveBeenCalledWith(expect.objectContaining({ method: "agent" }));
+  });
+
   it("normalizes explicit cwd before materializing native subagent attachments", async () => {
     const homeDir = fs.mkdtempSync(
       path.join(os.tmpdir(), `openclaw-subagent-home-attachments-${process.pid}-${Date.now()}-`),

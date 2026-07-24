@@ -209,9 +209,9 @@ attachAs?: {
 };
 ```
 
-These fields carry scoped input into the **new child delegate workspace**. An accepted non-empty attachment array is a bounded snapshot **by value at tool dispatch**, not a source path, URL, workspace scan, or later-resolved reference. An omitted or empty `attachments` array means no snapshot. Non-empty arrays contain 1–50 entries. An omitted or empty `attachAs` object means no mount hint. A non-empty `mountPath` is trimmed to its canonical value before durable enqueue and accepts only ASCII letters, digits, `.`, `_`, `-`, `/`, and `:`; unsafe or control-bearing hints are rejected. The hint affects only the child prompt—it is not an alternate materialization destination.
+These fields carry scoped input into the **new child delegate workspace**. The workspace is the child execution workspace selected by the shared spawn contract—the target-agent workspace or an explicit child `cwd`. Per-session isolation comes from the private UUID receipt directory; this feature does not provision a separate workspace for every child. An accepted non-empty attachment array is a bounded snapshot **by value at tool dispatch**, not a source path, URL, workspace scan, or later-resolved reference. An omitted or empty `attachments` array means no snapshot. Non-empty arrays contain 1–50 entries. An omitted or empty `attachAs` object means no mount hint, and a mount hint is ignored unless `attachments` is non-empty. A non-empty `mountPath` is trimmed to its canonical value before durable enqueue and accepts only ASCII letters, digits, `.`, `_`, `-`, `/`, and `:`; unsafe or control-bearing hints are rejected. The hint affects only the child prompt—it is not an alternate materialization destination.
 
-The fields use the same validation, limits, private receipt directory, per-file hashes, cleanup policy, and `tools.sessions_spawn.attachments` configuration as `sessions_spawn` attachments. Immediate, delayed/recovered, and post-compaction typed delegates retain the snapshot until child spawn or a crash-safe post-compaction queue handoff. Terminal TaskFlow rows retain lifecycle and routing state but remove `attachments` and `attachAs`. Repaired and newly persisted `continue_delegate` tool calls replace each `attachments[].content` value with the established redaction marker while preserving the task and attachment metadata; this does not change the separate trusted-transcript behavior of `sessions_spawn`. Post-compaction queue recovery runtime-validates the discriminated payload and strict attachment members. Malformed records are dead-lettered with structural-only diagnostics, and their raw queue JSON is replaced so attachment bytes do not remain in the failed row. The tool result reports only attachment count and canonical mount options, never attachment content.
+The fields use the same validation, limits, private receipt directory, per-file hashes, cleanup policy, and `tools.sessions_spawn.attachments` configuration as `sessions_spawn` attachments. Immediate, delayed/recovered, and post-compaction typed delegates retain the snapshot until child spawn or a crash-safe post-compaction queue handoff. Terminal TaskFlow rows retain lifecycle and routing state but remove `attachments` and `attachAs`. Repaired and newly persisted `continue_delegate` tool calls replace each `attachments[].content` value with the established redaction marker while preserving the task and allowlisted attachment metadata; `attachAs` is projected to its single mount-path field and removed when no non-empty snapshot exists. This does not change the separate trusted-transcript behavior of `sessions_spawn`. Post-compaction queue recovery runtime-validates the discriminated payload and strict attachment members. Malformed records are dead-lettered with structural-only diagnostics, and their raw queue JSON is replaced so attachment bytes do not remain in the failed row. The tool result reports only attachment count and canonical mount options, never attachment content.
 
 This is an input contract, not an attachment-bearing return contract. The current child completion path captures a text result, renders a text completion event, and gives continuation return delivery a `text` field. Although the general internal task-completion event type can represent generated-media attachments, ordinary sub-agent completion capture does not populate structured attachments and targeted continuation delivery does not transport them. Adding a structured child-to-parent attachment result, preserving it through continuation return routing, and rendering or mounting it at recipients is separate [#666](https://github.com/karmaterminal/openclaw/issues/666) work.
 
@@ -1565,6 +1565,27 @@ The automated suite covers:
 - delegate store lifecycle,
 - compaction delegate queues,
 - configuration validation and boundary testing.
+
+#### 9.2.1 Typed input attachment regression matrix
+
+The attachment contract is exercised as one end-to-end boundary rather than
+only as a tool-schema feature:
+
+1. omitted and empty `attachments` input are equivalent and persist neither a
+   snapshot nor a mount-hint field through immediate, delayed/restart, or
+   post-compaction dispatch;
+2. non-empty input is copied by value into TaskFlow, survives delayed recovery
+   and post-compaction queue replay, and reaches the shared child materializer;
+3. the shared spawn boundary re-reads current
+   `tools.sessions_spawn.attachments` policy and limits, so a snapshot queued
+   under an earlier permissive configuration is rejected if policy tightens
+   before spawn;
+4. terminal TaskFlow and post-compaction queue settlement remove raw inline
+   bytes, while generic `systemEvent` and `agentTurn` queue metadata is projected
+   to descriptor-only `blob-sha256` references;
+5. malformed transcript or queue attachment state fails closed without
+   preserving secret bytes, while already-redacted canonical transcript state
+   remains identity-stable for signed-thinking replay.
 
 ### 9.3 Blind enrichment methodology
 

@@ -227,12 +227,32 @@ describe("continue_delegate tool", () => {
     const emptyResult = await executeTool(tool, 0, {
       task: "empty attachments mean no snapshot",
       attachments: [],
+      attachAs: { mountPath: "unused" },
     });
     expect(emptyResult).toMatchObject({ status: "scheduled" });
     expect(emptyResult).not.toHaveProperty("attachmentCount");
-    expect(consumePendingDelegates("test-session")).toEqual([
-      expect.not.objectContaining({ attachments: expect.anything() }),
-    ]);
+    expect(emptyResult).not.toHaveProperty("attachAs");
+    const emptyDelegate = expectDefined(
+      consumePendingDelegates("test-session").at(0),
+      "empty delegate",
+    );
+    expect(emptyDelegate).not.toHaveProperty("attachments");
+    expect(emptyDelegate).not.toHaveProperty("attachAs");
+    const emptyPostCompactionResult = await executeTool(tool, 1, {
+      task: "empty post-compaction attachments mean no snapshot",
+      mode: "post-compaction",
+      attachments: [],
+      attachAs: { mountPath: "unused" },
+    });
+    expect(emptyPostCompactionResult).toMatchObject({ status: "queued-for-compaction" });
+    expect(emptyPostCompactionResult).not.toHaveProperty("attachmentCount");
+    expect(emptyPostCompactionResult).not.toHaveProperty("attachAs");
+    const emptyStagedDelegate = expectDefined(
+      consumeStagedPostCompactionDelegates("test-session").at(0),
+      "empty staged delegate",
+    );
+    expect(emptyStagedDelegate).not.toHaveProperty("attachments");
+    expect(emptyStagedDelegate).not.toHaveProperty("attachAs");
     await expect(
       tool.execute("call-invalid-attachments", {
         task: "invalid attachment shape",
@@ -245,6 +265,13 @@ describe("continue_delegate tool", () => {
         attachAs: "handoff",
       }),
     ).rejects.toThrow("attachAs must be an object");
+    await expect(
+      tool.execute("call-unknown-attach-as", {
+        task: "reject unknown mount metadata",
+        attachments: [{ name: "handoff.txt", content: "data" }],
+        attachAs: { mountPath: "handoff", unknown: "secret" },
+      }),
+    ).rejects.toThrow("attachAs must contain only one mountPath field");
     await expect(
       tool.execute("call-invalid-mount-type", {
         task: "invalid mount type",

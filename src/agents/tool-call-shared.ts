@@ -55,23 +55,68 @@ function redactContinueDelegateAttachmentContent(value: unknown): unknown {
     return value;
   }
   const input = value as Record<string, unknown>;
-  if (!Object.hasOwn(input, "attachments")) {
-    return value;
-  }
-  if (!Array.isArray(input.attachments)) {
-    const redacted = { ...input };
-    delete redacted.attachments;
-    return redacted;
-  }
-  let changed = false;
-  const attachments = input.attachments.map((attachment) => {
-    if (isRedactedContinueDelegateAttachment(attachment)) {
-      return attachment;
+  let sanitized = input;
+  if (Object.hasOwn(input, "attachments")) {
+    if (!Array.isArray(input.attachments)) {
+      sanitized = { ...input };
+      delete sanitized.attachments;
+    } else {
+      let changed = false;
+      const attachments = input.attachments.map((attachment) => {
+        if (isRedactedContinueDelegateAttachment(attachment)) {
+          return attachment;
+        }
+        changed = true;
+        return redactContinueDelegateAttachment(attachment);
+      });
+      if (changed) {
+        sanitized = { ...input, attachments };
+      }
     }
-    changed = true;
-    return redactContinueDelegateAttachment(attachment);
-  });
-  return changed ? { ...input, attachments } : value;
+  }
+  return sanitizeContinueDelegateAttachAs(
+    sanitized,
+    Array.isArray(sanitized.attachments) && sanitized.attachments.length > 0,
+  );
+}
+
+function sanitizeContinueDelegateAttachAs(
+  input: Record<string, unknown>,
+  hasAttachments: boolean,
+): Record<string, unknown> {
+  const hasCamel = Object.hasOwn(input, "attachAs");
+  const hasSnake = Object.hasOwn(input, "attach_as");
+  if (!hasCamel && !hasSnake) {
+    return input;
+  }
+  const key = hasCamel ? "attachAs" : "attach_as";
+  const shadowKey = hasCamel ? "attach_as" : "attachAs";
+  const attachAs = hasAttachments ? projectContinueDelegateAttachAs(input[key]) : undefined;
+  if (attachAs === input[key] && !Object.hasOwn(input, shadowKey)) {
+    return input;
+  }
+  const sanitized = { ...input };
+  if (attachAs) {
+    sanitized[key] = attachAs;
+  } else {
+    delete sanitized[key];
+  }
+  delete sanitized[shadowKey];
+  return sanitized;
+}
+
+function projectContinueDelegateAttachAs(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const input = value as Record<string, unknown>;
+  const hasCamel = Object.hasOwn(input, "mountPath");
+  const hasSnake = Object.hasOwn(input, "mount_path");
+  const key = hasCamel ? "mountPath" : hasSnake ? "mount_path" : undefined;
+  if (!key || typeof input[key] !== "string" || input[key].trim().length === 0) {
+    return undefined;
+  }
+  return Object.keys(input).length === 1 ? input : { [key]: input[key] };
 }
 
 function isRedactedContinueDelegateAttachment(value: unknown): boolean {

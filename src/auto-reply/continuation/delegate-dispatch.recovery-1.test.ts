@@ -492,6 +492,37 @@ describe("recoverPendingContinuationDelegates", () => {
     );
   });
 
+  it("keeps empty delayed attachment input equivalent to omission after restart recovery", async () => {
+    const sessionKey = "agent:main:delayed-empty-attachment-recovery";
+    enqueuePendingDelegate(sessionKey, {
+      task: "recover without an attachment snapshot",
+      delayMs: 60_000,
+      attachments: [],
+      attachAs: { mountPath: "unused" },
+    });
+    loadSessionStoreForRecoveryMock.mockReturnValue({
+      [sessionKey]: {
+        sessionId: "session-child",
+        continuationChainCount: 0,
+        continuationChainStartedAt: Date.now(),
+        continuationChainTokens: 0,
+      },
+    });
+
+    await recoverPendingContinuationDelegates({});
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const spawnParams = expectDefined(spawnSubagentDirectMock.mock.calls[0]?.[0], "spawn params");
+    expect(spawnParams).not.toHaveProperty("attachments");
+    expect(spawnParams).not.toHaveProperty("attachMountPath");
+    expect(spawnSubagentDirectMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ agentSessionKey: sessionKey }),
+    );
+  });
+
   it("reconciles a claimed continuation child accepted before registry registration", async () => {
     const sessionKey = "agent:main:parent";
     enqueuePendingDelegate(sessionKey, { task: "recover without duplicate spawn" });

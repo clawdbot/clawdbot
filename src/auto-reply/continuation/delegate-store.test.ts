@@ -347,7 +347,7 @@ describe("delegate store — TaskFlow-backed", () => {
     enqueuePendingDelegate("session-empty-attachments", {
       task: "no attachment snapshot",
       attachments: [],
-      attachAs: {},
+      attachAs: { mountPath: "unused" },
     });
 
     const delegate = expectDefined(
