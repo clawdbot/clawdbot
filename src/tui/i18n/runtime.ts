@@ -11,7 +11,7 @@ import {
 import { TUI_ENGLISH_CATALOG, type TuiMessageKey } from "./locales/en.js";
 import { TUI_ZH_CN_CATALOG } from "./locales/zh-CN.js";
 
-export const TUI_SUPPORTED_LOCALES = ["en", "zh-CN"] as const;
+const TUI_SUPPORTED_LOCALES = ["en", "zh-CN"] as const;
 
 const validationIssues = validateCatalog({
   namespace: "tui",
