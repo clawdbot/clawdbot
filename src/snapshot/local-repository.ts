@@ -1037,11 +1037,7 @@ async function isIncompleteSnapshotDirectory(snapshotDir: string): Promise<boole
     }
   }
   const names = new Set(entries.map((entry) => entry.name));
-  return (
-    names.size !== 2 ||
-    !names.has(SNAPSHOT_MANIFEST_FILENAME) ||
-    !names.has(SNAPSHOT_SQLITE_FILENAME)
-  );
+  return names.size === 0 || names.has(SNAPSHOT_PENDING_FILENAME);
 }
 
 async function assertFreshRestorePathsAbsent(databasePath: string): Promise<void> {

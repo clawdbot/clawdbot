@@ -542,19 +542,23 @@ describe("local SQLite snapshot repository", () => {
     await fs.mkdir(path.join(repositoryPath, "interrupted-final"));
     await fs.writeFile(path.join(repositoryPath, "interrupted-final", ".pending"), "");
     await fs.mkdir(path.join(repositoryPath, "empty-final"));
-    await fs.mkdir(path.join(repositoryPath, "artifact-only"));
-    await fs.writeFile(
-      path.join(repositoryPath, "artifact-only", SNAPSHOT_SQLITE_FILENAME),
-      "partial",
-    );
-    await fs.mkdir(path.join(repositoryPath, "manifest-only"));
-    await fs.writeFile(
-      path.join(repositoryPath, "manifest-only", SNAPSHOT_MANIFEST_FILENAME),
-      "partial",
-    );
 
     await expect(provider.list()).resolves.toEqual([second, first]);
   });
+
+  it.each([SNAPSHOT_SQLITE_FILENAME, SNAPSHOT_MANIFEST_FILENAME])(
+    "rejects markerless partial snapshot directories containing only %s",
+    async (entryName) => {
+      const tempDir = await createTempDir();
+      const repositoryPath = path.join(tempDir, "snapshots");
+      const partialPath = path.join(repositoryPath, "markerless-partial");
+      await fs.mkdir(partialPath, { recursive: true });
+      await fs.writeFile(path.join(partialPath, entryName), "partial");
+      const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+
+      await expect(provider.list()).rejects.toThrow();
+    },
+  );
 
   it("rejects unknown entries inside an incomplete snapshot directory", async () => {
     const tempDir = await createTempDir();
