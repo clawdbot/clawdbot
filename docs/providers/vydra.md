@@ -162,7 +162,7 @@ Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://v
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Provider directory" href="/providers/index" icon="list">
+  <Card title="Provider directory" href="/providers" icon="list">
     Browse all available providers.
   </Card>
   <Card title="Image generation" href="/tools/image-generation" icon="image">

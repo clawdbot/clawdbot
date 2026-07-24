@@ -668,7 +668,7 @@ verifies the completed video download.
   <Card title="Video generation" href="/tools/video-generation" icon="video">
     Shared video tool parameters and provider selection.
   </Card>
-  <Card title="All providers" href="/providers/index" icon="grid-2">
+  <Card title="All providers" href="/providers" icon="grid-2">
     The broader provider overview.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">

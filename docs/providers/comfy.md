@@ -359,7 +359,7 @@ The `image` and `video` sections also support a reference-image input node:
   <Card title="Music Generation" href="/tools/music-generation" icon="music">
     Music and audio generation tool setup.
   </Card>
-  <Card title="Provider Directory" href="/providers/index" icon="layers">
+  <Card title="Provider Directory" href="/providers" icon="layers">
     Overview of all providers and model refs.
   </Card>
   <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
