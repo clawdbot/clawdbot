@@ -961,7 +961,7 @@ describe("backupVerifyCommand", () => {
       },
       {
         tempPrefix: "openclaw-backup-backslash-",
-        archivePath: `${TEST_ARCHIVE_ROOT}/payload\\..\\escaped.txt`,
+        archivePath: `${TEST_ARCHIVE_ROOT}/payload\\escaped.txt`,
         error: /forward slashes/i,
       },
     ]) {
