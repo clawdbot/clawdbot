@@ -283,6 +283,13 @@ for the node command and security boundary.
 
 ## Thinking defaults (Claude Opus 5, Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
 
+Bare family aliases are rolling: `opus` tracks the current supported Claude
+Opus generation and today resolves to `anthropic/claude-opus-5`, the same way
+`sonnet` tracks the current Sonnet. Upgrading OpenClaw can therefore move a
+config that says `opus` onto a newer model generation. Pin a version to opt
+out — versioned aliases such as `opus-4.8` keep resolving to their own model,
+and configs that already name `claude-opus-4-8` are never rewritten.
+
 `anthropic/claude-opus-5` uses adaptive thinking at `high` effort by default.
 Use `/think off` to disable thinking, or `/think xhigh|max` for the model's
 higher native effort levels. OpenClaw omits manual thinking budgets, custom
