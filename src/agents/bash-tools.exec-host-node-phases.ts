@@ -42,11 +42,13 @@ import {
   invokeNodeSystemRun,
 } from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { formatNodeRunToolResult } from "./bash-tools.exec-node-result.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
+
+export { formatNodeRunToolResult } from "./bash-tools.exec-node-result.js";
 
 type NodeExecutionTarget = {
   nodeId: string;
@@ -233,44 +235,6 @@ export function shouldSkipNodeApprovalPrepare(params: {
   return (
     params.hostSecurity === "full" && params.hostAsk === "off" && params.strictInlineEval !== true
   );
-}
-
-/** Formats a raw `node.invoke system.run` response as an exec tool result. */
-export function formatNodeRunToolResult(params: {
-  raw: unknown;
-  startedAt: number;
-  cwd: string | undefined;
-  warnings?: string[];
-}): AgentToolResult<ExecToolDetails> {
-  const payload =
-    params.raw && typeof params.raw === "object"
-      ? (params.raw as { payload?: unknown }).payload
-      : undefined;
-  const payloadObj =
-    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
-  const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
-  const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
-  const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
-  const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
-  const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
-  return {
-    content: [
-      {
-        type: "text",
-        text: renderExecUpdateText({
-          tailText: stdout || stderr || errorText,
-          warnings: params.warnings ?? [],
-        }),
-      },
-    ],
-    details: {
-      status: success ? "completed" : "failed",
-      exitCode,
-      durationMs: Date.now() - params.startedAt,
-      aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
-      cwd: params.cwd,
-    } satisfies ExecToolDetails,
-  };
 }
 
 /** Resolves the node id, platform, argv, env, and timeout for a node-host exec. */

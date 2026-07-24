@@ -12,9 +12,13 @@ import type { ProcessSupervisor } from "../process/supervisor/index.js";
 import type { SpawnInput } from "../process/supervisor/types.js";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { prependRedactionWarning } from "./bash-tools.exec-output.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { buildExecForegroundResult, buildExecRunningResult } from "./bash-tools.exec-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { getBashShellConfig } from "./shell-utils.js";
+
+const EXEC_REDACTION_WARNING = prependRedactionWarning("", true).trimEnd();
 
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn<ProcessSupervisor["spawn"]>(),
@@ -32,6 +36,7 @@ const defaultShell = isWin
   ? undefined
   : process.env.OPENCLAW_TEST_SHELL || getBashShellConfig().shell;
 const tempDirs = createTempDirTracker();
+const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
 
 function requireTextContent(
   result: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>,
@@ -247,6 +252,102 @@ describe("exec foreground failures", () => {
     expect(details.aggregated).toBe("");
     expect(details.durationMs).toBeTypeOf("number");
     expect(details.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("redacts secret-shaped stdout before returning foreground results", () => {
+    const result = buildExecForegroundResult({
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        aggregated: `${fakeSecretOutput}\n`,
+        timedOut: false,
+      },
+    });
+
+    const text = (result.content[0] as { text?: string }).text ?? "";
+    const details = result.details as { aggregated?: string; redacted?: boolean };
+    expect(text).not.toContain(fakeSecretOutput);
+    expect(details.aggregated).not.toContain(fakeSecretOutput);
+    expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(details.aggregated).toContain("OPENAI_API_KEY=***");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect(details.redacted).toBe(true);
+  });
+
+  it("redacts secret-shaped warning text before returning foreground results", () => {
+    const result = buildExecForegroundResult({
+      warningText: `Warning: ${fakeSecretOutput}`,
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        aggregated: "ok\n",
+        timedOut: false,
+      },
+    });
+
+    const text = (result.content[0] as { text?: string }).text ?? "";
+    expect(text).not.toContain(fakeSecretOutput);
+    expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect((result.details as { redacted?: boolean }).redacted).toBe(true);
+  });
+
+  it("redacts secret-shaped output from background exec details tail", () => {
+    const result = buildExecRunningResult({
+      sessionId: "sess-redact-background",
+      pid: 12345,
+      startedAt: Date.now(),
+      cwd: "/tmp",
+      tail: `${fakeSecretOutput}\n`,
+    });
+
+    const text = (result.content[0] as { text?: string }).text ?? "";
+    const details = result.details as { status?: string; tail?: string; redacted?: boolean };
+    expect(details.status).toBe("running");
+    expect(details.tail).not.toContain(fakeSecretOutput);
+    expect(details.tail).toContain("OPENAI_API_KEY=***");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect(details.redacted).toBe(true);
+  });
+
+  it("redacts secret-shaped warning text before returning background exec results", () => {
+    const result = buildExecRunningResult({
+      warningText: `Warning: ${fakeSecretOutput}\n\n`,
+      sessionId: "sess-redact-background-warning",
+      pid: 12345,
+      startedAt: Date.now(),
+      cwd: "/tmp",
+      tail: "still running\n",
+    });
+
+    const text = (result.content[0] as { text?: string }).text ?? "";
+    expect(text).not.toContain(fakeSecretOutput);
+    expect(text).toContain("OPENAI_API_KEY=sk-pro…7890");
+    expect(text).toContain(EXEC_REDACTION_WARNING);
+    expect((result.details as { redacted?: boolean }).redacted).toBe(true);
+    expect(text).toContain("7890\n\nCommand still running");
+    expect(text).toContain("Command still running");
+  });
+
+  it("does not mark unredacted foreground results", () => {
+    const result = buildExecForegroundResult({
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        aggregated: "plain output\n",
+        timedOut: false,
+      },
+    });
+
+    const text = (result.content[0] as { text?: string }).text ?? "";
+    expect(text).not.toContain(EXEC_REDACTION_WARNING);
+    expect((result.details as { redacted?: boolean }).redacted).toBeUndefined();
   });
 
   it("rejects invalid host values before launching a command", async () => {

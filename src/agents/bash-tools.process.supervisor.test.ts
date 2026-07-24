@@ -3,6 +3,10 @@
  * Verifies managed session cancellation, process-tree fallback, and registry state.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { prependRedactionWarning } from "./bash-tools.exec-output.js";
+
+const EXEC_REDACTION_WARNING = prependRedactionWarning("", true).trimEnd();
+const fakeFlagSecret = "sk-proj-redaction-canary-abcdefghijklmnopqrstuvwxyz1234567890";
 
 const { supervisorMock } = vi.hoisted(() => ({
   supervisorMock: {
@@ -48,6 +52,13 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`expected ${label}`);
   }
   return value as Record<string, unknown>;
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
 }
 
 function expectSessionState(sessionId: string, expected: { exited?: boolean }) {
@@ -154,6 +165,33 @@ describe("process tool supervisor cancellation", () => {
     expectFinishedSessionState("sess-fallback", { status: "failed", exitSignal: "SIGKILL" });
     expectTextContent(result.content[0], "Killed session sess-fallback.");
   });
+
+  it.each(["kill", "remove"] as const)(
+    "%s marks command-only redaction in agent-visible results",
+    async (action) => {
+      const sessionId = `sess-redact-${action}`;
+      supervisorMock.getRecord.mockReturnValue({ runId: sessionId, state: "running" });
+      addSession(
+        createProcessSessionFixture({
+          id: sessionId,
+          command: `tool --api-key ${fakeFlagSecret}`,
+          backgrounded: true,
+        }),
+      );
+      const processTool = createProcessTool();
+
+      const result = await processTool.execute("toolcall", { action, sessionId });
+      const text = requireString(
+        requireRecord(result.content[0], "tool content").text,
+        "tool content text",
+      );
+
+      expect(text).toContain(EXEC_REDACTION_WARNING);
+      expect(text).not.toContain(fakeFlagSecret);
+      expect(JSON.stringify(result.details)).not.toContain(fakeFlagSecret);
+      expect(requireRecord(result.details, "result details").redacted).toBe(true);
+    },
+  );
 
   it.each(["kill", "remove"] as const)(
     "refuses %s while sandbox finalization owns the terminal transition",

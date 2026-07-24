@@ -46,6 +46,7 @@ import {
 } from "./bash-tools.exec-script-preflight.js";
 import {
   buildExecForegroundResult,
+  buildExecRunningResult,
   createExecHostResolver,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
@@ -603,24 +604,16 @@ export function createExecTool(
 
         const resolveRunning = () => {
           cleanupToolRunListeners();
-          resolve({
-            content: [
-              {
-                type: "text",
-                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                  run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.`,
-              },
-            ],
-            details: {
-              status: "running",
+          resolve(
+            buildExecRunningResult({
+              warningText: getWarningText(),
               sessionId: run.session.id,
               pid: run.session.pid ?? undefined,
               startedAt: run.startedAt,
               cwd: run.session.cwd,
               tail: run.session.tail,
-            },
-          });
+            }),
+          );
         };
 
         const onYieldNow = () => {

@@ -3328,6 +3328,44 @@ describe("buildAfterTurnRuntimeContext", () => {
     }
   });
 
+  it("redacts sessionId-scoped active process sessions for after-turn context", () => {
+    resetProcessRegistryForTests();
+    try {
+      const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
+      const active = createProcessSessionFixture({
+        id: "sess-session-secret",
+        command: `node worker.js --token ${fakeSecretOutput}`,
+        backgrounded: true,
+      });
+      active.scopeKey = "session-123";
+      active.tail = `last output ${fakeSecretOutput}`;
+      addSession(active);
+
+      const legacy = buildAfterTurnRuntimeContext({
+        attempt: {
+          sessionId: "session-123",
+          config: {} as OpenClawConfig,
+          skillsSnapshot: undefined,
+          provider: "openai",
+          modelId: "gpt-5.4",
+          thinkLevel: "off",
+          reasoningLevel: "on",
+        },
+        workspaceDir: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        activeAgentId: "main",
+      });
+
+      const serialized = JSON.stringify(legacy.activeProcessSessions);
+      expect(serialized).not.toContain(fakeSecretOutput);
+      expect(serialized).toContain("OPENAI_API_KEY=***");
+      expect(serialized).toContain('"command":"node worker.js --token ***"');
+      expect(serialized).toContain('"redacted":true');
+    } finally {
+      resetProcessRegistryForTests();
+    }
+  });
+
   it("uses primary model when compaction.model is not set", () => {
     const runtimeAuthPlan = {
       providerForAuth: "openai",

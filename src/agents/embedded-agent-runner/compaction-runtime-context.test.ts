@@ -247,6 +247,31 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     }
   });
 
+  it("redacts scoped active process session references for compaction", () => {
+    const fakeSecretOutput = "OPENAI_API_KEY=sk-proj-redaction-canary-1234567890";
+    const active = createProcessSessionFixture({
+      id: "sess-active-secret",
+      command: `node worker.js --token ${fakeSecretOutput}`,
+      backgrounded: true,
+    });
+    active.scopeKey = "agent:main:thread:1";
+    active.tail = `last output ${fakeSecretOutput}`;
+    addSession(active);
+
+    const result = buildEmbeddedCompactionRuntimeContext({
+      sessionKey: "agent:main:thread:1",
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as unknown as OpenClawConfig,
+    });
+
+    const serialized = JSON.stringify(result.activeProcessSessions);
+    expect(serialized).not.toContain(fakeSecretOutput);
+    expect(serialized).toContain("OPENAI_API_KEY=***");
+    expect(serialized).toContain('"command":"node worker.js --token ***"');
+    expect(serialized).toContain('"redacted":true');
+  });
+
   it("omits active process session references when no safe scope is available", () => {
     const active = createProcessSessionFixture({
       id: "sess-active",

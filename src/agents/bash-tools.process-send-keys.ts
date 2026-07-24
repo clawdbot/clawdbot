@@ -4,7 +4,12 @@
  * live process stdin.
  */
 import type { ProcessSession } from "./bash-process-registry.js";
-import { deriveSessionName } from "./bash-tools.shared.js";
+import { prependRedactionWarning } from "./bash-tools.exec-output.js";
+import {
+  deriveRedactedProcessSessionName,
+  redactProcessText,
+  redactProcessToolDetailsWithCommand,
+} from "./bash-tools.process-redaction.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
@@ -70,19 +75,26 @@ export async function handleProcessSendKeys(params: {
     return failText("No key data provided.");
   }
   await writeProcessStdin(params.stdin, data);
+  const text = redactProcessText(
+    `Sent ${Buffer.byteLength(data, "utf8")} bytes to session ${params.sessionId}.` +
+      (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
+  );
+  const details = redactProcessToolDetailsWithCommand(
+    {
+      status: "running",
+      sessionId: params.sessionId,
+      name: deriveRedactedProcessSessionName(params.session.command),
+    },
+    params.session.command,
+    text.redacted,
+  );
   return {
     content: [
       {
         type: "text",
-        text:
-          `Sent ${Buffer.byteLength(data, "utf8")} bytes to session ${params.sessionId}.` +
-          (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
+        text: prependRedactionWarning(text.text, details.redacted === true),
       },
     ],
-    details: {
-      status: "running",
-      sessionId: params.sessionId,
-      name: deriveSessionName(params.session.command),
-    },
+    details,
   };
 }
