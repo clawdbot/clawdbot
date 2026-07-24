@@ -53,11 +53,7 @@ export function normalizePersistedSessionEntryShape(value: unknown): SessionEntr
   let next = projectCanonicalSessionEntryShape(value);
   if (value.sessionId !== undefined) {
     if (!isSafeSessionId(value.sessionId)) {
-      if (modelSelectionLocked) {
-        return undefined;
-      }
-      const { sessionId: _retiredSessionId, ...metadata } = next;
-      next = metadata as SessionEntry;
+      return undefined;
     } else {
       const sessionId = value.sessionId.trim();
       if (modelSelectionLocked && sessionId !== value.sessionId) {
@@ -67,13 +63,7 @@ export function normalizePersistedSessionEntryShape(value: unknown): SessionEntr
       }
       const transcriptSessionId = normalizeTranscriptSessionId(sessionId);
       if (!transcriptSessionId) {
-        if (modelSelectionLocked) {
-          return undefined;
-        }
-        // Preserve unrelated metadata from old rows while withholding an ID
-        // that cannot identify a canonical SQLite transcript.
-        const { sessionId: _retiredSessionId, ...metadata } = next;
-        next = metadata as SessionEntry;
+        return undefined;
       }
       if (transcriptSessionId && sessionId !== value.sessionId) {
         next = { ...next, sessionId };

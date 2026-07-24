@@ -25,17 +25,14 @@ it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
 });
 
-it("preserves legacy row metadata while withholding a noncanonical transcript id", () => {
+it("filters legacy row metadata with a noncanonical transcript id", () => {
   expect(
     normalizePersistedSessionEntryShape({
       sessionId: "legacy:session",
       updatedAt: 42,
       pluginExtensions: { memory: { mode: "legacy" } },
     }),
-  ).toEqual({
-    updatedAt: 42,
-    pluginExtensions: { memory: { mode: "legacy" } },
-  });
+  ).toBeUndefined();
 });
 
 describe("session path safety", () => {
