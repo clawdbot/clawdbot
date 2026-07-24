@@ -625,7 +625,7 @@ export const pl: TranslationMap = {
     filters: "Filtry",
     createdBy: "Utworzono przez {name}",
     archivedBy: "Zarchiwizowane przez: {name}",
-    filterByCreator: "Filtruj według twórcy",
+    people: "Osoby",
     allCreators: "Wszystkie osoby",
     filterControls: "Filtry sesji",
     sourceFilters: "Filtry źródła sesji",
@@ -1415,6 +1415,11 @@ export const pl: TranslationMap = {
     chatPrefs: {
       title: "Czat",
       hint: "Lokalne preferencje czatu w przeglądarce.",
+      messageWidth: "Szerokość wiadomości",
+      messageWidthHint:
+        "Opcjonalna szerokość CSS wyśrodkowanego zapisu rozmowy, na przykład 960px, 82% lub min(1280px, 82%).",
+      messageWidthInvalid:
+        "Wprowadź szerokość CSS, na przykład 960px, 82%, min(1280px, 82%) lub calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Pasek boczny",
@@ -1704,6 +1709,7 @@ export const pl: TranslationMap = {
     blockedAgentFilter: "zablokowane przez filtr agenta",
   },
   nav: {
+    account: "Konto",
     back: "Wstecz",
     forward: "Dalej",
     chat: "Czat",
@@ -3867,13 +3873,29 @@ export const pl: TranslationMap = {
       visibility: "Widoczność",
       shared: "Udostępniony",
       readOnly: "Tylko do odczytu",
-      suggest: "Sugerowanie",
+      suggest: "Zaproponuj",
       draft: "Wersja robocza",
       publishDraft: "Opublikuj wersję roboczą",
       members: "Członkowie",
       selected: "Członek",
       noPeople: "Nie znaleziono sparowanych osób.",
       readOnlyNotice: "Tylko właściciel wątku i członkowie mogą podejmować działania w tym wątku.",
+    },
+    sessionSuggestions: {
+      suggest: "Zaproponuj",
+      suggestMessage: "Zaproponuj wiadomość",
+      attachmentsUnsupported: "Usuń załączniki przed przesłaniem propozycji tekstowej.",
+      sendNow: "Wyślij teraz propozycję użytkownika {author}",
+      queue: "Dodaj propozycję użytkownika {author} do kolejki",
+      edit: "Edytuj propozycję użytkownika {author}",
+      dismiss: "Odrzuć propozycję użytkownika {author}",
+      typing: "{name} pisze…",
+      typingMany: "{names} piszą…",
+      state: {
+        pending: "Oczekujące",
+        accepted: "Zaakceptowano",
+        dismissed: "Odrzucono",
+      },
     },
     loadOlder: "Załaduj starsze",
     sessionHeader: {

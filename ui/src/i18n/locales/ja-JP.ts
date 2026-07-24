@@ -627,7 +627,7 @@ export const ja_JP: TranslationMap = {
     filters: "フィルター",
     createdBy: "{name}が作成",
     archivedBy: "{name} がアーカイブ",
-    filterByCreator: "作成者で絞り込み",
+    people: "ユーザー",
     allCreators: "すべての人",
     filterControls: "セッションフィルター",
     sourceFilters: "セッションソースのフィルター",
@@ -1414,6 +1414,11 @@ export const ja_JP: TranslationMap = {
     chatPrefs: {
       title: "チャット",
       hint: "ブラウザ内に保存されるチャット設定。",
+      messageWidth: "メッセージの幅",
+      messageWidthHint:
+        "中央揃えの会話ログに使用するCSS幅を任意で指定します（例：960px、82%、min(1280px, 82%)）。",
+      messageWidthInvalid:
+        "960px、82%、min(1280px, 82%)、calc(100% - 2rem)などのCSS幅を入力してください。",
     },
     sidebarPrefs: {
       title: "サイドバー",
@@ -1702,6 +1707,7 @@ export const ja_JP: TranslationMap = {
     blockedAgentFilter: "エージェントフィルターによりブロック",
   },
   nav: {
+    account: "アカウント",
     back: "戻る",
     forward: "進む",
     chat: "チャット",
@@ -3862,6 +3868,22 @@ export const ja_JP: TranslationMap = {
       selected: "メンバー",
       noPeople: "ペアリング済みのユーザーが見つかりません。",
       readOnlyNotice: "このスレッドで操作できるのは、スレッドの所有者とメンバーのみです。",
+    },
+    sessionSuggestions: {
+      suggest: "提案",
+      suggestMessage: "メッセージを提案",
+      attachmentsUnsupported: "テキストの提案を送信する前に、添付ファイルを削除してください。",
+      sendNow: "{author}の提案を今すぐ送信",
+      queue: "{author}の提案をキューに追加",
+      edit: "{author}の提案を編集",
+      dismiss: "{author}の提案を却下",
+      typing: "{name}が入力中…",
+      typingMany: "{names}が入力中…",
+      state: {
+        pending: "保留中",
+        accepted: "承認済み",
+        dismissed: "却下済み",
+      },
     },
     loadOlder: "以前の項目を読み込む",
     sessionHeader: {

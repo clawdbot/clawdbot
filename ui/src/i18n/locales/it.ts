@@ -626,7 +626,7 @@ export const it: TranslationMap = {
     filters: "Filtri",
     createdBy: "Creato da {name}",
     archivedBy: "Archiviata da {name}",
-    filterByCreator: "Filtra per creatore",
+    people: "Persone",
     allCreators: "Tutte le persone",
     filterControls: "Filtri sessione",
     sourceFilters: "Filtri origine sessione",
@@ -1421,6 +1421,11 @@ export const it: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Preferenze della chat locali del browser.",
+      messageWidth: "Larghezza del messaggio",
+      messageWidthHint:
+        "Larghezza CSS facoltativa per la trascrizione centrata, ad esempio 960px, 82% o min(1280px, 82%).",
+      messageWidthInvalid:
+        "Inserisci una larghezza CSS come 960px, 82%, min(1280px, 82%) o calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Barra laterale",
@@ -1709,6 +1714,7 @@ export const it: TranslationMap = {
     blockedAgentFilter: "bloccato dal filtro dell'agente",
   },
   nav: {
+    account: "Account",
     back: "Indietro",
     forward: "Avanti",
     chat: "Chat",
@@ -3887,6 +3893,22 @@ export const it: TranslationMap = {
       noPeople: "Nessuna persona associata trovata.",
       readOnlyNotice:
         "Solo il proprietario della conversazione e i membri possono intervenire in questa conversazione.",
+    },
+    sessionSuggestions: {
+      suggest: "Suggerisci",
+      suggestMessage: "Suggerisci un messaggio",
+      attachmentsUnsupported: "Rimuovi gli allegati prima di inviare un suggerimento di testo.",
+      sendNow: "Invia ora il suggerimento di {author}",
+      queue: "Metti in coda il suggerimento di {author}",
+      edit: "Modifica il suggerimento di {author}",
+      dismiss: "Ignora il suggerimento di {author}",
+      typing: "{name} sta scrivendo…",
+      typingMany: "{names} stanno scrivendo…",
+      state: {
+        pending: "In sospeso",
+        accepted: "Accettato",
+        dismissed: "Ignorato",
+      },
     },
     loadOlder: "Carica precedenti",
     sessionHeader: {
