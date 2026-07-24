@@ -326,14 +326,20 @@ describe("local SQLite snapshot repository", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32").each([0o000, 0o200, 0o300])(
-    "repairs an existing private repository from mode %o before pinning it",
-    async (initialMode) => {
+  it.runIf(process.platform !== "win32").each([
+    { label: "000", mode: 0o000 },
+    { label: "200", mode: 0o200 },
+    { label: "300", mode: 0o300 },
+    { label: "777", mode: 0o777 },
+  ])(
+    "repairs an existing private repository from mode $label before pinning it",
+    async (testCase) => {
       const tempDir = await createTempDir();
       const sourcePath = path.join(tempDir, "source.sqlite");
       const repositoryPath = path.join(tempDir, "snapshots");
       createGenericDatabase(sourcePath);
-      await fs.mkdir(repositoryPath, { mode: initialMode });
+      await fs.mkdir(repositoryPath, { mode: testCase.mode });
+      await fs.chmod(repositoryPath, testCase.mode);
       const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
 
       try {

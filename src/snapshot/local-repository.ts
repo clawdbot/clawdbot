@@ -1219,7 +1219,12 @@ async function assertTrustedStagingRoot(
     return trustedRootPath;
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  if (uid === undefined || rootIdentity.uid !== uid || (rootIdentity.mode & 0o022) !== 0) {
+  const unsafeMode = (rootIdentity.mode & 0o022) !== 0;
+  if (
+    uid === undefined ||
+    rootIdentity.uid !== uid ||
+    (unsafeMode && options.allowModeRepair !== true)
+  ) {
     throw new Error(
       `Private SQLite staging root must be owned by the current user and not writable by other users: ${resolvedRootPath}`,
     );
