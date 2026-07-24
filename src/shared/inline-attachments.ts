@@ -1,4 +1,4 @@
-import { isUnsafeDeviceReadPath } from "@openclaw/fs-safe/advanced";
+import { isUnsafeDeviceReadPath } from "../infra/fs-safe-advanced.js";
 
 export type InlineAttachment = {
   name: string;

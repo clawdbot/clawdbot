@@ -6,6 +6,7 @@ export {
   assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
   type FileIdentityStat,
+  isUnsafeDeviceReadPath,
   sameFileIdentity,
   sanitizeUntrustedFileName,
 } from "@openclaw/fs-safe/advanced";
