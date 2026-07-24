@@ -211,6 +211,16 @@ function readRecordAgentPid(record: unknown): number | undefined {
   return numericPid && Number.isInteger(numericPid) && numericPid > 0 ? numericPid : undefined;
 }
 
+/** Best-effort check that a PID is still alive and signalable. */
+function isProcessAliveByPid(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readOpenClawLeaseIdFromRecord(record: unknown): string | undefined {
   if (typeof record !== "object" || record === null) {
     return undefined;
@@ -280,14 +290,26 @@ function createResetAwareSessionStore(
       if (!record || !params?.leaseStore || !params.gatewayInstanceId) {
         return record;
       }
+      const recordPid = readRecordAgentPid(record);
+      if (recordPid && !isProcessAliveByPid(recordPid)) {
+        // The wrapper process that owned this session is gone. Treat the stored
+        // session as fresh so we do not try to resume a dead process, which
+        // can hang the gateway after a restart (#109285).
+        return undefined;
+      }
       const sessionName = readSessionRecordName(record) || normalized;
       const lease = selectCurrentSessionLease({
         leases: await params.leaseStore.listOpen(params.gatewayInstanceId),
         sessionKeys: [sessionName, normalized],
-        rootPid: readRecordAgentPid(record),
+        rootPid: recordPid,
       });
       if (!lease) {
         return record;
+      }
+      // Defensive: the lease might still be open but its process has died
+      // without being reaped (e.g. gateway crash). Treat as fresh.
+      if (!isProcessAliveByPid(lease.rootPid)) {
+        return undefined;
       }
       return withOpenClawLeaseSessionMetadata(record, {
         openclawLeaseId: lease.leaseId,

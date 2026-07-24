@@ -158,9 +158,26 @@ function readFirstEnsureSessionInput(ensure: {
   return input as Parameters<AcpRuntime["ensureSession"]>[0];
 }
 
+function mockProcessAliveByPid(alivePids: Set<number>) {
+  return vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (signal !== 0) {
+      return true;
+    }
+    if (!alivePids.has(pid as number)) {
+      const error = new Error("ESRCH");
+      (error as { code?: string }).code = "ESRCH";
+      throw error;
+    }
+    return true;
+  });
+}
+
 describe("AcpxRuntime fresh reset wrapper", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // Default: treat every PID as alive so tests that use synthetic PIDs do not
+    // depend on real process state. Tests that need a dead PID override this.
+    vi.spyOn(process, "kill").mockImplementation(() => true);
   });
 
   it("rejects unsupported runtime session modes with a clear AcpRuntimeError (issue #73071)", async () => {
@@ -1906,6 +1923,126 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
     expect(baseStore["load"]).toHaveBeenCalledOnce();
+  });
+
+  it("treats a stored session with a dead pid as fresh so the gateway does not hang (#109285)", async () => {
+    const deadPid = 999_999;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        pid: deadPid,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: makeLeaseStore().store,
+    });
+    const killSpy = mockProcessAliveByPid(new Set());
+
+    const loaded = await wrappedStore.load("agent:codex:acp:test");
+
+    expect(loaded).toBeUndefined();
+    expect(killSpy).toHaveBeenCalledWith(deadPid, 0);
+  });
+
+  it("returns a stored session when its pid is still alive (#109285)", async () => {
+    const livePid = 999_998;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        pid: livePid,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: makeLeaseStore().store,
+    });
+    mockProcessAliveByPid(new Set([livePid]));
+
+    const loaded = (await wrappedStore.load("agent:codex:acp:test")) as Record<string, unknown>;
+
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        pid: livePid,
+      }),
+    );
+  });
+
+  it("treats a session as fresh when an open lease's root pid is dead (#109285)", async () => {
+    const deadPid = 999_997;
+    const leaseStore = makeLeaseStore();
+    await leaseStore.store.save({
+      leaseId: "lease-dead",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "codex-acp-wrapper.mjs",
+      rootPid: deadPid,
+      commandHash: "hash",
+      startedAt: Date.now(),
+      state: "open",
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+    });
+    mockProcessAliveByPid(new Set());
+
+    const loaded = await wrappedStore.load("agent:codex:acp:test");
+
+    expect(loaded).toBeUndefined();
+  });
+
+  it("enriches a stored session with lease metadata when the lease root pid is alive (#109285)", async () => {
+    const livePid = 999_996;
+    const leaseStore = makeLeaseStore();
+    await leaseStore.store.save({
+      leaseId: "lease-live",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "codex-acp-wrapper.mjs",
+      rootPid: livePid,
+      commandHash: "hash",
+      startedAt: Date.now(),
+      state: "open",
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+    });
+    mockProcessAliveByPid(new Set([livePid]));
+
+    const loaded = (await wrappedStore.load("agent:codex:acp:test")) as Record<string, unknown>;
+
+    expect(loaded).toEqual(
+      expect.objectContaining({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+        openclawLeaseId: "lease-live",
+        openclawGatewayInstanceId: "gateway-test",
+      }),
+    );
   });
 
   it("releases managed OpenClaw tools MCP delegates after close", async () => {
