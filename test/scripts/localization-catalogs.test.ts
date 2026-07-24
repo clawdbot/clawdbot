@@ -233,4 +233,23 @@ describe("localization catalog authoring", () => {
       "normalized repository-relative path",
     );
   });
+
+  it("rejects Windows drive paths on every host platform", async () => {
+    await writeJson("registry.json", {
+      schemaVersion: 1,
+      areas: [
+        {
+          id: "wizard-core",
+          namespace: "wizard",
+          source: "C:/outside/i18n/catalogs/en.json",
+          targets: [{ locale: "zh-CN", path: TARGET_PATH }],
+          protectedLiterals: [],
+        },
+      ],
+    });
+
+    await expect(catalogWorkflowPaths({ root, registryPath: "registry.json" })).rejects.toThrow(
+      "normalized repository-relative path",
+    );
+  });
 });

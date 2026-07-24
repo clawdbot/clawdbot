@@ -70,6 +70,7 @@ function expectRepositoryPath(value: unknown, label: string): string {
   const candidate = expectString(value, label);
   if (
     candidate.includes("\\") ||
+    /^[A-Za-z]:\//u.test(candidate) ||
     path.isAbsolute(candidate) ||
     path.posix.isAbsolute(candidate) ||
     path.posix.normalize(candidate) !== candidate ||
