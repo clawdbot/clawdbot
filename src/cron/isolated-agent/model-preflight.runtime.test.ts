@@ -122,6 +122,10 @@ describe("preflightCronModelProvider", () => {
     expect(first.model).toBe("qwen3:32b");
     expect(first.baseUrl).toBe("http://localhost:11434");
     expect(first.retryAfterMs).toBe(300000);
+    expect(first.reason).toContain("the local provider preflight failed");
+    expect(first.reason).not.toContain("endpoint is not reachable");
+    expect(first.reason).toContain("Last error: Error: ECONNREFUSED");
+    expect(first.reason).not.toContain("timed out after");
     expect(second.status).toBe("unavailable");
     if (second.status !== "unavailable") {
       throw new Error(`expected second preflight unavailable, got ${second.status}`);
@@ -134,6 +138,149 @@ describe("preflightCronModelProvider", () => {
     const request = requireFetchPreflightRequest();
     expect(request.url).toBe("http://localhost:11434/api/tags");
     expect(request.auditContext).toBe("cron-model-provider-preflight");
+  });
+
+  it("reports a nested guarded-fetch deadline separately from endpoint failures", async () => {
+    const timeoutError = new Error("request timed out");
+    timeoutError.name = "TimeoutError";
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      new TypeError("fetch failed", { cause: timeoutError }),
+    );
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://localhost:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3:32b",
+    });
+
+    expect(result.status).toBe("unavailable");
+    if (result.status !== "unavailable") {
+      throw new Error(`expected preflight unavailable, got ${result.status}`);
+    }
+    expect(result.reason).toContain(
+      "Last error: Local provider preflight exceeded its configured 2500ms deadline | " +
+        "TypeError: fetch failed | TimeoutError: request timed out",
+    );
+    expect(result.reason).not.toContain("ECONNREFUSED");
+  });
+
+  it("preserves nested abort details without classifying a generic abort as timeout", async () => {
+    const connectionError = Object.assign(new Error("connect ECONNREFUSED"), {
+      name: "ConnectError",
+      code: "ECONNREFUSED",
+    });
+    const abortError = Object.assign(new Error("request aborted", { cause: connectionError }), {
+      name: "AbortError",
+      code: "ABORT_ERR",
+    });
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(abortError);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://localhost:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3:32b",
+    });
+
+    expect(result.status).toBe("unavailable");
+    if (result.status !== "unavailable") {
+      throw new Error(`expected preflight unavailable, got ${result.status}`);
+    }
+    expect(result.reason).toContain(
+      "Last error: AbortError: request aborted (code=ABORT_ERR) | " +
+        "ConnectError: connect ECONNREFUSED (code=ECONNREFUSED)",
+    );
+    expect(result.reason).not.toContain("timed out after");
+    expect(result.reason).not.toContain("endpoint is not reachable");
+  });
+
+  it("bounds cyclic cause-chain inspection", async () => {
+    const errors = Array.from({ length: 12 }, (_, index) =>
+      Object.assign(new Error(`failure-${index}`), {
+        name: `NestedError${index}`,
+        code: `ELOOP${index}`,
+        cause: undefined as unknown,
+      }),
+    );
+    for (let index = 0; index < errors.length - 1; index += 1) {
+      errors[index]!.cause = errors[index + 1];
+    }
+    errors.at(-1)!.cause = errors[0];
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(errors[0]);
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://localhost:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3:32b",
+    });
+
+    expect(result.status).toBe("unavailable");
+    if (result.status !== "unavailable") {
+      throw new Error(`expected preflight unavailable, got ${result.status}`);
+    }
+    expect(result.reason.match(/failure-0/g)).toHaveLength(1);
+    expect(result.reason).toContain("NestedError7: failure-7 (code=ELOOP7)");
+    expect(result.reason).not.toContain("failure-8");
+  });
+
+  it("bounds long diagnostics without splitting UTF-16 surrogate pairs", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error(`${"x".repeat(992)}😀truncated-detail`));
+
+    const result = await preflightCronModelProvider({
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              api: "ollama",
+              baseUrl: "http://localhost:11434",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      model: "qwen3:32b",
+    });
+
+    expect(result.status).toBe("unavailable");
+    if (result.status !== "unavailable") {
+      throw new Error(`expected preflight unavailable, got ${result.status}`);
+    }
+    const diagnostic = result.reason.split("Last error: ")[1];
+    expect(diagnostic).toHaveLength(1_000);
+    expect(diagnostic).toMatch(/^Error: x+…$/u);
+    expect(diagnostic).not.toContain("😀");
+    expect(diagnostic).not.toContain("truncated-detail");
+    expect(/[\uD800-\uDBFF]$/u.test(diagnostic ?? "")).toBe(false);
   });
 
   it("retries an unavailable endpoint after the cache ttl", async () => {
