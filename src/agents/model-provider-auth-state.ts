@@ -5,6 +5,11 @@ export type PreparedProviderAuthState = {
   agentId: string;
   configFingerprint: string;
   providers: ReadonlyMap<string, boolean>;
+  defaultModelRoute?: {
+    provider: string;
+    modelId: string;
+    available: boolean;
+  };
 };
 
 export type ProviderAuthWarmSnapshot = {
@@ -12,6 +17,11 @@ export type ProviderAuthWarmSnapshot = {
     agentId: string;
     configFingerprint: string;
     providers: Array<[string, boolean]>;
+    defaultModelRoute?: {
+      provider: string;
+      modelId: string;
+      available: boolean;
+    };
   }>;
 };
 
@@ -81,6 +91,7 @@ export function publishProviderAuthWarmSnapshot(snapshot: ProviderAuthWarmSnapsh
         agentId: state.agentId,
         configFingerprint: state.configFingerprint,
         providers: new Map(state.providers),
+        ...(state.defaultModelRoute ? { defaultModelRoute: { ...state.defaultModelRoute } } : {}),
       },
     ]),
   );

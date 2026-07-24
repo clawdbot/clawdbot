@@ -32,6 +32,7 @@ vi.mock("./prepared-model-catalog.js", () => ({
         ),
         routeVariants: [],
       },
+      metadataSnapshot: { plugins: [] },
     }),
   ),
 }));

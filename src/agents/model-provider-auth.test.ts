@@ -75,6 +75,7 @@ vi.mock("./prepared-model-catalog.js", () => ({
       entries: await modelCatalogMocks.loadModelCatalog(params),
       routeVariants: [],
     },
+    metadataSnapshot: { plugins: [] },
   }),
 }));
 
@@ -105,6 +106,8 @@ vi.mock("./workspace.js", () => ({
 
 vi.mock("./agent-scope-config.js", () => ({
   listAgentIds: () => ["default"],
+  resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) =>
+    cfg.agents?.list?.find((agent) => agent.id === agentId),
   resolveAgentDir: () => "/warm/default-agent",
   resolveDefaultAgentDir: () => "/warm/default-agent",
   resolveAgentWorkspaceDir: () => "/warm/default-workspace",
@@ -176,6 +179,59 @@ describe("prepared provider auth state", () => {
     expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
       "workspaceDir",
     );
+  });
+
+  it("publishes route-scoped auth evidence for the configured default model", async () => {
+    const cfg = {
+      agents: { defaults: { model: { primary: "openai/gpt" } } },
+    } as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "GPT", provider: "openai", api: "openai-responses" },
+    ]);
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue({
+      availability: false,
+      routeResolution: null,
+    });
+
+    const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
+      readOnlyAuthStore: true,
+    });
+
+    expect(snapshot.agents[0]?.defaultModelRoute).toEqual({
+      provider: "openai",
+      modelId: "gpt",
+      available: false,
+    });
+    expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledWith("openai", {
+      modelId: "gpt",
+      api: "openai-responses",
+      baseUrl: undefined,
+      observedRoutes: [],
+    });
+  });
+
+  it("omits false route evidence when synthetic auth discovery is incomplete", async () => {
+    const cfg = {
+      agents: { defaults: { model: { primary: "plugin-provider/plugin-model" } } },
+    } as OpenClawConfig;
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "plugin-model", name: "Plugin Model", provider: "plugin-provider" },
+    ]);
+    modelAuthMocks.createRuntimeProviderAuthLookup.mockReturnValueOnce({
+      envApiKey: { aliasMap: {}, candidateMap: {}, authEvidenceMap: {} },
+      syntheticAuthProviderRefs: [],
+      syntheticAuthProviderRefsComplete: false,
+    });
+    modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue({
+      availability: false,
+      routeResolution: null,
+    });
+
+    const snapshot = await buildCurrentProviderAuthStateSnapshot(cfg, {
+      readOnlyAuthStore: true,
+    });
+
+    expect(snapshot.agents[0]?.defaultModelRoute).toBeUndefined();
   });
 
   it("uses the prepared owner's authoritative workspace for auth discovery", async () => {
@@ -718,6 +774,39 @@ describe("prepared provider auth state", () => {
       isCancelled: expect.any(Function),
       workerUrl: undefined,
     });
+  });
+
+  it("rejects malformed default model route evidence from the warm worker", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-auth-worker-"));
+    const workerPath = path.join(tempDir, "malformed-worker.mjs");
+    await fs.writeFile(
+      workerPath,
+      `
+        import { parentPort } from "node:worker_threads";
+        parentPort.postMessage({
+          status: "ok",
+          snapshot: {
+            agents: [{
+              agentId: "default",
+              configFingerprint: "fingerprint",
+              providers: [["openai", true]],
+              defaultModelRoute: null
+            }]
+          }
+        });
+      `,
+    );
+
+    try {
+      await expect(
+        warmCurrentProviderAuthStateOffMainThread({} as OpenClawConfig, {
+          workerUrl: pathToFileURL(workerPath),
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("invalid provider auth warm worker response");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("terminates the off-main-thread warm worker when cancellation fires", async () => {

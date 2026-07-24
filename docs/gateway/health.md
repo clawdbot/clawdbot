@@ -71,7 +71,12 @@ conditions without selecting a hosting profile:
   gateway: {
     readiness: {
       requiredCriteria: ["openclaw.workspace-writable", "plugin.storage.backend"],
-      advisoryCriteria: ["plugin.metrics.exporter"],
+      advisoryCriteria: [
+        "openclaw.config-current",
+        "openclaw.model-route-ready",
+        "openclaw.secrets-ready",
+        "plugin.metrics.exporter",
+      ],
     },
   },
 }
@@ -106,6 +111,23 @@ Dynamic subject IDs, generations, node-specific references, and messages are
 diagnostic fields, not metric labels. Telemetry exporters should use bounded
 dimensions such as condition type, status, requirement, reason, subject kind,
 and selected profile.
+
+Core activation criteria inspect the Gateway's already-published runtime
+generation. They do not read configuration or credentials from disk, discover
+providers, call a model, or probe an external service.
+
+| Selector ID                   | Condition           | What it verifies                                       |
+| ----------------------------- | ------------------- | ------------------------------------------------------ |
+| `openclaw.config-current`     | `ConfigCurrent`     | Active config matches the latest source generation     |
+| `openclaw.model-route-ready`  | `ModelRouteReady`   | Default model is cataloged and has available auth      |
+| `openclaw.secrets-ready`      | `SecretsReady`      | No runtime owner is degraded by secret resolution      |
+| `openclaw.workspace-writable` | `WorkspaceWritable` | Default workspace accepts a bounded write/delete check |
+
+These criteria are evaluated only when selected. Put one in
+`advisoryCriteria` to observe it first, then move it to `requiredCriteria` when
+that condition should block new work. `PluginsLoaded` remains an always-present
+advisory and includes plugins quarantined before activation as well as plugin
+loader errors.
 
 - **DO use:** `GET /health` - instant response, no session created, no LLM call, returns `{"ok":true,"status":"live"}`
 - **DON'T use:** `/v1/chat/completions` for health checks - each request creates a full agent session with skill snapshot, context assembly, and LLM calls

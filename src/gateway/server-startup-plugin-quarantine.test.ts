@@ -196,7 +196,12 @@ describe("Gateway startup plugin quarantine", () => {
     setTestPluginRegistry(registry);
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
-      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "none" },
+        readiness: {},
+      },
       plugins: pluginConfig,
     });
 
@@ -205,7 +210,18 @@ describe("Gateway startup plugin quarantine", () => {
     const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
 
     expect(ready.status).toBe(200);
-    await expect(ready.json()).resolves.toMatchObject({ ready: true });
+    await expect(ready.json()).resolves.toMatchObject({
+      ready: true,
+      advisories: expect.arrayContaining(["PluginLoadFailures"]),
+      conditions: expect.arrayContaining([
+        expect.objectContaining({
+          type: "PluginsLoaded",
+          status: "False",
+          requirement: "advisory",
+          reason: "PluginLoadFailures",
+        }),
+      ]),
+    });
     expect((globalThis as Record<string, unknown>).brokenPluginImported).toBeUndefined();
     expect((globalThis as Record<string, unknown>).selectedPluginImported).toBe(true);
   });

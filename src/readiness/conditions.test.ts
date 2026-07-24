@@ -71,6 +71,27 @@ describe("buildRuntimeReadiness", () => {
     expect(readiness.advisories).toEqual(["PluginLoadFailures"]);
   });
 
+  it("reports configured plugins quarantined before activation", () => {
+    const readiness = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: {
+        errors: [],
+        unavailable: [{ id: "storage", diagnostic: { reason: "missing-main-entry" } }],
+      },
+    });
+
+    expect(readiness.ready).toBe(true);
+    expect(readiness.advisories).toEqual(["PluginLoadFailures"]);
+    expect(readiness.conditions).toContainEqual(
+      expect.objectContaining({
+        type: "PluginsLoaded",
+        status: "False",
+        message: expect.stringContaining("storage: missing-main-entry"),
+      }),
+    );
+  });
+
   it("includes explicitly selected conditions in the canonical result", () => {
     const readiness = buildRuntimeReadiness({
       configLoaded: true,

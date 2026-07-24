@@ -61,6 +61,12 @@ export type PluginReadinessInput = {
     activationSource?: string;
     error?: string;
   }>;
+  unavailable?: Array<{
+    id: string;
+    diagnostic: {
+      reason: string;
+    };
+  }>;
 };
 
 type RuntimeReadinessInput = {
@@ -112,13 +118,17 @@ export function buildUnobservedGatewayConditions(): ReadinessCondition[] {
 }
 
 function resolvePluginFailures(plugins: PluginReadinessInput): string[] {
-  return plugins.errors
+  const loadFailures = plugins.errors
     .filter((entry) => entry.activated === true || entry.activationSource !== "disabled")
     .map((entry) =>
       boundedCoreReadinessMessage(
         entry.error ? `${entry.id}: ${entry.error}` : `${entry.id}: plugin load failed`,
       ),
     );
+  const unavailable = (plugins.unavailable ?? []).map((entry) =>
+    boundedCoreReadinessMessage(`${entry.id}: ${entry.diagnostic.reason}`),
+  );
+  return [...loadFailures, ...unavailable];
 }
 
 function buildPluginCondition(plugins: PluginReadinessInput | undefined): ReadinessCondition {
@@ -142,7 +152,7 @@ function buildPluginCondition(plugins: PluginReadinessInput | undefined): Readin
     message:
       failures.length === 0
         ? "Selected plugins loaded without activation errors."
-        : boundedCoreReadinessMessage(`Plugin load failures: ${failures.join("; ")}`),
+        : boundedCoreReadinessMessage(`Plugin activation failures: ${failures.join("; ")}`),
   };
 }
 
