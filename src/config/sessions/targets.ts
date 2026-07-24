@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   isValidAgentId,
   LEGACY_IMPLICIT_AGENT_ID,
@@ -38,6 +39,7 @@ const NON_FATAL_DISCOVERY_ERROR_CODES = new Set([
   "EPERM",
   "ESTALE",
 ]);
+const log = createSubsystemLogger("sessions/targets");
 
 function dedupeTargetsByStorePath(targets: SessionStoreTarget[]): SessionStoreTarget[] {
   const deduped = new Map<string, SessionStoreTarget>();
@@ -49,33 +51,102 @@ function dedupeTargetsByStorePath(targets: SessionStoreTarget[]): SessionStoreTa
   return [...deduped.values()];
 }
 
-function sqliteTargetOwnerPriority(target: SessionStoreTarget): number {
-  const normalizedAgentId = normalizeAgentId(target.agentId);
-  const storeBaseName = normalizeAgentId(
-    path.basename(target.storePath, path.extname(target.storePath)),
-  );
-  if (normalizedAgentId === storeBaseName) {
-    return 2;
-  }
-  return normalizedAgentId === LEGACY_IMPLICIT_AGENT_ID ? 1 : 0;
-}
+export type SessionStoreTargetCollisionDiagnostic = {
+  message: string;
+  sqlitePath: string;
+  ownerAgentId?: string;
+  ignoredAgentIds: string[];
+  ownerSource: "database-registry" | "database-path" | "configured-default" | "ambiguous-registry";
+};
 
 export function dedupeSessionStoreTargetsBySqliteTarget(
   targets: SessionStoreTarget[],
+  options: {
+    defaultAgentId: string;
+    env?: NodeJS.ProcessEnv;
+    onDiagnostic?: (diagnostic: SessionStoreTargetCollisionDiagnostic) => void;
+  },
 ): SessionStoreTarget[] {
-  const deduped = new Map<string, SessionStoreTarget>();
+  const grouped = new Map<
+    string,
+    Array<{ target: SessionStoreTarget; databaseOwnerAgentId?: string }>
+  >();
   for (const target of targets) {
-    const sqlitePath =
-      resolveSqliteTargetFromSessionStorePath(target.storePath, { agentId: target.agentId }).path ??
-      target.storePath;
-    const current = deduped.get(sqlitePath);
-    // A custom store basename and legacy main can intentionally resolve to the same
-    // unsuffixed SQLite file. The basename-matching owner is the resolver's stronger claim.
-    if (!current || sqliteTargetOwnerPriority(target) > sqliteTargetOwnerPriority(current)) {
-      deduped.set(sqlitePath, target);
+    const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+      agentId: target.agentId,
+    });
+    const sqlitePath = path.resolve(resolved.path ?? target.storePath);
+    const group = grouped.get(sqlitePath) ?? [];
+    group.push({
+      target,
+      ...(resolved.agentId ? { databaseOwnerAgentId: normalizeAgentId(resolved.agentId) } : {}),
+    });
+    grouped.set(sqlitePath, group);
+  }
+  // Ownership must not fall back while the authoritative registry is unreadable:
+  // doing so can project the same physical DB under a different configured default.
+  const registeredDatabases = listOpenClawRegisteredAgentDatabases({ env: options.env });
+  const deduped: SessionStoreTarget[] = [];
+  for (const [sqlitePath, group] of grouped) {
+    const byAgentId = new Map(
+      group.map(({ target }) => [normalizeAgentId(target.agentId), target] as const),
+    );
+    const registeredOwners = [
+      ...new Set(
+        registeredDatabases
+          .filter((entry) => path.resolve(entry.path) === sqlitePath)
+          .map((entry) => normalizeAgentId(entry.agentId)),
+      ),
+    ];
+    const pathOwners = [...new Set(group.flatMap((entry) => entry.databaseOwnerAgentId ?? []))];
+    const collision = byAgentId.size > 1;
+    if (pathOwners.length !== 1 && registeredOwners.length > 1) {
+      const diagnostic: SessionStoreTargetCollisionDiagnostic = {
+        message: `Session store target collision at ${sqlitePath}: registry ownership is ambiguous across ${registeredOwners.map((id) => `"${id}"`).join(", ")}; no owner selected.`,
+        sqlitePath,
+        ignoredAgentIds: [...byAgentId.keys()],
+        ownerSource: "ambiguous-registry",
+      };
+      if (options.onDiagnostic) {
+        options.onDiagnostic(diagnostic);
+      } else {
+        log.warn(diagnostic.message);
+      }
+      continue;
+    }
+    const ownerSource =
+      pathOwners.length === 1
+        ? "database-path"
+        : registeredOwners.length === 1
+          ? "database-registry"
+          : "configured-default";
+    const ownerAgentId = normalizeAgentId(
+      pathOwners[0] ??
+        registeredOwners[0] ??
+        (collision ? options.defaultAgentId : group[0]!.target.agentId),
+    );
+    const selected = byAgentId.get(ownerAgentId);
+    if (selected) {
+      deduped.push(selected);
+    }
+    const ignoredAgentIds = [...byAgentId.keys()].filter((agentId) => agentId !== ownerAgentId);
+    if (!selected || ignoredAgentIds.length > 0) {
+      const effectiveIgnoredAgentIds = selected ? ignoredAgentIds : [...byAgentId.keys()];
+      const diagnostic: SessionStoreTargetCollisionDiagnostic = {
+        message: `Session store target collision at ${sqlitePath}: owner "${ownerAgentId}" selected by ${ownerSource}; ignored owner(s): ${effectiveIgnoredAgentIds.map((id) => `"${id}"`).join(", ")}.`,
+        sqlitePath,
+        ownerAgentId,
+        ignoredAgentIds: effectiveIgnoredAgentIds,
+        ownerSource,
+      };
+      if (options.onDiagnostic) {
+        options.onDiagnostic(diagnostic);
+      } else {
+        log.warn(diagnostic.message);
+      }
     }
   }
-  return [...deduped.values()];
+  return deduped;
 }
 
 function shouldSkipDiscoveryError(err: unknown): boolean {
@@ -378,10 +449,10 @@ export function resolveAllAgentSessionStoreTargetsSync(
       throw err;
     }
   });
-  return dedupeSessionStoreTargetsBySqliteTarget([
-    ...validatedConfiguredTargets,
-    ...discoveredTargets,
-  ]);
+  return dedupeSessionStoreTargetsBySqliteTarget(
+    [...validatedConfiguredTargets, ...discoveredTargets],
+    { defaultAgentId: resolveDefaultAgentId(cfg), env },
+  );
 }
 
 /** Resolves only already-existing stores for one configured, retired, or manual agent. */
@@ -398,6 +469,20 @@ export function resolveExistingAgentSessionStoreTargetsSync(
       agentId: requested,
       storePath: resolveStorePath(storeConfig, { agentId: requested, env }),
     };
+    const configuredTargets = listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
+      agentId,
+      storePath: resolveStorePath(storeConfig, { agentId, env }),
+    }));
+    if (!configuredTargets.some((target) => normalizeAgentId(target.agentId) === requested)) {
+      configuredTargets.push(fixedTarget);
+    }
+    const ownedTarget = dedupeSessionStoreTargetsBySqliteTarget(configuredTargets, {
+      defaultAgentId: resolveDefaultAgentId(cfg),
+      env,
+    }).find((target) => normalizeAgentId(target.agentId) === requested);
+    if (!ownedTarget) {
+      return [];
+    }
     const sqlitePath = resolveSqliteTargetFromSessionStorePath(fixedTarget.storePath, {
       agentId: requested,
     }).path;
@@ -436,10 +521,10 @@ export function resolveExistingAgentSessionStoreTargetsSync(
     },
   );
   const validatedRequestedTarget = resolveValidatedExistingSessionStoreTargetSync(requestedTarget);
-  return dedupeSessionStoreTargetsBySqliteTarget([
-    ...(validatedRequestedTarget ? [validatedRequestedTarget] : []),
-    ...discoveredTargets,
-  ]);
+  return dedupeSessionStoreTargetsBySqliteTarget(
+    [...(validatedRequestedTarget ? [validatedRequestedTarget] : []), ...discoveredTargets],
+    { defaultAgentId: resolveDefaultAgentId(cfg), env },
+  );
 }
 
 /**
@@ -515,10 +600,10 @@ export function resolveAllAgentSessionStoreCandidateTargetsSync(
       throw err;
     }
   });
-  return dedupeSessionStoreTargetsBySqliteTarget([
-    ...validatedConfiguredTargets,
-    ...discoveredTargets,
-  ]);
+  return dedupeSessionStoreTargetsBySqliteTarget(
+    [...validatedConfiguredTargets, ...discoveredTargets],
+    { defaultAgentId: resolveDefaultAgentId(cfg), env },
+  );
 }
 
 /** Resolves session store targets for one agent, including retired/manual stores. */
@@ -611,7 +696,7 @@ export function resolveAgentSessionStoreTargetsSync(
 export function resolveSessionStoreTargets(
   cfg: OpenClawConfig,
   opts: SessionStoreSelectionOptions,
-  params: { env?: NodeJS.ProcessEnv } = {},
+  params: { env?: NodeJS.ProcessEnv; diagnostics?: string[] } = {},
 ): SessionStoreTarget[] {
   const env = params.env ?? process.env;
   const hasAgent = Boolean(opts.agent?.trim());
@@ -633,7 +718,13 @@ export function resolveSessionStoreTargets(
       agentId,
       storePath: resolveStorePath(cfg.session?.store, { agentId, env }),
     }));
-    return dedupeSessionStoreTargetsBySqliteTarget(targets);
+    return dedupeSessionStoreTargetsBySqliteTarget(targets, {
+      defaultAgentId,
+      env,
+      ...(params.diagnostics
+        ? { onDiagnostic: (diagnostic) => params.diagnostics?.push(diagnostic.message) }
+        : {}),
+    });
   }
 
   if (hasAgent) {

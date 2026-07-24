@@ -151,11 +151,13 @@ export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
   opts: { agentId?: string; configuredAgentsOnly?: boolean; includeIncognito?: boolean } = {},
 ): {
+  diagnostics: string[];
   durableStorePath?: string;
   storePath: string;
   store: Record<string, SessionEntry>;
 } {
   const storeConfig = cfg.session?.store;
+  const diagnostics: string[] = [];
   // Exclusion happens before path aggregation; filtering rows afterward would
   // still leak a live incognito handle by changing the projected store path.
   const includeIncognito = opts.includeIncognito !== false;
@@ -189,6 +191,10 @@ export function loadCombinedSessionStoreForGateway(
         agentId,
         storePath: resolveStorePath(storeConfig, { agentId }),
       })),
+      {
+        defaultAgentId,
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.message),
+      },
     );
     for (const { agentId, storePath } of ownerTargets) {
       const store = loadGatewayStoreEntries({ agentId, storePath });
@@ -226,6 +232,7 @@ export function loadCombinedSessionStoreForGateway(
         })
       : [];
     return {
+      diagnostics,
       durableStorePath,
       storePath: incognitoStorePaths.length > 0 ? "(multiple)" : durableStorePath,
       store: combined,
@@ -281,5 +288,5 @@ export function loadCombinedSessionStoreForGateway(
     [...durableStorePaths, ...incognitoStorePaths],
     storeConfig,
   );
-  return { durableStorePath, storePath, store: combined };
+  return { diagnostics, durableStorePath, storePath, store: combined };
 }
