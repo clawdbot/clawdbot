@@ -140,6 +140,36 @@ describe("security audit exec surface findings", () => {
     ).toBe(false);
   });
 
+  it("honors global strictInlineEval for a named default agent approval scope", async () => {
+    saveExecApprovals({
+      version: 1,
+      agents: {
+        ops: {
+          allowlist: [{ pattern: "/usr/bin/python3" }],
+        },
+      },
+    });
+
+    expect(
+      hasFinding(
+        "tools.exec.allowlist_interpreter_without_strict_inline_eval",
+        "warn",
+        await collectSecurityAuditFindings({
+          agents: {
+            entries: {
+              ops: { default: true },
+            },
+          },
+          tools: {
+            exec: {
+              strictInlineEval: true,
+            },
+          },
+        } satisfies OpenClawConfig),
+      ),
+    ).toBe(false);
+  });
+
   it("flags open channel access combined with exec-enabled scopes", async () => {
     const findings = await collectSecurityAuditFindings({
       channels: {

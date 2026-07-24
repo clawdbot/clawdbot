@@ -144,7 +144,7 @@ function resolveSessionUsageFileOrRespond(
 ): {
   config: OpenClawConfig;
   entry: SessionEntry | undefined;
-  agentId: string | undefined;
+  agentId: string;
   sessionId: string;
   sessionFile: string;
 } | null {
@@ -152,7 +152,7 @@ function resolveSessionUsageFileOrRespond(
 
   // For discovered sessions (not in store), try using key as sessionId directly
   const parsed = parseAgentSessionKey(key);
-  const agentId = parsed?.agentId;
+  const agentId = parsed?.agentId ?? resolveDefaultAgentId(config);
   const rawSessionId = parsed?.rest ?? key;
   const sessionId = entry?.sessionId ?? rawSessionId;
   let sessionFile: string;
@@ -901,12 +901,13 @@ async function loadCostUsageSummaryCached(params: {
   agentId?: string;
   agentScope?: "all";
 }): Promise<CostUsageSummary> {
+  const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
   const dayBucketKey = params.dayBucket
     ? params.dayBucket.mode === "time-zone"
       ? `time-zone:${params.dayBucket.timeZone}`
       : `utc-offset:${params.dayBucket.utcOffsetMinutes}`
     : "gateway";
-  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
+  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -934,7 +935,7 @@ async function loadCostUsageSummaryCached(params: {
           endMs: params.endMs,
           dayBucket: params.dayBucket,
           config: params.config,
-          agentId: params.agentId,
+          agentId,
           requestRefresh: true,
           refreshMode: "background",
         })
@@ -1392,7 +1393,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     // individually re-reads and re-parses the whole cache file, so RSS spikes
     // in proportion to `limit` on every dashboard connect (issue #100041).
     const sessionsByAgent = new Map<
-      string | undefined,
+      string,
       Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
     >();
     for (const [entryIndex, merged] of mergedEntries.entries()) {

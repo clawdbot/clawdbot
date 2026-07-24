@@ -42,9 +42,17 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       ...fileDefaults,
       ...testState.agentConfig,
     };
-    const agents = testState.agentsConfig
-      ? { ...fileAgents, ...testState.agentsConfig, defaults }
-      : { ...fileAgents, defaults };
+    const testAgents = testState.agentsConfig;
+    const retainedFileAgents = { ...fileAgents };
+    if (testAgents && Object.hasOwn(testAgents, "list")) {
+      delete retainedFileAgents.entries;
+    }
+    if (testAgents && Object.hasOwn(testAgents, "entries")) {
+      delete retainedFileAgents.list;
+    }
+    const agents = testAgents
+      ? { ...retainedFileAgents, ...testAgents, defaults }
+      : { ...retainedFileAgents, defaults };
 
     const fileBindings = Array.isArray(baseConfig.bindings)
       ? (baseConfig.bindings as AgentBinding[])

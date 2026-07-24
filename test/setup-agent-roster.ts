@@ -1,6 +1,7 @@
 // Ordinary runtime tests receive config after load-time roster migration.
 // Keep raw-roster contract tests explicitly unmocked instead of reintroducing a production fallback.
 import { vi } from "vitest";
+import { resolveSqliteTargetFromSessionStorePath } from "../src/config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 
 function materializeRoster(cfg: OpenClawConfig): OpenClawConfig {
@@ -69,6 +70,46 @@ vi.mock("../src/agents/agent-scope-config.js", async (importOriginal) => {
       actual.resolveAgentWorkspaceDir(materializeRoster(cfg), agentId, env),
     resolveDefaultAgentDir: (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) =>
       actual.resolveDefaultAgentDir(materializeRoster(cfg), env),
+  };
+});
+
+// Runtime callers reach SQLite after routing has selected an agent. Ordinary unit
+// fixtures historically omit that prepared owner, so model the routed main owner here.
+vi.mock("../src/config/sessions/session-accessor.sqlite-scope.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../src/config/sessions/session-accessor.sqlite-scope.js")
+    >();
+  const withAgentId = <T extends { agentId?: string; sessionKey?: string }>(scope: T): T =>
+    scope.agentId ||
+    scope.sessionKey?.startsWith("agent:") ||
+    ("storePath" in scope &&
+      typeof scope.storePath === "string" &&
+      resolveSqliteTargetFromSessionStorePath(scope.storePath).agentId)
+      ? scope
+      : ({ ...scope, agentId: "main" } as T);
+  return {
+    ...actual,
+    resolveSqliteScope: (scope: Parameters<typeof actual.resolveSqliteScope>[0]) =>
+      actual.resolveSqliteScope(withAgentId(scope)),
+    resolveSqliteReadScope: (scope: Parameters<typeof actual.resolveSqliteReadScope>[0]) =>
+      actual.resolveSqliteReadScope(withAgentId(scope)),
+    resolveSqliteStoreScope: (
+      storePath: string,
+      options?: Parameters<typeof actual.resolveSqliteStoreScope>[1],
+    ) => {
+      const storeAgentId = resolveSqliteTargetFromSessionStorePath(storePath).agentId;
+      return actual.resolveSqliteStoreScope(
+        storePath,
+        options?.agentId || storeAgentId ? options : { agentId: "main" },
+      );
+    },
+    resolveSqliteTranscriptScope: (
+      scope: Parameters<typeof actual.resolveSqliteTranscriptScope>[0],
+    ) => actual.resolveSqliteTranscriptScope(withAgentId(scope)),
+    resolveSqliteTranscriptReadScope: (
+      scope: Parameters<typeof actual.resolveSqliteTranscriptReadScope>[0],
+    ) => actual.resolveSqliteTranscriptReadScope(withAgentId(scope)),
   };
 });
 

@@ -9,7 +9,7 @@ import { resolveStateDir } from "../paths.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
 function resolveAgentSessionsDir(
-  agentId?: string,
+  agentId: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): string {
@@ -22,14 +22,14 @@ function resolveAgentSessionsDir(
 }
 
 export function resolveSessionTranscriptsDirForAgent(
-  agentId?: string,
+  agentId: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): string {
   return resolveAgentSessionsDir(agentId, env, homedir);
 }
 
-export function resolveDefaultSessionStorePath(agentId?: string): string {
+export function resolveDefaultSessionStorePath(agentId: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
@@ -75,7 +75,10 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   if (sessionsDir) {
     return path.resolve(sessionsDir);
   }
-  return resolveAgentSessionsDir(opts?.agentId);
+  if (!opts?.agentId?.trim()) {
+    throw new Error("Session storage path requires an explicit agent id.");
+  }
+  return resolveAgentSessionsDir(opts.agentId);
 }
 
 function resolvePathFromAgentSessionsDir(
@@ -285,7 +288,7 @@ export function resolveSessionTranscriptPathInDir(
 
 export function resolveSessionTranscriptPath(
   sessionId: string,
-  agentId?: string,
+  agentId: string,
   topicId?: string | number,
 ): string {
   return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
