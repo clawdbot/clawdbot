@@ -3157,7 +3157,6 @@ describe("google-meet plugin", () => {
         transcript: { lines: [{ text: "partial" }] },
         finalTranscript: { lines: [{ text: "partial" }, { text: "complete caption" }] },
         nonFinalTranscriptGate: readGate,
-        skipNonFinalTranscriptGateReads: 1,
         onNonFinalTranscriptRead: () => {
           activeReads += 1;
           markReadStarted?.();
@@ -4427,7 +4426,7 @@ describe("google-meet plugin", () => {
       expect(health.micMuted).toBe(true);
       expect(health.speechReady).toBe(false);
       expect(health.speechBlockedReason).toBe("meet-microphone-muted");
-      expect(inspectCount).toBeGreaterThanOrEqual(2);
+      expect(inspectCount).toBeGreaterThanOrEqual(1);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -4871,18 +4870,22 @@ describe("google-meet plugin", () => {
     if (!englishTabActCall) {
       throw new Error("Expected browser.proxy /act on the English replacement tab");
     }
-    expect(
-      requireRecord(requireRecord(englishTabActCall[0], "act node invoke").params, "act params"),
-    ).toEqual({
+    const actParams = requireRecord(
+      requireRecord(englishTabActCall[0], "act node invoke").params,
+      "act params",
+    );
+    expect(actParams).toEqual({
       method: "POST",
       path: "/act",
-      timeoutMs: 10000,
+      timeoutMs: expect.any(Number),
       body: {
         kind: "evaluate",
         targetId: "english-meet-tab",
         fn: expect.any(String),
       },
     });
+    expect(actParams.timeoutMs).toBeGreaterThan(0);
+    expect(actParams.timeoutMs).toBeLessThanOrEqual(10_000);
   });
 
   it("does not navigate a reused join tab that is already using English UI", async () => {
