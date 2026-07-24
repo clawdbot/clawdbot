@@ -214,7 +214,7 @@ Example stdin:
   },
   "origin": {
     "type": "clawhub",
-    "registry": "https://clawhub.openclaw.ai",
+    "registry": "https://clawhub.ai",
     "slug": "weather",
     "version": "1.0.0"
   },
