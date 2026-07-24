@@ -337,15 +337,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           storePath: marker.storePath,
           readOnly: true,
         });
-        const match = markerEntries.find(({ entry }) => entry.sessionId === marker.sessionId);
-        if (!match) {
+        const matches = markerEntries.filter(({ entry }) => entry.sessionId === marker.sessionId);
+        if (matches.length === 0) {
           throw new Error(`Plugin session ownership target not found: ${marker.sessionId}`);
         }
-        assertSessionEntryOwned({
-          action: params.action,
-          entry: match.entry,
-          sessionKey: match.sessionKey,
-        });
+        for (const match of matches) {
+          assertSessionEntryOwned({
+            action: params.action,
+            entry: match.entry,
+            sessionKey: match.sessionKey,
+          });
+        }
       }
     };
     const resolveRunSessionExecutionOwner = (

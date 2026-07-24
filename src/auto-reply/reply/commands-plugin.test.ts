@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -144,6 +145,43 @@ describe("handlePluginCommand", () => {
       sessionId: "target-session",
     });
     expect(commandParams.authProfileId).toBe("openai:owner@example.com");
+  });
+
+  it("uses the process-local transcript store for incognito plugin commands", async () => {
+    matchPluginCommandMock.mockReturnValue({
+      command: { name: "card" },
+      args: "",
+    });
+    executePluginCommandMock.mockResolvedValue({ text: "from plugin" });
+
+    const params = buildPluginParams("/card", {
+      commands: { text: true },
+      session: { store: "/tmp/durable/{agentId}/sessions.json" },
+    } as OpenClawConfig);
+    params.agentId = "main";
+    params.sessionKey = "agent:main:dashboard:incognito-plugin-command";
+    params.storePath = "/tmp/durable/main/sessions.json";
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "incognito-session",
+        incognito: true,
+        updatedAt: Date.now(),
+      },
+    };
+
+    await handlePluginCommand(params, true);
+
+    const [commandParams] = expectDefined(
+      executePluginCommandMock.mock.calls[0] as unknown as [
+        { sessionFile?: string; sessionTarget?: { storePath?: string } },
+      ],
+      "plugin command invocation",
+    );
+    const expectedStorePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+    expect(commandParams.sessionTarget?.storePath).toBe(expectedStorePath);
+    expect(parseSqliteSessionFileMarker(commandParams.sessionFile)?.storePath).toBe(
+      expectedStorePath,
+    );
   });
 
   it("continues the agent without leaking continueAgent into the reply payload", async () => {
