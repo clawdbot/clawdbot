@@ -108,6 +108,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.readiness": "Gateway Readiness Criteria",
   "gateway.readiness.requiredCriteria": "Required Readiness Criteria",
   "gateway.readiness.advisoryCriteria": "Advisory Readiness Criteria",
+  hosting: "Hosting",
+  "hosting.profile": "Hosting Profile",
   "gateway.bind": "Gateway Bind Mode",
   "gateway.customBindHost": "Gateway Custom Bind Host",
   "gateway.controlUi": "Control UI",
