@@ -124,6 +124,10 @@ jobs:
           echo "build_timestamp=${build_timestamp}" >> "${GITHUB_OUTPUT}"
           unexpected_assets="$(printf '%s' "${release_json}" | jq -r '[.assets[]? | select(.name | startswith("OpenClaw-Android")) | .name] | join(", ")')"
           if [[ -n "${unexpected_assets}" ]]; then
+            if [[ "${DIRECT_RELEASE_RECOVERY}" != "true" ]]; then
+              echo "Target release already contains Android assets: ${unexpected_assets}. Refusing to proceed on a normal (non-recovery) run." >&2
+              exit 1
+            fi
             echo "Target release already contains Android assets: ${unexpected_assets}. Immutable recovery accepts them only after rebuilding identical bytes." >&2
           fi
 
