@@ -62,9 +62,12 @@ flow:
         - set: conversationId
           value:
             expr: "`restart-inflight-${randomUUID().slice(0, 8)}`"
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${conversationId}` })"
         - set: sessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: conversationId }, dmScope: 'per-channel-peer', identityLinks: env.cfg.session?.identityLinks })"
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
         - set: restartPatch
           value:
             expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } }, tools: { codeMode: { enabled: false } } })"
