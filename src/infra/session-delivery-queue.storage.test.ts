@@ -195,6 +195,57 @@ describe("session-delivery queue storage", () => {
     });
   });
 
+  it("requires exact generic metadata kinds and strict generic payload shapes during recovery", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const corruptions = [
+        {
+          payload: {
+            kind: "systemEvent" as const,
+            sessionKey: "agent:main:main",
+            text: "GENERIC_KIND_SYSTEM_TO_AGENT_SECRET",
+          },
+          mutate: (id: string) => rewriteSessionQueueEntryKind(tempDir, id, "agentTurn"),
+          secret: "GENERIC_KIND_SYSTEM_TO_AGENT_SECRET",
+        },
+        {
+          payload: {
+            kind: "agentTurn" as const,
+            sessionKey: "agent:main:main",
+            message: "GENERIC_KIND_AGENT_TO_SYSTEM_SECRET",
+            messageId: "generic-kind-agent-to-system",
+          },
+          mutate: (id: string) => rewriteSessionQueueEntryKind(tempDir, id, "systemEvent"),
+          secret: "GENERIC_KIND_AGENT_TO_SYSTEM_SECRET",
+        },
+        {
+          payload: {
+            kind: "systemEvent" as const,
+            sessionKey: "agent:main:main",
+            text: "strict generic event",
+          },
+          mutate: (id: string) =>
+            rewriteSessionQueueEntry(tempDir, id, (entry) => {
+              entry.extra = "GENERIC_UNKNOWN_FIELD_SECRET";
+            }),
+          secret: "GENERIC_UNKNOWN_FIELD_SECRET",
+        },
+      ];
+
+      for (const corruption of corruptions) {
+        const id = await enqueueSessionDelivery(corruption.payload, tempDir);
+        corruption.mutate(id);
+
+        await expect(loadPendingSessionDelivery(id, tempDir)).resolves.toBeNull();
+        const row = readSessionQueueRow(tempDir, id);
+        expect(row).toMatchObject({
+          status: "failed",
+          last_error: "invalid generic session delivery payload: invalid shape",
+        });
+        expect(row?.entry_json).not.toContain(corruption.secret);
+      }
+    });
+  });
+
   it("grants one initial-attempt lease and releases it for recovery", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const payload = {

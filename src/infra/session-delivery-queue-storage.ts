@@ -232,6 +232,89 @@ const QueuedContinuationTargetKeysSchema = z.array(z.string().trim().min(1)).tra
   return normalized.length > 0 ? normalized : undefined;
 });
 
+const QueuedGenericDeliveryContextSchema = z
+  .object({
+    channel: z.string().optional(),
+    to: z.string().optional(),
+    accountId: z.string().optional(),
+    threadId: z.union([z.string(), z.number()]).optional(),
+  })
+  .strict();
+
+const QueuedGenericRouteSchema = z
+  .object({
+    channel: z.string(),
+    to: z.string(),
+    accountId: z.string().optional(),
+    replyToId: z.string().optional(),
+    threadId: z.string().optional(),
+    chatType: z.enum(["direct", "group", "channel"]),
+  })
+  .strict();
+
+const QueuedInputProvenanceSchema = z
+  .object({
+    kind: z.enum(["external_user", "inter_session", "internal_system"]),
+    originSessionId: z.string().optional(),
+    sourceSessionKey: z.string().optional(),
+    sourceChannel: z.string().optional(),
+    sourceTool: z.string().optional(),
+  })
+  .strict();
+
+const QueuedGenericCommonSchema = {
+  traceparent: z.string().optional(),
+  traceparentProvenance: z.literal("internal").optional(),
+  attachments: z.array(z.unknown()).optional(),
+  maxRetries: z.number().int().nonnegative().optional(),
+  completionRetention: z.literal("permanent").optional(),
+  id: z.string().min(1),
+  enqueuedAt: z.number(),
+  retryCount: z.number().int().nonnegative(),
+  agentRunAttempt: z.number().int().nonnegative().optional(),
+  lastChargedAgentRunAttempt: z.number().int().nonnegative().optional(),
+  lastAttemptAt: z.number().optional(),
+  lastError: z.string().optional(),
+  deliveryStartedAt: z.number().optional(),
+  acknowledgedAt: z.number().optional(),
+  settlementOutcome: z.enum(["recovered", "moved-to-failed"]).optional(),
+  availableAt: z.number().optional(),
+};
+
+const QueuedSystemEventSchema = z
+  .object({
+    ...QueuedGenericCommonSchema,
+    kind: z.literal("systemEvent"),
+    sessionKey: z.string(),
+    text: z.string(),
+    deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
+    idempotencyKey: z.string().optional(),
+  })
+  .strict();
+
+const QueuedAgentTurnSchema = z
+  .object({
+    ...QueuedGenericCommonSchema,
+    kind: z.literal("agentTurn"),
+    sessionKey: z.string(),
+    message: z.string(),
+    messageId: z.string(),
+    expectedSessionId: z.string().optional(),
+    route: QueuedGenericRouteSchema.optional(),
+    deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
+    inputProvenance: QueuedInputProvenanceSchema.optional(),
+    sourceReplyDeliveryMode: z.enum(["automatic", "message_tool_only"]).optional(),
+    expectedMediaUrls: z.array(z.string()).optional(),
+    suppressTextDelivery: z.literal(true).optional(),
+    idempotencyKey: z.string().optional(),
+  })
+  .strict();
+
+const QueuedGenericDeliverySchema = z.discriminatedUnion("kind", [
+  QueuedSystemEventSchema,
+  QueuedAgentTurnSchema,
+]);
+
 const QueuedPostCompactionDelegateSchema = z
   .object({
     kind: z.literal("postCompactionDelegate"),
@@ -306,6 +389,7 @@ const INVALID_POST_COMPACTION_DELIVERY_JSON =
 const INVALID_POST_COMPACTION_DELIVERY_SHAPE =
   "invalid postCompactionDelegate delivery payload: invalid shape";
 const INVALID_GENERIC_DELIVERY_JSON = "invalid generic session delivery payload: invalid JSON";
+const INVALID_GENERIC_DELIVERY_SHAPE = "invalid generic session delivery payload: invalid shape";
 const INVALID_GENERIC_DELIVERY_ATTACHMENTS = "invalid generic session delivery attachment metadata";
 
 function failInvalidSessionDelivery(params: {
@@ -332,17 +416,28 @@ function decodeLoadedSessionDelivery(
   stateDir?: string,
 ): QueuedSessionDelivery | null {
   const item = result.entry as typeof result.entry & { kind?: unknown };
-  const metadataSaysPostCompaction = result.entryKind === "postCompactionDelegate";
-  const payloadSaysPostCompaction = item.kind === "postCompactionDelegate";
-  if (metadataSaysPostCompaction !== payloadSaysPostCompaction) {
+  const payloadKind = typeof item.kind === "string" ? item.kind : undefined;
+  if (result.entryKind !== payloadKind) {
     failInvalidSessionDelivery({
       entry: result.entry,
-      error: INVALID_POST_COMPACTION_DELIVERY_SHAPE,
+      error:
+        result.entryKind === "postCompactionDelegate" || payloadKind === "postCompactionDelegate"
+          ? INVALID_POST_COMPACTION_DELIVERY_SHAPE
+          : INVALID_GENERIC_DELIVERY_SHAPE,
       stateDir,
     });
     return null;
   }
-  if (!payloadSaysPostCompaction) {
+  if (payloadKind !== "postCompactionDelegate") {
+    const parsed = QueuedGenericDeliverySchema.safeParse(result.entry);
+    if (!parsed.success) {
+      failInvalidSessionDelivery({
+        entry: result.entry,
+        error: INVALID_GENERIC_DELIVERY_SHAPE,
+        stateDir,
+      });
+      return null;
+    }
     const normalized = normalizeQueuedAttachmentRefs(result.entry as QueuedSessionDelivery);
     if (normalized !== result.entry) {
       failInvalidSessionDelivery({
@@ -388,7 +483,12 @@ function normalizeSessionDeliveryForPersistence(
   entry: QueuedSessionDelivery,
 ): QueuedSessionDelivery {
   if (entry.kind !== "postCompactionDelegate") {
-    return normalizeQueuedAttachmentRefs(entry);
+    const normalized = normalizeQueuedAttachmentRefs(entry);
+    const parsed = QueuedGenericDeliverySchema.safeParse(normalized);
+    if (!parsed.success) {
+      throw new Error(INVALID_GENERIC_DELIVERY_SHAPE);
+    }
+    return parsed.data as QueuedSessionDelivery;
   }
   const parsed = QueuedPostCompactionDelegateSchema.safeParse(entry);
   if (!parsed.success) {

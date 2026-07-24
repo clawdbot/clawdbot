@@ -203,25 +203,41 @@ export function prepareInlineAttachmentSnapshots(params: {
       );
     }
 
-    const buf =
-      encoding === "base64"
-        ? decodeStrictBase64(content, params.limits.maxFileBytes)
-        : Buffer.from(content, "utf8");
-    if (!buf) {
-      throw new Error("attachments_invalid_base64_or_too_large");
+    let buf: Buffer;
+    let bytes: number;
+    if (encoding === "base64") {
+      const decoded = decodeStrictBase64(content, params.limits.maxFileBytes);
+      if (!decoded) {
+        throw new Error("attachments_invalid_base64_or_too_large");
+      }
+      buf = decoded;
+      bytes = decoded.byteLength;
+    } else {
+      bytes = Buffer.byteLength(content, "utf8");
+      if (bytes > params.limits.maxFileBytes) {
+        throw new Error(
+          `attachments_file_bytes_exceeded (name=${name} bytes=${bytes} maxFileBytes=${params.limits.maxFileBytes})`,
+        );
+      }
+      if (totalBytes + bytes > params.limits.maxTotalBytes) {
+        throw new Error(
+          `attachments_total_bytes_exceeded (totalBytes=${totalBytes + bytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
+        );
+      }
+      buf = Buffer.from(content, "utf8");
     }
-    const bytes = buf.byteLength;
     if (bytes > params.limits.maxFileBytes) {
       throw new Error(
         `attachments_file_bytes_exceeded (name=${name} bytes=${bytes} maxFileBytes=${params.limits.maxFileBytes})`,
       );
     }
-    totalBytes += bytes;
-    if (totalBytes > params.limits.maxTotalBytes) {
+    const nextTotalBytes = totalBytes + bytes;
+    if (nextTotalBytes > params.limits.maxTotalBytes) {
       throw new Error(
-        `attachments_total_bytes_exceeded (totalBytes=${totalBytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
+        `attachments_total_bytes_exceeded (totalBytes=${nextTotalBytes} maxTotalBytes=${params.limits.maxTotalBytes})`,
       );
     }
+    totalBytes = nextTotalBytes;
     attachments.push({ name, mimeType, buf, bytes });
   }
   return { attachments, totalBytes };

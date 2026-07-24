@@ -165,7 +165,7 @@ import {
 
 const VALID_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 
-function queueRawPendingFlow(sessionKey: string, stateJson: Record<string, unknown>): string {
+function queueRawPendingFlow(sessionKey: string, stateJson: unknown): string {
   const flowId = `flow-${++flowIdCounter}`;
   mockFlows.set(flowId, {
     flowId,
@@ -443,6 +443,22 @@ describe("delegate store — TaskFlow-backed", () => {
       expect(flow.status).toBe("failed");
       expect(flow.stateJson).not.toHaveProperty("attachments");
       expect(JSON.stringify(flow.stateJson)).not.toContain(corruption.content);
+    }
+  });
+
+  it("replaces corrupt non-record recovered state with a minimal scrubbed value", () => {
+    for (const secret of [
+      "RECOVERY_ARRAY_SECRET_MUST_NOT_RETAIN",
+      "RECOVERY_PRIMITIVE_SECRET_MUST_NOT_RETAIN",
+    ]) {
+      const stateJson = secret.includes("ARRAY") ? [secret] : secret;
+      const flowId = queueRawPendingFlow(`session-corrupt-state-${secret}`, stateJson);
+
+      expect(consumePendingDelegates(`session-corrupt-state-${secret}`)).toEqual([]);
+      const flow = expectDefined(mockFlows.get(flowId), "failed corrupt state flow");
+      expect(flow.status).toBe("failed");
+      expect(flow.stateJson).toEqual({});
+      expect(JSON.stringify(flow.stateJson)).not.toContain(secret);
     }
   });
 

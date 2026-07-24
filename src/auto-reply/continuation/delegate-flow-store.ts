@@ -287,8 +287,11 @@ function resolveUpdatedDelegateState(params: {
 function scrubStoredDelegateAttachmentState(
   stateJson: JsonValue | null | undefined,
 ): JsonValue | null | undefined {
-  if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
+  if (stateJson === undefined || stateJson === null) {
     return stateJson;
+  }
+  if (typeof stateJson !== "object" || Array.isArray(stateJson)) {
+    return {};
   }
   const scrubbed = { ...stateJson };
   delete scrubbed.attachments;

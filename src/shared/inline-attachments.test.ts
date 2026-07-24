@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
   MAX_INLINE_ATTACHMENT_BASENAME_BYTES,
@@ -148,5 +148,32 @@ describe("inline attachment snapshots", () => {
     expect(
       parseInlineAttachmentMountPath("a".repeat(MAX_INLINE_ATTACHMENT_MOUNT_PATH_BYTES + 1)),
     ).toEqual({ status: "invalid" });
+  });
+
+  it("measures UTF-8 snapshots before allocating rejected file or total bytes", () => {
+    const limits = { maxFiles: 2, maxFileBytes: 4, maxTotalBytes: 5 };
+    const from = vi.spyOn(Buffer, "from");
+    try {
+      expect(() =>
+        prepareInlineAttachmentSnapshots({
+          attachments: [{ name: "too-large.txt", content: "ééé" }],
+          limits,
+        }),
+      ).toThrow("attachments_file_bytes_exceeded");
+      expect(from).not.toHaveBeenCalled();
+
+      expect(() =>
+        prepareInlineAttachmentSnapshots({
+          attachments: [
+            { name: "first.txt", content: "abc" },
+            { name: "second.txt", content: "abc" },
+          ],
+          limits,
+        }),
+      ).toThrow("attachments_total_bytes_exceeded");
+      expect(from).toHaveBeenCalledTimes(1);
+    } finally {
+      from.mockRestore();
+    }
   });
 });
