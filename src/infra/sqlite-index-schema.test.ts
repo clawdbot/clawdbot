@@ -7,6 +7,7 @@ import {
 
 const CANONICAL_INDEX: CanonicalSqliteUniqueIndex = {
   name: "idx_records_identity",
+  tableName: "records",
   definition: `
     ON records(
       tenant_id COLLATE NOCASE,
@@ -119,6 +120,73 @@ describe("repairCanonicalSqliteUniqueIndexes", () => {
           .all(),
       ).toEqual([]);
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("repairs a physically drifted index hidden behind canonical schema text", () => {
+    const db = createDatabase();
+    try {
+      db.exec(`
+        DROP INDEX idx_records_identity;
+        CREATE UNIQUE INDEX idx_records_identity ON records(id);
+        INSERT INTO records VALUES
+          (1, 'Tenant', NULL, 1),
+          (2, 'Other', NULL, 1);
+      `);
+      db.enableDefensive?.(false);
+      db.exec("PRAGMA writable_schema = ON;");
+      db.prepare("UPDATE sqlite_schema SET sql = ? WHERE name = 'idx_records_identity'").run(
+        `CREATE UNIQUE INDEX idx_records_identity
+           ON records(
+             tenant_id COLLATE NOCASE,
+             IFNULL(external_id, '')
+           )
+          WHERE active = 1`,
+      );
+      db.exec("PRAGMA writable_schema = OFF;");
+      const schemaVersion = db.prepare("PRAGMA schema_version").get() as {
+        schema_version?: unknown;
+      };
+      db.exec(`PRAGMA schema_version = ${Number(schemaVersion.schema_version) + 1};`);
+
+      expect(db.prepare("PRAGMA integrity_check('records')").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            integrity_check: expect.stringMatching(/missing from index idx_records_identity/),
+          }),
+        ]),
+      );
+      expect(
+        db
+          .prepare(
+            `SELECT id
+               FROM records INDEXED BY idx_records_identity
+              WHERE tenant_id = 'Tenant'
+                AND IFNULL(external_id, '') = ''
+                AND active = 1`,
+          )
+          .all(),
+      ).toEqual([]);
+
+      repairCanonicalSqliteUniqueIndexes(db, "test database", [CANONICAL_INDEX]);
+
+      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expect(
+        db
+          .prepare(
+            `SELECT id
+               FROM records INDEXED BY idx_records_identity
+              WHERE tenant_id = 'Tenant'
+                AND IFNULL(external_id, '') = ''
+                AND active = 1`,
+          )
+          .all(),
+      ).toEqual([{ id: 1 }]);
+      expect(() => db.exec("INSERT INTO records VALUES (3, 'tenant', NULL, 1);")).toThrow(
+        /UNIQUE constraint failed/iu,
+      );
     } finally {
       db.close();
     }

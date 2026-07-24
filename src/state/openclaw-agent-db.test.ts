@@ -366,7 +366,7 @@ function createUnsafeSchemaMetaIndexDrift(databasePath: string): void {
 
 function createTranscriptIdempotencyIndexDrift(
   databasePath: string,
-  options: { duplicateRows?: boolean } = {},
+  options: { duplicateRows?: boolean; hideWithCanonicalSql?: boolean } = {},
 ): void {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
@@ -401,8 +401,28 @@ function createTranscriptIdempotencyIndexDrift(
         );
       `);
     }
+    if (options.hideWithCanonicalSql) {
+      database.enableDefensive?.(false);
+      database.exec("PRAGMA writable_schema = ON;");
+      database
+        .prepare(
+          `UPDATE sqlite_schema
+              SET sql = ?
+            WHERE type = 'index'
+              AND name = 'idx_agent_transcript_message_idempotency'`,
+        )
+        .run(
+          `CREATE UNIQUE INDEX idx_agent_transcript_message_idempotency
+             ON transcript_event_identities(session_id, message_idempotency_key)
+            WHERE message_idempotency_key IS NOT NULL`,
+        );
+      const schemaVersion = readSqliteNumberPragma(database, "schema_version");
+      database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
+    }
     expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
-      integrity_check: "ok",
+      integrity_check: options.hideWithCanonicalSql
+        ? expect.stringMatching(/idx_agent_transcript_message_idempotency/)
+        : "ok",
     });
     expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   } finally {
@@ -2285,6 +2305,40 @@ describe("openclaw agent database", () => {
     );
     expect(index.sql).toContain("WHERE message_idempotency_key IS NOT NULL");
 
+    expect(() =>
+      reopened.db
+        .prepare(
+          `INSERT INTO transcript_event_identities (
+             session_id, event_id, seq, message_idempotency_key, created_at
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run("session-1", "event-2", 2, "message-1", 2),
+    ).toThrow(/UNIQUE constraint failed/iu);
+  });
+
+  it("repairs physical transcript index drift hidden behind canonical schema text", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const created = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = created.path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    createTranscriptIdempotencyIndexDrift(databasePath, { hideWithCanonicalSql: true });
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(
+      reopened.db
+        .prepare(
+          `SELECT event_id
+             FROM transcript_event_identities
+            WHERE session_id = ?
+              AND message_idempotency_key = ?`,
+        )
+        .get("session-1", "message-1"),
+    ).toEqual({ event_id: "event-1" });
     expect(() =>
       reopened.db
         .prepare(

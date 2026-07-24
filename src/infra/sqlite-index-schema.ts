@@ -1,7 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import { assertSqliteIntegrity, assertSqliteTableIntegrity } from "./sqlite-integrity.js";
 
 export type CanonicalSqliteUniqueIndex = {
   name: string;
+  tableName: string;
   definition: string;
 };
 
@@ -20,18 +22,36 @@ export function repairCanonicalSqliteUniqueIndexes(
   databaseLabel: string,
   indexes: readonly CanonicalSqliteUniqueIndex[],
 ): void {
-  const drifted = indexes.filter((index) => {
+  const indexesByTable = new Map<string, CanonicalSqliteUniqueIndex[]>();
+  const repairIndexes = new Set<CanonicalSqliteUniqueIndex>();
+  for (const index of indexes) {
     assertSqliteIdentifier(index.name);
+    assertSqliteIdentifier(index.tableName);
+    const tableIndexes = indexesByTable.get(index.tableName) ?? [];
+    tableIndexes.push(index);
+    indexesByTable.set(index.tableName, tableIndexes);
     const row = db
       .prepare("SELECT sql FROM main.sqlite_schema WHERE type = 'index' AND name = ?")
       .get(index.name) as SqliteSchemaRow | undefined;
-    return (
+    if (
       typeof row?.sql !== "string" ||
       normalizeCreateIndexSql(row.sql) !==
         normalizeCreateIndexSql(createIndexSql(index, index.name, false))
-    );
-  });
-  if (drifted.length === 0) {
+    ) {
+      repairIndexes.add(index);
+    }
+  }
+
+  for (const [tableName, tableIndexes] of indexesByTable) {
+    try {
+      assertSqliteTableIntegrity(db, databaseLabel, tableName);
+    } catch {
+      for (const index of tableIndexes) {
+        repairIndexes.add(index);
+      }
+    }
+  }
+  if (repairIndexes.size === 0) {
     return;
   }
 
@@ -39,16 +59,20 @@ export function repairCanonicalSqliteUniqueIndexes(
   let activeIndex: CanonicalSqliteUniqueIndex | undefined;
   db.exec(`SAVEPOINT ${savepoint};`);
   try {
-    for (const index of drifted) {
+    for (const index of repairIndexes) {
       activeIndex = index;
       const probeName = findUnusedProbeIndexName(db, index.name);
       // Build the canonical constraint first. If existing rows conflict, the
       // wrong same-name index remains in place and the whole repair rolls back.
       db.exec(createIndexSql(index, probeName, true));
-      db.exec(`DROP INDEX main.${index.name};`);
+      db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
       db.exec(createIndexSql(index, index.name, true));
       db.exec(`DROP INDEX main.${probeName};`);
     }
+    for (const tableName of indexesByTable.keys()) {
+      assertSqliteTableIntegrity(db, databaseLabel, tableName);
+    }
+    assertSqliteIntegrity(db, databaseLabel);
     db.exec(`RELEASE SAVEPOINT ${savepoint};`);
   } catch (error) {
     try {

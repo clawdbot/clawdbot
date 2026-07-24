@@ -97,10 +97,12 @@ export { withOpenClawStateStartupMigrationCheckpointDatabase } from "./openclaw-
 const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
   {
     name: "idx_operator_approvals_resolution_ref",
+    tableName: "operator_approvals",
     definition: "ON operator_approvals(resolution_ref)",
   },
   {
     name: "idx_worker_environments_provider_lease",
+    tableName: "worker_environments",
     definition: `
       ON worker_environments(provider_id, lease_id)
       WHERE lease_id IS NOT NULL
@@ -108,6 +110,7 @@ const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
   },
   {
     name: "idx_worker_inference_turns_pending_run",
+    tableName: "worker_inference_turns",
     definition: `
       ON worker_inference_turns(session_id, run_epoch, run_id)
       WHERE state = 'pending'
