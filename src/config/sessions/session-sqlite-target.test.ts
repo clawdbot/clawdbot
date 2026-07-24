@@ -22,6 +22,25 @@ describe("resolveSqliteTargetFromSessionStorePath", () => {
     });
   });
 
+  it("keeps a multiply registered exact SQLite locator shared", () => {
+    const databasePath = path.resolve("tmp", "stores", "existing-shared.sqlite");
+
+    expect(
+      resolveSqliteTargetFromSessionStorePath(databasePath, {
+        defaultAgentId: "main",
+        registeredDatabases: [
+          { agentId: "main", path: databasePath },
+          { agentId: "ops", path: databasePath },
+        ],
+      }),
+    ).toMatchObject({
+      agentId: "main",
+      ownerSource: "ambiguous-registry",
+      path: databasePath,
+      shared: true,
+    });
+  });
+
   it("keeps custom store targets distinct when templates share a directory", () => {
     const dir = path.join("tmp", "stores");
 

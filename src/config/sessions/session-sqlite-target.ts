@@ -247,16 +247,14 @@ export function resolveSqliteTargetFromSessionStorePath(
       options.registeredDatabases ??
       listOpenClawRegisteredAgentDatabases(options.env ? { env: options.env } : {});
     const registeredOwners = resolveRegisteredOwners(unsuffixedTarget.path, registeredDatabases);
-    if (registeredOwners.length > 1) {
-      throw new Error(
-        `SQLite session target ${unsuffixedTarget.path} has ambiguous registry ownership.`,
-      );
-    }
     const databaseOwner = resolveDatabaseOwner(unsuffixedTarget.path);
     const configuredDefaultAgentId = normalizeAgentId(
       options.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,
     );
-    const ownerAgentId = registeredOwners[0] ?? databaseOwner ?? configuredDefaultAgentId;
+    const ownerAgentId =
+      (registeredOwners.length === 1 ? registeredOwners[0] : undefined) ??
+      databaseOwner ??
+      configuredDefaultAgentId;
     return {
       ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
       path: unsuffixedTarget.path,
@@ -267,7 +265,9 @@ export function resolveSqliteTargetFromSessionStorePath(
         ? { ownerSource: "database-registry" as const }
         : databaseOwner
           ? { ownerSource: "database-path" as const }
-          : { ownerSource: "configured-default" as const }),
+          : registeredOwners.length > 1
+            ? { ownerSource: "ambiguous-registry" as const }
+            : { ownerSource: "configured-default" as const }),
     };
   }
   return resolveCustomStoreSqlitePath({ unsuffixedPath: unsuffixedTarget.path, options });
