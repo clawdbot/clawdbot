@@ -90,7 +90,9 @@ export class SessionManagerCore {
 
   reloadPersistedTranscript(): void {
     if (this.persistenceTarget) {
+      const runtimeCwd = this.cwd;
       this.setSessionTarget(this.persistenceTarget);
+      this.cwd = runtimeCwd;
     }
   }
 

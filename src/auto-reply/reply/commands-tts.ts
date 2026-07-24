@@ -6,7 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isUnscopedSessionKeySentinel,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -222,7 +225,9 @@ async function handleTtsLatestAction(
     return stopWithText("🎤 No active chat session is available for `/tts latest`.");
   }
   const targetSessionEntry = params.sessionStore[params.sessionKey] ?? params.sessionEntry;
-  const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) ?? params.agentId;
+  const targetAgentId = isUnscopedSessionKeySentinel(params.sessionKey)
+    ? params.agentId
+    : resolveAgentIdFromSessionKey(params.sessionKey);
   const latest = await readLatestAssistantTextFromSessionTranscript({
     agentId: targetAgentId,
     sessionId: targetSessionEntry.sessionId,

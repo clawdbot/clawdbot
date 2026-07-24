@@ -77,8 +77,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     throw params.initialAcquireSignal.reason;
   }
   const noOpLock = { release: async () => {} } as SessionLock;
-  let cleanupStarted = false;
   let disposed = false;
+  let promptReleased = false;
+  let promptSettled = Promise.resolve();
+  let settlePrompt: (() => void) | undefined;
   let lifecycle = Promise.resolve();
   const serializeLifecycle = async (run: () => Promise<void> | void): Promise<void> => {
     const previous = lifecycle;
@@ -98,27 +100,44 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     publishOwnedSessionFileSnapshot: () => false,
     publishValidatedSessionFileSnapshot: () => false,
     readTrustedCurrentSessionFileSnapshot: async () => undefined,
-    releaseForPrompt: async () => {},
+    releaseForPrompt: async () => {
+      promptReleased = true;
+      promptSettled = new Promise<void>((resolve) => {
+        settlePrompt = resolve;
+      });
+    },
     releaseHeldLockForAbort: async () => {},
     refreshAfterOwnedSessionWrite: () => {},
     withOwnedSessionFileWrite: (run) => run(),
     reacquireAfterPrompt: async () =>
       await serializeLifecycle(async () => {
-        if (cleanupStarted || disposed) {
+        if (disposed) {
+          settlePrompt?.();
           return;
         }
-        await params.reloadPromptReleasedSessionFile?.();
+        try {
+          await params.reloadPromptReleasedSessionFile?.();
+        } finally {
+          promptReleased = false;
+          settlePrompt?.();
+          settlePrompt = undefined;
+        }
       }),
     waitForSessionEvents: async () => {},
     withSessionWriteLock: async (run) => await run(),
     acquireForCleanup: async () => {
-      cleanupStarted = true;
+      if (promptReleased) {
+        await promptSettled;
+      }
       await serializeLifecycle(() => {});
       return noOpLock;
     },
     hasSessionTakeover: () => false,
     dispose: async () => {
       disposed = true;
+      if (promptReleased) {
+        await promptSettled;
+      }
       await serializeLifecycle(() => {});
     },
   };
