@@ -63,7 +63,6 @@ extensions/codex/src/app-server/side-question.ts
 extensions/codex/src/app-server/thread-lifecycle.binding.test.ts
 extensions/codex/src/app-server/thread-lifecycle.test.ts
 extensions/codex/src/app-server/transcript-mirror.test.ts
-extensions/codex/src/command-handlers.ts
 extensions/codex/src/commands.test.ts
 extensions/codex/src/conversation-binding.test.ts
 extensions/codex/src/conversation-binding.ts
