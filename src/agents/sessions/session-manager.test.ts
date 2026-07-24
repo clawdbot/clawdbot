@@ -260,6 +260,41 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("clears side-append mode when switching to a header-only target", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const firstTarget = {
+      agentId: "main",
+      sessionId: "side-target",
+      sessionKey: "agent:main:side-target",
+      storePath,
+    };
+    const secondTarget = {
+      agentId: "main",
+      sessionId: "header-target",
+      sessionKey: "agent:main:header-target",
+      storePath,
+    };
+    await upsertSessionEntry(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
+    await upsertSessionEntry(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
+    const manager = SessionManager.open(firstTarget, dir);
+    const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    manager.appendLeafControl({ targetId: firstId, appendParentId: firstId, appendMode: "side" });
+    replaceTranscriptEventsSync(secondTarget, [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: secondTarget.sessionId,
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: dir,
+      },
+    ]);
+
+    manager.setSessionTarget(secondTarget);
+
+    expect(manager.getAppendMode()).toBeUndefined();
+  });
+
   it("migrates version-two hook messages before current-role validation", () => {
     const manager = SessionManager.fromEntries([
       {

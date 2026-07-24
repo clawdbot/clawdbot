@@ -234,6 +234,20 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("locks relative transcript artifact paths", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const relativeSessionFile = path.relative(process.cwd(), sessionFile);
+      const lock = await acquireSessionWriteLock({
+        sessionFile: relativeSessionFile,
+        timeoutMs: 500,
+      });
+
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      await lock.release();
+      await expectPathMissing(lockPath);
+    });
+  });
+
   it("does not reenter locks by default in the same process", async () => {
     await withTempSessionLockFile(async ({ sessionFile }) => {
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });

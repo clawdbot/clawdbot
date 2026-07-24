@@ -75,7 +75,8 @@ type SqliteRestoreCheckpointSessionParams = {
 export async function branchSqliteCompactionCheckpointSession(
   params: SqliteBranchCheckpointSessionParams,
 ): Promise<SqliteCompactionCheckpointSessionMutationResult> {
-  const sourceKey = normalizeSqliteSessionKey(params.sourceKey);
+  const sourceKey = normalizeSqliteSessionKey(params.sourceStoreKey ?? params.sourceKey);
+  const requestedSourceKey = normalizeSqliteSessionKey(params.sourceKey);
   const targetKey = normalizeSqliteSessionKey(params.nextKey);
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -95,7 +96,7 @@ export async function branchSqliteCompactionCheckpointSession(
       previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
       result = branchSqliteCompactionCheckpointSessionInTransaction(database, {
         checkpointId: params.checkpointId,
-        parentSessionKey: normalizeSqliteSessionKey(params.sourceKey),
+        parentSessionKey: requestedSourceKey,
         resolved,
         sourceKey,
         targetKey,
@@ -111,7 +112,7 @@ export async function branchSqliteCompactionCheckpointSession(
 export async function restoreSqliteCompactionCheckpointSession(
   params: SqliteRestoreCheckpointSessionParams,
 ): Promise<SqliteCompactionCheckpointSessionMutationResult> {
-  const sessionKey = normalizeSqliteSessionKey(params.sessionKey);
+  const sessionKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const targetKey = normalizeSqliteSessionKey(params.sessionKey);
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),

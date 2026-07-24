@@ -901,7 +901,13 @@ export async function acquireSessionWriteLock(params: {
     throw error;
   };
   throwIfAborted();
-  if (!path.isAbsolute(params.sessionFile)) {
+  const hasFilePathShape =
+    path.isAbsolute(params.sessionFile) ||
+    params.sessionFile.endsWith(".jsonl") ||
+    params.sessionFile.endsWith(".json") ||
+    params.sessionFile.includes("/") ||
+    params.sessionFile.includes("\\");
+  if (!hasFilePathShape) {
     return { release: async () => {} };
   }
   registerCleanupHandlers();

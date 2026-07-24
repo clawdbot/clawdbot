@@ -170,6 +170,7 @@ export class SessionManagerCore {
     this.labelTimestampsById.clear();
     this.leafId = null;
     this.appendParentId = null;
+    this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
     let latestResetId: string | undefined;

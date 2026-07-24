@@ -128,7 +128,6 @@ describe("gateway agent handler", () => {
       await fs.mkdir(sessionsDir, { recursive: true });
       const transcriptFields = await scenario.configureTranscript({
         sessionId: scenario.sessionId,
-        sessionsDir,
         storePath,
       });
       const failedEntryWithStaleActivity = {

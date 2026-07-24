@@ -220,6 +220,7 @@ export async function writeSessionStore(params: {
       lastTo?: string;
       lastAccountId?: string;
       lastThreadId?: string | number;
+      sessionFile?: string;
     }
   >;
   storePath?: string;

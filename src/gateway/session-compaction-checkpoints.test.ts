@@ -65,16 +65,17 @@ describe("session-compaction-checkpoints", () => {
     });
   });
 
-  test("checkpoint store branches and restores SQLite marker checkpoints from rows", async () => {
+  test("checkpoint store branches and restores checkpoints through resolved store keys", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-sqlite-branch-"));
     tempDirs.push(dir);
     const storePath = path.join(dir, "openclaw-agent.sqlite");
     const sessionId = "sqlite-checkpoint-branch-source";
     const sessionKey = MAIN_SESSION_KEY;
+    const sessionStoreKey = "agent:main:legacy-main";
     const scope = {
       agentId: MAIN_AGENT_ID,
       sessionId,
-      sessionKey,
+      sessionKey: sessionStoreKey,
       storePath,
     };
     const marker = formatSqliteSessionFileMarker({
@@ -142,12 +143,14 @@ describe("session-compaction-checkpoints", () => {
     const branched = await store.branchCheckpointSession({
       storePath,
       sourceKey: sessionKey,
+      sourceStoreKey: sessionStoreKey,
       nextKey: branchKey,
       checkpointId: checkpoint.checkpointId,
     });
     const restored = await store.restoreCheckpointSession({
       storePath,
       sessionKey,
+      sessionStoreKey,
       checkpointId: checkpoint.checkpointId,
     });
 
