@@ -18,7 +18,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
 import {
@@ -178,6 +177,7 @@ async function runHelperWithExistingSentinel(params: {
   metaHandoffId?: string;
   prepareStateDatabase?: (env: NodeJS.ProcessEnv) => Promise<void> | void;
   sentinel?: unknown;
+  deepStatePath?: boolean;
   parentExitTimeoutMs?: number;
   whileHelperRunning?: (env: NodeJS.ProcessEnv) => Promise<void> | void;
 }) {
@@ -186,6 +186,14 @@ async function runHelperWithExistingSentinel(params: {
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-helper-test-"));
   tempDirs.add(tmpDir);
+  let stateDir = tmpDir;
+  while (
+    params.deepStatePath &&
+    resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }).length <= 260
+  ) {
+    stateDir = path.join(stateDir, `segment-${"x".repeat(24)}`);
+  }
+  const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
 
   await startManagedServiceUpdateHandoff({
     root: tmpDir,
@@ -196,7 +204,7 @@ async function runHelperWithExistingSentinel(params: {
     execPath: "/usr/local/bin/node",
     argv1: "/opt/openclaw/openclaw.mjs",
     ...(params.handoffId ? { handoffId: params.handoffId } : {}),
-    env: {},
+    env,
     meta: {
       ...(params.metaHandoffId ? { handoffId: params.metaHandoffId } : {}),
       sessionKey: "agent:test:webchat:dm:user-123",
@@ -215,13 +223,11 @@ async function runHelperWithExistingSentinel(params: {
     string,
     unknown
   >;
-  const env = { OPENCLAW_STATE_DIR: tmpDir } as NodeJS.ProcessEnv;
   await params.prepareStateDatabase?.(env);
   if (params.sentinel !== undefined) {
     writeRestartSentinelRow(env, params.sentinel);
   }
   const helperParamsPath = path.join(tmpDir, "helper-params.json");
-  const stateDatabasePath = resolveOpenClawStateSqlitePath(env);
   await fs.writeFile(
     helperParamsPath,
     `${JSON.stringify(
@@ -229,8 +235,6 @@ async function runHelperWithExistingSentinel(params: {
         ...helperParams,
         parentPid: process.pid,
         parentExitTimeoutMs: params.parentExitTimeoutMs ?? 1,
-        stateDatabasePath,
-        nodeSqliteLocation: resolveNodeSqliteLocation(stateDatabasePath),
         logPath: path.join(tmpDir, "handoff.log"),
         sensitivePaths: [],
       },
@@ -241,7 +245,7 @@ async function runHelperWithExistingSentinel(params: {
 
   const resultPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (resolve) => {
-      execFile(process.execPath, [helperScriptPath, helperParamsPath], (err) => {
+      execFile(process.execPath, [helperScriptPath, helperParamsPath], { cwd: tmpDir }, (err) => {
         const childError = err as (NodeJS.ErrnoException & { signal?: NodeJS.Signals }) | null;
         resolve({
           code: typeof childError?.code === "number" ? childError.code : 0,
@@ -311,7 +315,7 @@ async function runHelperWithCommand(params: {
     parentPid: process.pid,
     execPath: "/usr/local/bin/node",
     argv1: "/opt/openclaw/openclaw.mjs",
-    env: {},
+    env: { OPENCLAW_STATE_DIR: tmpDir },
     meta: { sessionKey: "agent:test:webchat:dm:user-123" },
   });
 
@@ -324,9 +328,6 @@ async function runHelperWithCommand(params: {
   >;
 
   const helperParamsPath = path.join(tmpDir, "helper-params.json");
-  const stateDatabasePath = resolveOpenClawStateSqlitePath({
-    OPENCLAW_STATE_DIR: tmpDir,
-  });
   await fs.writeFile(
     helperParamsPath,
     `${JSON.stringify(
@@ -337,8 +338,6 @@ async function runHelperWithCommand(params: {
           params.parentExitTimeoutMs === undefined ? 5000 : params.parentExitTimeoutMs,
         cwd: tmpDir,
         commandArgv: params.commandArgv,
-        stateDatabasePath,
-        nodeSqliteLocation: resolveNodeSqliteLocation(stateDatabasePath),
         logPath: path.join(tmpDir, "handoff.log"),
         sensitivePaths: [],
         ...(params.serviceRecovery ? { serviceRecovery: params.serviceRecovery } : {}),
@@ -796,6 +795,24 @@ describe("managed service update handoff", () => {
       expect(mode).toBe(0o600);
     }
   });
+
+  it.runIf(process.platform === "win32")(
+    "writes fallback state through the detached helper beyond MAX_PATH",
+    async () => {
+      const { result, env } = await runHelperWithExistingSentinel({
+        deepStatePath: true,
+        handoffId: "handoff-windows-long-path",
+        metaHandoffId: "handoff-windows-long-path",
+      });
+      const statePath = resolveOpenClawStateSqlitePath(env);
+      expect(statePath.startsWith("\\\\?\\")).toBe(false);
+      expect(statePath.length).toBeGreaterThan(260);
+      expect(result).toEqual({ code: 1, signal: null });
+      expect(readRestartSentinelPayload(env)).toMatchObject({
+        payload: { status: "error" },
+      });
+    },
+  );
 
   it("waits for a concurrent state writer before persisting the fallback failure", async () => {
     let lockReleased: Promise<void> | undefined;

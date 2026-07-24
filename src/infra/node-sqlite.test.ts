@@ -69,9 +69,7 @@ describe("node SQLite locations", () => {
 
   it("keeps ordinary filesystem paths unchanged outside Windows", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe(
-      "relative/openclaw.sqlite",
-    );
+    expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe("relative/openclaw.sqlite");
   });
 
   it("normalizes ordinary filesystem paths through the Windows VFS boundary", () => {
