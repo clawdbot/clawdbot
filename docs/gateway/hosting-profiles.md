@@ -17,12 +17,21 @@ does not add profile-only conditions.
 
 ## Standard profiles
 
-| Profile         | Use when                                         | Additional required evidence                                                                                                                                                                                                       |
-| --------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `local`         | Running a foreground or local Gateway            | The workspace is writable.                                                                                                                                                                                                         |
-| `container`     | Exposing the Gateway directly from a container   | The workspace is writable and the effective listener is not loopback-only.                                                                                                                                                         |
-| `reverse-proxy` | Running behind a trusted identity proxy          | The workspace is writable, trusted-proxy auth is active, an identity header is configured, and at least one effective proxy source is trusted. Loopback proxy sources also require `gateway.auth.trustedProxy.allowLoopback=true`. |
-| `node-mode`     | Controlling one or more paired execution targets | The workspace is writable and at least one target is paired, connected, command-approved, and available through a live control channel.                                                                                            |
+| Profile         | Use when                                         | Profile-specific required evidence                                                                                                                                                                      |
+| --------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `local`         | Running a foreground or local Gateway            | No topology-specific evidence beyond the shared serving contract.                                                                                                                                       |
+| `container`     | Exposing the Gateway directly from a container   | The effective listener is not loopback-only.                                                                                                                                                            |
+| `reverse-proxy` | Running behind a trusted identity proxy          | Trusted-proxy auth is active, an identity header is configured, and at least one effective proxy source is trusted. Loopback proxy sources also require `gateway.auth.trustedProxy.allowLoopback=true`. |
+| `node-mode`     | Controlling one or more paired execution targets | At least one target is paired, connected, command-approved, and available through a live control channel.                                                                                               |
+
+Every profile requires the same agent-serving baseline: current configuration, an authenticated
+default model route, resolved runtime secrets, writable workspace and session storage, and usable
+plugin, context-engine, tool, MCP, sandbox, and harness surfaces. Features that are not configured
+satisfy their capability criterion without starting work from the readiness request.
+
+Shared state, durable delivery, and scheduler lifecycle are selected as advisory evidence. They
+remain visible in the canonical result but do not block a profile because those owners may be lazy
+or disabled. Operators can promote any advisory selector through `gateway.readiness.requiredCriteria`.
 
 Profiles add requirements to the universal Gateway lifecycle conditions. They do not generate or
 repair configuration, choose restart policy, or replace explicit `gateway.readiness` criteria.
