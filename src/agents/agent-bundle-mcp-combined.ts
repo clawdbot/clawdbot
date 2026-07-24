@@ -99,13 +99,16 @@ export function createCombinedSessionMcpRuntime(params: {
     }
   };
 
+  const sourceCatalogsAreCurrent = (catalogs: readonly McpToolCatalog[]): boolean =>
+    parts.every((part, index) => part.peekCatalog() === catalogs[index]);
+
   // Parts invalidate their own catalogs on tools/list_changed by replacing or
   // clearing the cached object. Identity-compare against what was merged so the
   // facade re-merges instead of serving a stale combined catalog.
   const cachedCatalogIsCurrent = (): boolean =>
     cachedCatalog !== null &&
     mergedSourceCatalogs !== null &&
-    parts.every((part, index) => part.peekCatalog() === mergedSourceCatalogs?.[index]);
+    sourceCatalogsAreCurrent(mergedSourceCatalogs);
 
   const loadCatalog = async (
     options?: Pick<McpRequestOptions, "signal">,
@@ -120,20 +123,27 @@ export function createCombinedSessionMcpRuntime(params: {
     const load = (async () => {
       // The combined catalog belongs to the runtime. Individual operation
       // deadlines only detach their waiters; parts keep warming shared caches.
-      const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
-      if (
-        cachedCatalog &&
-        mergedSourceCatalogs?.every((source, index) => source === catalogs[index])
-      ) {
+      while (true) {
+        const catalogs = await Promise.all(parts.map((part) => part.getCatalog()));
+        // A part can replace its catalog while another part is still loading.
+        // Publish only a snapshot whose source identities are still current.
+        if (!sourceCatalogsAreCurrent(catalogs)) {
+          continue;
+        }
+        if (
+          cachedCatalog &&
+          mergedSourceCatalogs?.every((source, index) => source === catalogs[index])
+        ) {
+          return cachedCatalog;
+        }
+        serverOwner.clear();
+        for (let index = 0; index < parts.length; index += 1) {
+          rememberServerOwners(catalogs[index]!, parts[index]!);
+        }
+        mergedSourceCatalogs = catalogs;
+        cachedCatalog = mergeMcpToolCatalogs(catalogs);
         return cachedCatalog;
       }
-      serverOwner.clear();
-      for (let index = 0; index < parts.length; index += 1) {
-        rememberServerOwners(catalogs[index]!, parts[index]!);
-      }
-      mergedSourceCatalogs = catalogs;
-      cachedCatalog = mergeMcpToolCatalogs(catalogs);
-      return cachedCatalog;
     })();
     let trackedLoad: Promise<McpToolCatalog>;
     trackedLoad = (async () => {

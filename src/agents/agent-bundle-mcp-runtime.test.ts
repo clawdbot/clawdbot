@@ -28,7 +28,7 @@ import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
-import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
@@ -509,6 +509,7 @@ function makeRuntime(
 ): SessionMcpRuntime {
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
+  let catalog: McpToolCatalog | null = null;
   return {
     sessionId: "session-colliding-tools",
     workspaceDir: "/tmp",
@@ -520,31 +521,32 @@ function makeRuntime(
     markUsed: () => {
       lastUsedAt = Date.now();
     },
-    peekCatalog: () => null,
-    getCatalog: async () => ({
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        [serverName]: {
-          serverName,
-          launchSummary: serverName,
-          toolCount: tools.length,
-        },
-      },
-      tools: tools.map((tool) => ({
-        serverName,
-        safeServerName: serverName,
-        toolName: tool.toolName,
-        description: tool.description,
-        inputSchema: {
-          type: "object",
-          properties: {
-            toolName: { type: "string", const: tool.toolName },
+    peekCatalog: () => catalog,
+    getCatalog: async () =>
+      (catalog ??= {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          [serverName]: {
+            serverName,
+            launchSummary: serverName,
+            toolCount: tools.length,
           },
         },
-        fallbackDescription: tool.description,
-      })),
-    }),
+        tools: tools.map((tool) => ({
+          serverName,
+          safeServerName: serverName,
+          toolName: tool.toolName,
+          description: tool.description,
+          inputSchema: {
+            type: "object",
+            properties: {
+              toolName: { type: "string", const: tool.toolName },
+            },
+          },
+          fallbackDescription: tool.description,
+        })),
+      }),
     callTool: async (_serverName, toolName) => ({
       content: [{ type: "text", text: toolName }],
       isError: false,
@@ -4115,27 +4117,6 @@ describe("requester-scoped MCP connection resolution", () => {
         workspaceDir: params.workspaceDir,
         configFingerprint: params.configFingerprint ?? "fingerprint",
         requesterScope: params.requesterScope,
-        getCatalog: async () => ({
-          version: 1,
-          generatedAt: 0,
-          servers: {
-            [serverName]: {
-              serverName,
-              launchSummary: serverName,
-              toolCount: 1,
-            },
-          },
-          tools: [
-            {
-              serverName,
-              safeServerName: serverName,
-              toolName,
-              description: toolName,
-              inputSchema: { type: "object", properties: {} },
-              fallbackDescription: toolName,
-            },
-          ],
-        }),
         callTool: async (calledServer, calledTool) => ({
           content: [{ type: "text", text: `${calledServer}:${calledTool}` }],
           isError: false,
@@ -4313,6 +4294,73 @@ describe("requester-scoped MCP connection resolution", () => {
     expect(catalogLoadCount).toBe(2);
 
     await manager.disposeAll();
+  });
+
+  it("retries a combined catalog load when a part is superseded during the merge", async () => {
+    const makeCatalog = (serverName: string, toolName: string): McpToolCatalog => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: { serverName, launchSummary: serverName, toolCount: 1 },
+      },
+      tools: [
+        {
+          serverName,
+          safeServerName: serverName,
+          toolName,
+          description: toolName,
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: toolName,
+        },
+      ],
+    });
+    let sharedCatalog = makeCatalog("shared", "shared_v1");
+    const requesterCatalog = makeCatalog("user-mail", "send");
+    let sharedLoadCount = 0;
+    let requesterLoadCount = 0;
+    let releaseRequesterCatalog: (() => void) | undefined;
+    const requesterCatalogGate = new Promise<void>((resolve) => {
+      releaseRequesterCatalog = resolve;
+    });
+    const sharedPart: SessionMcpRuntime = {
+      ...makeRuntime([], "shared"),
+      peekCatalog: () => sharedCatalog,
+      getCatalog: async () => {
+        sharedLoadCount += 1;
+        return sharedCatalog;
+      },
+    };
+    const requesterPart: SessionMcpRuntime = {
+      ...makeRuntime([], "user-mail"),
+      peekCatalog: () => requesterCatalog,
+      getCatalog: async () => {
+        requesterLoadCount += 1;
+        await requesterCatalogGate;
+        return requesterCatalog;
+      },
+    };
+    const runtime = createCombinedSessionMcpRuntime({
+      sessionId: "session-combined-superseded-part",
+      workspaceDir: "/workspace",
+      parts: [sharedPart, requesterPart],
+    });
+
+    const catalogPromise = runtime.getCatalog();
+    await waitForPredicate(
+      () => sharedLoadCount === 1 && requesterLoadCount === 1,
+      "the first combined catalog snapshot to be in flight",
+      LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+    );
+    sharedCatalog = makeCatalog("shared", "shared_v2");
+    releaseRequesterCatalog?.();
+
+    const catalog = await catalogPromise;
+    expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual(["send", "shared_v2"]);
+    expect(runtime.peekCatalog()).toBe(catalog);
+    expect(sharedLoadCount).toBe(2);
+    expect(requesterLoadCount).toBe(2);
+
+    await runtime.dispose();
   });
 
   it("re-merges the combined catalog after a part refreshes on tools/list_changed", async () => {
@@ -4773,33 +4821,35 @@ describe("requester-scoped MCP connection resolution", () => {
       const isScoped = Boolean(params.requesterScope);
       const serverName = isScoped ? "mail-prod" : "mail.prod";
       const safe = params.safeServerNamesByServer?.get(serverName) ?? serverName;
+      const catalog: McpToolCatalog = {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          [serverName]: {
+            serverName,
+            safeServerName: safe,
+            launchSummary: serverName,
+            toolCount: 1,
+          },
+        },
+        tools: [
+          {
+            serverName,
+            safeServerName: safe,
+            toolName: "send",
+            inputSchema: { type: "object", properties: {} },
+            fallbackDescription: "send",
+          },
+        ],
+      };
       return {
         ...makeRuntime([{ toolName: "send", description: "send" }], serverName),
         sessionId: params.sessionId,
         workspaceDir: params.workspaceDir,
         configFingerprint: params.configFingerprint ?? "fingerprint",
         requesterScope: params.requesterScope,
-        getCatalog: async () => ({
-          version: 1,
-          generatedAt: 0,
-          servers: {
-            [serverName]: {
-              serverName,
-              safeServerName: safe,
-              launchSummary: serverName,
-              toolCount: 1,
-            },
-          },
-          tools: [
-            {
-              serverName,
-              safeServerName: safe,
-              toolName: "send",
-              inputSchema: { type: "object", properties: {} },
-              fallbackDescription: "send",
-            },
-          ],
-        }),
+        peekCatalog: () => catalog,
+        getCatalog: async () => catalog,
       };
     };
     const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
