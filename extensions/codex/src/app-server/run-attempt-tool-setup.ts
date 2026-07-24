@@ -153,7 +153,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   // attachment (thread-lifecycle-run omits them from the native user-MCP patch on
   // the same condition); wildcard/unrestricted turns keep native attachment.
   const exposeAllowlistedStaticServers =
-    userMcpServersEnabled !== false && !isUnrestrictedCodexToolsAllow(params.toolsAllow);
+    userMcpServersEnabled && !isUnrestrictedCodexToolsAllow(params.toolsAllow);
   const scopedMcpTools = await materializeRequesterScopedMcpToolsForHarnessRun({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

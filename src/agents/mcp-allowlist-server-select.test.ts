@@ -1,31 +1,6 @@
 /** Behavior tests for server-granular MCP allowlist selection. */
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  isMcpServerToolAllowlisted,
-  selectAllowlistedStaticMcpServerNames,
-} from "./mcp-allowlist-server-select.js";
-
-describe("isMcpServerToolAllowlisted", () => {
-  it("includes a server named by the allowlist (or when unrestricted)", () => {
-    expect(isMcpServerToolAllowlisted("opik", undefined)).toBe(true);
-    expect(isMcpServerToolAllowlisted("opik", ["*"])).toBe(true);
-    expect(isMcpServerToolAllowlisted("opik", ["bundle-mcp"])).toBe(true);
-    expect(isMcpServerToolAllowlisted("opik", ["group:plugins"])).toBe(true);
-    expect(isMcpServerToolAllowlisted("opik", ["opik__*"])).toBe(true);
-    expect(isMcpServerToolAllowlisted("opik", ["opik__list"])).toBe(true);
-    // Normalization: surrounding space and server-prefix case are ignored.
-    expect(isMcpServerToolAllowlisted("opik", [" Opik__list "])).toBe(true);
-  });
-
-  it("excludes a server the allowlist does not reference", () => {
-    expect(isMcpServerToolAllowlisted("opik", ["notion__*"])).toBe(false);
-    expect(isMcpServerToolAllowlisted("opik", ["message"])).toBe(false);
-    // A bare `<server>__` with no tool fragment does not reference the server.
-    expect(isMcpServerToolAllowlisted("opik", ["opik__"])).toBe(false);
-    // An empty allowlist restricts to nothing.
-    expect(isMcpServerToolAllowlisted("opik", [])).toBe(false);
-  });
-});
+import { selectAllowlistedStaticMcpServerNames } from "./mcp-allowlist-server-select.js";
 
 describe("selectAllowlistedStaticMcpServerNames", () => {
   afterEach(async () => {
@@ -37,14 +12,28 @@ describe("selectAllowlistedStaticMcpServerNames", () => {
     mcp: { servers: { opik: { command: "true" }, notion: { command: "true" } } },
   };
 
-  it("selects only static servers the scoped allowlist references", () => {
-    const selected = selectAllowlistedStaticMcpServerNames({
+  const select = (toolsAllow: string[] | undefined) =>
+    selectAllowlistedStaticMcpServerNames({
       cfg: cfg as never,
       workspaceDir: "/workspace",
-      toolsAllow: ["opik__read"],
+      toolsAllow,
     });
-    expect(selected.has("opik")).toBe(true);
-    expect(selected.has("notion")).toBe(false);
+
+  it.each([
+    { toolsAllow: ["*"], expected: ["notion", "opik"] },
+    { toolsAllow: ["bundle-mcp"], expected: ["notion", "opik"] },
+    { toolsAllow: ["group:plugins"], expected: ["notion", "opik"] },
+    { toolsAllow: ["opik__*"], expected: ["opik"] },
+    { toolsAllow: ["opik__list"], expected: ["opik"] },
+    // Normalization: surrounding space and server-prefix case are ignored.
+    { toolsAllow: [" Opik__list "], expected: ["opik"] },
+    { toolsAllow: ["message"], expected: [] },
+    // A bare `<server>__` with no tool fragment does not reference the server.
+    { toolsAllow: ["opik__"], expected: [] },
+    // An empty allowlist restricts to nothing.
+    { toolsAllow: [], expected: [] },
+  ])("selects $expected for allowlist $toolsAllow", ({ toolsAllow, expected }) => {
+    expect([...select(toolsAllow)].toSorted()).toEqual(expected);
   });
 
   it("selects every static server referenced by a multi-token allowlist", () => {
@@ -52,21 +41,11 @@ describe("selectAllowlistedStaticMcpServerNames", () => {
     // names is selected. Deny is not a server-selection input — a denied tool on
     // an allowed server still opens the server; the tool is dropped downstream by
     // the harness tool policy, not here.
-    const selected = selectAllowlistedStaticMcpServerNames({
-      cfg: cfg as never,
-      workspaceDir: "/workspace",
-      toolsAllow: ["opik__read", "notion__list"],
-    });
-    expect([...selected].toSorted()).toEqual(["notion", "opik"]);
+    expect([...select(["opik__read", "notion__list"])].toSorted()).toEqual(["notion", "opik"]);
   });
 
   it("returns an empty set when the allowlist imposes no restriction", () => {
-    const selected = selectAllowlistedStaticMcpServerNames({
-      cfg: cfg as never,
-      workspaceDir: "/workspace",
-      toolsAllow: undefined,
-    });
-    expect(selected.size).toBe(0);
+    expect(select(undefined).size).toBe(0);
   });
 
   it("excludes a requester-scoped server even when the allowlist names it", async () => {
@@ -76,11 +55,7 @@ describe("selectAllowlistedStaticMcpServerNames", () => {
     testing.setMcpServerConnectionResolversForTest([
       { serverName: "opik", resolve: async () => ({ url: "https://mcp.example.test" }) },
     ]);
-    const selected = selectAllowlistedStaticMcpServerNames({
-      cfg: cfg as never,
-      workspaceDir: "/workspace",
-      toolsAllow: ["opik__read", "notion__read"],
-    });
+    const selected = select(["opik__read", "notion__read"]);
     expect(selected.has("opik")).toBe(false);
     expect(selected.has("notion")).toBe(true);
   });

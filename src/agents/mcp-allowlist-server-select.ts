@@ -32,7 +32,7 @@ function isGlobalMcpAllowToken(token: string): boolean {
  *   - `<safeServer>__<anything>`           -> include
  *   - no matching token                    -> exclude the server
  */
-export function isMcpServerToolAllowlisted(
+function isMcpServerToolAllowlisted(
   safeServerName: string,
   toolsAllow: string[] | undefined,
 ): boolean {
