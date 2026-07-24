@@ -678,7 +678,7 @@ describe("config io write prepare", () => {
         },
         unsetPaths: [["agents", "list", "0"]],
       }),
-    ).toThrow("cannot safely resolve duplicate agent ids");
+    ).toThrow('cannot canonicalize duplicate normalized agent id "worker"');
   });
 
   it("rejects duplicate normalized ids before canonicalizing a legacy roster", () => {
@@ -707,6 +707,33 @@ describe("config io write prepare", () => {
       }),
     );
     expect(nextConfig).toEqual(before);
+  });
+
+  it("rejects duplicate normalized ids in an explicit legacy-list value source", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: { agents: { entries: { main: { default: true } } } },
+        sourceConfig: { agents: { entries: { main: { default: true } } } },
+        sourceConfigBeforeMigrations: {
+          agents: { list: [{ id: "main", default: true }] },
+        },
+        rootAuthoredConfig: {
+          agents: { list: [{ id: "main", default: true }] },
+        },
+        nextConfig: { agents: { entries: { main: { default: true } } } },
+        explicitSetPaths: [["agents", "list"]],
+        explicitSetValueSource: {
+          agents: {
+            list: [{ id: "Ops", default: true }, { id: " ops " }],
+          },
+        },
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        name: "DuplicateAgentRosterIdError",
+        message: 'Config write cannot canonicalize duplicate normalized agent id "ops".',
+      }),
+    );
   });
 
   it("keys legacy authored references by the pre-migration resolved agent id", () => {

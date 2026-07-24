@@ -33,6 +33,20 @@ class DuplicateAgentRosterIdError extends Error {
   }
 }
 
+function assertUniqueNormalizedLegacyRosterIds(value: readonly unknown[]): void {
+  const normalizedIds = new Set<string>();
+  for (const entry of value) {
+    if (!isRecord(entry) || typeof entry.id !== "string") {
+      continue;
+    }
+    const agentId = normalizeAgentId(entry.id);
+    if (normalizedIds.has(agentId)) {
+      throw new DuplicateAgentRosterIdError(agentId);
+    }
+    normalizedIds.add(agentId);
+  }
+}
+
 type ManifestModelIdNormalizationProvider = {
   aliases?: Record<string, string>;
   stripPrefixes?: string[];
@@ -944,14 +958,7 @@ function canCanonicalizeAgentRoster(value: unknown): boolean {
     ) {
       return false;
     }
-    const normalizedIds = new Set<string>();
-    for (const entry of roster.value) {
-      const agentId = normalizeAgentId(String(entry.id));
-      if (normalizedIds.has(agentId)) {
-        throw new DuplicateAgentRosterIdError(agentId);
-      }
-      normalizedIds.add(agentId);
-    }
+    assertUniqueNormalizedLegacyRosterIds(roster.value);
     return true;
   }
   return isRecord(roster.value) && Object.values(roster.value).every(isRecord);
@@ -1244,6 +1251,23 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     }
     return explicitId.includes("${") ? undefined : explicitId;
   };
+  if (explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)) {
+    const normalizedIds = new Set<string>();
+    for (const [index, entry] of explicitRoster.value.entries()) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      const resolvedId = resolveExplicitLegacyEntryId(entry, index);
+      if (resolvedId === undefined) {
+        continue;
+      }
+      const agentId = normalizeAgentId(resolvedId);
+      if (normalizedIds.has(agentId)) {
+        throw new DuplicateAgentRosterIdError(agentId);
+      }
+      normalizedIds.add(agentId);
+    }
+  }
   const explicitEntries =
     explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)
       ? Object.fromEntries(

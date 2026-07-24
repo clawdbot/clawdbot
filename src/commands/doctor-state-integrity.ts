@@ -45,6 +45,7 @@ import {
 } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { shortenHomePath } from "../utils.js";
@@ -183,7 +184,9 @@ function formatOrphanAgentDirPreview(entries: OrphanAgentDir[], limit = 3): stri
 }
 
 function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgentDir[] {
-  const configuredIds = new Set<string>();
+  // agents/main/agent also owns the shipped shared legacy auth store.
+  // Keep main undeletable until named agents make auth-store ownership explicit.
+  const configuredIds = new Set<string>([LEGACY_IMPLICIT_AGENT_ID]);
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   if (defaultAgentId) {
     configuredIds.add(normalizeAgentId(defaultAgentId));

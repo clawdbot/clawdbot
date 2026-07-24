@@ -406,17 +406,17 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("Examples:");
   });
 
-  it("reports an unconfigured main agent dir after compatibility removal", async () => {
+  it("protects the shared legacy main auth-store dir for an ops-only roster", async () => {
     createAgentDir("main");
 
     const text = await runStateIntegrityText({
       agents: {
-        list: [{ id: "jeremiah", default: true }],
+        entries: { ops: { default: true } },
       },
     });
 
-    expect(text).toContain("without a matching agents.list entry");
-    expect(text).toContain("Examples: main");
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples: main");
   });
 
   it("does not let OPENCLAW_AGENT_DIR hide an unconfigured agent dir", async () => {
