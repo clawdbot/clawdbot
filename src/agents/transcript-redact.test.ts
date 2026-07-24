@@ -70,6 +70,19 @@ const OPENAI_REASONING_REPLAY_METADATA = {
 } as const;
 
 describe("redactTranscriptMessage", () => {
+  it("removes context-engine provenance before transcript persistence", () => {
+    const msg = {
+      role: "assistant",
+      content: [{ type: "text", text: "answer" }],
+      __openclawCompactionSourceEntryId: "entry-1",
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+
+    expect(result).not.toHaveProperty("__openclawCompactionSourceEntryId");
+    expect(msg).toHaveProperty("__openclawCompactionSourceEntryId", "entry-1");
+  });
+
   it("redacts text block matching default patterns (sk- token)", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz end");
     const result = redactTranscriptMessage(msg, cfg("tools"));

@@ -6,6 +6,7 @@ import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-time
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
+import { COMPACTION_SOURCE_ENTRY_ID } from "../../compaction-boundary.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
@@ -44,8 +45,10 @@ export function normalizeMessagesForLlmBoundary(
   messages: AgentMessage[],
   options?: LlmBoundaryOptions,
 ): AgentMessage[] {
-  const normalized = stripUnsafeBlockedRunMetadata(
-    stripToolResultDetails(normalizeAssistantReplayContent(messages)),
+  const normalized = stripCompactionSourceEntryIds(
+    stripUnsafeBlockedRunMetadata(
+      stripToolResultDetails(normalizeAssistantReplayContent(messages)),
+    ),
   );
   const userTranscriptMessages = resolveUserTranscriptMessages(
     normalized,
@@ -61,6 +64,21 @@ export function normalizeMessagesForLlmBoundary(
       ? withoutHistoricalInboundMetadata
       : projectPersistedSenderContext(withoutHistoricalInboundMetadata, userTranscriptMessages);
   return stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
+}
+
+function stripCompactionSourceEntryIds(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const nextMessages = messages.map((message) => {
+    const record = message as unknown as Record<string, unknown>;
+    if (!Object.hasOwn(record, COMPACTION_SOURCE_ENTRY_ID)) {
+      return message;
+    }
+    const next = { ...record };
+    delete next[COMPACTION_SOURCE_ENTRY_ID];
+    changed = true;
+    return next as AgentMessage;
+  });
+  return changed ? nextMessages : messages;
 }
 
 /** Normalizes existing transcript messages as if the current prompt were appended last. */

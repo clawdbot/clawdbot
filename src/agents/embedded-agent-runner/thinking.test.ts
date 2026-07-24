@@ -1225,6 +1225,40 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     expect(result).toBe(messages);
   });
 
+  it("strips retained thinking signatures when the retained assistant timestamp is invalid", () => {
+    const retainedBoundary = Symbol.for("openclaw.compactionRetainedBoundary");
+    const boundaryId = "compaction-invalid-retained-timestamp";
+    const markRetained = (message: AgentMessage): AgentMessage => {
+      const marked = { ...message } as AgentMessage & { [retainedBoundary]?: string };
+      Object.defineProperty(marked, retainedBoundary, {
+        configurable: true,
+        enumerable: true,
+        value: boundaryId,
+      });
+      return marked;
+    };
+    const messages: AgentMessage[] = [
+      markRetained({
+        role: "compactionSummary",
+        summary: "s",
+        tokensBefore: 0,
+        timestamp: 2_000,
+        retainedMessageCount: 1,
+      } as AgentMessage),
+      markRetained({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "old", thinkingSignature: "stale" }],
+        timestamp: "not-a-timestamp",
+      } as AgentMessage),
+    ];
+
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
+
+    expect((result[1] as AssistantMessage).content).toEqual([
+      { type: "thinking", thinking: "old" },
+    ]);
+  });
+
   it("uses the latest compaction summary timestamp when multiple summaries are present", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({

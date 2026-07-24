@@ -12,6 +12,22 @@ import {
 import { resolveUserTranscriptMessages } from "./attempt.user-message-boundary.js";
 
 describe("normalizeMessagesForLlmBoundary", () => {
+  it("strips context-engine provenance before provider conversion", () => {
+    const input = [
+      {
+        role: "user",
+        content: "historical",
+        timestamp: 1,
+        __openclawCompactionSourceEntryId: "entry-1",
+      },
+    ] as unknown as AgentMessage[];
+
+    const output = normalizeMessagesForLlmBoundary(input);
+
+    expect(output[0]).not.toHaveProperty("__openclawCompactionSourceEntryId");
+    expect(input[0]).toHaveProperty("__openclawCompactionSourceEntryId", "entry-1");
+  });
+
   it("strips inbound metadata from historical user turns before model replay", () => {
     // Historical envelopes contain untrusted routing metadata that should not be
     // replayed as user instructions.

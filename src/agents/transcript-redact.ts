@@ -11,6 +11,7 @@ import {
   redactSensitiveFieldValue,
   redactSensitiveText,
 } from "../logging/redact.js";
+import { COMPACTION_SOURCE_ENTRY_ID } from "./compaction-boundary.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -515,6 +516,11 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    if (location === "root" && key === COMPACTION_SOURCE_ENTRY_ID) {
+      next ??= { ...source };
+      delete next[key];
+      continue;
+    }
     if (
       location === "assistant-content-block" &&
       (isOpenAIResponsesRoute(currentAssistantRoute) ||

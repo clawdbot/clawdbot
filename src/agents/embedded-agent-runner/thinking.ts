@@ -182,8 +182,8 @@ export function stripStaleThinkingSignaturesForCompactionReplay(
     return messages;
   }
   const useRetainedRange =
-    boundary.latestSummaryTimestamp === null && boundary.retainedStartIndex !== null;
-  const latestCompactionTimestamp = useRetainedRange ? null : boundary.maxSummaryTimestamp;
+    boundary.retainedStartIndex !== null && boundary.retainedEndIndex !== null;
+  const latestCompactionTimestamp = boundary.maxSummaryTimestamp;
   if (latestCompactionTimestamp === null && !useRetainedRange) {
     return messages;
   }

@@ -2,6 +2,7 @@ import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/numbe
 import type { AgentMessage } from "./runtime/index.js";
 
 const COMPACTION_RETAINED_BOUNDARY = Symbol.for("openclaw.compactionRetainedBoundary");
+export const COMPACTION_SOURCE_ENTRY_ID = "__openclawCompactionSourceEntryId";
 
 type CompactionBoundaryMarkedMessage = AgentMessage & {
   [COMPACTION_RETAINED_BOUNDARY]?: unknown;
@@ -35,6 +36,13 @@ function getCompactionBoundaryId(message: AgentMessage): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function getCompactionSourceEntryId(message: AgentMessage): string | null {
+  const value = (message as AgentMessage & { [COMPACTION_SOURCE_ENTRY_ID]?: unknown })[
+    COMPACTION_SOURCE_ENTRY_ID
+  ];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 function withCompactionBoundaryId(message: AgentMessage, boundaryId: string): AgentMessage {
   const marked = { ...message } as CompactionBoundaryMarkedMessage;
   Object.defineProperty(marked, COMPACTION_RETAINED_BOUNDARY, {
@@ -43,39 +51,6 @@ function withCompactionBoundaryId(message: AgentMessage, boundaryId: string): Ag
     value: boundaryId,
   });
   return marked;
-}
-
-function compactionMessageKey(message: AgentMessage): string {
-  const record = message as AgentMessage & {
-    content?: unknown;
-    customType?: unknown;
-    fromId?: unknown;
-    model?: unknown;
-    provider?: unknown;
-    role?: unknown;
-    summary?: unknown;
-    timestamp?: unknown;
-    tokensBefore?: unknown;
-    toolCallId?: unknown;
-    toolName?: unknown;
-  };
-  try {
-    return JSON.stringify({
-      content: record.content,
-      customType: record.customType,
-      fromId: record.fromId,
-      model: record.model,
-      provider: record.provider,
-      role: record.role,
-      summary: record.summary,
-      timestamp: record.timestamp,
-      tokensBefore: record.tokensBefore,
-      toolCallId: record.toolCallId,
-      toolName: record.toolName,
-    });
-  } catch {
-    return `${record.role ?? "unknown"}:${String(record.timestamp ?? "")}`;
-  }
 }
 
 export function resolveCompactionBoundary(messages: AgentMessage[]): CompactionBoundary | null {
@@ -172,13 +147,18 @@ export function rebindCompactionBoundaryMessages(
   }
   const sourceSummary = sourceMessages[sourceBoundary.latestSummaryIndex];
   const boundaryId = sourceSummary ? getCompactionBoundaryId(sourceSummary) : null;
-  if (!boundaryId) {
+  const sourceSummaryEntryId = sourceSummary ? getCompactionSourceEntryId(sourceSummary) : null;
+  if (!boundaryId || !sourceSummaryEntryId) {
     return transformedMessages;
   }
 
   let transformedSummaryIndex = -1;
   for (let index = transformedMessages.length - 1; index >= 0; index -= 1) {
-    if (transformedMessages[index]?.role === "compactionSummary") {
+    if (
+      transformedMessages[index]?.role === "compactionSummary" &&
+      getCompactionSourceEntryId(transformedMessages[index] as AgentMessage) ===
+        sourceSummaryEntryId
+    ) {
       transformedSummaryIndex = index;
       break;
     }
@@ -187,15 +167,18 @@ export function rebindCompactionBoundaryMessages(
     return transformedMessages;
   }
 
-  const sourceIndexesByKey = new Map<string, number[]>();
+  const sourceIndexByEntryId = new Map<string, number>();
+  const ambiguousSourceEntryIds = new Set<string>();
   for (let index = 0; index < sourceMessages.length; index += 1) {
-    if (index === sourceBoundary.latestSummaryIndex) {
+    const sourceEntryId = getCompactionSourceEntryId(sourceMessages[index] as AgentMessage);
+    if (!sourceEntryId) {
       continue;
     }
-    const key = compactionMessageKey(sourceMessages[index] as AgentMessage);
-    const indexes = sourceIndexesByKey.get(key) ?? [];
-    indexes.push(index);
-    sourceIndexesByKey.set(key, indexes);
+    if (sourceIndexByEntryId.has(sourceEntryId)) {
+      ambiguousSourceEntryIds.add(sourceEntryId);
+      continue;
+    }
+    sourceIndexByEntryId.set(sourceEntryId, index);
   }
 
   let matchedRetainedCount = 0;
@@ -222,8 +205,11 @@ export function rebindCompactionBoundaryMessages(
       return marked;
     }
 
-    const candidates = sourceIndexesByKey.get(compactionMessageKey(message));
-    const sourceIndex = candidates?.shift();
+    const sourceEntryId = getCompactionSourceEntryId(message);
+    const sourceIndex =
+      sourceEntryId && !ambiguousSourceEntryIds.has(sourceEntryId)
+        ? sourceIndexByEntryId.get(sourceEntryId)
+        : undefined;
     if (sourceIndex === undefined || !sourceBoundary.retainedMessageIndexes?.has(sourceIndex)) {
       return message;
     }

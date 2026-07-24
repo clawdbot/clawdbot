@@ -190,11 +190,16 @@ describe("limitHistoryTurns", () => {
   it("rebinds retained identity after a structured context-engine clone", () => {
     const retainedBoundary = Symbol.for("openclaw.compactionRetainedBoundary");
     const boundaryId = "compaction-structured-clone";
+    let sourceEntryCounter = 0;
     const markRetained = (message: AgentMessage): AgentMessage => {
       const marked = { ...message } as AgentMessage & { [retainedBoundary]?: string };
       Object.defineProperty(marked, retainedBoundary, {
         enumerable: true,
         value: boundaryId,
+      });
+      Object.defineProperty(marked, "__openclawCompactionSourceEntryId", {
+        enumerable: true,
+        value: `entry-${sourceEntryCounter++}`,
       });
       return marked;
     };
@@ -221,6 +226,48 @@ describe("limitHistoryTurns", () => {
     expect(isWithinRetainedCompactionRange(boundary, runtimeMessages.indexOf(freshAssistant))).toBe(
       false,
     );
+  });
+
+  it("does not bind a post-compaction duplicate to a retained source message", () => {
+    const retainedBoundary = Symbol.for("openclaw.compactionRetainedBoundary");
+    const boundaryId = "compaction-duplicate-source";
+    const sourceId = "__openclawCompactionSourceEntryId";
+    const mark = (message: AgentMessage, id: string): AgentMessage => {
+      const marked = { ...message } as AgentMessage & { [retainedBoundary]?: string };
+      Object.defineProperty(marked, sourceId, { enumerable: true, value: id });
+      if (id === "summary" || id === "retained-a") {
+        Object.defineProperty(marked, retainedBoundary, {
+          enumerable: true,
+          value: boundaryId,
+        });
+      }
+      return marked;
+    };
+    const duplicate = {
+      role: "user",
+      content: [{ type: "text", text: "same" }],
+      timestamp: 2_000,
+    } as AgentMessage;
+    const source = [
+      mark(
+        {
+          role: "compactionSummary",
+          summary: "Previous conversation",
+          tokensBefore: 5000,
+          retainedMessageCount: 1,
+        } as AgentMessage,
+        "summary",
+      ),
+      mark({ ...duplicate, timestamp: 1_000 }, "retained-a"),
+      mark(duplicate, "post-b"),
+    ];
+    const transformed = structuredClone([source[0], source[2]]) as AgentMessage[];
+
+    const rebound = rebindCompactionBoundaryMessages(source, transformed);
+
+    expect((rebound[1] as Record<string, unknown>)[sourceId]).toBe("post-b");
+    expect((rebound[1] as Record<PropertyKey, unknown>)[retainedBoundary]).toBeUndefined();
+    expect((rebound[0] as { retainedMessageCount?: number }).retainedMessageCount).toBe(0);
   });
 
   it("preserves leading branchSummary when limiting", () => {
