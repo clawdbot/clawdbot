@@ -1,6 +1,5 @@
 // Creates backup archives while filtering volatile runtime state.
-import { randomUUID } from "node:crypto";
-import { constants as fsConstants, type Stats } from "node:fs";
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,12 +23,14 @@ import {
 } from "../state/openclaw-state-snapshot-sanitizer.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { writeArchiveStreamToFile } from "./backup-create-stream.js";
 import {
-  removeBackupTempArchiveBestEffort,
-  resolveBackupTarAttemptTempPaths,
-  writeTarArchiveWithRetry,
-} from "./backup-tar-retry.js";
+  cleanupBackupArchivePublication,
+  createBackupArchivePublication,
+  publishPreparedBackupArchive,
+  type BackupArchivePublication,
+} from "./backup-archive-publication.js";
+import { removePreparedBackupArchive, writeArchiveStreamToFile } from "./backup-create-stream.js";
+import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { formatErrorMessage } from "./errors.js";
@@ -179,10 +180,6 @@ async function assertOutputPathReady(outputPath: string): Promise<void> {
   }
 }
 
-function buildTempArchivePath(outputPath: string): string {
-  return `${outputPath}.${randomUUID()}.tmp`;
-}
-
 // The temp manifest is passed to `tar.c` alongside the asset source paths. If
 // the temp file lives inside any asset, recursive traversal pulls it in a
 // second time and both copies remap to `<archiveRoot>/manifest.json`, which
@@ -218,46 +215,6 @@ async function chooseBackupTempRoot(params: {
     );
   }
   return fallback;
-}
-
-function isLinkUnsupportedError(code: string | undefined): boolean {
-  return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EPERM";
-}
-
-async function publishTempArchive(params: {
-  tempArchivePath: string;
-  outputPath: string;
-}): Promise<void> {
-  try {
-    await fs.link(params.tempArchivePath, params.outputPath);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "EEXIST") {
-      throw new Error(`Refusing to overwrite existing backup archive: ${params.outputPath}`, {
-        cause: err,
-      });
-    }
-    if (!isLinkUnsupportedError(code)) {
-      throw err;
-    }
-
-    try {
-      // Some backup targets support ordinary files but not hard links.
-      await fs.copyFile(params.tempArchivePath, params.outputPath, fsConstants.COPYFILE_EXCL);
-    } catch (copyErr) {
-      const copyCode = (copyErr as NodeJS.ErrnoException | undefined)?.code;
-      if (copyCode !== "EEXIST") {
-        await fs.rm(params.outputPath, { force: true }).catch(() => undefined);
-      }
-      if (copyCode === "EEXIST") {
-        throw new Error(`Refusing to overwrite existing backup archive: ${params.outputPath}`, {
-          cause: copyErr,
-        });
-      }
-      throw copyErr;
-    }
-  }
-  await fs.rm(params.tempArchivePath, { force: true });
 }
 
 async function canonicalizePathForContainment(targetPath: string): Promise<string> {
@@ -845,8 +802,14 @@ export async function createBackupArchive(
   await fs.mkdir(tempRoot, { recursive: true });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
-  const tempArchivePath = buildTempArchivePath(outputPath);
-  const tempArchiveCleanupPaths = resolveBackupTarAttemptTempPaths(tempArchivePath);
+  let publication: BackupArchivePublication;
+  try {
+    publication = await createBackupArchivePublication(outputPath);
+  } catch (error) {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+  const tempArchivePath = publication.tempArchivePath;
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
   const preservedStatePaths = [
     plan.configPath,
@@ -966,7 +929,7 @@ export async function createBackupArchive(
       }
       return true;
     };
-    const completedTempArchivePath = await writeTarArchiveWithRetry({
+    const completedArchive = await writeTarArchiveWithRetry({
       tempArchivePath,
       log: opts.log,
       runTar: async (attemptTempArchivePath) => {
@@ -975,7 +938,7 @@ export async function createBackupArchive(
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
         unexpectedSqliteSourcePaths.length = 0;
-        await writeArchiveStreamToFile({
+        const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
           archiveStream: tar.c(
             {
@@ -1001,13 +964,20 @@ export async function createBackupArchive(
               ...result.assets.map((asset) => asset.sourcePath),
             ],
           ),
+          onPartialArchive: (partialArchive) => {
+            publication.pendingCleanupArchives.push(partialArchive);
+          },
         });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
         if (unexpectedSqliteSourcePath) {
+          if (!removePreparedBackupArchive(prepared)) {
+            publication.pendingCleanupArchives.push(prepared);
+          }
           throw new Error(
             `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
           );
         }
+        return prepared;
       },
     });
     result.skippedVolatileCount = skippedVolatileCount;
@@ -1018,11 +988,13 @@ export async function createBackupArchive(
         } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
-    await publishTempArchive({ tempArchivePath: completedTempArchivePath, outputPath });
+    await publishPreparedBackupArchive({
+      plan: publication,
+      prepared: completedArchive,
+      log: opts.log,
+    });
   } finally {
-    for (const cleanupPath of tempArchiveCleanupPaths) {
-      await removeBackupTempArchiveBestEffort(cleanupPath);
-    }
+    await cleanupBackupArchivePublication(publication, opts.log);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 

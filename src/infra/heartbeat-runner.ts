@@ -1,8 +1,5 @@
 // Runs heartbeat checks and emits status updates for configured agents.
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { TextDecoder } from "node:util";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -13,18 +10,12 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import {
-  listAgentIds,
-  resolveAgentConfig,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/run-state.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
-import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import {
   resolveHeartbeatReplyPayload,
   resolveHeartbeatTerminalToolFailure,
@@ -116,7 +107,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { readStoredDeviceIdentityReadOnly } from "./device-identity-store.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { formatErrorMessage } from "./errors.js";
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
 import {
   createActiveHoursPredicate,
@@ -177,8 +168,6 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { isPathInside } from "./path-guards.js";
-import { readRegularFile } from "./regular-file.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -199,42 +188,6 @@ export type HeartbeatDeps = OutboundSendDeps &
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
-const LEGACY_HEARTBEAT_FILE_MAX_BYTES = 16 * 1024 * 1024;
-const legacyHeartbeatFallbackWarnings = new Set<string>();
-const legacyHeartbeatDecoder = new TextDecoder("utf-8", { fatal: true });
-
-async function readLegacyHeartbeatFileForMigration(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<string | undefined> {
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const heartbeatPath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
-  try {
-    const workspaceRealPath = await fs.realpath(workspaceDir);
-    const sourceRealPath = await fs.realpath(heartbeatPath);
-    if (sourceRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, sourceRealPath)) {
-      throw new Error("HEARTBEAT.md symlink target escapes the agent workspace");
-    }
-    const file = await readRegularFile({
-      filePath: sourceRealPath,
-      maxBytes: LEGACY_HEARTBEAT_FILE_MAX_BYTES,
-    });
-    const content = legacyHeartbeatDecoder.decode(file.buffer);
-    if (!legacyHeartbeatFallbackWarnings.has(heartbeatPath)) {
-      legacyHeartbeatFallbackWarnings.add(heartbeatPath);
-      log.warn(
-        `heartbeat: using legacy ${DEFAULT_HEARTBEAT_FILENAME}; run openclaw doctor --fix to migrate it into cron scratch`,
-      );
-    }
-    return content;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    log.warn(`heartbeat: legacy file migration fallback failed: ${formatErrorMessage(error)}`);
-    return undefined;
-  }
-}
 
 const loadHeartbeatRunnerRuntime = createLazyRuntimeModule(
   () => import("./heartbeat-runner.runtime.js"),
@@ -933,34 +886,15 @@ async function resolveHeartbeatPreflight(params: {
     wakeFlags.isWakePayload ||
     hasTaggedCronEvents;
   let monitorScratch: ReturnType<typeof readHeartbeatMonitorScratch>;
-  let scratchReadOk = false;
   try {
     monitorScratch = readHeartbeatMonitorScratch(
       resolveCronJobsStorePathFromConfig(params.cfg),
       params.agentId,
     );
-    scratchReadOk = true;
   } catch (error) {
     log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
   }
-  let heartbeatScratchContent = monitorScratch?.state.scratch?.content;
-  if (
-    !shouldBypassFileGates &&
-    // The legacy fallback needs a proven revision-0 state: a failed database
-    // read must not resurrect retired file instructions past a tombstone.
-    scratchReadOk &&
-    heartbeatScratchContent === undefined &&
-    (monitorScratch?.state.currentRevision ?? 0) === 0
-  ) {
-    // Named upgrade bridge: tagged builds shipped HEARTBEAT.md as the only
-    // instruction store. Doctor owns the migration; this read-only fallback
-    // prevents silent loss until one full stable upgrade window has shipped,
-    // after which the fallback and legacy template repair can be deleted.
-    heartbeatScratchContent = await readLegacyHeartbeatFileForMigration({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
-  }
+  const heartbeatScratchContent = monitorScratch?.state.scratch?.content;
   const basePreflight = {
     ...wakeFlags,
     session,
