@@ -70,9 +70,12 @@ function expectStringArray(value: unknown, label: string): string[] {
 }
 
 function expectRepoPath(value: unknown, label: string): string {
-  const raw = expectString(value, label).replaceAll("\\", "/");
+  const raw = expectString(value, label);
   const normalized = path.posix.normalize(raw);
   if (
+    raw.includes("\\") ||
+    /^[A-Za-z]:\//u.test(raw) ||
+    path.isAbsolute(raw) ||
     path.posix.isAbsolute(raw) ||
     normalized === "." ||
     normalized === ".." ||
@@ -156,6 +159,9 @@ async function readRegistry(root: string, registryPath: string): Promise<Surface
       "localization surface registry must use schemaVersion 1 and declare adapters and surfaces",
     );
   }
+  if (raw.adapters.length === 0 || raw.surfaces.length === 0) {
+    throw new Error("localization surface registry must declare an adapter and a surface");
+  }
   const adapters = raw.adapters.map((entry, index): SurfaceAdapter => {
     if (!isRecord(entry)) {
       throw new Error(`adapters[${index}] must be an object`);
@@ -169,12 +175,10 @@ async function readRegistry(root: string, registryPath: string): Promise<Surface
         )
       : [];
     for (const excludedRoot of excludedRoots) {
-      if (
-        !roots.some(
-          (rootPath) => excludedRoot === rootPath || excludedRoot.startsWith(`${rootPath}/`),
-        )
-      ) {
-        throw new Error(`adapters[${index}].excludedRoots must stay inside a declared root`);
+      if (!roots.some((rootPath) => excludedRoot.startsWith(`${rootPath}/`))) {
+        throw new Error(
+          `adapters[${index}].excludedRoots must stay below, not replace, a declared root`,
+        );
       }
     }
     const extensions = expectStringArray(entry.extensions, `adapters[${index}].extensions`).map(
@@ -228,7 +232,9 @@ async function discoverRoot(
       cause: error,
     });
   }
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of entries.toSorted((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  )) {
     const childPath = path.posix.join(repoPath, entry.name);
     if (isExcluded(childPath, adapter.excludedRoots)) {
       continue;

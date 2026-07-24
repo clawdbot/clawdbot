@@ -101,6 +101,29 @@ describe("localization surface dispositions", () => {
     ).resolves.toBe(2);
   });
 
+  it("accepts a source owned by a conforming pipeline", async () => {
+    await writeJson(
+      "registry.json",
+      registry([
+        {
+          id: "wizard-core",
+          owner: "wizard",
+          source: "product/en.json",
+          disposition: "conforming-pipeline",
+          pipeline: "wizard-owned catalog refresh",
+        },
+      ]),
+    );
+
+    await expect(
+      checkSurfaceDispositions({
+        root,
+        registryPath: "registry.json",
+        catalogRegistryPath: "catalogs.json",
+      }),
+    ).resolves.toBe(1);
+  });
+
   it("rejects a deferred source without an owner rationale", async () => {
     await writeJson("product/new-surface.json", { messages: {} });
     await writeJson(
@@ -176,5 +199,34 @@ describe("localization surface dispositions", () => {
         catalogRegistryPath: "catalogs.json",
       }),
     ).rejects.toThrow("surface stale-surface declares undiscovered source product/missing.json");
+  });
+
+  it("rejects cross-platform absolute surface paths", async () => {
+    await writeJson(
+      "registry.json",
+      registry([{ ...adoptedSurface, source: "C:/outside/product/en.json" }]),
+    );
+
+    await expect(
+      checkSurfaceDispositions({
+        root,
+        registryPath: "registry.json",
+        catalogRegistryPath: "catalogs.json",
+      }),
+    ).rejects.toThrow("normalized repository-relative path");
+  });
+
+  it("rejects excluding an adapter's complete owner root", async () => {
+    const value = registry([adoptedSurface]);
+    value.adapters[0]!.excludedRoots = ["product"];
+    await writeJson("registry.json", value);
+
+    await expect(
+      checkSurfaceDispositions({
+        root,
+        registryPath: "registry.json",
+        catalogRegistryPath: "catalogs.json",
+      }),
+    ).rejects.toThrow("must stay below, not replace, a declared root");
   });
 });

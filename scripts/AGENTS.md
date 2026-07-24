@@ -38,6 +38,8 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 - Keep refresh budgets atomic and bounded before provider calls: at most 5 areas, 110 stale targets, 500 messages per area, 4,000 characters per message, 100,000 source characters per area, and 2,000,000 source-character translations per run. Split larger work into reviewed owner slices instead of raising limits casually.
 - Keep auto-merge disabled. Generation provenance and structural validation do not count as linguistic, product, or safety approval.
 - A new area must include the owner runtime import and focused rendering tests in the same adoption slice. Do not register speculative or unconsumed catalogs.
+- Extend `localization/surfaces.json` progressively with owner-scoped adapters. Adapters enumerate product-facing source resources; they do not scan arbitrary literals or prove repository-wide coverage.
+- Every source discovered by an adapter needs the matching semantic owner and one explicit disposition: adopted catalog area, conforming owner pipeline, or a reviewed English-only, platform-constrained, or deferred rationale. Exclude generated roots, never the complete owner root.
 
 ## Scope
 
