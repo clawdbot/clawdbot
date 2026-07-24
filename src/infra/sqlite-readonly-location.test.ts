@@ -169,6 +169,40 @@ describe("prepareSqliteReadOnlyLocation", () => {
     }
   });
 
+  it("retries when backup fallback inspection sees a replaced source", async () => {
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const writer = new sqlite.DatabaseSync(databasePath);
+    writer.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE probe (value TEXT);
+      INSERT INTO probe VALUES ('ok');
+    `);
+    let failNextSourceStat = false;
+    vi.spyOn(sqlite, "backup").mockImplementationOnce(async () => {
+      failNextSourceStat = true;
+      throw new Error("simulated backup race");
+    });
+    const statSync = fs.statSync.bind(fs);
+    vi.spyOn(fs, "statSync").mockImplementation(((pathname, options) => {
+      if (failNextSourceStat && path.resolve(String(pathname)) === path.resolve(databasePath)) {
+        failNextSourceStat = false;
+        const error = new Error("missing");
+        (error as NodeJS.ErrnoException).code = "ENOENT";
+        throw error;
+      }
+      return statSync(pathname, options as never);
+    }) as typeof fs.statSync);
+
+    const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+    expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "ok" }]);
+    snapshot.close();
+    expect(prepared.cleanup()).toBe(true);
+    writer.close();
+  });
+
   it("backs up live MEMORY-journal transactions atomically", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
