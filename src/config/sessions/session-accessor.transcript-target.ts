@@ -8,6 +8,7 @@ import type {
   SessionTranscriptRuntimeScope,
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 
 type SessionTranscriptRuntimeContext = {
   agentId: string;
@@ -22,9 +23,15 @@ function resolveRuntimeContext(
   if (!agentId) {
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
   }
-  const storePath =
+  const configuredStorePath =
     resolveConcreteStorePath(scope.storePath) ??
     resolveStorePath(getRuntimeConfig().session?.store, { agentId, env: scope.env });
+  const storePath = resolveSessionStorePathForScope({
+    agentId,
+    env: scope.env,
+    sessionKey: scope.sessionKey,
+    storePath: configuredStorePath,
+  });
   const store = Object.fromEntries(
     listSessionEntries({ agentId, storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
@@ -59,9 +66,15 @@ export function resolveSessionTranscriptReadTarget(
   if (!agentId) {
     throw new Error(`Cannot resolve transcript scope without an agent id: ${sessionKey}`);
   }
-  const storePath =
+  const configuredStorePath =
     resolveConcreteStorePath(scope.storePath) ??
     resolveStorePath(getRuntimeConfig().session?.store, { agentId, env: scope.env });
+  const storePath = resolveSessionStorePathForScope({
+    agentId,
+    env: scope.env,
+    sessionKey,
+    storePath: configuredStorePath,
+  });
   return {
     agentId,
     sessionId: scope.sessionId,

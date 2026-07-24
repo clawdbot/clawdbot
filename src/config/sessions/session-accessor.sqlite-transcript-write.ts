@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -570,7 +571,10 @@ export async function withSqliteTranscriptWriteTransaction<T>(
           agentId: resolved.agentId,
           sessionId: resolved.sessionId,
           sessionKey: resolved.sessionKey,
-          storePath: resolved.path ?? scope.storePath ?? "",
+          storePath:
+            resolved.path ??
+            scope.storePath ??
+            resolveOpenClawAgentSqlitePath({ agentId: resolved.agentId, env: resolved.env }),
         }),
       toDatabaseOptions(resolved),
       { operationLabel: "session.transcript.batch" },
