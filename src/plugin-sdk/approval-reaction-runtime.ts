@@ -313,10 +313,10 @@ function buildApprovalReactionPromptText(params: {
     const warningText = view.warningText?.trim();
     if (warningText) {
       // The auto-review rationale is the reason for the interruption, so bold
-      // it. It is generated text; the reaction-runtime renderers (iMessage,
-      // Signal, WhatsApp) parse to an IR that tolerates stray markers, so a
-      // rationale containing a lone `*` degrades gracefully rather than
-      // breaking the span.
+      // it. It is generated text: the reaction-runtime renderers parse to an
+      // IR, so an unmatched `*`/`_` in the rationale degrades to imperfect
+      // styling rather than a delivery failure, but the emphasis is not
+      // guaranteed pixel-perfect for hostile rationale text.
       sections.push(`**${warningText}**`);
     }
     const warningLines = view.commandAnalysis?.warningLines
