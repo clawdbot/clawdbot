@@ -28,7 +28,6 @@ import {
   loadSessionCostSummariesFromCache as loadSessionCostSummariesFromCacheForAgent,
   loadSessionLogs as loadSessionLogsForAgent,
   loadSessionUsageTimeSeries as loadSessionUsageTimeSeriesForAgent,
-  resolveExistingUsageSessionFile as resolveExistingUsageSessionFileForAgent,
 } from "./session-cost-usage.js";
 import { testing as sessionCostUsageTestApi } from "./session-cost-usage.test-support.js";
 
