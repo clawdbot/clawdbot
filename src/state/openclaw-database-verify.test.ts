@@ -93,17 +93,17 @@ describe("OpenClaw database integrity verifier", () => {
     ]);
     await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual(directResults);
 
-    // The drift lives outside schema_meta, so the rescoped open still succeeds;
-    // the recorder must then quarantine this live handle, not just future opens.
-    const liveHandle = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(liveHandle.db.isOpen).toBe(true);
+    // The drift is not a committed canonical index, so open must fail closed
+    // instead of guessing a replacement definition.
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      expect.objectContaining({ name: "SqliteIntegrityError" }),
+    );
 
     applyOpenClawDatabaseVerificationResults({
       env,
       results: directResults,
       targets,
     });
-    expect(liveHandle.db.isOpen).toBe(false);
     expect(readOpenClawDatabaseQuarantine(agentPath, { env })).toEqual({
       kind: "agent",
       quarantinedAt: expect.any(Number),
@@ -123,7 +123,9 @@ describe("OpenClaw database integrity verifier", () => {
       }),
     );
     clearOpenClawAgentDatabaseOpenFailure(agentPath, { env });
-    expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      expect.objectContaining({ name: "SqliteIntegrityError" }),
+    );
   });
 
   it("reports an uncleared quarantine row instead of claiming repair success", () => {
