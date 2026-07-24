@@ -276,7 +276,12 @@ class Monitor {
     state.requesterSessionKey ??= params.requesterSessionKey;
     state.taskRuntimeScope ??= params.taskRuntimeScope;
     state.agentId ??= params.agentId;
-    state.isRelayHealthy ??= params.isRelayHealthy;
+    if (params.isRelayHealthy) {
+      // Relay ownership is turn-scoped while the monitor and detached child are
+      // client-scoped. A later parent turn must therefore replace the health
+      // probe instead of leaving the mirror bound to an unregistered relay.
+      state.isRelayHealthy = params.isRelayHealthy;
+    }
     this.prepareParentTaskRuntime(state);
     for (const childState of this.childStates.values()) {
       if (childState.parentThreadId === parentThreadId && childState.pendingCompletion) {
@@ -324,7 +329,7 @@ class Monitor {
         requesterSessionKey: state.requesterSessionKey,
         agentId: state.agentId,
         endpoint: `codex-app-server:${getCodexAppServerClientInstanceId(this.client)}`,
-        isRelayHealthy: state.isRelayHealthy,
+        isRelayHealthy: state.isRelayHealthy ? () => state.isRelayHealthy?.() === true : undefined,
       },
       state.taskRuntime,
     );
