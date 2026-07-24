@@ -414,6 +414,38 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(JSON.stringify(flow.stateJson)).not.toContain("receipts");
   });
 
+  it("dead-letters semantically invalid recovered attachment snapshots and scrubs raw bytes", () => {
+    const corruptions = [
+      {
+        sessionKey: "session-noncanonical-base64",
+        content: "Z g==",
+        attachment: { name: "brief.bin", content: "Z g==", encoding: "base64" },
+      },
+      {
+        sessionKey: "session-invalid-attachment-name",
+        content: "RECOVERY_INVALID_NAME_CONTENT_MUST_NOT_RETAIN",
+        attachment: {
+          name: "../escape.txt",
+          content: "RECOVERY_INVALID_NAME_CONTENT_MUST_NOT_RETAIN",
+        },
+      },
+    ];
+
+    for (const corruption of corruptions) {
+      const flowId = queueRawPendingFlow(corruption.sessionKey, {
+        kind: "continuation_delegate",
+        task: "reject semantically invalid recovered attachment",
+        attachments: [corruption.attachment],
+      });
+
+      expect(consumePendingDelegates(corruption.sessionKey)).toEqual([]);
+      const flow = expectDefined(mockFlows.get(flowId), "failed semantic attachment flow");
+      expect(flow.status).toBe("failed");
+      expect(flow.stateJson).not.toHaveProperty("attachments");
+      expect(JSON.stringify(flow.stateJson)).not.toContain(corruption.content);
+    }
+  });
+
   it("scrubs attachment bytes when a delegate reaches a terminal state", () => {
     enqueuePendingDelegate("session-terminal-success", {
       task: "successful attachment task",

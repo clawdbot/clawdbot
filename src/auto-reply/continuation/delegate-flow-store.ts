@@ -10,7 +10,10 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { registerDiagnosticContinuationQueueMetricsProvider } from "../../logging/diagnostic-continuation-queues.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { parseInlineAttachmentMountPath } from "../../shared/inline-attachments.js";
+import {
+  validateInlineAttachmentSnapshots,
+  parseInlineAttachmentMountPath,
+} from "../../shared/inline-attachments.js";
 import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import {
   createManagedTaskFlow,
@@ -129,6 +132,14 @@ const PendingDelegateStateSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "continuation delegate payload cannot combine explicit targets with fanoutMode",
+      });
+      return;
+    }
+    if (validateInlineAttachmentSnapshots({ attachments: state.attachments })) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["attachments"],
+        message: "invalid inline attachment snapshot",
       });
       return;
     }
