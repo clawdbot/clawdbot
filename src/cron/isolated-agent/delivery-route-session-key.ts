@@ -9,7 +9,14 @@ import type { CronJob } from "../types.js";
  * Keep this provider-specific because other adapters have their own current-session
  * semantics and are outside #95646.
  */
-export function selectCronRouteCurrentSessionKey(job: CronJob, agentSessionKey: string): string {
+export function selectCronRouteCurrentSessionKey(
+  job: CronJob,
+  agentSessionKey: string,
+  deliveryProvider: string,
+): string {
+  if (deliveryProvider.trim().toLowerCase() !== "mattermost") {
+    return agentSessionKey;
+  }
   const bound = (job.sessionKey ?? "").trim();
   const parsed = parseAgentSessionKey(bound);
   if (parsed && /^mattermost:(direct|group|channel):[^:]+(?::thread:[^:]+)?$/i.test(parsed.rest)) {

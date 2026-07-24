@@ -753,7 +753,11 @@ async function resolveDirectCronDeliverySessionKey(params: {
     jobId: params.job.id,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
-    routeCurrentSessionKey: selectCronRouteCurrentSessionKey(params.job, params.agentSessionKey),
+    routeCurrentSessionKey: selectCronRouteCurrentSessionKey(
+      params.job,
+      params.agentSessionKey,
+      params.delivery.channel,
+    ),
     delivery: params.delivery,
     warningContext: "direct delivery mirror",
   });
@@ -842,7 +846,11 @@ export async function queueCronMessageToolDeliveryAwareness(params: {
       jobId: params.job.id,
       agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
-      routeCurrentSessionKey: selectCronRouteCurrentSessionKey(params.job, params.agentSessionKey),
+      routeCurrentSessionKey: selectCronRouteCurrentSessionKey(
+        params.job,
+        params.agentSessionKey,
+        target.channel,
+      ),
       delivery: target,
       warningContext: "message-tool delivery awareness",
     });

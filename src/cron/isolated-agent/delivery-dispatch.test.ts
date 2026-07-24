@@ -11,40 +11,62 @@ describe("selectCronRouteCurrentSessionKey", () => {
     // The exact #95646 scenario: a recheck cron bound to the inbound group session.
     const bound =
       "agent:main:mattermost:group:mde76yfz8ifgpgag69otk8rw6c:thread:mofm6k3fai8ixyhhna7m4pa43o";
-    expect(selectCronRouteCurrentSessionKey(job(bound), ISOLATED_RUN_KEY)).toBe(bound);
+    expect(selectCronRouteCurrentSessionKey(job(bound), ISOLATED_RUN_KEY, "mattermost")).toBe(
+      bound,
+    );
   });
 
   it("prefers bound channel and direct thread sessions too", () => {
     const channel = "agent:main:mattermost:channel:pub999:thread:root1";
-    expect(selectCronRouteCurrentSessionKey(job(channel), ISOLATED_RUN_KEY)).toBe(channel);
+    expect(selectCronRouteCurrentSessionKey(job(channel), ISOLATED_RUN_KEY, "mattermost")).toBe(
+      channel,
+    );
     const direct = "agent:main:mattermost:direct:user1:thread:root2";
-    expect(selectCronRouteCurrentSessionKey(job(direct), ISOLATED_RUN_KEY)).toBe(direct);
+    expect(selectCronRouteCurrentSessionKey(job(direct), ISOLATED_RUN_KEY, "mattermost")).toBe(
+      direct,
+    );
+  });
+
+  it("keeps the isolated run key when a Mattermost-bound job delivers elsewhere", () => {
+    const bound =
+      "agent:main:mattermost:group:mde76yfz8ifgpgag69otk8rw6c:thread:mofm6k3fai8ixyhhna7m4pa43o";
+    expect(selectCronRouteCurrentSessionKey(job(bound), ISOLATED_RUN_KEY, "telegram")).toBe(
+      ISOLATED_RUN_KEY,
+    );
   });
 
   it("falls back to the isolated run key when the job has no bound session", () => {
-    expect(selectCronRouteCurrentSessionKey(job(undefined), ISOLATED_RUN_KEY)).toBe(
+    expect(selectCronRouteCurrentSessionKey(job(undefined), ISOLATED_RUN_KEY, "mattermost")).toBe(
       ISOLATED_RUN_KEY,
     );
-    expect(selectCronRouteCurrentSessionKey(job("   "), ISOLATED_RUN_KEY)).toBe(ISOLATED_RUN_KEY);
+    expect(selectCronRouteCurrentSessionKey(job("   "), ISOLATED_RUN_KEY, "mattermost")).toBe(
+      ISOLATED_RUN_KEY,
+    );
   });
 
   it("falls back to the isolated run key for non-Mattermost and malformed bindings", () => {
     expect(
-      selectCronRouteCurrentSessionKey(job("agent:main:cron:job-2:run:run-2"), ISOLATED_RUN_KEY),
+      selectCronRouteCurrentSessionKey(
+        job("agent:main:cron:job-2:run:run-2"),
+        ISOLATED_RUN_KEY,
+        "mattermost",
+      ),
     ).toBe(ISOLATED_RUN_KEY);
     expect(
       selectCronRouteCurrentSessionKey(
         job("agent:main:telegram:group:-100123:thread:42"),
         ISOLATED_RUN_KEY,
+        "mattermost",
       ),
     ).toBe(ISOLATED_RUN_KEY);
-    expect(selectCronRouteCurrentSessionKey(job("agent:main:main"), ISOLATED_RUN_KEY)).toBe(
-      ISOLATED_RUN_KEY,
-    );
+    expect(
+      selectCronRouteCurrentSessionKey(job("agent:main:main"), ISOLATED_RUN_KEY, "mattermost"),
+    ).toBe(ISOLATED_RUN_KEY);
     expect(
       selectCronRouteCurrentSessionKey(
         job("agent:main:mattermost:group:peer:unexpected"),
         ISOLATED_RUN_KEY,
+        "mattermost",
       ),
     ).toBe(ISOLATED_RUN_KEY);
   });
