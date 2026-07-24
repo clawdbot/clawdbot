@@ -5,7 +5,7 @@ import { isSafeClawRelativePath } from "./schema-portability.js";
 import { parseClawOpenClawProfile } from "./schema.js";
 import type { ClawDiagnostic, ClawManifest, ClawOpenClawProfile } from "./types.js";
 
-const MAX_OPENCLAW_PROFILE_BYTES = 256 * 1024;
+const MAX_PROFILE_BYTES = 256 * 1024;
 
 function diagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
@@ -75,7 +75,7 @@ async function readProfileFile(packageRoot: string, path: string): Promise<Buffe
   const packageFiles = await fsSafeRoot(packageRoot);
   const read = await packageFiles.read(path, {
     hardlinks: "reject",
-    maxBytes: MAX_OPENCLAW_PROFILE_BYTES,
+    maxBytes: MAX_PROFILE_BYTES,
     nonBlockingRead: true,
     symlinks: "reject",
   });
@@ -130,7 +130,7 @@ export async function readClawOpenClawProfile(params: {
           unsafe
             ? "The OpenClaw profile must be a regular, non-symlinked, non-hardlinked file."
             : tooLarge
-              ? `The OpenClaw profile exceeds ${MAX_OPENCLAW_PROFILE_BYTES} bytes.`
+              ? `The OpenClaw profile exceeds ${MAX_PROFILE_BYTES} bytes.`
               : `Could not read ${declaredPath}: ${(error as Error).message}`,
           "$.metadata.openclaw.config",
         ),
