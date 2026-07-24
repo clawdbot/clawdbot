@@ -20,6 +20,9 @@ type OpenSqliteDirectoryReceipt = {
   receipt: SqlitePathIdentityReceipt;
 };
 
+const LINUX_O_PATH = 0x20_0000;
+const DARWIN_O_SEARCH = 0x4010_0000;
+
 function sqliteDirectoryOpenFlags(): string | number {
   if (process.platform === "win32") {
     return "r";
@@ -33,6 +36,16 @@ function sqliteDirectoryOpenFlags(): string | number {
 
 async function openDirectoryHandle(directoryPath: string): Promise<FileHandle> {
   return await fs.open(directoryPath, sqliteDirectoryOpenFlags());
+}
+
+function sqliteDirectoryModeRepairFlags(): number | undefined {
+  if (process.platform === "linux") {
+    return LINUX_O_PATH | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
+  }
+  if (process.platform === "darwin") {
+    return DARWIN_O_SEARCH | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
+  }
+  return undefined;
 }
 
 function isWindowsDirectorySyncUnsupported(error: unknown): boolean {
@@ -85,10 +98,42 @@ async function assertOpenDirectoryCurrent(
 export async function openSqliteDirectoryForDurability(
   receipt: SqlitePathIdentityReceipt,
   label: string,
+  options: { mode?: number } = {},
 ): Promise<FileHandle> {
-  const handle = await openDirectoryHandle(receipt.path);
+  let handle: FileHandle;
+  try {
+    handle = await openDirectoryHandle(receipt.path);
+  } catch (error) {
+    const repairFlags = sqliteDirectoryModeRepairFlags();
+    if (
+      (error as NodeJS.ErrnoException).code !== "EACCES" ||
+      options.mode === undefined ||
+      repairFlags === undefined
+    ) {
+      throw error;
+    }
+    const repairHandle = await fs.open(receipt.path, repairFlags);
+    try {
+      await assertOpenDirectoryCurrent(repairHandle, receipt, label);
+      if (process.platform === "linux") {
+        // O_PATH pins an unreadable Linux directory but cannot be fchmod'd.
+        // /proc resolves this descriptor to the pinned inode, not the pathname.
+        await fs.chmod(`/proc/self/fd/${repairHandle.fd}`, options.mode);
+      } else {
+        await repairHandle.chmod(options.mode);
+      }
+      await assertOpenDirectoryCurrent(repairHandle, receipt, label);
+    } finally {
+      await repairHandle.close();
+    }
+    handle = await openDirectoryHandle(receipt.path);
+  }
   try {
     await assertOpenDirectoryCurrent(handle, receipt, label);
+    if (options.mode !== undefined && process.platform !== "win32") {
+      await handle.chmod(options.mode);
+      await assertOpenDirectoryCurrent(handle, receipt, label);
+    }
     return handle;
   } catch (error) {
     await handle.close().catch(() => undefined);
@@ -186,19 +231,25 @@ async function findExistingAncestorReceipt(
 export async function ensureDurableSqliteDirectory(params: {
   directoryPath: string;
   label: string;
+  repairExistingMode?: number;
   create: (directoryPath: string) => Promise<void>;
 }): Promise<DurableSqliteDirectoryReceipt> {
   const directoryPath = path.resolve(params.directoryPath);
   const ancestor = await findExistingAncestorReceipt(directoryPath, params.label);
+  const targetExists = ancestor.path === directoryPath;
   // Keep the preexisting anchor open while the creator runs. Otherwise a
   // remove/recreate race can recycle its inode and hide an unsynced new edge.
-  const ancestorHandle = await openSqliteDirectoryForDurability(ancestor, params.label);
+  const ancestorHandle = await openSqliteDirectoryForDurability(ancestor, params.label, {
+    mode: targetExists ? params.repairExistingMode : undefined,
+  });
   const openedReceipts: OpenSqliteDirectoryReceipt[] = [
     { handle: ancestorHandle, receipt: ancestor },
   ];
   try {
     await assertOpenDirectoryCurrent(ancestorHandle, ancestor, params.label);
-    await params.create(directoryPath);
+    if (!targetExists) {
+      await params.create(directoryPath);
+    }
     await assertOpenDirectoryCurrent(ancestorHandle, ancestor, params.label);
 
     let currentPath = ancestor.path;

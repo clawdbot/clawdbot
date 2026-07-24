@@ -124,7 +124,7 @@ describe("SQLite path durability", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "rejects an existing ancestor replaced before the create callback",
+    "repairs the pinned existing target and rejects a path replacement",
     async () => {
       const directoryPath = await fs.realpath(
         tempDirs.make("openclaw-sqlite-durable-existing-race-"),
@@ -134,29 +134,39 @@ describe("SQLite path durability", () => {
       let replaced = false;
       let createCalled = false;
       vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-        if (
-          !replaced &&
-          isDirectoryOpen(flags) &&
-          path.resolve(String(filePath)) === directoryPath
-        ) {
-          replaced = true;
-          await fs.rename(directoryPath, displacedPath);
-          await fs.mkdir(directoryPath);
+        const handle = await originalOpen(filePath, flags, mode);
+        if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === directoryPath) {
+          const originalChmod = handle.chmod.bind(handle);
+          vi.spyOn(handle, "chmod").mockImplementation(async (targetMode) => {
+            replaced = true;
+            await fs.rename(directoryPath, displacedPath);
+            await fs.mkdir(directoryPath);
+            await fs.chmod(directoryPath, 0o755);
+            await originalChmod(targetMode);
+          });
         }
-        return await originalOpen(filePath, flags, mode);
+        return handle;
       });
 
-      await expect(
-        ensureDurableSqliteDirectory({
-          directoryPath,
-          label: "test directory",
-          create: async () => {
-            createCalled = true;
-          },
-        }),
-      ).rejects.toThrow(/handle changed during directory sync/u);
-      expect(replaced).toBe(true);
-      expect(createCalled).toBe(false);
+      try {
+        await expect(
+          ensureDurableSqliteDirectory({
+            directoryPath,
+            label: "test directory",
+            repairExistingMode: 0o700,
+            create: async () => {
+              createCalled = true;
+            },
+          }),
+        ).rejects.toThrow(/changed during durable directory operation/u);
+        expect(replaced).toBe(true);
+        expect(createCalled).toBe(false);
+        expect((await fs.stat(displacedPath)).mode & 0o777).toBe(0o700);
+        expect((await fs.stat(directoryPath)).mode & 0o777).not.toBe(0o700);
+      } finally {
+        await fs.rm(directoryPath, { recursive: true, force: true });
+        await fs.rename(displacedPath, directoryPath).catch(() => undefined);
+      }
     },
   );
 

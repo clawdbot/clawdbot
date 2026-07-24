@@ -791,6 +791,7 @@ async function ensurePrivateDirectory(
   return await ensureDurableSqliteDirectory({
     directoryPath,
     label: scopeLabel,
+    repairExistingMode: process.platform === "win32" ? undefined : SNAPSHOT_DIRECTORY_MODE,
     create: async (targetPath) => {
       if (process.platform === "win32") {
         const parentResult = await ensureAbsoluteDirectory(path.dirname(targetPath), {

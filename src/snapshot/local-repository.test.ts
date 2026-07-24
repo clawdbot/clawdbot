@@ -326,6 +326,30 @@ describe("local SQLite snapshot repository", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "repairs an existing private repository before pinning it",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const repositoryPath = path.join(tempDir, "snapshots");
+      createGenericDatabase(sourcePath);
+      await fs.mkdir(repositoryPath, { mode: 0o300 });
+      const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+
+      try {
+        await expect(
+          provider.create({
+            path: sourcePath,
+            identity: { role: "generic", id: "repair-existing-repository" },
+          }),
+        ).resolves.toBeDefined();
+        expect((await fs.stat(repositoryPath)).mode & 0o777).toBe(0o700);
+      } finally {
+        await fs.chmod(repositoryPath, 0o700).catch(() => undefined);
+      }
+    },
+  );
+
   it("fails creation when a nested repository parent edge cannot be synced", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");
