@@ -1,3 +1,5 @@
+import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
@@ -56,10 +58,35 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
     sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile,
   );
   if (sessionFileUsed && sessionFileChanged) {
+    const marker = parseSqliteSessionFileMarker(sessionFileUsed);
+    if (marker) {
+      if (
+        marker.sessionId !== sessionIdUsed ||
+        !sessionPromptState.sessionTarget?.sessionKey ||
+        marker.agentId !== sessionPromptState.sessionTarget.agentId
+      ) {
+        throw new Error("Legacy context-engine successor identity is inconsistent");
+      }
+      sessionPromptState.sessionTarget = {
+        ...marker,
+        sessionKey: sessionPromptState.sessionTarget.sessionKey,
+      };
+    } else if (
+      sessionFileUsed.startsWith("agent:") &&
+      sessionPromptState.sessionTarget &&
+      resolveAgentIdFromSessionKey(sessionFileUsed) === sessionPromptState.sessionTarget.agentId
+    ) {
+      sessionPromptState.sessionTarget = {
+        ...sessionPromptState.sessionTarget,
+        sessionId: sessionIdUsed,
+        sessionKey: sessionFileUsed,
+      };
+    } else {
+      throw new Error(
+        "Legacy context-engine successor files are unsupported; return a structured sessionTarget",
+      );
+    }
     sessionPromptState.sessionFile = sessionFileUsed;
-    // A pre-sessionTarget engine returned an opaque successor locator. The old
-    // structured target must not override that compatibility result on retry.
-    sessionPromptState.sessionTarget = undefined;
   }
   if (!sessionFileChanged && sessionIdUsed && sessionIdUsed !== previousSessionId) {
     sessionPromptState.sessionTarget = sessionPromptState.sessionTarget

@@ -49,6 +49,8 @@ export async function persistCompactionCheckpoint(params: {
       firstKeptEntryId: params.firstKeptEntryId,
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
+      // SQLite checkpoints persist postCompaction.sessionId plus leaf/entry ids.
+      // postSessionFile is reserved for named legacy/artifact fork sources.
       postSessionFile: params.sessionTarget ? undefined : params.sessionFile,
       postLeafId: checkpointPosition.leafId,
       postEntryId: checkpointPosition.entryId,
