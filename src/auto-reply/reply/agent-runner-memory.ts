@@ -43,7 +43,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -707,11 +707,19 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         transcriptBytesTokens,
       };
     }
-    const messages = (await readSessionMessagesAsync(sessionId, params.storePath, undefined, {
-      mode: "recent",
-      maxMessages: 200,
-      maxBytes: 1024 * 1024,
-    })) as AgentMessage[];
+    const messages = (await readSessionMessagesAsync(
+      {
+        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      {
+        mode: "recent",
+        maxMessages: 200,
+        maxBytes: 1024 * 1024,
+      },
+    )) as AgentMessage[];
     const estimatedMessageTokens = (() => {
       if (messages.length === 0) {
         return undefined;
