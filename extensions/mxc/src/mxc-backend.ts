@@ -194,6 +194,17 @@ export function createMxcSandboxBackendHandle(params: {
     runtimeId: params.runtimeId,
     runtimeLabel: params.runtimeId,
     workdir: params.workdir,
+    workdirValidation: "backend",
+    async validateWorkdir(workdir) {
+      try {
+        return resolveWorkdirInsideWorkspace(params.workdir, workdir);
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("MXC sandbox workdir")) {
+          return null;
+        }
+        throw err;
+      }
+    },
     capabilities: {},
 
     async buildExecSpec({ command, workdir, env, usePty }): Promise<SandboxBackendExecSpec> {
