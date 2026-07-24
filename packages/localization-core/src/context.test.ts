@@ -56,15 +56,31 @@ describe("localization context", () => {
     expect(result.context.source).toBe("english-default");
   });
 
-  it("continues through unsupported inferred process locales", () => {
+  it("honors POSIX locale precedence when the highest-priority value is unsupported", () => {
     const result = resolveProcessLocalizationContext(
       {
-        LC_ALL: "de-DE",
+        LC_ALL: "de",
         LC_MESSAGES: "zh-Hant",
       },
       { audience: "operator", supportedLocales: ["en", "zh-CN", "zh-TW"] },
     );
-    expect(result.context.locale).toBe("zh-TW");
+    expect(result.context.locale).toBe("en");
+    expect(result.findings).toEqual([
+      { source: "platform", value: "de", reason: "unsupported-by-surface" },
+    ]);
+  });
+
+  it("keeps the POSIX C locale in English instead of falling through to LANG", () => {
+    const result = resolveProcessLocalizationContext(
+      {
+        LC_ALL: "C",
+        LANG: "zh_CN.UTF-8",
+      },
+      { audience: "operator", supportedLocales: ["en", "zh-CN", "zh-TW"] },
+    );
+    expect(result.context.locale).toBe("en");
+    expect(result.context.source).toBe("platform");
+    expect(result.findings).toEqual([]);
   });
 
   it("uses runtime platform locales when Windows has no POSIX locale variables", () => {

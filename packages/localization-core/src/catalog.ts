@@ -167,11 +167,25 @@ function formatMessage(
       }
       FORMATTER_CACHE.set(cacheKey, formatter);
     }
-    const result = formatter.format(params);
+    const result = formatter.format(normalizeMessageParams(params));
     return typeof result === "string" ? result : undefined;
   } catch {
     return undefined;
   }
+}
+
+function normalizeMessageParams(
+  params?: Readonly<Record<string, MessageParam>>,
+): Readonly<Record<string, string | number>> | undefined {
+  if (!params) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(params).map(([key, value]) => [
+      key,
+      typeof value === "boolean" ? String(value) : value,
+    ]),
+  );
 }
 
 function validateEntry(

@@ -118,16 +118,30 @@ export function resolveProcessLocalizationContext(
     ]);
   }
 
+  const processLocale = [env.LC_ALL, env.LC_MESSAGES, env.LANG].find((value) => value?.trim());
+  if (processLocale) {
+    const locale =
+      isPosixEnglishLocale(processLocale) && supportedLocales.includes("en")
+        ? "en"
+        : matchInferredOpenClawLocale(processLocale, supportedLocales);
+    if (locale) {
+      return resolution(locale, "platform", options.audience, supportedLocales, []);
+    }
+    return resolution("en", "english-default", options.audience, supportedLocales, [
+      rejection("platform", processLocale, supportedLocales),
+    ]);
+  }
+
   return resolveLocalizationContext({
     audience: options.audience,
-    platform: [
-      env.LC_ALL,
-      env.LC_MESSAGES,
-      env.LANG,
-      ...(options.platform ?? readRuntimePlatformLocales()),
-    ],
+    platform: options.platform ?? readRuntimePlatformLocales(),
     supportedLocales,
   });
+}
+
+function isPosixEnglishLocale(value: string): boolean {
+  const token = value.trim().split(".")[0]?.split("@")[0]?.toUpperCase();
+  return token === "C" || token === "POSIX";
 }
 
 function readRuntimePlatformLocales(): readonly string[] {

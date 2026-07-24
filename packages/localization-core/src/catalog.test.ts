@@ -99,6 +99,26 @@ describe("localization catalogs", () => {
     ).toBe("Approve gateway?");
   });
 
+  it.each([false, true])("renders boolean params as text (%s)", (enabled) => {
+    const snapshot = createCatalogSnapshot({
+      catalogRevision: "test",
+      catalogs: { en: { "core.setting.enabled": "Enabled: {enabled}" } },
+    });
+    const context = createLocalizationContext({
+      locale: "en",
+      source: "english-default",
+      audience: "operator",
+    });
+    expect(
+      renderLocalizedMessage(snapshot, context, {
+        key: "core.setting.enabled",
+        params: { enabled },
+        fallback: "Setting enabled: {enabled}",
+      }),
+    ).toBe(`Enabled: ${enabled}`);
+    expect(interpolateMessage("Enabled: {enabled}", { enabled })).toBe(`Enabled: ${enabled}`);
+  });
+
   it("uses the matched catalog locale for plural fallback", () => {
     const snapshot = createCatalogSnapshot({ catalogRevision: "test", catalogs: { en: english } });
     const context = createLocalizationContext({
