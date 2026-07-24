@@ -71,6 +71,10 @@ function encodeTarEntry(params: {
   return Buffer.concat([headerBlock, body, padding]);
 }
 
+function isTarSourcePath(entryPath: string, sourcePath: string): boolean {
+  return path.resolve(entryPath) === path.resolve(sourcePath);
+}
+
 async function createArchiveWithManifestContent(
   options: {
     tempPrefix: string;
@@ -95,11 +99,11 @@ async function createArchiveWithManifestContent(
         portable: true,
         preservePaths: true,
         onWriteEntry: (entry) => {
-          if (entry.path === manifestPath) {
+          if (isTarSourcePath(entry.path, manifestPath)) {
             entry.path = `${TEST_ARCHIVE_ROOT}/manifest.json`;
             return;
           }
-          if (entry.path === payloadPath) {
+          if (isTarSourcePath(entry.path, payloadPath)) {
             entry.path = payloadArchivePath;
           }
         },
@@ -136,7 +140,7 @@ async function withBrokenArchiveFixture(
     }),
   );
   const payloadEntryPathBySource = new Map(
-    payloadSpecs.map((payload) => [payload.path, payload.archivePath]),
+    payloadSpecs.map((payload) => [path.resolve(payload.path), payload.archivePath]),
   );
 
   try {
@@ -152,11 +156,11 @@ async function withBrokenArchiveFixture(
         portable: true,
         preservePaths: true,
         onWriteEntry: (entry) => {
-          if (entry.path === manifestPath) {
+          if (isTarSourcePath(entry.path, manifestPath)) {
             entry.path = `${TEST_ARCHIVE_ROOT}/manifest.json`;
             return;
           }
-          const payloadEntryPath = payloadEntryPathBySource.get(entry.path);
+          const payloadEntryPath = payloadEntryPathBySource.get(path.resolve(entry.path));
           if (payloadEntryPath) {
             entry.path = payloadEntryPath;
           }
@@ -218,11 +222,11 @@ describe("backupVerifyCommand", () => {
           portable: true,
           preservePaths: true,
           onWriteEntry: (entry) => {
-            if (entry.path === manifestPath) {
+            if (isTarSourcePath(entry.path, manifestPath)) {
               entry.path = `${archiveRoot}/manifest.json`;
               return;
             }
-            if (entry.path === payloadPath) {
+            if (isTarSourcePath(entry.path, payloadPath)) {
               entry.path = payloadArchivePath;
             }
           },
@@ -1123,15 +1127,15 @@ describe("backupVerifyCommand", () => {
           portable: true,
           preservePaths: true,
           onWriteEntry: (entry) => {
-            if (entry.path === manifestPath) {
+            if (isTarSourcePath(entry.path, manifestPath)) {
               entry.path = `${archiveRoot}/manifest.json`;
               return;
             }
-            if (entry.path === statePayloadPath) {
+            if (isTarSourcePath(entry.path, statePayloadPath)) {
               entry.path = stateArchivePath;
               return;
             }
-            if (entry.path === workspaceManifestPayloadPath) {
+            if (isTarSourcePath(entry.path, workspaceManifestPayloadPath)) {
               entry.path = workspaceArchivePath;
             }
           },
