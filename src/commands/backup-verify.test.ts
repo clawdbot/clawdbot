@@ -8,7 +8,7 @@ import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { buildBackupArchiveRoot } from "./backup-shared.js";
+import { buildBackupArchivePath, buildBackupArchiveRoot } from "./backup-shared.js";
 import { backupVerifyCommand, testApi } from "./backup-verify.js";
 
 const TEST_ARCHIVE_ROOT = "2026-03-09T00-00-00.000Z-openclaw-backup";
@@ -274,6 +274,66 @@ describe("backupVerifyCommand", () => {
       },
     );
   });
+
+  it.runIf(process.platform === "win32")(
+    "verifies a canonical global SQLite backup beyond MAX_PATH",
+    async () => {
+      const stateDir = String.raw`C:\Users\OpenClaw\.openclaw`;
+      const stateAssetArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir);
+      const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+      const sqlitePayload = await createSqlitePayload((database) => {
+        database.exec(`
+          CREATE TABLE schema_meta (
+            meta_key TEXT NOT NULL PRIMARY KEY,
+            role TEXT NOT NULL
+          );
+          INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+        `);
+      });
+
+      await withBrokenArchiveFixture(
+        {
+          tempPrefix: "openclaw-backup-windows-long-path-",
+          manifestAssetArchivePath: stateAssetArchivePath,
+          manifest: createBackupManifest(stateAssetArchivePath, TEST_ARCHIVE_ROOT, stateDir),
+          payloads: [
+            {
+              fileName: "openclaw.sqlite",
+              contents: sqlitePayload,
+              archivePath: sqliteArchivePath,
+            },
+          ],
+        },
+        async (archivePath) => {
+          const verificationTempBase = tempDirs.make("openclaw-backup-verify-long-path-");
+          let verificationTempRoot = verificationTempBase;
+          const resolveMinimumExtractedPath = () =>
+            path.join(
+              verificationTempRoot,
+              "openclaw-backup-verify-sqlite-",
+              ...sqliteArchivePath.split("/"),
+            );
+          while (resolveMinimumExtractedPath().length <= 260) {
+            verificationTempRoot = path.join(verificationTempRoot, `segment-${"x".repeat(24)}`);
+          }
+          await fs.mkdir(verificationTempRoot, { recursive: true });
+          expect(verificationTempRoot.startsWith("\\\\?\\")).toBe(false);
+          expect(resolveMinimumExtractedPath().length).toBeGreaterThan(260);
+
+          const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(verificationTempRoot);
+          try {
+            const runtime = createBackupVerifyRuntime();
+            await expect(
+              backupVerifyCommand(runtime, { archive: archivePath }),
+            ).resolves.toMatchObject({ ok: true });
+            await expect(fs.readdir(verificationTempRoot)).resolves.toEqual([]);
+          } finally {
+            tmpdirSpy.mockRestore();
+          }
+        },
+      );
+    },
+  );
 
   it("rejects canonical SQLite snapshots with foreign-key violations", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
