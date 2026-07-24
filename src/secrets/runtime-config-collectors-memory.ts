@@ -1,7 +1,11 @@
 /** Collects per-agent memory search secret refs from runtime config. */
-import { type ListedAgentEntry, listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
+import {
+  hasAgentRosterProperty,
+  type ListedAgentEntry,
+  listAgentEntriesWithSource,
+} from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { runtimeMemorySecretOwnerId } from "./runtime-memory-secret-owner.js";
 import {
   collectRuntimeSecretInputAssignment,
@@ -19,7 +23,16 @@ export function collectAgentMemorySearchAssignments(params: {
 }): void {
   const memory = params.config.memory as Record<string, unknown> | undefined;
   const defaultsMemorySearch = isRecord(memory?.search) ? memory.search : undefined;
-  const entries = listAgentEntriesWithSource(params.config);
+  const configuredEntries = listAgentEntriesWithSource(params.config);
+  const entries: ListedAgentEntry[] =
+    configuredEntries.length === 0 && !hasAgentRosterProperty(params.config)
+      ? [
+          {
+            entry: { id: LEGACY_IMPLICIT_AGENT_ID, default: true },
+            source: { kind: "entries", key: LEGACY_IMPLICIT_AGENT_ID },
+          },
+        ]
+      : configuredEntries;
   const defaultRemote = isRecord(defaultsMemorySearch?.remote)
     ? defaultsMemorySearch.remote
     : undefined;

@@ -249,7 +249,7 @@ describe("sessions-list-tool", () => {
     );
   });
 
-  it("derives channels only from structurally valid group session keys", async () => {
+  it("omits malformed agent keys and derives channels only from valid group keys", async () => {
     mocks.gatewayCall.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -295,7 +295,6 @@ describe("sessions-list-tool", () => {
       "slack",
       "discord",
       "matrix",
-      "unknown",
       "unknown",
     ]);
   });

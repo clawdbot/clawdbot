@@ -256,13 +256,15 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   agentId?: string;
 }): SessionKeyResolution {
   const sessionId = opts.sessionId.trim();
-  const storeAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
+  const storeAgentId = opts.agentId?.trim()
+    ? normalizeAgentId(opts.agentId)
+    : resolveDefaultAgentId(opts.cfg);
   const storePath = resolveStorePath(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
   const sessionStore = loadCommandSessionStore({
     storePath,
-    ...(storeAgentId ? { agentId: storeAgentId } : {}),
+    agentId: storeAgentId,
   });
   if (!sessionId) {
     return { sessionKey: undefined, sessionStore, storePath };

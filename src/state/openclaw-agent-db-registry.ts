@@ -241,8 +241,30 @@ function resolveDanglingSymlinkTargetPath(lexicalPath: string): {
   return { existingPath: resolved, unresolvedSegments: [] };
 }
 
+function anchorDatabasePathWithoutNormalizing(pathname: string): string {
+  const platformPath = path.sep === "\\" ? pathname.replaceAll("/", "\\") : pathname;
+  if (path.isAbsolute(platformPath)) {
+    return platformPath;
+  }
+  if (path.sep === "\\") {
+    const driveRelative = /^([A-Za-z]:)(.*)$/u.exec(platformPath);
+    if (driveRelative) {
+      // Resolve only the drive's current-directory anchor. Appending the raw
+      // suffix preserves `..` for the component-wise filesystem walk below.
+      const driveBase = path.resolve(`${driveRelative[1]}.`);
+      return driveRelative[2]
+        ? `${driveBase}${driveBase.endsWith(path.sep) ? "" : path.sep}${driveRelative[2]}`
+        : driveBase;
+    }
+  }
+  const cwd = process.cwd();
+  return `${cwd}${cwd.endsWith(path.sep) ? "" : path.sep}${platformPath}`;
+}
+
 function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathIdentity {
-  const lexicalPath = path.resolve(pathname);
+  // `path.resolve` collapses `..` before symlinks are inspected, but the filesystem
+  // resolves `link/..` from the link target. Anchor relative input without rewriting tokens.
+  const lexicalPath = anchorDatabasePathWithoutNormalizing(pathname);
   try {
     const stat = statSync(lexicalPath, { bigint: true });
     return {

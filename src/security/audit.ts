@@ -774,9 +774,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   const interpreterAllowlistHits = collectInterpreterAllowlistHits({
     approvals,
     strictInlineEvalForAgentId: (agentId) => {
-      // Exec approvals store the global scope under the configured default agent id.
-      // Keep that scope global even when the roster's default is not the legacy main id.
-      if (!agentId || agentId === "*" || agentId === defaultAgentId) {
+      if (!agentId || agentId === "*") {
         return globalStrictInlineEval;
       }
       const agent = agents.find((entry) => entry?.id === agentId);

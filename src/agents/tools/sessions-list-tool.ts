@@ -210,19 +210,23 @@ export function createSessionsListTool(opts?: {
       );
       const defaultAgentId = resolveDefaultAgentId(cfg);
       const stateVersions = getSessionStateVersions(
-        sessions.flatMap((entry) =>
-          entry && typeof entry === "object" && typeof entry.key === "string"
-            ? [
-                {
-                  sessionKey: entry.key,
-                  agentId:
-                    typeof entry.agentId === "string" && entry.agentId
-                      ? entry.agentId
-                      : resolveAgentIdFromSessionKey(entry.key, defaultAgentId),
-                },
-              ]
-            : [],
-        ),
+        sessions.flatMap((entry) => {
+          if (!entry || typeof entry !== "object" || typeof entry.key !== "string") {
+            return [];
+          }
+          let agentId =
+            typeof entry.agentId === "string" && entry.agentId ? entry.agentId : undefined;
+          if (!agentId) {
+            try {
+              agentId = resolveAgentIdFromSessionKey(entry.key, defaultAgentId);
+            } catch {
+              // Malformed rows remain subject to the fail-closed visibility checker below,
+              // but cannot participate in agent state-version lookup.
+              return [];
+            }
+          }
+          return [{ sessionKey: entry.key, agentId }];
+        }),
       );
       const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({

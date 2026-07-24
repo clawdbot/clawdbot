@@ -1701,6 +1701,25 @@ describe("openclaw agent database", () => {
       const danglingTraversalAlias = path.join(stateDir, "dangling-traversal.sqlite");
       fs.symlinkSync("missing/../live-worker.sqlite", danglingTraversalAlias);
       expect(isSameOpenClawAgentDatabasePath(danglingTraversalAlias, livePath)).toBe(false);
+      const rawMissingTraversalPath = `${stateDir}${path.sep}missing${path.sep}..${path.sep}live-worker.sqlite`;
+      expect(isSameOpenClawAgentDatabasePath(rawMissingTraversalPath, livePath)).toBe(false);
+      const symlinkParentTarget = path.join(stateDir, "other", "nested");
+      fs.mkdirSync(symlinkParentTarget, { recursive: true });
+      const symlinkParent = path.join(stateDir, "parent-link");
+      fs.symlinkSync(symlinkParentTarget, symlinkParent, "dir");
+      const rawSymlinkParentTraversal = `${symlinkParent}${path.sep}..${path.sep}parent-owned.sqlite`;
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          rawSymlinkParentTraversal,
+          path.join(stateDir, "other", "parent-owned.sqlite"),
+        ),
+      ).toBe(true);
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          rawSymlinkParentTraversal,
+          path.join(stateDir, "parent-owned.sqlite"),
+        ),
+      ).toBe(false);
       const loopPath = path.join(stateDir, "database-loop.sqlite");
       fs.symlinkSync(loopPath, loopPath);
       expect(() => isSameOpenClawAgentDatabasePath(loopPath, realPath)).toThrow(
@@ -1746,6 +1765,18 @@ describe("openclaw agent database", () => {
           path.join(stateDir, "worker.sqlite"),
         ),
       ).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "matches drive-relative and absolute database paths without collapsing the suffix",
+    () => {
+      const cwd = process.cwd();
+      const drive = path.parse(cwd).root.slice(0, 2);
+      const absolutePath = path.join(cwd, "future-drive-relative.sqlite");
+      const driveRelativePath = `${drive}future-drive-relative.sqlite`;
+
+      expect(isSameOpenClawAgentDatabasePath(driveRelativePath, absolutePath)).toBe(true);
     },
   );
 

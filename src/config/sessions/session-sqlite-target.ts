@@ -274,10 +274,20 @@ export function resolveSqliteTargetFromSessionStorePath(
 
 /** Lists durable owners recorded in the fixed store's bounded SQLite sibling family. */
 export function listDurableSqliteTargetOwnersForSessionStorePath(storePath: string): string[] {
+  const owners = new Set<string>();
+  for (const candidatePath of listSqliteTargetCandidatePathsForSessionStorePath(storePath)) {
+    const owner = resolveDatabaseOwner(candidatePath);
+    if (owner) {
+      owners.add(owner);
+    }
+  }
+  return [...owners];
+}
+
+function listSqliteTargetCandidatePathsForSessionStorePath(storePath: string): string[] {
   const unsuffixedTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
   if (unsuffixedTarget.agentId || path.resolve(storePath).endsWith(".sqlite")) {
-    const owner = resolveDatabaseOwner(unsuffixedTarget.path);
-    return owner ? [owner] : [];
+    return [unsuffixedTarget.path];
   }
   const directory = path.dirname(unsuffixedTarget.path);
   const baseName = path.basename(unsuffixedTarget.path, ".sqlite");
@@ -293,14 +303,15 @@ export function listDurableSqliteTargetOwnersForSessionStorePath(storePath: stri
       throw error;
     }
   }
-  const owners = new Set<string>();
-  for (const fileName of candidateNames) {
-    const owner = resolveDatabaseOwner(path.join(directory, fileName));
-    if (owner) {
-      owners.add(owner);
-    }
-  }
-  return [...owners];
+  return [...candidateNames].map((fileName) => path.join(directory, fileName));
+}
+
+/** Lists the logical store's unsuffixed target plus durable owned partitions. */
+export function listDurableSqliteTargetPathsForSessionStorePath(storePath: string): string[] {
+  const candidates = listSqliteTargetCandidatePathsForSessionStorePath(storePath);
+  return candidates.filter(
+    (candidatePath, index) => index === 0 || resolveDatabaseOwner(candidatePath) !== undefined,
+  );
 }
 
 /** Extracts the agent id from the canonical per-agent SQLite database path. */

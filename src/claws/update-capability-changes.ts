@@ -380,9 +380,7 @@ function resolvePortableTools(config: OpenClawConfig, agentId: string): unknown 
 
 function resolvePortableMemorySearch(config: OpenClawConfig, agentId: string): unknown {
   const defaults = config.memory?.search;
-  const overrides = listAgentEntries(config).find(
-    (agent) => agent.id === agentId,
-  )?.memory?.search;
+  const overrides = listAgentEntries(config).find((agent) => agent.id === agentId)?.memory?.search;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const rememberAcrossConversations = resolveRememberAcrossConversations(config, agentId);
   const sessionMemory =
