@@ -1,7 +1,4 @@
-import {
-  loadTranscriptEvents,
-  replaceTranscriptEvents,
-} from "../../config/sessions/session-accessor.js";
+import { withTranscriptWriteLock } from "../../config/sessions/session-accessor.js";
 /**
  * Rewrites transcript entries in session managers, states, and files.
  */
@@ -36,67 +33,50 @@ async function rewriteSqliteRuntimeTranscript(params: {
   target: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>>;
   request: TranscriptRewriteRequest;
 }): Promise<TranscriptRewriteResult> {
-  const replacementsById = new Map(
-    params.request.replacements.map((replacement) => [replacement.entryId, replacement.message]),
-  );
-  let bytesFreed = 0;
-  let rewrittenEntries = 0;
-  const events = await loadTranscriptEvents({
-    agentId: params.target.agentId,
-    sessionId: params.target.sessionId,
-    sessionKey: params.target.sessionKey,
-    storePath: params.target.storePath,
-  });
-  const nextEvents = events.map((event) => {
-    if (!isTranscriptEventRecord(event)) {
-      return event;
-    }
-    const eventId = typeof event.id === "string" ? event.id : undefined;
-    const replacement = eventId ? replacementsById.get(eventId) : undefined;
-    if (!replacement || event.type !== "message") {
-      return event;
-    }
-    bytesFreed += Math.max(
-      0,
-      Buffer.byteLength(JSON.stringify(event.message), "utf8") -
-        Buffer.byteLength(JSON.stringify(replacement), "utf8"),
+  return await withTranscriptWriteLock(params.target, async (transcript) => {
+    const replacementsById = new Map(
+      params.request.replacements.map((replacement) => [replacement.entryId, replacement.message]),
     );
-    rewrittenEntries += 1;
-    return Object.assign({}, event, {
-      message: replacement,
+    let bytesFreed = 0;
+    let rewrittenEntries = 0;
+    const events = await transcript.readEvents();
+    const nextEvents = events.map((event) => {
+      if (!isTranscriptEventRecord(event)) {
+        return event;
+      }
+      const eventId = typeof event.id === "string" ? event.id : undefined;
+      const replacement = eventId ? replacementsById.get(eventId) : undefined;
+      if (!replacement || event.type !== "message") {
+        return event;
+      }
+      bytesFreed += Math.max(
+        0,
+        Buffer.byteLength(JSON.stringify(event.message), "utf8") -
+          Buffer.byteLength(JSON.stringify(replacement), "utf8"),
+      );
+      rewrittenEntries += 1;
+      return Object.assign({}, event, { message: replacement });
     });
-  });
-  if (rewrittenEntries === 0) {
-    return {
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-      reason: "no matching transcript entries",
-    };
-  }
-  await replaceTranscriptEvents(
-    {
-      agentId: params.target.agentId,
-      sessionId: params.target.sessionId,
+    if (rewrittenEntries === 0) {
+      return {
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+        reason: "no matching transcript entries",
+      };
+    }
+    await transcript.replaceEvents(nextEvents);
+    emitSessionTranscriptUpdate({
       sessionKey: params.target.sessionKey,
-      storePath: params.target.storePath,
-    },
-    nextEvents,
-  );
-  emitSessionTranscriptUpdate({
-    sessionKey: params.target.sessionKey,
-    agentId: params.target.agentId,
-    target: {
       agentId: params.target.agentId,
-      sessionId: params.target.sessionId,
-      sessionKey: params.target.sessionKey,
-    },
+      target: {
+        agentId: params.target.agentId,
+        sessionId: params.target.sessionId,
+        sessionKey: params.target.sessionKey,
+      },
+    });
+    return { changed: true, bytesFreed, rewrittenEntries };
   });
-  return {
-    changed: true,
-    bytesFreed,
-    rewrittenEntries,
-  };
 }
 
 function estimateMessageBytes(message: AgentMessage): number {

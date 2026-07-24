@@ -40,6 +40,33 @@ import {
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
 type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+
+export function applyEmbeddedAttemptSessionIdentity(params: {
+  sessionPromptState: Pick<
+    SessionPromptState,
+    "adoptSessionId" | "sessionFile" | "sessionId" | "sessionTarget"
+  >;
+  sessionFileUsed?: string;
+  sessionIdUsed: string;
+}): void {
+  const { sessionPromptState, sessionFileUsed, sessionIdUsed } = params;
+  const previousSessionId = sessionPromptState.sessionId;
+  sessionPromptState.adoptSessionId(sessionIdUsed);
+  const sessionFileChanged = Boolean(
+    sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile,
+  );
+  if (sessionFileUsed && sessionFileChanged) {
+    sessionPromptState.sessionFile = sessionFileUsed;
+    // A pre-sessionTarget engine returned an opaque successor locator. The old
+    // structured target must not override that compatibility result on retry.
+    sessionPromptState.sessionTarget = undefined;
+  }
+  if (!sessionFileChanged && sessionIdUsed && sessionIdUsed !== previousSessionId) {
+    sessionPromptState.sessionTarget = sessionPromptState.sessionTarget
+      ? { ...sessionPromptState.sessionTarget, sessionId: sessionIdUsed }
+      : undefined;
+  }
+}
 type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
 
 export async function normalizeEmbeddedRunAttempt(input: {
@@ -143,20 +170,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       aborted: terminalAborted,
     });
   };
-  const previousSessionId = sessionPromptState.sessionId;
-  const previousSessionFile = sessionPromptState.sessionFile;
-  sessionPromptState.adoptSessionId(sessionIdUsed);
-  if (sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile) {
-    sessionPromptState.sessionFile = sessionFileUsed;
-  }
-  if (
-    (sessionIdUsed && sessionIdUsed !== previousSessionId) ||
-    (sessionFileUsed && sessionFileUsed !== previousSessionFile)
-  ) {
-    sessionPromptState.sessionTarget = sessionPromptState.sessionTarget
-      ? { ...sessionPromptState.sessionTarget, sessionId: sessionIdUsed }
-      : undefined;
-  }
+  applyEmbeddedAttemptSessionIdentity({ sessionPromptState, sessionFileUsed, sessionIdUsed });
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??
     (attempt.bootstrapPromptWarningSignature
