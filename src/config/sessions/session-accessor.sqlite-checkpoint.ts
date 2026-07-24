@@ -37,6 +37,14 @@ type SqliteCheckpointTranscriptForkSource = {
   totalTokens?: number;
 };
 
+export type SqliteCompactionCheckpointLegacySource = {
+  checkpointId: string;
+  events: TranscriptEvent[];
+  sessionFile: string;
+  sourceLeafId?: string;
+  totalTokens?: number;
+};
+
 /** Result from SQLite compaction checkpoint branch or restore operations. */
 type SqliteCompactionCheckpointSessionMutationResult =
   | {
@@ -60,6 +68,7 @@ type SqliteBranchCheckpointSessionParams = {
   sourceStoreKey?: string;
   nextKey: string;
   checkpointId: string;
+  legacySource?: SqliteCompactionCheckpointLegacySource;
 };
 
 /** Parameters for restoring a SQLite session from a compaction checkpoint. */
@@ -70,6 +79,7 @@ type SqliteRestoreCheckpointSessionParams = {
   sessionKey: string;
   sessionStoreKey?: string;
   checkpointId: string;
+  legacySource?: SqliteCompactionCheckpointLegacySource;
 };
 
 export async function branchSqliteCompactionCheckpointSession(
@@ -97,6 +107,7 @@ export async function branchSqliteCompactionCheckpointSession(
       result = branchSqliteCompactionCheckpointSessionInTransaction(database, {
         checkpointId: params.checkpointId,
         parentSessionKey: requestedSourceKey,
+        legacySource: params.legacySource,
         resolved,
         sourceKey,
         targetKey,
@@ -132,6 +143,7 @@ export async function restoreSqliteCompactionCheckpointSession(
       previousIdentity = readSqliteSessionIdentitySnapshot(database, identityKeys);
       result = restoreSqliteCompactionCheckpointSessionInTransaction(database, {
         checkpointId: params.checkpointId,
+        legacySource: params.legacySource,
         resolved,
         sourceKey: sessionKey,
         targetKey,
@@ -149,6 +161,7 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   database: OpenClawAgentDatabase,
   params: {
     checkpointId: string;
+    legacySource?: SqliteCompactionCheckpointLegacySource;
     parentSessionKey: string;
     resolved: ResolvedSqliteScope;
     sourceKey: string;
@@ -168,6 +181,7 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   }
   const forked = forkSqliteCheckpointTranscriptInTransaction(database, params.resolved, {
     checkpoint,
+    legacySource: params.legacySource,
     targetSessionKey: params.targetKey,
   });
   if (forked.status !== "created") {
@@ -197,6 +211,7 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
   database: OpenClawAgentDatabase,
   params: {
     checkpointId: string;
+    legacySource?: SqliteCompactionCheckpointLegacySource;
     resolved: ResolvedSqliteScope;
     sourceKey: string;
     targetKey: string;
@@ -215,6 +230,7 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
   }
   const restored = forkSqliteCheckpointTranscriptInTransaction(database, params.resolved, {
     checkpoint,
+    legacySource: params.legacySource,
     targetSessionKey: params.targetKey,
   });
   if (restored.status !== "created") {
@@ -241,6 +257,7 @@ function forkSqliteCheckpointTranscriptInTransaction(
   resolved: ResolvedSqliteScope,
   params: {
     checkpoint: SessionCompactionCheckpoint;
+    legacySource?: SqliteCompactionCheckpointLegacySource;
     targetSessionKey: string;
   },
 ):
@@ -273,7 +290,10 @@ function forkSqliteCheckpointTranscriptInTransaction(
     }
     lastFailure = rows;
   }
-  if (!selected) {
+  const legacySource = selected
+    ? undefined
+    : resolvePreparedLegacyCheckpointSource(params.checkpoint, params.legacySource);
+  if (!selected && !legacySource) {
     return lastFailure;
   }
 
@@ -284,21 +304,36 @@ function forkSqliteCheckpointTranscriptInTransaction(
     sessionKey: params.targetSessionKey,
   };
   const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
+  const selectedEvents = selected?.rows ?? legacySource?.events ?? [];
+  const totalTokens = selected?.source.totalTokens ?? legacySource?.totalTokens;
   appendTranscriptEventsInTransaction(database, targetScope, [
     createSessionTranscriptHeader({
-      cwd: readTranscriptHeaderCwd(selected.rows),
+      cwd: readTranscriptHeaderCwd(selectedEvents),
       sessionId,
     }),
-    ...selected.rows.filter((event) => !isSessionTranscriptHeader(event)),
+    ...selectedEvents.filter((event) => !isSessionTranscriptHeader(event)),
   ]);
   return {
     status: "created",
     sessionId,
     sessionFile,
-    ...(typeof selected.source.totalTokens === "number"
-      ? { totalTokens: selected.source.totalTokens }
-      : {}),
+    ...(typeof totalTokens === "number" ? { totalTokens } : {}),
   };
+}
+
+function resolvePreparedLegacyCheckpointSource(
+  checkpoint: SessionCompactionCheckpoint,
+  source: SqliteCompactionCheckpointLegacySource | undefined,
+): SqliteCompactionCheckpointLegacySource | undefined {
+  if (!source || source.checkpointId !== checkpoint.checkpointId || source.events.length === 0) {
+    return undefined;
+  }
+  const matches = [checkpoint.preCompaction, checkpoint.postCompaction].some((position) => {
+    const sessionFile = position.sessionFile?.trim();
+    const sourceLeafId = position.entryId?.trim() || position.leafId?.trim() || undefined;
+    return sessionFile === source.sessionFile && sourceLeafId === source.sourceLeafId;
+  });
+  return matches ? source : undefined;
 }
 
 function resolveSqliteCheckpointTranscriptForkSources(

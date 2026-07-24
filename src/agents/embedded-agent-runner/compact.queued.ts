@@ -1,6 +1,11 @@
 /**
  * Queues embedded-agent session compaction onto the correct command lane.
  */
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/legacy-sqlite-marker.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -651,7 +656,7 @@ async function compactResolvedContextEngine(
         // Shipped pre-sessionTarget engines report rotation via the deprecated
         // sessionFile field; honor it when no typed target is present.
         let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
-        let postCompactionSessionTarget = delegatedSessionFile ? undefined : runtimeTarget;
+        let postCompactionSessionTarget = runtimeTarget;
         if (delegatedSessionTarget) {
           const resolvedDelegatedTarget = await resolveAgentRunSessionTarget({
             agentId: delegatedSessionTarget.agentId ?? sessionAgentId,
@@ -662,6 +667,58 @@ async function compactResolvedContextEngine(
           });
           postCompactionSessionId = resolvedDelegatedTarget.sessionId;
           postCompactionSessionFile = resolvedDelegatedTarget.sessionKey;
+          postCompactionSessionTarget = resolvedDelegatedTarget;
+        } else if (delegatedSessionFile) {
+          const marker = parseSqliteSessionFileMarker(delegatedSessionFile);
+          if (marker && delegatedSessionId && marker.sessionId !== delegatedSessionId) {
+            throw new Error("Legacy context-engine successor identity is inconsistent");
+          }
+          const keyedEntry = delegatedSessionFile.startsWith("agent:")
+            ? loadSessionEntry({
+                agentId: runtimeTarget.agentId,
+                sessionKey: delegatedSessionFile,
+                storePath: runtimeTarget.storePath,
+              })
+            : undefined;
+          if (
+            delegatedSessionFile.startsWith("agent:") &&
+            (!keyedEntry?.sessionId ||
+              (delegatedSessionId && keyedEntry.sessionId !== delegatedSessionId))
+          ) {
+            throw new Error("Legacy context-engine successor identity is inconsistent");
+          }
+          const keyedSessionId = delegatedSessionFile.startsWith("agent:")
+            ? (delegatedSessionId ?? keyedEntry?.sessionId)
+            : undefined;
+          const legacyTarget = marker
+            ? {
+                ...marker,
+                sessionId: delegatedSessionId ?? marker.sessionId,
+                sessionKey: runtimeTarget.sessionKey,
+              }
+            : keyedSessionId
+              ? {
+                  ...runtimeTarget,
+                  sessionId: keyedSessionId,
+                  sessionKey: delegatedSessionFile,
+                }
+              : undefined;
+          if (!legacyTarget) {
+            throw new Error(
+              "Legacy context-engine successor files are unsupported; return a structured sessionTarget",
+            );
+          }
+          const resolvedDelegatedTarget = await resolveAgentRunSessionTarget({
+            agentId: legacyTarget.agentId,
+            config: params.config,
+            sessionId: legacyTarget.sessionId,
+            sessionKey: legacyTarget.sessionKey,
+            sessionTarget: legacyTarget,
+          });
+          postCompactionSessionId = resolvedDelegatedTarget.sessionId;
+          postCompactionSessionFile = marker
+            ? formatSqliteSessionFileMarker(resolvedDelegatedTarget)
+            : resolvedDelegatedTarget.sessionKey;
           postCompactionSessionTarget = resolvedDelegatedTarget;
         } else if (delegatedSessionId && !delegatedSessionFile) {
           postCompactionSessionTarget = {

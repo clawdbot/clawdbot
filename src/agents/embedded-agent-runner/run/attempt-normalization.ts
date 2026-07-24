@@ -1,4 +1,7 @@
-import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../../config/sessions/legacy-sqlite-marker.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers.js";
@@ -94,6 +97,11 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
   sessionPromptState.adoptSessionId(sessionIdUsed);
   if (sessionFileUsed && sessionFileChanged) {
     sessionPromptState.sessionFile = sessionFileUsed;
+  } else if (sessionIdUsed !== previousSessionId && nextSessionTarget) {
+    const marker = parseSqliteSessionFileMarker(sessionPromptState.sessionFile);
+    if (marker) {
+      sessionPromptState.sessionFile = formatSqliteSessionFileMarker(nextSessionTarget);
+    }
   }
   sessionPromptState.sessionTarget = nextSessionTarget;
 }

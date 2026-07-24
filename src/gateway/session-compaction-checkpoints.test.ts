@@ -307,7 +307,7 @@ describe("session-compaction-checkpoints", () => {
     }
   });
 
-  test("checkpoint store does not fork retired legacy snapshots for SQLite marker entries", async () => {
+  test("imports a retired legacy checkpoint snapshot into a new SQLite branch", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-sqlite-legacy-"));
     tempDirs.push(dir);
     const storePath = path.join(dir, "openclaw-agent.sqlite");
@@ -369,8 +369,6 @@ describe("session-compaction-checkpoints", () => {
       },
     );
 
-    const beforeFiles = fsSync.readdirSync(dir).toSorted();
-
     const branched = await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
       storePath,
       sourceKey: sessionKey,
@@ -378,8 +376,21 @@ describe("session-compaction-checkpoints", () => {
       checkpointId: "legacy-file-checkpoint",
     });
 
-    expect(branched.status).toBe("missing-boundary");
-    expect(fsSync.readdirSync(dir).toSorted()).toEqual(beforeFiles);
+    if (branched.status !== "created") {
+      throw new Error("expected legacy checkpoint snapshot import");
+    }
+    expect(fsSync.readdirSync(dir).filter((file) => file.endsWith(".jsonl"))).toEqual([
+      path.basename(legacySnapshotFile),
+    ]);
+    const branchEvents = await loadTranscriptEvents({
+      agentId: MAIN_AGENT_ID,
+      sessionId: branched.entry.sessionId,
+      sessionKey: "agent:main:legacy-checkpoint-branch",
+      storePath,
+    });
+    expect(
+      branchEvents.some((event) => isAssistantTextEvent(event, "legacy checkpoint source")),
+    ).toBe(true);
   });
 
   test("leaf state follows terminal controls while retaining the append cursor", async () => {

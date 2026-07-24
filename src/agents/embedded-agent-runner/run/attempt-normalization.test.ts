@@ -72,4 +72,17 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
 
     expect(state.sessionTarget).toMatchObject({ sessionId: "session-after" });
   });
+
+  it("refreshes a legacy marker for an id-only successor", () => {
+    const state = promptState();
+    state.sessionFile = "sqlite:main:session-before:/tmp/sessions.json";
+
+    applyEmbeddedAttemptSessionIdentity({
+      sessionPromptState: state,
+      sessionIdUsed: "session-after",
+    });
+
+    expect(state.sessionFile).toBe("sqlite:main:session-after:/tmp/sessions.json");
+    expect(state.sessionTarget).toMatchObject({ sessionId: "session-after" });
+  });
 });
