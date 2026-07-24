@@ -1811,6 +1811,8 @@ This extension defines a child-to-recipient result path for files or other binar
 - This extension does not automatically mount bytes into a parent workspace, inject bytes into a prompt, upload media to a channel, fetch a URL, or turn a claim into a current instruction. Parent materialization or rendering is an explicit recipient-authorized operation defined by the eventual implementation.
 - Generic arbitrary `data: JsonValue` is not part of the first claim-return slice. It needs a concrete durable consumer and independent compatibility/security design.
 
+A child has no implicit right to publish outputs merely because it completed. At accepted dispatch, the host creates the immutable, host-owned `DelegateArtifactReturnPolicyV1` described in §A.6.4. It is the sole authority for whether that delegate run may publish, which recipients may later resolve, and the publication bounds (count, MIME/type, byte limits, approved output boundary, and retention deadline). The child never supplies or widens those facts.
+
 The intended first completion surface is:
 
 ```ts
@@ -1836,13 +1838,15 @@ The host owns both the claim identifier and all authorization decisions. A `clai
 The durable server-side claim record SHALL retain immutable provenance and delivery facts separately from display metadata:
 
 - claim ID, private retained object identity, content digest/type/size, and host publication timestamp;
-- producing child session and delegate run; originating parent session/dispatch; immutable causal completion-event ID; and completion idempotency key;
-- complete intended recipient set, return route, and return-policy identity/version captured at dispatch;
+- producing child session and delegate run; originating parent session/dispatch; immutable causal completion-event ID; completion-finalization idempotency key; and the immutable `DelegateArtifactReturnPolicyV1` identity/version;
+- the complete intended recipient set and return route **inside the private host record only**; per-recipient delivery projections are filtered as specified in §A.6.3;
 - decision, scheduled/`notBefore`, enqueue, child-start, child-complete, claim-create, completion-finalize, first-delivery, and each replay-attempt timestamp where applicable;
-- claim lifecycle state and transitions: `available`, `expired`, `revoked`, and terminal purge/unavailable; plus retention deadline and revocation cause when safe to disclose;
+- claim lifecycle state and transitions: `pending` (no completion binding and not externally resolvable), `available` (atomically bound to the immutable completion), `expired`, `revoked`, `orphaned`, and terminal purge/unavailable; plus retention deadline and revocation/orphan cause when safe to disclose;
 - durable delivery/replay attempt identity, acknowledgement or terminal delivery state, and idempotency linkage so recovery cannot manufacture a second claim or relabel an old completion as new.
 
-A restart between publication, completion persistence, and delivery SHALL recover from this record idempotently. It SHALL preserve original dispatch and completion timestamps, IDs, policy version, recipient binding, and integrity metadata unchanged. Expired, revoked, absent, unauthorized, or corrupt claims fail closed: they cannot resolve, materialize, or silently degrade into a path/URL/content fallback. Cleanup of the child workspace cannot invalidate a valid retained claim before its retention policy says so; expiry/revocation does invalidate later resolution even if some old child path once existed.
+Publication-to-completion binding is a crash-safe transaction, not two best-effort events. The host first persists a `pending` claim under the accepted policy and may copy bytes into its private retained store, but it MUST NOT emit a `DelegateArtifactRef`, arrival context, or resolver-visible claim until it atomically/idempotently binds that claim to one immutable completion event and transitions it to `available`. A crash after retained-byte copy but before binding leaves only a non-resolvable `pending` record. Recovery may finalize it only by replaying the same completion-finalization idempotency key and matching immutable run, policy, and integrity facts; otherwise it SHALL mark the record `orphaned` and revoke/purge retained bytes under the policy cleanup deadline. A crash after finalization but before delivery replays the already finalized completion; it never makes another claim.
+
+A restart between publication, completion persistence, and delivery SHALL recover from this record idempotently. It SHALL preserve original dispatch and completion timestamps, IDs, policy version, recipient binding, and integrity metadata unchanged. Expired, revoked, orphaned, absent, unauthorized, or corrupt claims fail closed: they cannot resolve, materialize, or silently degrade into a path/URL/content fallback. Cleanup of the child workspace cannot invalidate a valid retained claim before its retention policy says so; expiry/revocation does invalidate later resolution even if some old child path once existed.
 
 #### A.6.3 Recipient arrival context, including inter-session delivery
 
@@ -1850,18 +1854,18 @@ A dispatching parent often remembers why it created a child. An explicit `target
 
 Every child-to-recipient return therefore SHALL have a typed, host-authored arrival context. It is part of the delivery event—not optional UI decoration, child prose, or a bare `System:` string. The recipient projection SHALL state at least:
 
-- delivery class (`delegate result` to the dispatching parent or explicit `inter-session enrichment`), explicit-target route, and silent/announced delivery mode;
-- immutable dispatch ID; allowed source identity or privacy-safe host-generated origin label; producer child/run; causal completion-event ID; and the recipient identity that authorized this delivery;
-- original dispatch, scheduled/`notBefore`, completion, and actual delivery/replay times; the return-policy version; and the claim's current availability/revocation/expiry state at delivery;
+- delivery class (`delegate result` to the dispatching parent or explicit `inter-session enrichment`) and silent/announced delivery mode; it may identify the recipient's own direct binding but does not disclose sibling identities, route membership, or fan-out cardinality;
+- immutable dispatch ID; only an approved source identity or privacy-safe host-generated origin label; producer child/run; causal completion-event ID; and the recipient's own authorization binding for this delivery;
+- original dispatch, scheduled/`notBefore`, completion, and actual delivery/replay times; the return-policy version; and only the recipient's authorized claim availability/revocation/expiry state at delivery;
 - a bounded `recipientContext` captured at dispatch explaining why the target is being woken or enriched. This field is caller-supplied, immutable once the host accepts the dispatch, and visibly labelled as contextual provenance—not host authority, executable instruction, or a substitute for the child result.
 
-The recipient need not receive the full original task, another session's private history, or child-only workspace data. The projection provides only the approved causal context needed to judge: **this was produced there, for this declared purpose, then; it reached me now; and it is/was valid under this claim.** A legacy record lacking a required provenance field must say that context is unavailable; it must not fabricate a complete-looking envelope. Artifact-capable inter-session returns must not arrive unlabeled.
+The full recipient set, sibling recipient identities, the complete route/fan-out set, fan-out cardinality, child-only workspace data, unapproved claim metadata, and another session's private history stay in the private host record. The recipient projection provides only the approved causal context needed to judge: **this was produced there, for this declared purpose, then; it reached me now; and it is/was valid under this claim.** A legacy record lacking a required provenance field must say that context is unavailable; it must not fabricate a complete-looking envelope. Artifact-capable inter-session returns must not arrive unlabeled.
 
 #### A.6.4 Authorization, v1 return-policy authority, and explicit resolution
 
 Publishing is authorized only for the active producing delegate run and its approved output boundary. Resolving or materializing is authorized only for an intended recipient whose claim remains available under current policy. Recipient authorization is evaluated again at resolution time; claim IDs are opaque identifiers, not bearer permission to bypass those checks.
 
-**V1 return-policy authority.** V1 introduces no agent-authored generic policy language and no recipient expansion beyond the existing typed `continue_delegate()` return-target fields. At accepted dispatch, the host validates the requested route under the ordinary same-host targeting rules, resolves the route once, and records an immutable `continue_delegate-recipient-snapshot-v1` policy record with its version, the dispatch ID, and the exact authorized recipient session identities. An artifact-capable dispatch whose target cannot be resolved and authorized at that point fails closed before child spawn.
+**V1 return-policy authority.** V1 introduces no agent-authored generic policy language and no recipient expansion beyond the existing typed `continue_delegate()` return-target fields. At accepted dispatch, the host validates the requested route under the ordinary same-host targeting rules, resolves the route once, and creates an immutable host-owned `DelegateArtifactReturnPolicyV1` record. It contains its identity/version, dispatch ID, producing delegate-run binding, approved output boundary, the exact authorized recipient session identities, `maxArtifactCount`, allowed MIME/type policy, per-artifact and aggregate byte limits, and retention deadline/cleanup policy. These are the host policy snapshot at acceptance, not child input or display metadata. An artifact-capable dispatch whose target cannot be resolved and authorized at that point, or whose requested publication exceeds the captured policy, fails closed before child spawn or publication respectively.
 
 The V1 mapping is exact:
 
@@ -1886,7 +1890,9 @@ Before an implementation can ship, tests must prove all of the following:
 5. **Cleanup and retention:** removing the child workspace does not erase an in-retention claim; expiry, revocation, purge, unauthorized access, missing bytes, and corrupt metadata fail closed with no fallback path/URL/content.
 6. **Isolation:** a sibling, guessed session, guessed claim ID, fan-out outsider, or post-expiry recipient cannot resolve, materialize, or receive another recipient's artifact.
 7. **No implicit promotion:** final prose, tool output, workspace paths, hashes, URLs, and `message(action=send, media=...)` cannot create a claim; claims do not auto-mount, prompt-inject, or channel-upload.
-8. **Identifier and policy isolation:** possession of a claim ID without the authenticated recipient/run/delivery binding fails; the V1 policy snapshot matches the accepted default, explicit, tree, or host-wide route exactly and cannot expand after dispatch or during replay.
+8. **Identifier and policy isolation:** possession of a claim ID without the authenticated recipient/run/delivery binding fails; the V1 policy snapshot captures the producing-run/output-boundary/count/type/size/retention limits and matches the accepted default, explicit, tree, or host-wide route exactly; it cannot expand after dispatch or during replay.
+9. **Publish/finalize crash safety:** crashes before retained-byte copy, after copy but before finalization, and after finalization but before delivery leave no resolvable unbound claim, create no duplicate claim, and deterministically finalize by the same idempotency key or orphan/revoke/purge the pending object.
+10. **Recipient privacy:** targeted and fan-out recipients receive only their own binding and approved origin/context/claim projection; they cannot infer sibling recipient identities, complete route/fan-out set or cardinality, or unauthorized claim metadata.
 
 This is intentionally a wider lifecycle than adding an `attachments` field to a completion callback. The implementation unit is the managed claim plus its provenance-preserving recipient delivery, not just its serialized metadata.
 
