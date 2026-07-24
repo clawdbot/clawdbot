@@ -26,6 +26,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         initialDestination: "settings",
         name: "04-settings-connected")
     private static let appReadinessAccessibilityIdentifier = "RootTabs.Ready"
+    private static let debugAppBundleIdentifier = "ai.openclawfoundation.app.debug"
 
     private var app: XCUIApplication?
 
@@ -1021,14 +1022,45 @@ final class OpenClawSnapshotUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line)
     {
-        guard let app = self.app else { return }
-        app.terminate()
-        XCTAssertTrue(
-            app.wait(for: .notRunning, timeout: 5),
-            "OpenClaw did not terminate before the next launch",
-            file: file,
-            line: line)
+        let app = self.app
+        _ = Self.terminateDebugAppProcess()
+        if let app {
+            XCTAssertTrue(
+                self.waitForAppToStop(app, timeout: 5),
+                "OpenClaw did not terminate before the next launch",
+                file: file,
+                line: line)
+        }
         self.app = nil
+    }
+
+    private static func terminateDebugAppProcess() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = [
+            "simctl",
+            "terminate",
+            "booted",
+            Self.debugAppBundleIdentifier,
+        ]
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
+    private func waitForAppToStop(_ app: XCUIApplication, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if app.state == .notRunning {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        } while Date() < deadline
+        return app.state == .notRunning
     }
 
     private func waitForValue(
