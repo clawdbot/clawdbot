@@ -402,6 +402,8 @@ exit 1
 }
 
 describe("managed service update handoff", () => {
+  const itUnix = it.runIf(process.platform !== "win32");
+
   it("rejects failed helper spawns and removes the sensitive handoff directory", async () => {
     const child = createSpawnMock();
     spawnMock.mockReturnValueOnce(child);
@@ -672,7 +674,7 @@ describe("managed service update handoff", () => {
     expect(result.command).toContain("--channel extended-stable");
   });
 
-  it.runIf(process.platform !== "win32")(
+  itUnix(
     "starts the managed gateway service when the update command fails after handoff",
     async () => {
       const { binDir, recordPath } = await writeFakeSystemctl();
@@ -701,33 +703,30 @@ describe("managed service update handoff", () => {
     await expect(pathExists(recordPath)).resolves.toBe(false);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "retries launchd start when bootstrap reports an already-loaded label",
-    async () => {
-      const { binDir, recordPath } = await writeFakeLaunchctl();
-      const result = await runHelperWithCommand({
-        commandArgv: [process.execPath, "-e", "process.exit(7)"],
-        serviceRecovery: {
-          kind: "launchd",
-          uid: 501,
-          label: "com.example.openclaw",
-          plistPath: "/Users/test/Library/LaunchAgents/com.example.openclaw.plist",
-        },
-        pathPrepend: binDir,
-      });
+  itUnix("retries launchd start when bootstrap reports an already-loaded label", async () => {
+    const { binDir, recordPath } = await writeFakeLaunchctl();
+    const result = await runHelperWithCommand({
+      commandArgv: [process.execPath, "-e", "process.exit(7)"],
+      serviceRecovery: {
+        kind: "launchd",
+        uid: 501,
+        label: "com.example.openclaw",
+        plistPath: "/Users/test/Library/LaunchAgents/com.example.openclaw.plist",
+      },
+      pathPrepend: binDir,
+    });
 
-      expect(result.code).toBe(7);
-      await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
-        [
-          "kickstart gui/501/com.example.openclaw",
-          "enable gui/501/com.example.openclaw",
-          "bootstrap gui/501 /Users/test/Library/LaunchAgents/com.example.openclaw.plist",
-          "kickstart gui/501/com.example.openclaw",
-          "",
-        ].join("\n"),
-      );
-    },
-  );
+    expect(result.code).toBe(7);
+    await expect(fs.readFile(recordPath, "utf-8")).resolves.toBe(
+      [
+        "kickstart gui/501/com.example.openclaw",
+        "enable gui/501/com.example.openclaw",
+        "bootstrap gui/501 /Users/test/Library/LaunchAgents/com.example.openclaw.plist",
+        "kickstart gui/501/com.example.openclaw",
+        "",
+      ].join("\n"),
+    );
+  });
 
   it("passes a gateway service recovery descriptor for each supervisor", async () => {
     const { startManagedServiceUpdateHandoff } =
@@ -735,17 +734,12 @@ describe("managed service update handoff", () => {
     const cases = [
       {
         supervisor: "launchd" as const,
-        env: { OPENCLAW_LAUNCHD_LABEL: "com.example.openclaw.test", HOME: "/Users/test" },
+        env: { OPENCLAW_LAUNCHD_LABEL: "test.gateway", HOME: "/Users/test" },
         expected: {
           kind: "launchd",
           uid: typeof process.getuid === "function" ? process.getuid() : 501,
-          label: "com.example.openclaw.test",
-          plistPath: path.join(
-            "/Users/test",
-            "Library",
-            "LaunchAgents",
-            "com.example.openclaw.test.plist",
-          ),
+          label: "test.gateway",
+          plistPath: path.normalize("/Users/test/Library/LaunchAgents/test.gateway.plist"),
         },
       },
       {
