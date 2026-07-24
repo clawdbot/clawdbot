@@ -1762,7 +1762,7 @@ describe("local SQLite snapshot repository", () => {
 
       try {
         await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-          /restore target changed|outside snapshot repository|must be a real directory/u,
+          /restore target changed|outside snapshot repository|must be a real directory|not a directory/u,
         );
       } finally {
         realpathSpy.mockRestore();
