@@ -16,6 +16,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { registerAgentRunContext, resetAgentEventsForTest } from "../infra/agent-events.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
@@ -25,12 +29,17 @@ import {
   resolveGatewayModelSupportsImages,
 } from "./session-utils.js";
 
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+});
+
 async function seedSessionEntry(
   storePath: string,
   sessionKey: string,
   entry: SessionEntry,
+  agentId?: string,
 ): Promise<void> {
-  await replaceSessionEntry({ sessionKey, storePath }, entry);
+  await replaceSessionEntry({ ...(agentId ? { agentId } : {}), sessionKey, storePath }, entry);
 }
 
 describe("listSessionsFromStore subagent metadata", () => {
@@ -1301,6 +1310,81 @@ describe("listSessionsFromStore subagent metadata", () => {
 });
 
 describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
+  test("fixed stores merge every configured agent's partition", async () => {
+    await withStateDirEnv("openclaw-fixed-store-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "shared-sessions.json");
+      const cfg = {
+        session: { mainKey: "main", store: storePath },
+        agents: {
+          entries: {
+            ops: { default: true },
+            worker: {},
+          },
+        },
+      } as OpenClawConfig;
+
+      await seedSessionEntry(
+        storePath,
+        "agent:ops:main",
+        { sessionId: "s-ops", updatedAt: 100 },
+        "ops",
+      );
+      await seedSessionEntry(
+        storePath,
+        "agent:worker:main",
+        { sessionId: "s-worker", updatedAt: 200 },
+        "worker",
+      );
+      await seedSessionEntry(
+        storePath,
+        "agent:dynamic:main",
+        { sessionId: "s-dynamic", updatedAt: 300 },
+        "dynamic",
+      );
+      await seedSessionEntry(
+        storePath,
+        "agent:ops:legacy",
+        { sessionId: "s-legacy-ops", spawnedBy: "main", updatedAt: 400 },
+        "main",
+      );
+      const dynamicIncognitoKey = "dashboard:incognito-dynamic";
+      await seedSessionEntry(
+        resolveIncognitoOpenClawAgentSqlitePath({ agentId: "dynamic" }),
+        dynamicIncognitoKey,
+        { incognito: true, sessionId: "s-incognito-dynamic", updatedAt: 500 },
+        "dynamic",
+      );
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:ops:main"]?.sessionId).toBe("s-ops");
+      expect(store["agent:worker:main"]?.sessionId).toBe("s-worker");
+      expect(store["agent:dynamic:main"]?.sessionId).toBe("s-dynamic");
+
+      const configuredOnly = loadCombinedSessionStoreForGateway(cfg, {
+        configuredAgentsOnly: true,
+      }).store;
+      expect(configuredOnly["agent:ops:legacy"]?.sessionId).toBe("s-legacy-ops");
+      expect(configuredOnly["agent:ops:legacy"]?.spawnedBy).toBe("agent:ops:main");
+      expect(configuredOnly["agent:dynamic:main"]).toBeUndefined();
+      expect(configuredOnly[dynamicIncognitoKey]).toBeUndefined();
+
+      const opsOnly = loadCombinedSessionStoreForGateway(cfg, { agentId: "ops" }).store;
+      expect(opsOnly["agent:ops:main"]?.sessionId).toBe("s-ops");
+      expect(opsOnly["agent:ops:legacy"]?.sessionId).toBe("s-legacy-ops");
+      expect(opsOnly["agent:worker:main"]).toBeUndefined();
+      expect(opsOnly["agent:dynamic:main"]).toBeUndefined();
+
+      const explicitDynamic = loadCombinedSessionStoreForGateway(cfg, {
+        agentId: "dynamic",
+        configuredAgentsOnly: true,
+      }).store;
+      expect(explicitDynamic["agent:dynamic:main"]?.sessionId).toBe("s-dynamic");
+
+      const mainOnly = loadCombinedSessionStoreForGateway(cfg, { agentId: "main" }).store;
+      expect(mainOnly["agent:ops:legacy"]).toBeUndefined();
+    });
+  });
+
   test("ACP agent sessions are visible even when agents.list is configured", async () => {
     await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
       const customRoot = path.join(stateDir, "custom-state");
@@ -1370,6 +1454,9 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(path.resolve(storePath)).toBe(path.resolve(codexStorePath));
       expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
       expect(store["agent:main:main"]).toBeUndefined();
+
+      const mainOnly = loadCombinedSessionStoreForGateway(cfg, { agentId: "main" }).store;
+      expect(mainOnly["agent:main:main"]?.sessionId).toBe("s-main");
     });
   });
 });
