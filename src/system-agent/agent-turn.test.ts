@@ -404,7 +404,7 @@ describe("runSystemAgentTurn", () => {
   });
 
   it("resumes Claude's native transcript through fresh per-turn processes", async () => {
-    const stateDir = useTempStateDir();
+    useTempStateDir();
     const config = {
       agents: {
         defaults: {

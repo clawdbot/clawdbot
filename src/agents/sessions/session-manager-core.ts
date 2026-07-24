@@ -514,9 +514,7 @@ export class SessionManagerCore {
   }
 
   /** SQLite appends are synchronous; retained for the AgentSession contract. */
-  protected flushPendingPersistence(): void {
-    return;
-  }
+  protected flushPendingPersistence(): void {}
 
   isPersisted(): boolean {
     return this.persistenceTarget !== undefined;

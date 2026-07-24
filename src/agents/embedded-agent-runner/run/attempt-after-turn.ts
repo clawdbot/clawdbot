@@ -81,7 +81,7 @@ export async function completeEmbeddedAttemptAfterTurn(
   input: CompleteEmbeddedAttemptAfterTurnInput,
 ): Promise<{ sessionIdUsed: string; sessionFileUsed?: string }> {
   const { attempt, activeContextEngine, activeSession, sessionManager, state, runtime } = input;
-  let { sessionIdUsed, sessionFileUsed } = state;
+  const { sessionIdUsed, sessionFileUsed } = state;
 
   // Context-engine hooks may call runtime LLM capabilities. Only the transcript
   // rewrite callback reacquires the synchronous session write boundary.

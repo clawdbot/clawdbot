@@ -273,27 +273,31 @@ export async function compactEmbeddedAgentSession(
 }
 
 async function compactEmbeddedAgentSessionImpl(
-  params: CompactEmbeddedAgentSessionParams,
+  inputParams: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
-  if (params.abortSignal?.aborted) {
+  if (inputParams.abortSignal?.aborted) {
     return createCompactionAbortedResult();
   }
   ensureRuntimePluginsLoaded({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+    config: inputParams.config,
+    workspaceDir: inputParams.workspaceDir,
+    allowGatewaySubagentBinding: inputParams.allowGatewaySubagentBinding,
   });
   ensureContextEnginesInitialized();
   const agentIds = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
+    sessionKey: inputParams.sessionKey,
+    config: inputParams.config,
+    agentId: inputParams.agentId,
   });
   const runtimeTarget = await resolveAgentRunSessionTarget({
-    ...params,
-    agentId: params.agentId ?? agentIds.sessionAgentId,
+    ...inputParams,
+    agentId: inputParams.agentId ?? agentIds.sessionAgentId,
   });
-  params = { ...params, sessionTarget: runtimeTarget, sessionFile: runtimeTarget.sessionKey };
+  const params = {
+    ...inputParams,
+    sessionTarget: runtimeTarget,
+    sessionFile: runtimeTarget.sessionKey,
+  };
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
   const contextEngine = await resolveContextEngine(params.config, {
@@ -657,7 +661,6 @@ async function compactResolvedContextEngine(
           postCompactionSessionId = resolvedDelegatedTarget.sessionId;
           postCompactionSessionFile = resolvedDelegatedTarget.sessionKey;
         }
-        let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
           checkpointSnapshotRetained = await persistCompactionCheckpoint({
             config: params.config,
@@ -670,7 +673,6 @@ async function compactResolvedContextEngine(
             tokensBefore: result.result?.tokensBefore,
             tokensAfter: result.result?.tokensAfter,
             sessionFile: postCompactionSessionFile,
-            leafId: postCompactionLeafId,
           });
           await runContextEngineMaintenance({
             contextEngine,

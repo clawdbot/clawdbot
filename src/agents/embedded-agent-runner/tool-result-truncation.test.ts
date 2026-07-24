@@ -3,9 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
@@ -177,30 +175,6 @@ function getToolResultTextLength(message: AgentMessage): number {
     }
     return length + (typeof block.text === "string" ? block.text.length : 0);
   }, 0);
-}
-
-async function truncateSessionThroughActiveTarget(params: {
-  sessionFile: string;
-  contextWindowTokens: number;
-  maxCharsOverride?: number;
-  aggregateMaxCharsOverride?: number;
-  protectTrailingToolResults?: boolean;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}) {
-  return await truncateOversizedToolResultsInActiveTarget({
-    scope: {
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      sessionId: params.sessionId ?? "tool-result-truncation-test",
-      sessionKey: params.sessionKey ?? "agent:main:tool-result-truncation-test",
-      sessionFile: params.sessionFile,
-    },
-    contextWindowTokens: params.contextWindowTokens,
-    maxCharsOverride: params.maxCharsOverride,
-    aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
-    protectTrailingToolResults: params.protectTrailingToolResults,
-  });
 }
 
 async function createTmpDir(): Promise<string> {

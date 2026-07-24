@@ -859,25 +859,6 @@ describe("parseSessionEntries", () => {
   });
 });
 
-function readMessageContent(entry: SessionEntry): unknown {
-  const content = (entry as { message: { content: unknown } }).message.content;
-  if (Array.isArray(content)) {
-    return content.map((part) => (part as { text?: string }).text ?? "").join("");
-  }
-  return content;
-}
-
-async function readTrustedRepairSnapshot(sessionFile: string) {
-  const stat = await fs.stat(sessionFile, { bigint: true });
-  return {
-    dev: stat.dev,
-    ino: stat.ino,
-    size: stat.size,
-    mtimeNs: stat.mtimeNs,
-    ctimeNs: stat.ctimeNs,
-  };
-}
-
 function buildAssistantMessage(text: string) {
   return {
     role: "assistant" as const,
@@ -917,4 +898,3 @@ function buildMessageEntry(index: number, parentId: string | null): SessionEntry
     message: { role: "user", content: `message ${index}`, timestamp: index },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

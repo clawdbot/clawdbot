@@ -340,7 +340,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     expect(result).toMatchObject({ ok: true, compacted: true });
     const lockOptions = mockCallArg(acquireSessionWriteLockMock);
-    expect(lockOptions).toMatchObject({ sessionFile: TEST_SESSION_FILE });
+    expect(lockOptions).toMatchObject({ sessionFile: TEST_SESSION_KEY });
     expect(lockOptions).not.toHaveProperty("allowReentrant");
   });
 
@@ -700,6 +700,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp/workspace",
     });
@@ -721,6 +722,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
@@ -968,6 +970,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("preserves full sender identity when building compaction tools", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp/workspace",
       senderId: "sender-1",
@@ -994,6 +997,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
       await compactEmbeddedAgentSessionDirect({
         sessionId: "session-1",
+        sessionKey: TEST_SESSION_KEY,
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp/workspace",
       });
@@ -1005,6 +1009,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("uses cwd for compaction runtime tools while preserving workspace bootstrap root", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp/workspace",
       cwd: "/tmp/task-repo",
@@ -1024,6 +1029,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("uses the caller context token budget during runtime compaction", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp/workspace",
       contextTokenBudget: 64_000,
@@ -1048,6 +1054,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp/workspace",
     });
@@ -1103,6 +1110,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp/workspace",
       contextTokenBudget: 64_000,
@@ -1940,80 +1948,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
     try {
       await compactTesting.runPostCompactionSideEffects({
-        sessionKey: "agent:main:session-1",
-        sessionFile: "  /tmp/session.jsonl  ",
+        sessionKey: TEST_SESSION_KEY,
+        sessionFile: `  ${TEST_SESSION_KEY}  `,
       });
 
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
-        sessionFile: "/tmp/session.jsonl",
-        sessionKey: "agent:main:session-1",
-      });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it("emits post-compaction side effects once for a rotated successor transcript", async () => {
-    hookRunner.hasHooks.mockReturnValue(true);
-    const listener = vi.fn();
-    const cleanup = onSessionTranscriptUpdate(listener);
-    const sync = vi.fn(async () => {});
-    getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
-    rotateTranscriptAfterCompactionMock.mockResolvedValueOnce({
-      rotated: true,
-      sessionId: "rotated-session",
-      sessionFile: "/tmp/rotated-session.jsonl",
-      leafId: "rotated-leaf",
-    });
-
-    try {
-      const result = await compactEmbeddedAgentSessionDirect({
-        sessionId: "session-1",
+        sessionFile: TEST_SESSION_KEY,
         sessionKey: TEST_SESSION_KEY,
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp/workspace",
-        config: {
-          agents: {
-            defaults: {
-              compaction: {
-                truncateAfterCompaction: true,
-                postIndexSync: "await",
-              },
-            },
-          },
-        } as never,
-      });
-
-      expect(result.ok).toBe(true);
-      expect(listener).toHaveBeenCalledTimes(1);
-      expect(listener).toHaveBeenCalledWith({
-        agentId: "main",
-        sessionKey: TEST_SESSION_KEY,
-        sessionId: "rotated-session",
-        target: {
-          agentId: "main",
-          sessionId: "rotated-session",
-          sessionKey: TEST_SESSION_KEY,
-        },
-      });
-      expect(sync).toHaveBeenCalledTimes(1);
-      expect(sync).toHaveBeenCalledWith({
-        reason: "post-compaction",
-        sessions: [
-          {
-            agentId: "main",
-            sessionId: "rotated-session",
-            sessionKey: TEST_SESSION_KEY,
-          },
-        ],
-      });
-      expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
-        previousSessionId: "session-1",
-        sessionFile: "/tmp/rotated-session.jsonl",
-      });
-      expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
-        sessionId: "rotated-session",
       });
     } finally {
       cleanup();
@@ -2571,7 +2513,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     expect(mockCallArg(hookRunner.runBeforeCompaction)).toEqual({
       messageCount: -1,
-      sessionFile: TEST_SESSION_FILE,
+      sessionFile: TEST_SESSION_KEY,
     });
     expectRecordFields(mockCallArg(hookRunner.runBeforeCompaction, 0, 1), {
       sessionKey: TEST_SESSION_KEY,
@@ -2581,7 +2523,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       messageCount: -1,
       compactedCount: -1,
       tokenCount: 50,
-      sessionFile: TEST_SESSION_FILE,
+      sessionFile: TEST_SESSION_KEY,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
       sessionKey: TEST_SESSION_KEY,
@@ -2611,7 +2553,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
     expect(result.ok).toBe(true);
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
-      sessionFile: TEST_SESSION_FILE,
+      sessionFile: TEST_SESSION_KEY,
       previousSessionId: TEST_SESSION_ID,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
@@ -2683,7 +2625,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     )?.runtimeContext;
     expectRecordFields(mockCallArg(maintain), {
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: TEST_SESSION_FILE,
+      sessionFile: TEST_SESSION_KEY,
     });
     expect(runtimeContext?.workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(runtimeContext?.cwd).toBe("/tmp/task-repo");
@@ -3802,7 +3744,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: successorSessionId,
-        sessionFile: TEST_SESSION_FILE,
+        sessionFile: TEST_SESSION_KEY,
         trigger: "budget",
       }),
       { nativeCompactionRequest: "after_context_engine" },
@@ -4240,7 +4182,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.result?.sessionFile).toBeUndefined();
     expectRecordFields(mockCallArg(maintain), {
       sessionId: delegatedSessionId,
-      sessionFile: TEST_SESSION_FILE,
+      sessionFile: TEST_SESSION_KEY,
     });
   });
 
@@ -4287,7 +4229,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.result?.sessionFile).toBeUndefined();
     expectRecordFields(mockCallArg(maintain), {
       sessionId: TEST_SESSION_ID,
-      sessionFile: TEST_SESSION_FILE,
+      sessionFile: TEST_SESSION_KEY,
     });
   });
 

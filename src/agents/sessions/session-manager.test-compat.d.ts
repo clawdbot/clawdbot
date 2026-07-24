@@ -15,5 +15,3 @@ declare module "./session-manager.js" {
     ): SessionManagerInstance;
   }
 }
-
-export {};

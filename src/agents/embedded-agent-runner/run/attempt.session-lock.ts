@@ -96,7 +96,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 }
 
 type PromptReleaseStreamFn = ((...args: unknown[]) => Promise<unknown>) & {
-  __openclawSessionLockPromptReleaseInstalled?: true;
+  openclawSessionLockPromptReleaseInstalled?: true;
 };
 
 type SessionWithAgentPrompt = {
@@ -122,7 +122,7 @@ export function installPromptSubmissionLockRelease(params: {
     return;
   }
   const currentStreamFn = agent.streamFn;
-  if (currentStreamFn.__openclawSessionLockPromptReleaseInstalled === true) {
+  if (currentStreamFn.openclawSessionLockPromptReleaseInstalled === true) {
     return;
   }
   const originalStreamFn = currentStreamFn.bind(agent);
@@ -148,6 +148,6 @@ export function installPromptSubmissionLockRelease(params: {
       await params.reacquireAfterPrompt();
     }
   };
-  wrappedStreamFn.__openclawSessionLockPromptReleaseInstalled = true;
+  wrappedStreamFn.openclawSessionLockPromptReleaseInstalled = true;
   agent.streamFn = wrappedStreamFn;
 }

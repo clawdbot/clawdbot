@@ -22,5 +22,3 @@ declare module "./session-accessor.types.js" {
     sessionFile?: string;
   }
 }
-
-export {};
