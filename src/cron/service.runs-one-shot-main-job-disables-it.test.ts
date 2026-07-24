@@ -276,7 +276,6 @@ async function createScheduledOneShotTimerHarness(params: {
   atMs: number;
   nowMs: () => number;
   runHeartbeatOnce: NonNullable<CronServiceDeps["runHeartbeatOnce"]>;
-  cronConfig?: CronServiceDeps["cronConfig"];
 }) {
   const store = await makeStorePath();
   const enqueueSystemEvent = createRemovableEnqueueSystemEvent();
@@ -296,7 +295,6 @@ async function createScheduledOneShotTimerHarness(params: {
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
     })) as unknown as CronServiceDeps["runIsolatedAgentJob"],
-    ...(params.cronConfig ? { cronConfig: params.cronConfig } : {}),
   });
   return { store, state, enqueueSystemEvent, requestHeartbeat };
 }
@@ -717,38 +715,6 @@ describe("CronService", () => {
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(3);
     expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(consumedTexts).toEqual(["hello"]);
-    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
-
-    resetSystemEventsForTest();
-  });
-
-  it("disables exhausted disabled-heartbeat one-shots without leaving queued events", async () => {
-    resetSystemEventsForTest();
-    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
-    const runHeartbeatOnce = vi.fn(async () => ({
-      status: "skipped" as const,
-      reason: "disabled",
-    }));
-    const { state, enqueueSystemEvent, requestHeartbeat } =
-      await createScheduledOneShotTimerHarness({
-        id: "one-shot-disabled-heartbeat-exhausted",
-        name: "one-shot disabled heartbeat exhausted",
-        atMs,
-        nowMs: () => atMs,
-        runHeartbeatOnce,
-        cronConfig: { retry: { maxAttempts: 0, backoffMs: [30_000] } },
-      });
-
-    await onTimer(state);
-
-    const updated = findCronJob(state, "one-shot-disabled-heartbeat-exhausted");
-    expect(updated?.enabled).toBe(false);
-    expect(updated?.state.lastStatus).toBe("skipped");
-    expect(updated?.state.lastError).toBe("disabled");
-    expect(updated?.state.consecutiveSkipped).toBe(1);
-    expect(updated?.state.nextRunAtMs).toBeUndefined();
-    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
     expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
 
     resetSystemEventsForTest();

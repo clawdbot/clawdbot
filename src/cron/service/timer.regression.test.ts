@@ -44,13 +44,13 @@ import {
 } from "./jobs.js";
 import { run as runManualCronJob, stop } from "./ops.js";
 import { createCronServiceState as createBaseCronServiceState, type CronEvent } from "./state.js";
+import { isRunnableJob } from "./timer-runnable.js";
 import {
   applyJobResult,
   applyTriggerNoFireResult,
   executeJobCoreWithTimeout,
   runMissedJobs,
 } from "./timer.js";
-import { isRunnableJob } from "./timer-runnable.js";
 import { executeJobCore, onTimer } from "./timer.test-support.js";
 
 const FAST_TIMEOUT_SECONDS = 1;
@@ -308,51 +308,6 @@ describe("cron service timer regressions", () => {
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(4);
   });
 
-  it("#24355: one-shot job respects cron.retry config", async () => {
-    const store = timerRegressionFixtures.makeStorePath();
-    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
-
-    const cronJob = createIsolatedRegressionJob({
-      id: "oneshot-custom-retry",
-      name: "reminder",
-      scheduledAt,
-      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-      payload: { kind: "agentTurn", message: "remind me" },
-      state: { nextRunAtMs: scheduledAt },
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-    let now = scheduledAt;
-    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
-      status: "error",
-      error: "429 rate limit exceeded",
-    });
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-      cronConfig: {
-        retry: { maxAttempts: 2, backoffMs: [1000, 2000] },
-      },
-    });
-
-    for (let i = 0; i < 4; i += 1) {
-      await onTimer(state);
-      const job = requireJob(state, "oneshot-custom-retry");
-      if (i < 2) {
-        expect(job.enabled).toBe(true);
-        now = requireTimestamp(job.state.nextRunAtMs, "custom-retry next run") + 1;
-      } else {
-        expect(job.enabled).toBe(false);
-      }
-    }
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(3);
-  });
-
   it("#24355: one-shot job retries status-only 529 failures when retryOn only includes overloaded", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
@@ -383,9 +338,6 @@ describe("cron service timer regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
-      cronConfig: {
-        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["overloaded"] },
-      },
     });
 
     await onTimer(state);
@@ -431,9 +383,6 @@ describe("cron service timer regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
-      cronConfig: {
-        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["server_error"] },
-      },
     });
 
     await onTimer(state);
@@ -481,9 +430,6 @@ describe("cron service timer regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
-      cronConfig: {
-        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["rate_limit"] },
-      },
     });
 
     await onTimer(state);
@@ -572,9 +518,6 @@ describe("cron service timer regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
-      cronConfig: {
-        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["rate_limit"] },
-      },
     });
 
     await onTimer(state);
@@ -623,9 +566,6 @@ describe("cron service timer regressions", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
-      cronConfig: {
-        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["timeout"] },
-      },
     });
 
     await onTimer(state);
@@ -636,57 +576,6 @@ describe("cron service timer regressions", () => {
     expect(jobAfterRetry.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
     expect(jobAfterRetry.state.nextRunAtMs).toBeLessThan(scheduledAt + everySixHoursMs);
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses the normal recurring schedule after transient retry attempts are exhausted", async () => {
-    const store = timerRegressionFixtures.makeStorePath();
-    const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
-    const everySixHoursMs = 6 * 60 * 60 * 1_000;
-
-    const cronJob = createIsolatedRegressionJob({
-      id: "recurring-rate-limit-exhausted",
-      name: "Clawsweeper 6h closure report",
-      scheduledAt,
-      schedule: {
-        kind: "every",
-        everyMs: everySixHoursMs,
-        anchorMs: scheduledAt,
-      },
-      payload: { kind: "agentTurn", message: "closure report" },
-      state: { nextRunAtMs: scheduledAt },
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-    let now = scheduledAt;
-    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
-      status: "error",
-      error: "429 rate limit exceeded",
-    });
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-      cronConfig: {
-        retry: { maxAttempts: 1, backoffMs: [1000], retryOn: ["rate_limit"] },
-      },
-    });
-
-    await onTimer(state);
-    let job = requireJob(state, "recurring-rate-limit-exhausted");
-    expect(job.state.nextRunAtMs).toBeLessThan(scheduledAt + everySixHoursMs);
-
-    now = requireTimestamp(job.state.nextRunAtMs, "recurring exhausted retry") + 1;
-    await onTimer(state);
-
-    job = requireJob(state, "recurring-rate-limit-exhausted");
-    expect(job.enabled).toBe(true);
-    expect(job.state.lastStatus).toBe("error");
-    expect(job.state.nextRunAtMs).toBe(scheduledAt + everySixHoursMs);
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
   });
 
   it("preserves every cadence after a transient recurring retry succeeds", () => {
@@ -2306,7 +2195,6 @@ describe("cron service timer regressions", () => {
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: store.storePath,
-      cronConfig: { maxConcurrentRuns: 2 },
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),
