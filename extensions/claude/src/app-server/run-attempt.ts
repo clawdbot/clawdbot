@@ -630,8 +630,14 @@ export function resolveClaudeBridgeStartEnv(params: {
 }): Record<string, string> | undefined {
   const env = { ...params.configuredEnv };
   const resolvedApiKey = params.resolvedApiKey?.trim();
-  if (resolvedApiKey && !env.ANTHROPIC_API_KEY?.trim()) {
-    env.ANTHROPIC_API_KEY = resolvedApiKey;
+  if (resolvedApiKey && !env.ANTHROPIC_API_KEY?.trim() && !env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) {
+    // Claude setup-tokens are subscription OAuth credentials, not API keys.
+    // Passing one as ANTHROPIC_API_KEY makes Claude Code reject the valid token.
+    if (resolvedApiKey.startsWith("sk-ant-oat")) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = resolvedApiKey;
+    } else {
+      env.ANTHROPIC_API_KEY = resolvedApiKey;
+    }
   }
   // A raw appServer.env override (set directly by the operator) wins over the
   // derived value from the first-class appServer.queryThreadTimeoutMs option.

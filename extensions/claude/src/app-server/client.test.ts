@@ -95,9 +95,17 @@ describe("resolveBridgeSpawnEnv", () => {
 });
 
 describe("resolveClaudeBridgeStartEnv", () => {
-  it("passes the resolved OpenClaw Anthropic token to the bridge as ANTHROPIC_API_KEY", () => {
+  it("passes a resolved Anthropic API key to the bridge as ANTHROPIC_API_KEY", () => {
     expect(resolveClaudeBridgeStartEnv({ resolvedApiKey: " sk-ant-test " })).toEqual({
       ANTHROPIC_API_KEY: "sk-ant-test",
+    });
+  });
+
+  it("passes a resolved Claude setup-token to the bridge as CLAUDE_CODE_OAUTH_TOKEN", () => {
+    expect(
+      resolveClaudeBridgeStartEnv({ resolvedApiKey: " sk-ant-oat01-subscription-token " }),
+    ).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-subscription-token",
     });
   });
 
@@ -114,6 +122,15 @@ describe("resolveClaudeBridgeStartEnv", () => {
       ANTHROPIC_API_KEY: "configured-key",
       CLAUDE_CONFIG_DIR: "/tmp/claude",
     });
+  });
+
+  it("preserves an explicit OAuth token over a resolved credential", () => {
+    expect(
+      resolveClaudeBridgeStartEnv({
+        configuredEnv: { CLAUDE_CODE_OAUTH_TOKEN: "configured-oauth-token" },
+        resolvedApiKey: "sk-ant-test",
+      }),
+    ).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "configured-oauth-token" });
   });
 });
 
