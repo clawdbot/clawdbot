@@ -1,10 +1,12 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
 import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
+import { assertNotProjectedWorkboardCard } from "./card-output.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
@@ -171,6 +173,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
   }
 
   async bulkUpdate(input: WorkboardBulkInput): Promise<{ cards: WorkboardCard[] }> {
+    assertNotProjectedWorkboardCard(input);
     const ids = Array.isArray(input.ids)
       ? input.ids.filter((id): id is string => typeof id === "string" && id.trim() !== "")
       : [];
@@ -181,6 +184,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       input.patch && typeof input.patch === "object" && !Array.isArray(input.patch)
         ? (input.patch as WorkboardCardPatch)
         : {};
+    assertNotProjectedWorkboardCard(patch);
     const cards: WorkboardCard[] = [];
     for (const id of ids) {
       const updated =
@@ -273,7 +277,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
       openKeyedStore({
         namespace: "workboard.cards",
         maxEntries: MAX_CARDS,
-      }) as WorkboardKeyedStore,
+      }) as WorkboardCardStore,
       {
         boards: openKeyedStore({
           namespace: "workboard.boards",

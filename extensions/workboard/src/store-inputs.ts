@@ -57,6 +57,10 @@ export type WorkboardProofInput = {
   url?: unknown;
   note?: unknown;
 };
+export type WorkboardProofListOptions = {
+  cursor?: unknown;
+  limit?: unknown;
+};
 export type WorkboardArtifactInput = {
   label?: unknown;
   url?: unknown;

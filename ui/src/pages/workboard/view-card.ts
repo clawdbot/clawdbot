@@ -12,6 +12,7 @@ import {
   getWorkboardState,
   moveWorkboardCard,
   workboardCardMatchesHealthKey,
+  workboardProofTotal,
   type WorkboardCard,
   type WorkboardDependencyState,
   type WorkboardStatus,
@@ -101,8 +102,9 @@ function renderCompactBadges(card: WorkboardCard, task?: WorkboardTaskSummary) {
   if (metadata?.comments?.length) {
     badges.push(renderCountBadge("workboard.badgeComments", metadata.comments.length));
   }
-  if (metadata?.proof?.length) {
-    badges.push(renderCountBadge("workboard.badgeProof", metadata.proof.length));
+  const proofTotal = workboardProofTotal(card);
+  if (proofTotal) {
+    badges.push(renderCountBadge("workboard.badgeProof", proofTotal));
   }
   if (metadata?.claim) {
     badges.push(

@@ -1,7 +1,8 @@
 import type {
   WorkboardBoardSummary,
-  WorkboardCard,
+  WorkboardCard as CanonicalWorkboardCard,
   WorkboardPriority,
+  WorkboardProofPageInfo,
   WorkboardStatus,
   WorkboardTemplateId,
 } from "@openclaw/workboard-contract";
@@ -10,6 +11,12 @@ import type { TaskSummary } from "../tasks/task-summary.ts";
 
 export * from "@openclaw/workboard-contract";
 export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
+
+// Gateway responses carry projected card views, while legacy fixtures and
+// cached payloads may predate proofPage. Normalization fills the marker in.
+export type WorkboardCard = Omit<CanonicalWorkboardCard, "proofPage"> & {
+  proofPage?: WorkboardProofPageInfo;
+};
 
 type WorkboardLifecycleState =
   | "unlinked"

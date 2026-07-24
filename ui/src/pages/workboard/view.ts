@@ -257,7 +257,8 @@ export function renderWorkboard(props: WorkboardProps) {
             <input
               class="input"
               type="search"
-              title=${t("workboard.searchPlaceholder")}
+              aria-describedby="workboard-search-proof-scope"
+              title=${t("workboard.searchProofScopeHint")}
               placeholder=${t("workboard.searchPlaceholder")}
               .value=${state.query}
               @input=${(event: InputEvent) => {
@@ -265,6 +266,9 @@ export function renderWorkboard(props: WorkboardProps) {
                 props.onRequestUpdate?.();
               }}
             />
+            <span id="workboard-search-proof-scope" class="workboard-sr-only">
+              ${t("workboard.searchProofScopeHint")}
+            </span>
             ${renderWorkboardSelect({
               value: state.viewPreset,
               options: viewOptions,

@@ -3,8 +3,14 @@ import type {
   WorkboardAttachment,
   WorkboardCard,
   WorkboardNotification,
+  WorkboardProofPage,
   WorkboardWorkerLog,
 } from "@openclaw/workboard-contract";
+import {
+  createWorkboardProofPage,
+  paginateWorkboardProof,
+  readWorkboardProofPageRequest,
+} from "./card-output.js";
 import type { PersistedWorkboardAttachment } from "./persistence-types.js";
 import {
   assertCanMutateClaimedCard,
@@ -25,6 +31,7 @@ import type {
   WorkboardAttachmentInput,
   WorkboardMutationScope,
   WorkboardProofInput,
+  WorkboardProofListOptions,
   WorkboardProtocolViolationInput,
   WorkboardWorkerLogInput,
 } from "./store-inputs.js";
@@ -37,6 +44,29 @@ import {
 } from "./store-normalizers.js";
 
 export class WorkboardEnrichmentStore extends WorkboardCoreStore {
+  async listProof(
+    id: string,
+    options: WorkboardProofListOptions = {},
+  ): Promise<WorkboardProofPage> {
+    const cardId = id.trim();
+    if (!cardId) {
+      throw new Error("id is required.");
+    }
+    const request = readWorkboardProofPageRequest(options);
+    if (this.proofPageReader) {
+      const page = await this.proofPageReader(cardId, request);
+      if (!page) {
+        throw new Error(`card not found: ${cardId}`);
+      }
+      return createWorkboardProofPage(page);
+    }
+    const card = await this.get(cardId);
+    if (!card) {
+      throw new Error(`card not found: ${cardId}`);
+    }
+    return paginateWorkboardProof(card.metadata?.proof ?? [], request);
+  }
+
   async addProof(
     id: string,
     input: WorkboardProofInput,

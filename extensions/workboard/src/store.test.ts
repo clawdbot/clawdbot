@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { WORKBOARD_EMBEDDED_PROOF_BYTES, toBoundedWorkboardCard } from "./card-output.js";
 import {
   WorkboardStaleSnapshotError,
   type PersistedWorkboardAttachment,
@@ -1349,6 +1350,161 @@ describe("WorkboardStore", () => {
     const saved = await store.get(card.id);
     expect(saved?.metadata?.proof?.map((proof) => proof.id)).toEqual(proofIds);
     expect(saved?.events?.filter((event) => event.kind === "proof_added")).toHaveLength(45);
+  });
+
+  it("pages memory proof history and rejects projected create, update, and bulk inputs", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = Array.from({ length: 45 }, (_, index) => ({
+      id: `proof-${index}`,
+      status: "passed" as const,
+      createdAt: index + 1,
+      label: `Proof ${index}`,
+    }));
+    const card = await store.create({ title: "Projected writeback", metadata: { proof } });
+    const view = toBoundedWorkboardCard(card);
+
+    const first = await store.listProof(card.id, { limit: 10 });
+    const second = await store.listProof(card.id, { limit: 10, cursor: first.nextCursor });
+    expect(first).toMatchObject({ total: 45, hasMore: true });
+    expect(first.proof.map((entry) => entry.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `proof-${index + 35}`),
+    );
+    expect(second.proof.map((entry) => entry.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `proof-${index + 25}`),
+    );
+
+    await expect(store.create(view as never)).rejects.toThrow(
+      "projected Workboard cards are read-only",
+    );
+    await expect(store.update(card.id, view as never)).rejects.toThrow(
+      "projected Workboard cards are read-only",
+    );
+    await expect(store.bulkUpdate({ ids: [card.id], patch: view })).rejects.toThrow(
+      "projected Workboard cards are read-only",
+    );
+    await expect(store.bulkUpdate({ ...view, ids: [card.id] } as never)).rejects.toThrow(
+      "projected Workboard cards are read-only",
+    );
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: { proof },
+    });
+  });
+
+  it("keeps a single oversized proof canonical and available through paging and export", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = {
+      id: `proof-${"x".repeat(WORKBOARD_EMBEDDED_PROOF_BYTES)}`,
+      status: "passed" as const,
+      createdAt: 1,
+      label: "Oversized id",
+    };
+    const card = await store.create({
+      title: "Oversized embedded proof",
+      metadata: { proof: [proof] },
+    });
+
+    const view = toBoundedWorkboardCard(card);
+    expect(view.metadata?.proof).toBeUndefined();
+    expect(view.proofPage).toEqual({ total: 1, hasMore: true });
+
+    await expect(store.listProof(card.id)).resolves.toEqual({
+      proof: [proof],
+      total: 1,
+      hasMore: false,
+    });
+    await expect(store.get(card.id)).resolves.toMatchObject({ metadata: { proof: [proof] } });
+    await expect(store.exportCards()).resolves.toMatchObject({
+      cards: [{ id: card.id, metadata: { proof: [proof] } }],
+    });
+  });
+
+  it("pages sqlite proof directly with stable cursors across append, resolution, and reopen", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-proof-pages-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const stores = createWorkboardSqliteStores({ dbPath });
+    let cardId = "";
+    let cursor = "";
+    try {
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const proof = Array.from({ length: 45 }, (_, index) => ({
+        id: `proof-${index}`,
+        status: index === 44 ? ("unknown" as const) : ("passed" as const),
+        createdAt: index + 1,
+        label: `Proof ${index}`,
+      }));
+      const card = await store.create({ title: "SQLite proof pages", metadata: { proof } });
+      cardId = card.id;
+      const first = await store.listProof(card.id, { limit: 10 });
+      cursor = first.nextCursor ?? "";
+      expect(first.proof.map((entry) => entry.id)).toEqual(
+        Array.from({ length: 10 }, (_, index) => `proof-${index + 35}`),
+      );
+      expect(first).toMatchObject({ total: 45, hasMore: true });
+
+      await store.addProof(card.id, { status: "passed", label: "Proof 45" });
+      await store.complete(card.id, {
+        proofId: "proof-44",
+        proof: { status: "passed", label: "Proof 44" },
+      });
+      const second = await store.listProof(card.id, { limit: 10, cursor });
+      expect(second.proof.map((entry) => entry.id)).toEqual(
+        Array.from({ length: 10 }, (_, index) => `proof-${index + 25}`),
+      );
+      expect(second.total).toBe(46);
+
+      const foreign = await store.create({
+        title: "Foreign cursor",
+        metadata: {
+          proof: [
+            { id: "foreign-0", status: "passed", createdAt: 1 },
+            { id: "foreign-1", status: "passed", createdAt: 2 },
+          ],
+        },
+      });
+      const foreignCursor = (await store.listProof(foreign.id, { limit: 1 })).nextCursor;
+      await expect(store.listProof(card.id, { cursor: foreignCursor })).rejects.toThrow(
+        "proof cursor does not belong to this card",
+      );
+      await expect(store.listProof(card.id, { limit: 41 })).rejects.toThrow(
+        "limit must be an integer from 1 to 40",
+      );
+
+      stores.cards.lookup = async () => {
+        throw new Error("full card hydration is not allowed for sqlite proof pages");
+      };
+      await expect(store.listProof(card.id, { limit: 1 })).resolves.toMatchObject({
+        total: 46,
+        proof: [expect.objectContaining({ label: "Proof 45" })],
+      });
+    } finally {
+      stores.close();
+    }
+
+    const reopenedStores = createWorkboardSqliteStores({ dbPath });
+    try {
+      const reopened = new WorkboardStore(reopenedStores.cards, {
+        boards: reopenedStores.boards,
+        subscriptions: reopenedStores.subscriptions,
+        attachments: reopenedStores.attachments,
+      });
+      const page = await reopened.listProof(cardId, { limit: 10, cursor });
+      expect(page.proof.map((entry) => entry.id)).toEqual(
+        Array.from({ length: 10 }, (_, index) => `proof-${index + 25}`),
+      );
+      const canonical = await reopened.get(cardId);
+      expect(canonical?.metadata?.proof).toHaveLength(46);
+      expect(canonical?.metadata?.proof?.find((entry) => entry.id === "proof-44")?.status).toBe(
+        "passed",
+      );
+      expect(canonical).not.toHaveProperty("proofPage");
+    } finally {
+      reopenedStores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("emits proof_added only when a genuinely new proof id is persisted", async () => {

@@ -28,6 +28,10 @@ export function createDeferred<T>() {
 
 export function createWorkboardCard(overrides: Partial<WorkboardCard> = {}): WorkboardCard {
   const title = overrides.title ?? "Build board";
+  const proofPage = overrides.proofPage ?? {
+    total: overrides.metadata?.proof?.length ?? 0,
+    hasMore: false,
+  };
   return {
     id: "card-1",
     title,
@@ -38,6 +42,7 @@ export function createWorkboardCard(overrides: Partial<WorkboardCard> = {}): Wor
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
+    proofPage,
   };
 }
 

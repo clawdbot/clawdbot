@@ -4,7 +4,9 @@ import type {
   WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardNotificationSubscription,
+  WorkboardProof,
 } from "@openclaw/workboard-contract";
+import type { WorkboardProofPageRequest } from "./card-output.js";
 
 export type PersistedWorkboardCard = {
   version: 1;
@@ -40,4 +42,17 @@ export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
   lookup(key: string): Promise<T | undefined>;
   delete(key: string): Promise<boolean>;
   entries(): Promise<Array<{ key: string; value: T }>>;
+};
+
+export type PersistedWorkboardProofPage = {
+  proof: WorkboardProof[];
+  total: number;
+  hasMore: boolean;
+};
+
+export type WorkboardCardStore = WorkboardKeyedStore & {
+  listProofPage?(
+    cardId: string,
+    request: WorkboardProofPageRequest,
+  ): Promise<PersistedWorkboardProofPage | undefined>;
 };

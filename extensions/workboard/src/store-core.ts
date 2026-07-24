@@ -7,7 +7,9 @@ import type {
   WorkboardMetadata,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
+import { assertNotProjectedWorkboardCard } from "./card-output.js";
 import {
+  type WorkboardCardStore,
   WorkboardStaleSnapshotError,
   type PersistedWorkboardAttachment,
   type PersistedWorkboardBoard,
@@ -80,12 +82,13 @@ export class WorkboardCoreStore {
   private lastNotificationSequence = 0;
   private readonly changes: WorkboardChangeTracker;
   protected readonly store: WorkboardKeyedStore;
+  protected readonly proofPageReader?: NonNullable<WorkboardCardStore["listProofPage"]>;
   protected readonly boardStore: WorkboardKeyedStore<PersistedWorkboardBoard>;
   protected readonly subscriptionStore: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   protected readonly attachmentStore: WorkboardKeyedStore<PersistedWorkboardAttachment>;
 
   constructor(
-    store: WorkboardKeyedStore,
+    store: WorkboardCardStore,
     stores: {
       boards?: WorkboardKeyedStore<PersistedWorkboardBoard>;
       subscriptions?: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
@@ -94,6 +97,7 @@ export class WorkboardCoreStore {
     } = {},
   ) {
     this.changes = new WorkboardChangeTracker(stores.dataVersion);
+    this.proofPageReader = store.listProofPage?.bind(store);
     this.store = this.changes.track(store);
     this.boardStore = this.changes.track(
       stores.boards ?? (store as unknown as WorkboardKeyedStore<PersistedWorkboardBoard>),
@@ -357,6 +361,7 @@ export class WorkboardCoreStore {
     scope?: WorkboardMutationScope,
     options: { onParentPersisted?: (parent: WorkboardCard) => void } = {},
   ): Promise<WorkboardCard> {
+    assertNotProjectedWorkboardCard(input);
     const now = Date.now();
     const requestedStatus = normalizeStatus(input.status, "todo");
     const cards = await this.list();
@@ -495,6 +500,7 @@ export class WorkboardCoreStore {
   }
 
   async update(id: string, patch: WorkboardCardPatch): Promise<WorkboardCard> {
+    assertNotProjectedWorkboardCard(patch);
     return await this.enqueueMutation(
       async () =>
         await this.updateCard(id, patch, {

@@ -1,6 +1,6 @@
 // Workboard plugin module implements gateway behavior.
 import type { OpenClawPluginApi } from "../api.js";
-import { redactClaimToken } from "./card-redaction.js";
+import { redactCanonicalWorkboardCard, toBoundedWorkboardCard } from "./card-output.js";
 import {
   assertNoCursorAdvance,
   createWorkboardDispatchHandler,
@@ -24,7 +24,7 @@ function redactDiagnosticsRows(result: Awaited<ReturnType<WorkboardStore["diagno
     ...result,
     diagnostics: result.diagnostics.map((row) => ({
       ...row,
-      card: redactClaimToken(row.card),
+      card: toBoundedWorkboardCard(row.card),
     })),
   };
 }
@@ -38,14 +38,17 @@ export function registerWorkboardGatewayMethods(params: {
   const dispatchCards = createWorkboardDispatchHandler({
     api,
     store,
-    redactCard: redactClaimToken,
+    redactCard: toBoundedWorkboardCard,
   });
 
   api.registerGatewayMethod(
     "workboard.cards.list",
     async ({ params: requestParams, respond }) => {
       try {
-        respond(true, await listWorkboardCards(store, requestParams.boardId, redactClaimToken));
+        respond(
+          true,
+          await listWorkboardCards(store, requestParams.boardId, toBoundedWorkboardCard),
+        );
       } catch (error) {
         respondError(respond, error);
       }
@@ -53,14 +56,14 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
-  registerWorkboardWorkspaceCardMethods({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceCardMethods({ api, store, redactCard: toBoundedWorkboardCard });
 
   api.registerGatewayMethod(
     "workboard.cards.move",
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(
+          card: toBoundedWorkboardCard(
             await store.move(readId(requestParams), requestParams.status, requestParams.position),
           ),
         });
@@ -88,7 +91,9 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.addComment(readId(requestParams), requestParams)),
+          card: toBoundedWorkboardCard(
+            await store.addComment(readId(requestParams), requestParams),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -102,7 +107,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.addLink(readId(requestParams), requestParams)),
+          card: toBoundedWorkboardCard(await store.addLink(readId(requestParams), requestParams)),
         });
       } catch (error) {
         respondError(respond, error);
@@ -121,7 +126,7 @@ export function registerWorkboardGatewayMethods(params: {
           throw new Error("parentId and childId are required.");
         }
         respond(true, {
-          card: redactClaimToken(await store.linkCards(parentId, childId)),
+          card: toBoundedWorkboardCard(await store.linkCards(parentId, childId)),
         });
       } catch (error) {
         respondError(respond, error);
@@ -134,8 +139,14 @@ export function registerWorkboardGatewayMethods(params: {
     "workboard.cards.proof",
     async ({ params: requestParams, respond }) => {
       try {
+        const card = await store.addProof(readId(requestParams), requestParams);
+        const proofId = card.metadata?.proof?.at(-1)?.id;
+        if (!proofId) {
+          throw new Error("proof was not retained in canonical card metadata.");
+        }
         respond(true, {
-          card: redactClaimToken(await store.addProof(readId(requestParams), requestParams)),
+          card: toBoundedWorkboardCard(card),
+          proofId,
         });
       } catch (error) {
         respondError(respond, error);
@@ -145,11 +156,31 @@ export function registerWorkboardGatewayMethods(params: {
   );
 
   api.registerGatewayMethod(
+    "workboard.cards.proof.list",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(
+          true,
+          await store.listProof(readId(requestParams), {
+            cursor: requestParams.cursor,
+            limit: requestParams.limit,
+          }),
+        );
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
     "workboard.cards.artifact",
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.addArtifact(readId(requestParams), requestParams)),
+          card: toBoundedWorkboardCard(
+            await store.addArtifact(readId(requestParams), requestParams),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -163,7 +194,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const claimed = await store.claim(readId(requestParams), requestParams);
-        respond(true, { ...claimed, card: redactClaimToken(claimed.card) });
+        respond(true, { ...claimed, card: toBoundedWorkboardCard(claimed.card) });
       } catch (error) {
         respondError(respond, error);
       }
@@ -176,7 +207,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.heartbeat(readId(requestParams), requestParams)),
+          card: toBoundedWorkboardCard(await store.heartbeat(readId(requestParams), requestParams)),
         });
       } catch (error) {
         respondError(respond, error);
@@ -190,7 +221,9 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.releaseClaim(readId(requestParams), requestParams)),
+          card: toBoundedWorkboardCard(
+            await store.releaseClaim(readId(requestParams), requestParams),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -204,7 +237,9 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.promote(readId(requestParams), requestParams, null)),
+          card: toBoundedWorkboardCard(
+            await store.promote(readId(requestParams), requestParams, null),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -218,7 +253,9 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.reassign(readId(requestParams), requestParams, null)),
+          card: toBoundedWorkboardCard(
+            await store.reassign(readId(requestParams), requestParams, null),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -232,7 +269,9 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.reclaim(readId(requestParams), requestParams, null)),
+          card: toBoundedWorkboardCard(
+            await store.reclaim(readId(requestParams), requestParams, null),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -246,7 +285,9 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.complete(readId(requestParams), requestParams, null)),
+          card: toBoundedWorkboardCard(
+            await store.complete(readId(requestParams), requestParams, null),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -260,7 +301,9 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.block(readId(requestParams), requestParams, null)),
+          card: toBoundedWorkboardCard(
+            await store.block(readId(requestParams), requestParams, null),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -274,7 +317,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.unblock(readId(requestParams))),
+          card: toBoundedWorkboardCard(await store.unblock(readId(requestParams))),
         });
       } catch (error) {
         respondError(respond, error);
@@ -283,7 +326,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: WRITE_SCOPE },
   );
 
-  registerWorkboardWorkspaceBulkMethod({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceBulkMethod({ api, store, redactCard: toBoundedWorkboardCard });
 
   api.registerGatewayMethod(
     "workboard.cards.diagnostics",
@@ -333,7 +376,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
-  registerWorkboardWorkspaceBoardMethod({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceBoardMethod({ api, store, redactCard: toBoundedWorkboardCard });
 
   api.registerGatewayMethod(
     "workboard.boards.archive",
@@ -378,7 +421,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const result = await store.runs(readId(requestParams));
-        respond(true, { ...result, card: redactClaimToken(result.card) });
+        respond(true, { ...result, card: toBoundedWorkboardCard(result.card) });
       } catch (error) {
         respondError(respond, error);
       }
@@ -386,7 +429,7 @@ export function registerWorkboardGatewayMethods(params: {
     { scope: READ_SCOPE },
   );
 
-  registerWorkboardWorkspaceWorkflowMethods({ api, store, redactCard: redactClaimToken });
+  registerWorkboardWorkspaceWorkflowMethods({ api, store, redactCard: toBoundedWorkboardCard });
 
   api.registerGatewayMethod(
     "workboard.notifications.subscribe",
@@ -454,7 +497,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         const result = await store.listAttachments(readId(requestParams));
-        respond(true, { ...result, card: redactClaimToken(result.card) });
+        respond(true, { ...result, card: toBoundedWorkboardCard(result.card) });
       } catch (error) {
         respondError(respond, error);
       }
@@ -483,7 +526,9 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.addAttachment(readId(requestParams), requestParams)),
+          card: toBoundedWorkboardCard(
+            await store.addAttachment(readId(requestParams), requestParams),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -501,7 +546,7 @@ export function registerWorkboardGatewayMethods(params: {
           throw new Error("attachmentId is required.");
         }
         respond(true, {
-          card: redactClaimToken(
+          card: toBoundedWorkboardCard(
             await store.deleteAttachment(readId(requestParams), attachmentId.trim()),
           ),
         });
@@ -517,7 +562,9 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(await store.addWorkerLog(readId(requestParams), requestParams)),
+          card: toBoundedWorkboardCard(
+            await store.addWorkerLog(readId(requestParams), requestParams),
+          ),
         });
       } catch (error) {
         respondError(respond, error);
@@ -531,7 +578,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(
+          card: toBoundedWorkboardCard(
             await store.recordProtocolViolation(readId(requestParams), requestParams),
           ),
         });
@@ -547,7 +594,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          card: redactClaimToken(
+          card: toBoundedWorkboardCard(
             await store.archive(readId(requestParams), requestParams.archived),
           ),
         });
@@ -563,7 +610,7 @@ export function registerWorkboardGatewayMethods(params: {
     async ({ respond }) => {
       try {
         const exported = await store.exportCards();
-        respond(true, { ...exported, cards: exported.cards.map(redactClaimToken) });
+        respond(true, { ...exported, cards: exported.cards.map(redactCanonicalWorkboardCard) });
       } catch (error) {
         respondError(respond, error);
       }

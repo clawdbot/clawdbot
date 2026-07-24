@@ -237,6 +237,71 @@ describe("workboard tools", () => {
     );
   });
 
+  it("returns bounded card views and paginates canonical proof history", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = Array.from({ length: 100 }, (_, index) => ({
+      id: `proof-${index}`,
+      status: "passed" as const,
+      createdAt: index + 1,
+      label: `Proof ${index}`,
+    }));
+    const card = await store.create({ title: "Tool projection", metadata: { proof } });
+    const tools = new Map(
+      createWorkboardTools({
+        api: { runtime: {} } as unknown as OpenClawPluginApi,
+        store,
+        context: { agentId: "main" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+
+    const read = readPayload(await tools.get("workboard_read")?.execute("read", { id: card.id }));
+    expect((read.card as { metadata?: { proof?: unknown[] } }).metadata?.proof).toHaveLength(40);
+    expect(read.card).toMatchObject({ proofPage: { total: 100, hasMore: true } });
+
+    const commented = readPayload(
+      await tools.get("workboard_comment")?.execute("comment", {
+        id: card.id,
+        body: "Keep proof canonical.",
+      }),
+    );
+    expect(commented).toMatchObject({ proofPage: { total: 100, hasMore: true } });
+    expect((commented.metadata as { proof?: unknown[] }).proof).toHaveLength(40);
+
+    const added = readPayload(
+      await tools.get("workboard_proof")?.execute("proof", {
+        id: card.id,
+        status: "passed",
+        label: "Proof 100",
+      }),
+    );
+    expect(added.proofId).toEqual(expect.any(String));
+    expect(added.card).toMatchObject({ proofPage: { total: 101, hasMore: true } });
+    expect(
+      ((added.card as { metadata?: { proof?: unknown[] } }).metadata?.proof ?? []).length,
+    ).toBeLessThanOrEqual(40);
+
+    const first = readPayload(
+      await tools.get("workboard_proof_list")?.execute("proof-list-1", {
+        id: card.id,
+        limit: 40,
+      }),
+    );
+    const second = readPayload(
+      await tools.get("workboard_proof_list")?.execute("proof-list-2", {
+        id: card.id,
+        limit: 40,
+        cursor: first.nextCursor,
+      }),
+    );
+    expect(first).toMatchObject({ total: 101, hasMore: true });
+    expect(first.proof).toHaveLength(40);
+    expect(second.proof).toHaveLength(40);
+
+    const canonical = await store.get(card.id);
+    expect(canonical?.metadata?.proof).toHaveLength(101);
+    expect(canonical).not.toHaveProperty("proofPage");
+  });
+
   it("can share one store across tool instances for claim coordination", async () => {
     const keyed = createMemoryStore();
     const api = {

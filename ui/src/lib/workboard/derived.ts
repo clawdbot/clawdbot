@@ -11,9 +11,13 @@ import type {
 
 const WORKBOARD_RECENT_DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+export function workboardProofTotal(card: WorkboardCard): number {
+  return Math.max(card.proofPage?.total ?? 0, card.metadata?.proof?.length ?? 0);
+}
+
 function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
   return Boolean(
-    card.metadata?.proof?.length ||
+    workboardProofTotal(card) ||
     card.metadata?.artifacts?.length ||
     card.metadata?.attachments?.length,
   );

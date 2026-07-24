@@ -2170,6 +2170,12 @@ describe("workboard controller", () => {
       status: "done",
       metadata: { artifacts: [{ id: "artifact-1", createdAt: 1, label: "log" }] },
     } satisfies WorkboardCard;
+    const projectedProof = {
+      ...sampleCard,
+      id: "projected-proof",
+      status: "done",
+      proofPage: { total: 12, hasMore: true },
+    } satisfies WorkboardCard;
     const failed = {
       ...sampleCard,
       id: "failed",
@@ -2201,7 +2207,16 @@ describe("workboard controller", () => {
 
     expect(
       summarizeWorkboardHealth({
-        cards: [running, blocked, ready, missingProof, artifactProof, failed, recovered],
+        cards: [
+          running,
+          blocked,
+          ready,
+          missingProof,
+          artifactProof,
+          projectedProof,
+          failed,
+          recovered,
+        ],
         tasksByCardId,
         sessions: [sampleSession],
       }),

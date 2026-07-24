@@ -24,6 +24,7 @@ import {
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
+  type WorkboardCardStore,
   WorkboardStaleSnapshotError,
   type PersistedWorkboardAttachment,
   type PersistedWorkboardBoard,
@@ -43,7 +44,7 @@ const WORKBOARD_CARD_SNAPSHOT = Symbol("workboard.cardSnapshot");
 type Row = Record<string, unknown>;
 type SnapshotCard = WorkboardCard & { [WORKBOARD_CARD_SNAPSHOT]?: string };
 type WorkboardSqliteStores = {
-  cards: WorkboardKeyedStore;
+  cards: WorkboardCardStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
   subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
@@ -139,6 +140,18 @@ function blobToBase64(value: unknown): string {
 
 function runTransaction<T>(db: DatabaseSync, run: () => T): T {
   db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = run();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function runReadTransaction<T>(db: DatabaseSync, run: () => T): T {
+  db.exec("BEGIN");
   try {
     const result = run();
     db.exec("COMMIT");
@@ -616,31 +629,33 @@ function readExecution(row: Row): WorkboardExecution | undefined {
   };
 }
 
+function proofFromRow(row: Row): WorkboardProof {
+  const entry: WorkboardProof = {
+    id: requiredString(row, "id"),
+    status: requiredString(row, "status") as WorkboardProof["status"],
+    createdAt: requiredNumber(row, "created_at"),
+  };
+  const label = stringValue(row, "label");
+  const command = stringValue(row, "command");
+  const url = stringValue(row, "url");
+  const note = stringValue(row, "note");
+  if (label) {
+    entry.label = label;
+  }
+  if (command) {
+    entry.command = command;
+  }
+  if (url) {
+    entry.url = url;
+  }
+  if (note) {
+    entry.note = note;
+  }
+  return entry;
+}
+
 function readProof(db: DatabaseSync, cardId: string, preloaded?: CardChildRows): WorkboardProof[] {
-  return childRows(db, "workboard_card_proof", cardId, preloaded).map((child) => {
-    const entry: WorkboardProof = {
-      id: requiredString(child, "id"),
-      status: requiredString(child, "status") as WorkboardProof["status"],
-      createdAt: requiredNumber(child, "created_at"),
-    };
-    const label = stringValue(child, "label");
-    const command = stringValue(child, "command");
-    const url = stringValue(child, "url");
-    const note = stringValue(child, "note");
-    if (label) {
-      entry.label = label;
-    }
-    if (command) {
-      entry.command = command;
-    }
-    if (url) {
-      entry.url = url;
-    }
-    if (note) {
-      entry.note = note;
-    }
-    return entry;
-  });
+  return childRows(db, "workboard_card_proof", cardId, preloaded).map(proofFromRow);
 }
 
 function readMetadata(
@@ -1235,7 +1250,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
   }
 }
 
-class WorkboardSqliteCardStore implements WorkboardKeyedStore {
+class WorkboardSqliteCardStore implements WorkboardCardStore {
   constructor(private readonly db: DatabaseSync) {}
 
   private assertPayload(key: string, value: PersistedWorkboardCard): void {
@@ -1299,6 +1314,62 @@ class WorkboardSqliteCardStore implements WorkboardKeyedStore {
       | Row
       | undefined;
     return row ? { version: 1, card: attachCardSnapshot(readCard(this.db, row)) } : undefined;
+  }
+
+  async listProofPage(
+    cardId: string,
+    request: Parameters<NonNullable<WorkboardCardStore["listProofPage"]>>[1],
+  ) {
+    return runReadTransaction(this.db, () => {
+      const card = this.db.prepare("SELECT 1 FROM workboard_cards WHERE id = ?").get(cardId);
+      if (!card) {
+        return undefined;
+      }
+      const total = requiredNumber(
+        this.db
+          .prepare("SELECT COUNT(*) AS total FROM workboard_card_proof WHERE card_id = ?")
+          .get(cardId) as Row,
+        "total",
+      );
+      let beforeOrdinal: number | undefined;
+      if (request.beforeProofId !== undefined) {
+        const cursor = this.db
+          .prepare("SELECT ordinal FROM workboard_card_proof WHERE card_id = ? AND id = ?")
+          .get(cardId, request.beforeProofId) as Row | undefined;
+        if (!cursor) {
+          throw new Error("proof cursor does not belong to this card.");
+        }
+        beforeOrdinal = requiredNumber(cursor, "ordinal");
+      }
+      const rows =
+        beforeOrdinal === undefined
+          ? (this.db
+              .prepare(
+                `
+                  SELECT * FROM workboard_card_proof
+                  WHERE card_id = ?
+                  ORDER BY ordinal DESC, id DESC
+                  LIMIT ?
+                `,
+              )
+              .all(cardId, request.limit + 1) as Row[])
+          : (this.db
+              .prepare(
+                `
+                  SELECT * FROM workboard_card_proof
+                  WHERE card_id = ? AND ordinal < ?
+                  ORDER BY ordinal DESC, id DESC
+                  LIMIT ?
+                `,
+              )
+              .all(cardId, beforeOrdinal, request.limit + 1) as Row[]);
+      const hasMore = rows.length > request.limit;
+      return {
+        proof: rows.slice(0, request.limit).map(proofFromRow).toReversed(),
+        total,
+        hasMore,
+      };
+    });
   }
 
   async delete(key: string): Promise<boolean> {

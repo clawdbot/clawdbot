@@ -2,9 +2,12 @@
 export { registerWorkboardGatewayMethods } from "./src/gateway.js";
 export type {
   WorkboardCard,
+  WorkboardCardView,
   WorkboardClaim,
   WorkboardDiagnostic,
   WorkboardListResult,
   WorkboardPriority,
+  WorkboardProofPage,
+  WorkboardProofPageInfo,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";

@@ -21,6 +21,7 @@ export {
   filterWorkboardCardsForPreset,
   summarizeWorkboardHealth,
   workboardCardMatchesHealthKey,
+  workboardProofTotal,
 } from "./derived.ts";
 export { captureSessionToWorkboard } from "./session-capture.ts";
 export { getWorkboardDependencyState, resetDraftState } from "./card-state.ts";

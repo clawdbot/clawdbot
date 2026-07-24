@@ -5,7 +5,7 @@ import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
-import { redactClaimToken } from "./card-redaction.js";
+import { toBoundedWorkboardCard } from "./card-output.js";
 import { WorkboardStore } from "./store.js";
 import { cardIdField, claimTokenField, createWorkboardMoveTool } from "./tools-card-mutations.js";
 
@@ -145,11 +145,11 @@ function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolC
 }
 
 function redactedCardResult(card: WorkboardCard) {
-  return jsonResult({ card: redactClaimToken(card) });
+  return jsonResult({ card: toBoundedWorkboardCard(card) });
 }
 
 function redactedRawCardResult(card: WorkboardCard) {
-  return jsonResult(redactClaimToken(card));
+  return jsonResult(toBoundedWorkboardCard(card));
 }
 
 function redactedProofResult(card: WorkboardCard) {
@@ -158,7 +158,7 @@ function redactedProofResult(card: WorkboardCard) {
     throw new Error("proof was not retained in card metadata.");
   }
   return jsonResult({
-    card: redactClaimToken(card),
+    card: toBoundedWorkboardCard(card),
     proofId,
   });
 }
@@ -293,7 +293,7 @@ export function createWorkboardTools(params: {
         const record = rawParams as Record<string, unknown>;
         readParentIds(record.parents);
         return jsonResult({
-          card: redactClaimToken(
+          card: toBoundedWorkboardCard(
             await store.create(record, { ownerId, token: record.token as string | undefined }),
           ),
         });
@@ -320,7 +320,9 @@ export function createWorkboardTools(params: {
         const childId = readStringParam(record, "childId", { required: true });
         const token = record.token as string | undefined;
         return jsonResult({
-          card: redactClaimToken(await store.linkCards(parentId, childId, { ownerId, token })),
+          card: toBoundedWorkboardCard(
+            await store.linkCards(parentId, childId, { ownerId, token }),
+          ),
         });
       },
     },
@@ -338,7 +340,7 @@ export function createWorkboardTools(params: {
           throw new Error(`card not found: ${id}`);
         }
         return jsonResult({
-          card: redactClaimToken(card),
+          card: toBoundedWorkboardCard(card),
           workerContext: await store.buildWorkerContext(id),
         });
       },
@@ -362,7 +364,7 @@ export function createWorkboardTools(params: {
           ownerId,
           ttlSeconds: record.ttlSeconds,
         });
-        return jsonResult({ ...claimed, card: redactClaimToken(claimed.card) });
+        return jsonResult({ ...claimed, card: toBoundedWorkboardCard(claimed.card) });
       },
     },
     {
@@ -470,6 +472,34 @@ export function createWorkboardTools(params: {
             )
           : await store.addProof(id, record, scope);
         return redactedProofResult(card);
+      },
+    },
+    {
+      name: "workboard_proof_list",
+      label: "Workboard Proof List",
+      description:
+        "Read one bounded page of durable Workboard proof history, starting with the newest records.",
+      parameters: Type.Object(
+        {
+          id: cardIdField(),
+          cursor: Type.Optional(
+            Type.String({ description: "Opaque cursor returned by the previous proof page." }),
+          ),
+          limit: Type.Optional(
+            Type.Number({ description: "Maximum proof records. Default and maximum 40." }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        const id = readStringParam(record, "id", { required: true });
+        return jsonResult(
+          await store.listProof(id, {
+            cursor: record.cursor,
+            limit: record.limit,
+          }),
+        );
       },
     },
     {
@@ -717,7 +747,7 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const id = readStringParam(rawParams as Record<string, unknown>, "id", { required: true });
         const result = await store.runs(id);
-        return jsonResult({ ...result, card: redactClaimToken(result.card) });
+        return jsonResult({ ...result, card: toBoundedWorkboardCard(result.card) });
       },
     },
     {
@@ -760,7 +790,9 @@ export function createWorkboardTools(params: {
         const id = readStringParam(record, "id", { required: true });
         await requireScopedCard(store, id, ownerId, record.token as string | undefined);
         return jsonResult({
-          card: redactClaimToken(await store.specify(id, record, { ownerId, token: record.token })),
+          card: toBoundedWorkboardCard(
+            await store.specify(id, record, { ownerId, token: record.token }),
+          ),
         });
       },
     },
@@ -820,8 +852,8 @@ export function createWorkboardTools(params: {
         await requireScopedCard(store, id, ownerId, record.token as string | undefined);
         const result = await store.decompose(id, record, { ownerId, token: record.token });
         return jsonResult({
-          parent: redactClaimToken(result.parent),
-          children: result.children.map(redactClaimToken),
+          parent: toBoundedWorkboardCard(result.parent),
+          children: result.children.map(toBoundedWorkboardCard),
         });
       },
     },
@@ -986,10 +1018,10 @@ export function createWorkboardTools(params: {
         const result = await store.dispatch({ boardId: record.boardId });
         return jsonResult({
           ...result,
-          promoted: result.promoted.map(redactClaimToken),
-          reclaimed: result.reclaimed.map(redactClaimToken),
-          blocked: result.blocked.map(redactClaimToken),
-          orchestrated: result.orchestrated.map(redactClaimToken),
+          promoted: result.promoted.map(toBoundedWorkboardCard),
+          reclaimed: result.reclaimed.map(toBoundedWorkboardCard),
+          blocked: result.blocked.map(toBoundedWorkboardCard),
+          orchestrated: result.orchestrated.map(toBoundedWorkboardCard),
         });
       },
     },

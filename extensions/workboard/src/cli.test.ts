@@ -122,6 +122,52 @@ describe("registerWorkboardCli", () => {
     expect(showOutput).toContain("[redacted]");
   });
 
+  it("keeps local JSON card commands on the full canonical proof contract", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const proof = Array.from({ length: 45 }, (_, index) => ({
+      id: `proof-${index}`,
+      status: "passed" as const,
+      createdAt: index + 1,
+      label: `Proof ${index}`,
+    }));
+    const card = await store.create({ title: "Full CLI history", metadata: { proof } });
+    const program = createProgram(store);
+
+    const list = JSON.parse(
+      await captureStdout(async () => {
+        await program.parseAsync(["workboard", "list", "--json"], { from: "user" });
+      }),
+    ) as { cards: Array<{ id: string; metadata?: { proof?: unknown[] }; proofPage?: unknown }> };
+    const shown = JSON.parse(
+      await captureStdout(async () => {
+        await program.parseAsync(["workboard", "show", card.id, "--json"], { from: "user" });
+      }),
+    ) as { card: { metadata?: { proof?: unknown[] }; proofPage?: unknown } };
+    const moved = JSON.parse(
+      await captureStdout(async () => {
+        await program.parseAsync(["workboard", "move", card.id, "--status", "review", "--json"], {
+          from: "user",
+        });
+      }),
+    ) as { card: { metadata?: { proof?: unknown[] }; proofPage?: unknown } };
+    const created = JSON.parse(
+      await captureStdout(async () => {
+        await program.parseAsync(["workboard", "create", "CLI", "created", "--json"], {
+          from: "user",
+        });
+      }),
+    ) as { card: { proofPage?: unknown } };
+
+    const listed = list.cards.find((entry) => entry.id === card.id);
+    expect(listed?.metadata?.proof).toHaveLength(45);
+    expect(shown.card.metadata?.proof).toHaveLength(45);
+    expect(moved.card.metadata?.proof).toHaveLength(45);
+    expect(listed).not.toHaveProperty("proofPage");
+    expect(shown.card).not.toHaveProperty("proofPage");
+    expect(moved.card).not.toHaveProperty("proofPage");
+    expect(created.card).not.toHaveProperty("proofPage");
+  });
+
   it("hides archived cards from text output by default and reveals them with --include-archived", async () => {
     const store = new WorkboardStore(createMemoryStore());
     await store.create({ title: "Active card" });
