@@ -15,7 +15,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function isDirectoryOpen(flags: string | number): boolean {
+function isDirectoryOpen(flags: string | number | undefined): boolean {
   return (
     flags === "r" || (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0)
   );
