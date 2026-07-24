@@ -2,7 +2,6 @@
 import type { Command } from "commander";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { setVerbose } from "../../globals.js";
-import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
@@ -36,7 +35,7 @@ function setProcessTitleForCommand(actionCommand: Command) {
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
   return (
-    (commandPath[0] === "update" && process.env[POST_CORE_UPDATE_ENV] === "1") ||
+    commandPath[0] === "update" ||
     resolvePluginInstallInvalidConfigPolicy(
       resolvePluginInstallPreactionRequest({
         actionCommand,

@@ -80,7 +80,6 @@ let originalProcessTitleDescriptor: PropertyDescriptor | undefined;
 let observedProcessTitle: string;
 let originalNodeNoWarnings: string | undefined;
 let originalHideBanner: string | undefined;
-let originalPostCoreUpdate: string | undefined;
 let originalForceStderr: boolean;
 
 beforeAll(async () => {
@@ -95,7 +94,6 @@ beforeEach(() => {
   observedProcessTitle = originalProcessTitle;
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
-  originalPostCoreUpdate = process.env.OPENCLAW_UPDATE_POST_CORE;
   originalForceStderr = loggingState.forceConsoleToStderr;
   // Worker-thread Vitest runs do not reliably mutate the real process title,
   // so capture writes at the property boundary instead.
@@ -110,7 +108,6 @@ beforeEach(() => {
   loggingState.forceConsoleToStderr = false;
   delete process.env.NODE_NO_WARNINGS;
   delete process.env.OPENCLAW_HIDE_BANNER;
-  delete process.env.OPENCLAW_UPDATE_POST_CORE;
 });
 
 afterEach(() => {
@@ -135,11 +132,6 @@ afterEach(() => {
     delete process.env.OPENCLAW_HIDE_BANNER;
   } else {
     process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
-  }
-  if (originalPostCoreUpdate === undefined) {
-    delete process.env.OPENCLAW_UPDATE_POST_CORE;
-  } else {
-    process.env.OPENCLAW_UPDATE_POST_CORE = originalPostCoreUpdate;
   }
 });
 
@@ -375,8 +367,7 @@ describe("registerPreActionHooks", () => {
     );
   });
 
-  it("allows invalid config only for the internal post-core update resume", async () => {
-    process.env.OPENCLAW_UPDATE_POST_CORE = "1";
+  it("allows invalid config for update migration commands", async () => {
     await runPreAction({
       parseArgv: ["update"],
       processArgv: ["node", "openclaw", "update", "--json"],
@@ -389,15 +380,16 @@ describe("registerPreActionHooks", () => {
     });
 
     vi.clearAllMocks();
-    delete process.env.OPENCLAW_UPDATE_POST_CORE;
     await runPreAction({
-      parseArgv: ["update"],
-      processArgv: ["node", "openclaw", "update", "--json"],
+      parseArgv: ["update", "status"],
+      processArgv: ["node", "openclaw", "update", "status", "--json"],
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
-      commandPath: ["update"],
+      commandPath: ["update", "status"],
+      allowInvalid: true,
+      suppressDoctorStdout: true,
     });
   });
 
@@ -654,6 +646,7 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["update", "status"],
+      allowInvalid: true,
       suppressDoctorStdout: true,
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
