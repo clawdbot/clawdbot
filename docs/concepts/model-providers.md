@@ -234,7 +234,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Thinking: `/think adaptive` uses Google dynamic thinking. Gemini 3/3.1 omit a fixed `thinkingLevel`; Gemini 2.5 sends `thinkingBudget: -1`.
 - Direct Gemini runs also accept `agents.defaults.models["google/<model>"].params.cachedContent` (or legacy `cached_content`) to forward a provider-native `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
 
-### Google Vertex and Gemini CLI
+### Gemini Enterprise Agent Platform (Vertex AI) and Gemini CLI
 
 - Providers: `google-vertex`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Gemini CLI uses its OAuth flow

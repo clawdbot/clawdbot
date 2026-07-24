@@ -32,7 +32,7 @@ export function createGoogleProvider(): ProviderPlugin {
 export function createGoogleVertexProvider(): ProviderPlugin {
   return {
     id: "google-vertex",
-    label: "Google Vertex AI",
+    label: "Gemini Enterprise Agent Platform (Vertex AI)",
     docsPath: "/providers/models",
     envVars: [
       "GOOGLE_CLOUD_API_KEY",

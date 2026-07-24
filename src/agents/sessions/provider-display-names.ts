@@ -12,7 +12,7 @@ export const BUILT_IN_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   deepseek: "DeepSeek",
   fireworks: "Fireworks",
   google: "Google Gemini",
-  "google-vertex": "Google Vertex AI",
+  "google-vertex": "Gemini Enterprise Agent Platform (Vertex AI)",
   groq: "Groq",
   huggingface: "Hugging Face",
   "kimi-coding": "Kimi For Coding",
