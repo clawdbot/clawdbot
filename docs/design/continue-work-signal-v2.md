@@ -75,6 +75,8 @@ Targeted delegate return is the banner routing primitive: one child can grant an
   - [A.2 Compaction-triggered evacuation delegate](#a2-compaction-triggered-evacuation-delegate)
   - [A.3 Proposed `context_pressure` lifecycle hook](#a3-proposed-context_pressure-lifecycle-hook)
   - [A.4 Proposed configuration values not shipped in the current codebase](#a4-proposed-configuration-values-not-shipped-in-the-current-codebase)
+  - [A.5 Proposed restoration: typed `continue_delegate()` on-dispatch input attachments (#1192)](#a5-proposed-restoration-typed-continue_delegate-on-dispatch-input-attachments-1192)
+  - [A.6 Proposed managed delegate return claims and recipient arrival context (#666)](#a6-proposed-managed-delegate-return-claims-and-recipient-arrival-context-666)
 - [Appendix B. Alternatives, prior art, and tool comparisons](#appendix-b-alternatives-prior-art-and-tool-comparisons)
   - [B.1 Alternatives considered](#b1-alternatives-considered)
   - [B.2 Prior art](#b2-prior-art)
@@ -1741,6 +1743,139 @@ agents:
 ```
 
 They are documented here as design targets only.
+
+### A.5 Proposed restoration: typed `continue_delegate()` on-dispatch input attachments (#1192)
+
+> **Status: restoration contract; absent from the current baseline.** This section defines the intended contract for [#1192](https://github.com/karmaterminal/openclaw/issues/1192) before implementation review. It restores the earlier `continue_delegate()` typed attachment surface as an **on-dispatch parent-to-child input snapshot**, not as a new return-artifact mechanism. Any candidate implementation must be judged against this section and its acceptance cases; prose added after implementation is not proof of the contract.
+
+#### A.5.1 Public typed-tool contract
+
+Only the typed `continue_delegate()` tool accepts the optional fields below. The response-token form `[[CONTINUE_DELEGATE: ...]]` and `continue_work()` have no attachment grammar or fields.
+
+```ts
+type InlineDelegateInput = {
+  name: string;
+  content: string;
+  encoding?: "utf8" | "base64";
+  mimeType?: string;
+};
+
+type ContinueDelegateInput = {
+  // existing task/mode/delay/target fields
+  attachments?: readonly InlineDelegateInput[];
+  attachAs?: { mountPath?: string };
+};
+```
+
+`attachments` is a bounded snapshot-by-value list. An omitted or empty list means no attachment input; an empty `attachAs` means no mount hint. The established camelCase/snake_case parameter normalization remains available for `attachAs`/`attach_as` and `mountPath`/`mount_path` where the tool surface supports it. The tool result may report an attachment **count** and a normalized mount hint, but MUST NOT echo attachment content, base64, or a derived preview.
+
+The typed-tool call validates the whole set **before it is queued** using the same configured policy as `sessions_spawn` attachments: opt-in gate, maximum files/total bytes/per-file bytes, UTF-8 or strict base64 decoding, safe non-duplicate basenames, and mount-hint sanitization. The later child-spawn boundary validates/materializes again under then-current policy; a configuration change, corrupt durable row, or materialization failure fails the child spawn without exposing raw attachment content in a tool result, error, log, or corrupt-state diagnostic.
+
+#### A.5.2 Dispatch snapshot and lifecycle
+
+At successful typed-tool dispatch, the gateway captures validated attachment bytes by value in the pending delegate state. It does not defer a path lookup, URL fetch, or caller-workspace read until the child starts. The snapshot and mount hint must remain attached to exactly one new child delegate through all three execution routes:
+
+1. immediate pending-delegate consumption;
+2. delayed TaskFlow recovery after process restart; and
+3. post-compaction staging, durable session-delivery queue replay, and eventual child spawn.
+
+At child spawn, the shared sub-agent attachment materializer writes the bytes to the child workspace's private receipt directory (not the parent workspace and not `attachAs.mountPath` itself), emits only a count/byte/hash receipt, and tells the child that the materialized files are untrusted input. `attachAs.mountPath` is advisory prompt metadata, not authority to write to an arbitrary location. Existing session cleanup/retention policy governs the private receipt directory.
+
+The snapshot stops at the child-workspace boundary. It never becomes a child completion attachment, return-delivery attachment, channel media upload, or parent workspace mount. Those are separate #666 concerns defined in §A.6.
+
+#### A.5.3 Required regression proofs
+
+The #1192 acceptance suite must fail if the typed input surface disappears again. It SHALL include an RFC-contract scenario (not only implementation-local tests) plus focused tests proving:
+
+1. schema exposure and camel/snake parameter normalization; empty input is equivalent to absence;
+2. pre-enqueue shared-policy validation, rejection, and redacted tool/error result;
+3. immediate child spawn materializes the exact decoded bytes only in the child receipt directory;
+4. delayed restart recovery preserves the snapshot and mount hint until one child spawn;
+5. post-compaction staging and durable queue replay preserve the snapshot and mount hint until one child spawn;
+6. corrupted TaskFlow **and session-delivery queue** records containing attachment content report only safe structural diagnostics;
+7. the token fallback and `continue_work()` remain attachment-free; and
+8. no return path receives the input snapshot merely because the child completed.
+
+### A.6 Proposed managed delegate return claims and recipient arrival context (#666)
+
+> **Status: proposed; not implemented.** This section is the normative design target for [#666](https://github.com/karmaterminal/openclaw/issues/666). It deliberately does **not** change the shipped `continue_delegate()` input contract described in §2.4. No implementation may claim this behavior until the storage, authorization, recovery, and recipient-projection requirements below are implemented and tested together.
+
+#### A.6.1 Scope and non-goals
+
+This extension defines a child-to-recipient result path for files or other binary artifacts produced during one delegate run. It is not a second spelling of typed inline attachments.
+
+- **#1192 remains parent-to-child input only.** Its bounded `{ name, content, encoding?, mimeType? }` snapshots are serialized by value at dispatch and materialized privately in the child workspace. They do not create artifact claims and are never copied back on completion.
+- A returned artifact is an **opaque, host-managed claim** over host-retained bytes. A claim is bound to its producing delegate run, the immutable completion event that returned it, and the recipient set authorized by the original dispatch/return policy.
+- A child must explicitly ask the host to publish an allowed regular file from its approved workspace/output area. The host canonicalizes the relative path, rejects traversal/symlink/non-regular-file escapes, applies configured size/type/redaction policy, stores the bytes privately, computes integrity metadata, and creates the claim.
+- The completion protocol persists claim metadata, not raw content, a child workspace path, an arbitrary URL, a hash used as authority, tool output, final prose, or a channel `media=` reference. It must not infer artifacts from any of those sources.
+- This extension does not automatically mount bytes into a parent workspace, inject bytes into a prompt, upload media to a channel, fetch a URL, or turn a claim into a current instruction. Parent materialization or rendering is an explicit recipient-authorized operation defined by the eventual implementation.
+- Generic arbitrary `data: JsonValue` is not part of the first claim-return slice. It needs a concrete durable consumer and independent compatibility/security design.
+
+The intended first completion surface is:
+
+```ts
+type DelegateArtifactRef = {
+  kind: "delegate_artifact";
+  claimId: string; // opaque capability handle; never a path, URL, or content address
+  name: string;
+  mimeType?: string;
+  sizeBytes: number;
+  sha256: string; // integrity metadata, not resolution authority
+};
+
+type DelegateReturn = {
+  text?: string;
+  artifacts?: readonly DelegateArtifactRef[];
+};
+```
+
+The host owns both the claim identifier and all authorization decisions. `name`, MIME type, size, and digest help a recipient assess a result but are not sufficient to retrieve it.
+
+#### A.6.2 Immutable claim record, lifecycle, and recovery
+
+The durable server-side claim record SHALL retain immutable provenance and delivery facts separately from display metadata:
+
+- claim ID, private retained object identity, content digest/type/size, and host publication timestamp;
+- producing child session and delegate run; originating parent session/dispatch; immutable causal completion-event ID; and completion idempotency key;
+- complete intended recipient set, return route, and return-policy identity/version captured at dispatch;
+- decision, scheduled/`notBefore`, enqueue, child-start, child-complete, claim-create, completion-finalize, first-delivery, and each replay-attempt timestamp where applicable;
+- claim lifecycle state and transitions: `available`, `expired`, `revoked`, and terminal purge/unavailable; plus retention deadline and revocation cause when safe to disclose;
+- durable delivery/replay attempt identity, acknowledgement or terminal delivery state, and idempotency linkage so recovery cannot manufacture a second claim or relabel an old completion as new.
+
+A restart between publication, completion persistence, and delivery SHALL recover from this record idempotently. It SHALL preserve original dispatch and completion timestamps, IDs, policy version, recipient binding, and integrity metadata unchanged. Expired, revoked, absent, unauthorized, or corrupt claims fail closed: they cannot resolve, materialize, or silently degrade into a path/URL/content fallback. Cleanup of the child workspace cannot invalidate a valid retained claim before its retention policy says so; expiry/revocation does invalidate later resolution even if some old child path once existed.
+
+#### A.6.3 Recipient arrival context, including inter-session delivery
+
+A dispatching parent often remembers why it created a child. An explicit `targetSessionKey`, `targetSessionKeys`, or fan-out recipient may have **zero awareness** of that dispatch. For that recipient, a valid claim without a delivery envelope is a mystery package.
+
+Every child-to-recipient return therefore SHALL have a typed, host-authored arrival context. It is part of the delivery event—not optional UI decoration, child prose, or a bare `System:` string. The recipient projection SHALL state at least:
+
+- delivery class (`delegate result` to the dispatching parent or explicit `inter-session enrichment`), explicit-target route, and silent/announced delivery mode;
+- immutable dispatch ID; allowed source identity or privacy-safe host-generated origin label; producer child/run; causal completion-event ID; and the recipient identity that authorized this delivery;
+- original dispatch, scheduled/`notBefore`, completion, and actual delivery/replay times; the return-policy version; and the claim's current availability/revocation/expiry state at delivery;
+- a bounded `recipientContext` captured at dispatch explaining why the target is being woken or enriched. This field is caller-supplied, immutable once the host accepts the dispatch, and visibly labelled as contextual provenance—not host authority, executable instruction, or a substitute for the child result.
+
+The recipient need not receive the full original task, another session's private history, or child-only workspace data. The projection provides only the approved causal context needed to judge: **this was produced there, for this declared purpose, then; it reached me now; and it is/was valid under this claim.** A legacy record lacking a required provenance field must say that context is unavailable; it must not fabricate a complete-looking envelope. Artifact-capable inter-session returns must not arrive unlabeled.
+
+#### A.6.4 Authorization and explicit resolution
+
+Publishing is authorized only for the active producing delegate run and its approved output boundary. Resolving or materializing is authorized only for an intended recipient whose claim remains available under current policy. Recipient authorization is evaluated again at resolution time; claim IDs are opaque references, not bearer permission to bypass those checks.
+
+The implementation must make artifact resolution explicit and auditable. It must bind the resolution to a claim ID, recipient identity, delivery/completion provenance, and a chosen safe destination or renderer. It must not use parent trust in final prose, workspace paths, file hashes, arbitrary URLs, or channel-media handles as an authorization substitute. Multi-recipient delivery may share retained bytes only if every recipient gets an independently authorized claim binding or an equivalently auditable recipient binding; no guessed sibling/session identifier may resolve another recipient's result.
+
+#### A.6.5 Acceptance matrix
+
+Before an implementation can ship, tests must prove all of the following:
+
+1. **Normal parent return:** an authorized parent receives typed text plus artifact claim metadata and an arrival context tied to the exact child run/completion.
+2. **Targeted/inter-session return:** a target with zero prior awareness of the dispatch, including a silent enrichment, can distinguish it from fresh direct instruction using the host-authored arrival context without receiving private prompt/history bytes.
+3. **Delayed and post-compaction return:** original schedule and completion facts remain distinct from delivery time; a 30-second continuation delivered ten hours late is visibly delayed rather than fresh.
+4. **Restart and replay:** publication, completion persistence, delivery, acknowledgement, and replay are idempotent; original IDs/timestamps/policy and recipient binding remain unchanged.
+5. **Cleanup and retention:** removing the child workspace does not erase an in-retention claim; expiry, revocation, purge, unauthorized access, missing bytes, and corrupt metadata fail closed with no fallback path/URL/content.
+6. **Isolation:** a sibling, guessed session, guessed claim ID, fan-out outsider, or post-expiry recipient cannot resolve, materialize, or receive another recipient's artifact.
+7. **No implicit promotion:** final prose, tool output, workspace paths, hashes, URLs, and `message(action=send, media=...)` cannot create a claim; claims do not auto-mount, prompt-inject, or channel-upload.
+
+This is intentionally a wider lifecycle than adding an `attachments` field to a completion callback. The implementation unit is the managed claim plus its provenance-preserving recipient delivery, not just its serialized metadata.
 
 ## Appendix B. Alternatives, prior art, and tool comparisons
 
