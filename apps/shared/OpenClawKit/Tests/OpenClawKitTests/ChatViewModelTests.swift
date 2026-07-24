@@ -2163,6 +2163,27 @@ struct ChatViewModelTests {
         #expect(viewModel.liveRunStateByRunID["legacy-run"]?.terminal == true)
     }
 
+    @Test @MainActor func `unsequenced lifecycle terminal retires a nonselected advertised run`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        var running = sessionEntry(key: "main", updatedAt: 1)
+        running.hasActiveRun = true
+        running.activeRunIds = ["remote-a", "remote-b"]
+        viewModel.sessions = [running]
+        #expect(viewModel.liveUsageRunID == "remote-a")
+
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "remote-b",
+            seq: nil,
+            stream: "lifecycle",
+            ts: 1,
+            data: ["phase": AnyCodable("end")])))
+
+        #expect(viewModel.liveRunStateByRunID["remote-b"]?.terminal == true)
+        #expect(viewModel.liveUsageRunID == "remote-a")
+    }
+
     @Test @MainActor func `advertised terminal chat retires the run without clearing local work`() {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
@@ -2180,6 +2201,23 @@ struct ChatViewModelTests {
             errorMessage: nil)))
 
         #expect(viewModel.liveRunStateByRunID["remote-run"]?.terminal == true)
+        #expect(!viewModel.hasBlockingRunActivity)
+    }
+
+    @Test @MainActor func `idless terminal chat clears boolean-only current activity`() {
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        viewModel.updateActiveSessionRunWithoutChatSnapshot(true)
+        #expect(viewModel.hasBlockingRunActivity)
+
+        viewModel.handleTransportEvent(.chat(OpenClawChatEventPayload(
+            runId: nil,
+            sessionKey: "main",
+            state: "final",
+            message: nil,
+            errorMessage: nil)))
+
         #expect(!viewModel.hasBlockingRunActivity)
     }
 

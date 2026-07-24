@@ -472,12 +472,15 @@ extension OpenClawChatViewModel {
         let settlesAdvertisedRun = matchesCurrentSession && explicitRunID.map {
             self.activeSessionRunIDs.contains($0)
         } == true
+        let settlesBooleanOnlyRun =
+            matchesCurrentSession && explicitRunID == nil && self.pendingRuns.isEmpty &&
+            self.activeSessionRunIDs.isEmpty && self.hasActiveSessionRunWithoutChatSnapshot
         if isTerminal {
             self.invalidateHistorySnapshots()
             if settlesAdvertisedRun, !ownsTerminalRun {
                 self.retireTerminalRun(explicitRunID)
             }
-            if ownsTerminalRun || self.pendingRuns.isEmpty {
+            if ownsTerminalRun || settlesBooleanOnlyRun {
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
             }
         }
@@ -612,6 +615,7 @@ extension OpenClawChatViewModel {
             self.handleAgentLifecycleEvent(
                 evt,
                 isPendingRun: isPendingRun,
+                isAdvertisedRun: isAdvertisedRun,
                 isSelectedRun: self.liveUsageRunID == evt.runId,
                 isLegacySessionStream: isLegacySessionStream)
             return
@@ -669,6 +673,7 @@ extension OpenClawChatViewModel {
     private func handleAgentLifecycleEvent(
         _ evt: OpenClawAgentEventPayload,
         isPendingRun: Bool,
+        isAdvertisedRun: Bool,
         isSelectedRun: Bool,
         isLegacySessionStream: Bool)
     {
@@ -694,7 +699,7 @@ extension OpenClawChatViewModel {
         } else if let sequence = evt.seq {
             self.applyLiveRunLifecycle(runID: evt.runId, sequence: sequence, terminal: true)
         } else {
-            isPendingRun || isSelectedRun
+            isPendingRun || isAdvertisedRun || isSelectedRun
         }
         guard acceptedLifecycle else { return }
 
