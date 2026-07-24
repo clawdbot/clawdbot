@@ -21,25 +21,74 @@ const sessionManagerConstructor = SessionManager as typeof SessionManager & {
   [TEST_SESSION_MANAGER_COMPAT]?: true;
   create?: (cwd: string, sessionDir?: string) => SessionManager;
 };
+
+function installFileSessionManagerCompat(params: {
+  manager: SessionManager;
+  sessionDir: string;
+  target: () => string;
+  initialize: boolean;
+}): SessionManager {
+  const manager = params.manager as SessionManager & {
+    persistRecord(entry: unknown): void;
+    replacePersistedTranscript(): void;
+  };
+  const writeFullFile = () => {
+    const target = params.target();
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const entries = manager.getPersistedEntries();
+    fs.writeFileSync(target, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+  };
+  const originalNewSession = manager.newSession.bind(manager);
+  Object.assign(manager, {
+    getSessionDir: () => params.sessionDir,
+    getSessionFile: () => params.target(),
+    newSession(options?: Parameters<SessionManager["newSession"]>[0]) {
+      const result = originalNewSession(options);
+      writeFullFile();
+      return result;
+    },
+    persistRecord(entry: unknown) {
+      const target = params.target();
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (fs.existsSync(target)) {
+        const contents = fs.readFileSync(target);
+        if (contents.length > 0 && contents.at(-1) !== 0x0a) {
+          fs.appendFileSync(target, "\n");
+        }
+      }
+      fs.appendFileSync(target, `${JSON.stringify(entry)}\n`);
+    },
+    replacePersistedTranscript: writeFullFile,
+  });
+  if (params.initialize) {
+    writeFullFile();
+  }
+  return manager;
+}
+
 if (!sessionManagerConstructor[TEST_SESSION_MANAGER_COMPAT]) {
   Object.assign(SessionManager, {
     create(cwd: string, sessionDir?: string) {
       const manager = SessionManager.inMemory(cwd);
-      Object.assign(manager, {
-        getSessionDir: () => sessionDir ?? cwd,
-        getSessionFile: () => path.join(sessionDir ?? cwd, `${manager.getSessionId()}.jsonl`),
+      const resolvedSessionDir = sessionDir ?? cwd;
+      return installFileSessionManagerCompat({
+        manager,
+        sessionDir: resolvedSessionDir,
+        target: () => path.join(resolvedSessionDir, `${manager.getSessionId()}.jsonl`),
+        initialize: true,
       });
-      return manager;
     },
     openFile(target: string, sessionDir?: string, cwd?: string) {
-      const manager = fs.existsSync(target)
+      const exists = fs.existsSync(target);
+      const manager = exists
         ? SessionManager.fromEntries(parseSessionEntries(fs.readFileSync(target, "utf8")), cwd)
         : SessionManager.inMemory(cwd ?? sessionDir ?? process.cwd());
-      Object.assign(manager, {
-        getSessionDir: () => sessionDir ?? path.dirname(target),
-        getSessionFile: () => target,
+      return installFileSessionManagerCompat({
+        manager,
+        sessionDir: sessionDir ?? path.dirname(target),
+        target: () => target,
+        initialize: !exists,
       });
-      return manager;
     },
   });
   sessionManagerConstructor[TEST_SESSION_MANAGER_COMPAT] = true;

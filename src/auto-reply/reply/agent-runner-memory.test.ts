@@ -2669,6 +2669,81 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.preflightCompactionTrigger).toBe("transcript_bytes");
   });
 
+  it("resolves usage from an active branch whose leaf target predates the bounded tail", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const storePath = path.join(rootDir, "sqlite-deep-leaf-session.json");
+    const sessionKey = "agent:main:deep-leaf";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    const activeRoot = {
+      type: "message",
+      id: "active-root",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: {
+        role: "assistant",
+        content: "active",
+        usage: { input: 10, output: 5 },
+      },
+    };
+    let parentId = activeRoot.id;
+    const abandonedBranch = Array.from({ length: 512 }, (_, index) => {
+      const id = `abandoned-${index}`;
+      const event = {
+        type: "message",
+        id,
+        parentId,
+        timestamp: `2026-01-01T00:00:${String(index % 60).padStart(2, "0")}.000Z`,
+        message: {
+          role: "assistant",
+          content: "abandoned",
+          usage: { input: 90_000, output: 10_000 },
+        },
+      };
+      parentId = id;
+      return event;
+    });
+    await replaceSqliteTranscriptEvents(scope, [
+      activeRoot,
+      ...abandonedBranch,
+      {
+        type: "leaf",
+        id: "return-to-active-root",
+        parentId,
+        targetId: activeRoot.id,
+        appendParentId: activeRoot.id,
+        timestamp: "2026-01-01T00:01:00.000Z",
+      },
+    ]);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
   it("forces memory flush when a SQLite-backed transcript exceeds the byte threshold", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,

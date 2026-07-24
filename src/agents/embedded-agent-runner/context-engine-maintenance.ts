@@ -326,10 +326,15 @@ function buildContextEngineMaintenanceRuntimeContext(params: {
       const rewriteRuntimeTranscriptEntries = async () =>
         await rewriteTranscriptEntriesInRuntimeTranscript({
           scope: {
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey ?? params.sessionId,
+            sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
+            sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId,
             sessionFile: params.sessionFile,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...((params.sessionTarget?.agentId ?? params.agentId)
+              ? { agentId: params.sessionTarget?.agentId ?? params.agentId }
+              : {}),
+            ...(params.sessionTarget?.storePath
+              ? { storePath: params.sessionTarget.storePath }
+              : {}),
           },
           request,
         });

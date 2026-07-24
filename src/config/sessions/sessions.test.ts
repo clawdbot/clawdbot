@@ -13,6 +13,7 @@ import {
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
+import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
 
 it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);
@@ -22,6 +23,19 @@ it("merges bounded restart tombstones without evicting fresh-only ids", () => {
     "run-new",
   ]);
   expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
+});
+
+it("preserves legacy row metadata while withholding a noncanonical transcript id", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "legacy:session",
+      updatedAt: 42,
+      pluginExtensions: { memory: { mode: "legacy" } },
+    }),
+  ).toEqual({
+    updatedAt: 42,
+    pluginExtensions: { memory: { mode: "legacy" } },
+  });
 });
 
 describe("session path safety", () => {

@@ -766,6 +766,39 @@ describe("SessionManager.open", () => {
     });
   });
 });
+
+describe("SessionManager.openFile test compatibility", () => {
+  afterEach(async () => {
+    await Promise.all(
+      tempPaths.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  it("separates appended records from a final unterminated JSONL record", async () => {
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "unterminated.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: "unterminated",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: dir,
+      }),
+    );
+
+    SessionManager.openFile(sessionFile, dir).appendMessage({
+      role: "user",
+      content: "appended",
+      timestamp: 1,
+    });
+
+    expect(SessionManager.openFile(sessionFile, dir).buildSessionContext().messages).toEqual([
+      expect.objectContaining({ content: "appended", role: "user" }),
+    ]);
+  });
+});
 describe("parseSessionEntries", () => {
   afterEach(() => {
     vi.restoreAllMocks();
