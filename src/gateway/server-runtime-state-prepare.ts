@@ -468,13 +468,21 @@ export async function prepareGatewayRuntimeState(params: {
     }
     throw new Error("Readiness runtime changed while it was being evaluated.");
   };
-  const getReadiness = (): Promise<CanonicalGatewayReadinessResult> =>
-    evaluateConfiguredGatewayReadiness({
-      config: pluginRuntime.readinessSnapshot.config,
+  const getReadiness = (): Promise<CanonicalGatewayReadinessResult> => {
+    const snapshot = pluginRuntime.readinessSnapshot;
+    const profileSelection = resolveHostingProfileSelection({
+      config: snapshot.config,
+      env: process.env,
+      override: opts.hostingProfileOverride,
+    });
+    return evaluateConfiguredGatewayReadiness({
+      config: snapshot.config,
       identity: readinessIdentity,
+      canonicalEvaluationEnabled: profileSelection !== undefined,
       evaluateGateway: getGatewayReadiness,
       evaluateRuntime: evaluateRuntimeReadiness,
     });
+  };
   log.info("starting HTTP server...");
   const pluginGatewayContext: { current: GatewayRequestContext | undefined } = {
     current: undefined,
