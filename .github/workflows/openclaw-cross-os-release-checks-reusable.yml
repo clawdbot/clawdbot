@@ -745,7 +745,7 @@ jobs:
 
       - name: Restore packaged-upgrade baseline prefix
         if: ${{ matrix.suite == 'packaged-upgrade' }}
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ runner.temp }}/openclaw-cross-os-baseline-prefix
           key: openclaw-cross-os-baseline-prefix-v1-${{ runner.os }}-${{ runner.arch }}-node-${{ env.NODE_VERSION }}-${{ needs.prepare.outputs.baseline_sha256 }}
