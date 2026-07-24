@@ -272,11 +272,17 @@ jobs:
           if ! docker buildx version >/dev/null 2>&1; then
             arch="$(uname -m)"
             case "$arch" in
-              aarch64|arm64) buildx_arch=arm64 ;;
-              x86_64|amd64) buildx_arch=amd64 ;;
+              aarch64|arm64)
+                buildx_arch=arm64
+                buildx_sha256=c4248d6cbc4a619a7e0b4609c11e509ad4ac0b475e1c64817c0ac20c5d90c766
+                ;;
+              x86_64|amd64)
+                buildx_arch=amd64
+                buildx_sha256=d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
+                ;;
               *) echo "unsupported buildx arch: $arch" >&2; exit 2 ;;
             esac
-            buildx_version="${DOCKER_BUILDX_VERSION:-v0.15.1}"
+            buildx_version="v0.35.0"
             mkdir -p "$HOME/.docker/cli-plugins"
             curl --fail --show-error --location \
               --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
@@ -286,6 +292,7 @@ jobs:
               --retry-all-errors \
               "https://github.com/docker/buildx/releases/download/${buildx_version}/buildx-${buildx_version}.linux-${buildx_arch}" \
               -o "$HOME/.docker/cli-plugins/docker-buildx"
+            echo "${buildx_sha256}  $HOME/.docker/cli-plugins/docker-buildx" | sha256sum -c -
             chmod 0755 "$HOME/.docker/cli-plugins/docker-buildx"
           fi
 

@@ -20,16 +20,15 @@ const mocks = vi.hoisted(() => ({
   resolveSessionDeliveryTarget: vi.fn(
     (params: {
       entry?: {
-        deliveryContext?: {
-          channel?: string;
-          to?: string;
-          accountId?: string;
-          threadId?: string | number;
+        delivery?: {
+          kind?: string;
+          context?: {
+            channel?: string;
+            to?: string;
+            accountId?: string;
+            threadId?: string | number;
+          };
         };
-        lastChannel?: string;
-        lastTo?: string;
-        lastAccountId?: string;
-        lastThreadId?: string | number;
       };
       requestedChannel?: string;
       explicitTo?: string;
@@ -39,12 +38,8 @@ const mocks = vi.hoisted(() => ({
       turnSourceAccountId?: string;
       turnSourceThreadId?: string | number;
     }) => {
-      const sessionContext = params.entry?.deliveryContext ?? {
-        channel: params.entry?.lastChannel,
-        to: params.entry?.lastTo,
-        accountId: params.entry?.lastAccountId,
-        threadId: params.entry?.lastThreadId,
-      };
+      const sessionContext =
+        params.entry?.delivery?.kind === "external" ? (params.entry.delivery.context ?? {}) : {};
       const lastChannel = params.turnSourceChannel ?? sessionContext.channel;
       const lastTo = params.turnSourceChannel ? params.turnSourceTo : sessionContext.to;
       const lastAccountId = params.turnSourceChannel
@@ -114,6 +109,9 @@ vi.mock("../../utils/message-channel.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { normalizeLegacySessionEntryDelivery } from "../state-migrations.legacy-session-store.js";
 let resolveAgentDeliveryPlanWithSessionRoute: typeof import("./agent-delivery.js").resolveAgentDeliveryPlanWithSessionRoute;
 let resolveAgentExplicitRecipientSession: typeof import("./agent-delivery.js").resolveAgentExplicitRecipientSession;
 let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
@@ -147,13 +145,27 @@ beforeEach(() => {
 });
 
 async function buildDeliveryPlan(
-  params: Omit<Parameters<typeof resolveAgentDeliveryPlanWithSessionRoute>[0], "cfg" | "agentId">,
+  params: Omit<
+    Parameters<typeof resolveAgentDeliveryPlanWithSessionRoute>[0],
+    "cfg" | "agentId" | "sessionEntry"
+  > & { sessionEntry?: SessionEntry & { deliveryContext?: DeliveryContext } },
 ) {
   return await resolveAgentDeliveryPlanWithSessionRoute({
     cfg: {} as OpenClawConfig,
     agentId: "agent",
     ...params,
+    sessionEntry: params.sessionEntry
+      ? normalizeLegacySessionEntryDelivery(params.sessionEntry)
+      : undefined,
   });
+}
+
+function sessionEntry(context: DeliveryContext): SessionEntry {
+  return normalizeLegacySessionEntryDelivery({
+    sessionId: "fixture",
+    updatedAt: 1,
+    deliveryContext: context,
+  } as unknown as SessionEntry);
 }
 
 describe("agent delivery helpers", () => {
@@ -306,11 +318,7 @@ describe("agent delivery helpers", () => {
       cfg: {} as OpenClawConfig,
       agentId: "agent",
       currentSessionKey: "agent:main",
-      sessionEntry: {
-        sessionId: "s4",
-        updatedAt: 4,
-        deliveryContext: { channel: "workspace", to: "channel:C999" },
-      },
+      sessionEntry: sessionEntry({ channel: "workspace", to: "channel:C999" }),
       requestedChannel: "workspace",
       explicitTo: "workspace:channel:C123:thread:1700000000.000100",
       accountId: "work",
@@ -976,15 +984,11 @@ describe("agent delivery helpers", () => {
     const plan = await resolveAgentDeliveryPlanWithSessionRoute({
       cfg: {} as OpenClawConfig,
       agentId: "agent",
-      sessionEntry: {
-        sessionId: "s-thread",
-        updatedAt: 5,
-        deliveryContext: {
-          channel: "workspace",
-          to: "channel:C999",
-          threadId: "old-thread",
-        },
-      },
+      sessionEntry: sessionEntry({
+        channel: "workspace",
+        to: "channel:C999",
+        threadId: "old-thread",
+      }),
       requestedChannel: "workspace",
       explicitTo: "channel:C123",
       accountId: undefined,

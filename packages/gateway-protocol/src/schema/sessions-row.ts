@@ -52,6 +52,7 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     lastRunError: Type.Optional(Type.String()),
+    activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),

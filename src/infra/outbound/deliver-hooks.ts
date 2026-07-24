@@ -1,18 +1,8 @@
 // Applies outbound hooks and shapes stable delivery outcomes/errors.
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import {
-  buildCanonicalSentMessageHookContext,
-  toInternalMessageSentContext,
-  toPluginMessageContext,
-  toPluginMessageSentEvent,
-} from "../../hooks/message-hook-mappers.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
-import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import {
   OutboundDeliveryError,
   type OutboundDeliveryFailureStage,
@@ -24,91 +14,7 @@ import type { QueuedReplyPayloadSendingHook } from "./delivery-queue.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import type { OutboundChannel } from "./targets.js";
 
-const log = createSubsystemLogger("outbound/deliver");
-
-type MessageSentEvent = {
-  success: boolean;
-  content: string;
-  error?: string;
-  messageId?: string;
-};
-
-/**
- * Best-effort session identifier for delivery telemetry only. Falls back to
- * `policyKey` as a last resort so diagnostic emission still has a stable
- * string when neither mirror nor canonical key are available. **Do not use
- * this value for hook-context correlation** — use `sessionKeyForInternalHooks`
- * (mirror.sessionKey ?? session.key, no policyKey fallback) instead, so we
- * never accidentally hand the policy key to plugins that expect the canonical
- * session key.
- */
-export function createMessageSentEmitter(params: {
-  hookRunner: ReturnType<typeof getGlobalHookRunner>;
-  channel: Exclude<OutboundChannel, "none">;
-  to: string;
-  accountId?: string;
-  sessionKeyForInternalHooks?: string;
-  mirrorIsGroup?: boolean;
-  mirrorGroupId?: string;
-}): { emitMessageSent: (event: MessageSentEvent) => void; hasMessageSentHooks: boolean } {
-  const hasMessageSentHooks = params.hookRunner?.hasHooks("message_sent") ?? false;
-  const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
-  const emitMessageSent = (event: MessageSentEvent) => {
-    if (!hasMessageSentHooks && !canEmitInternalHook) {
-      return;
-    }
-    const canonical = buildCanonicalSentMessageHookContext({
-      to: params.to,
-      content: event.content,
-      success: event.success,
-      error: event.error,
-      channelId: params.channel,
-      accountId: params.accountId ?? undefined,
-      conversationId: params.to,
-      // Mirror the canonical outbound session key into the `message_sent`
-      // hook context so plugins that observe both `message_sending` and
-      // `message_sent` see the same `sessionKey` (and so it matches the
-      // value the internal `message:sent` hook fires with). The value is
-      // already computed for the internal hook below; reusing it here
-      // keeps the contract documented in `PluginHookMessageContext`
-      // honest for both outbound delivery hooks.
-      sessionKey: params.sessionKeyForInternalHooks,
-      messageId: event.messageId,
-      isGroup: params.mirrorIsGroup,
-      groupId: params.mirrorGroupId,
-    });
-    if (hasMessageSentHooks) {
-      fireAndForgetHook(
-        params.hookRunner!.runMessageSent(
-          toPluginMessageSentEvent(canonical),
-          toPluginMessageContext(canonical),
-        ),
-        `${OUTBOUND_DELIVERY_LOG_SCOPE}: message_sent plugin hook failed`,
-        (message) => {
-          log.warn(message);
-        },
-      );
-    }
-    if (!canEmitInternalHook) {
-      return;
-    }
-    fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent(
-          "message",
-          "sent",
-          params.sessionKeyForInternalHooks!,
-          toInternalMessageSentContext(canonical),
-        ),
-      ),
-      `${OUTBOUND_DELIVERY_LOG_SCOPE}: message:sent internal hook failed`,
-      (message) => {
-        log.warn(message);
-      },
-    );
-  };
-  return { emitMessageSent, hasMessageSentHooks };
-}
+export { createMessageSentEmitter } from "./message-sent-hook.js";
 
 export async function applyMessageSendingHook(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;

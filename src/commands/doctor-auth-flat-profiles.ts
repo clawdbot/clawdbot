@@ -16,6 +16,7 @@ import {
   coercePersistedAuthProfileStore,
   loadLegacyAuthProfileStore,
   loadPersistedAuthProfileStore,
+  parseLegacyCredentialEntry,
 } from "../agents/auth-profiles/persisted.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
 import {
@@ -188,7 +189,13 @@ function inferLegacyCredentialType(
   if (readNonEmptyString(record.key) ?? readNonEmptyString(record.apiKey)) {
     return "api_key";
   }
+  if (coerceSecretRef(record.keyRef)) {
+    return "api_key";
+  }
   if (readNonEmptyString(record.token)) {
+    return "token";
+  }
+  if (coerceSecretRef(record.tokenRef)) {
     return "token";
   }
   if (
@@ -208,50 +215,16 @@ function coerceLegacyFlatCredential(
   if (!isRecord(raw)) {
     return null;
   }
-  const provider = readNonEmptyString(raw.provider) ?? providerId;
   const type = inferLegacyCredentialType(raw);
-  const email = readNonEmptyString(raw.email);
-  if (type === "api_key") {
-    const key = readNonEmptyString(raw.key) ?? readNonEmptyString(raw.apiKey);
-    return key ? { type, provider, key, ...(email ? { email } : {}) } : null;
+  if (!type) {
+    return null;
   }
-  if (type === "token") {
-    const token = readNonEmptyString(raw.token);
-    return token
-      ? {
-          type,
-          provider,
-          token,
-          ...(typeof raw.expires === "number" ? { expires: raw.expires } : {}),
-          ...(email ? { email } : {}),
-        }
-      : null;
+  const provider = readNonEmptyString(raw.provider) ?? providerId;
+  const credential = parseLegacyCredentialEntry({ ...raw, type, provider }, providerId);
+  if (!credential || !hasUsableAuthProfileCredential(credential)) {
+    return null;
   }
-  if (type === "oauth") {
-    const access = readNonEmptyString(raw.access);
-    const refresh = readNonEmptyString(raw.refresh);
-    if (!access || !refresh || typeof raw.expires !== "number") {
-      return null;
-    }
-    return {
-      type,
-      provider,
-      access,
-      refresh,
-      expires: raw.expires,
-      ...(readNonEmptyString(raw.enterpriseUrl)
-        ? { enterpriseUrl: readNonEmptyString(raw.enterpriseUrl) }
-        : {}),
-      ...(readNonEmptyString(raw.projectId)
-        ? { projectId: readNonEmptyString(raw.projectId) }
-        : {}),
-      ...(readNonEmptyString(raw.accountId)
-        ? { accountId: readNonEmptyString(raw.accountId) }
-        : {}),
-      ...(email ? { email } : {}),
-    };
-  }
-  return null;
+  return credential;
 }
 
 function coerceLegacyFlatAuthProfileStore(raw: unknown): AuthProfileStore | null {

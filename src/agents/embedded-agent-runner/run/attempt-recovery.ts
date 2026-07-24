@@ -1,4 +1,5 @@
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { LiveSessionModelSwitchError } from "../../live-model-switch-error.js";
@@ -85,14 +86,16 @@ export async function recoverEmbeddedRunAttempt(input: {
   const runtime = preparedRuntime.snapshot();
   const {
     attempt,
-    aborted,
-    externalAbort,
-    promptError,
-    promptErrorSource,
-    timedOut,
-    timedOutDuringCompaction,
-    timedOutDuringToolExecution,
-    timedOutByRunBudget,
+    terminalProjection: {
+      aborted,
+      externalAbort,
+      promptError,
+      promptErrorSource,
+      timedOut,
+      timedOutDuringCompaction,
+      timedOutDuringToolExecution,
+      timedOutByRunBudget,
+    },
     sessionIdUsed,
     attemptAssistant,
     currentAttemptCompletedAssistant,
@@ -292,7 +295,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       return retry({ codexAppServerRecoveryRetries: input.codexAppServerRecoveryRetries + 1 });
     }
     shouldSurfaceCodexCompletionTimeout =
-      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" && attempt.timedOut;
+      attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" &&
+      projectAgentRunAttemptTerminal(attempt.terminal).timedOut;
     if (
       attempt.codexAppServerFailure &&
       !hasRecoverableCodexAppServerTimeoutOutcome &&

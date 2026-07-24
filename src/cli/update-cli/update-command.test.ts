@@ -886,6 +886,11 @@ describe("resolvePostCoreUpdateChildStdio", () => {
     expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
     expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
   });
+
+  it('returns "pipe" for JSON output on every platform', () => {
+    expect(resolvePostCoreUpdateChildStdio("linux", true)).toBe("pipe");
+    expect(resolvePostCoreUpdateChildStdio("darwin", true)).toBe("pipe");
+  });
 });
 
 describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {

@@ -556,6 +556,20 @@ function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
   return a.provider === b.provider && a.model === b.model;
 }
 
+function resolveNextFallbackCandidateIndex(params: {
+  candidates: ModelCandidate[];
+  currentIndex: number;
+  excludedProviders: ReadonlySet<string>;
+}): number {
+  for (let index = params.currentIndex + 1; index < params.candidates.length; index += 1) {
+    const candidate = params.candidates[index];
+    if (candidate && !params.excludedProviders.has(candidate.provider)) {
+      return index;
+    }
+  }
+  return params.candidates.length;
+}
+
 function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | undefined): boolean {
   const normalized = normalizeOptionalString(runtime);
   if (!normalized) {
@@ -1457,6 +1471,7 @@ async function runWithModelFallbackInternal<T>(
   let latestClassifiedResult: ModelFallbackClassifiedResult<T> | undefined;
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
+  const tlsFailedProviders = new Set<string>();
   const resolveTerminalSuspensionLane = () =>
     deferredSuspension.pending ? deferredSuspension.pending.laneId : params.lane;
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
@@ -1506,6 +1521,16 @@ async function runWithModelFallbackInternal<T>(
     if (!candidate) {
       throw new Error(`Missing model fallback candidate at index ${i}`);
     }
+    if (tlsFailedProviders.has(candidate.provider)) {
+      continue;
+    }
+    const nextCandidateIndex = resolveNextFallbackCandidateIndex({
+      candidates,
+      currentIndex: i,
+      excludedProviders: tlsFailedProviders,
+    });
+    const nextCandidate = candidates[nextCandidateIndex];
+    const hasRemainingCandidate = nextCandidate !== undefined;
     const candidateHarnessAuth = await resolveModelFallbackCandidateHarnessAuthPrecheck({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -1561,7 +1586,7 @@ async function runWithModelFallbackInternal<T>(
           total: candidates.length,
           reason: skipReason as FailoverReason,
           error,
-          nextCandidate: candidates[i + 1],
+          nextCandidate,
           isPrimary,
           requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
@@ -1622,7 +1647,7 @@ async function runWithModelFallbackInternal<T>(
           // Only lock the lane when no remaining candidates can serve as
           // fallbacks. Per-provider cooldown state already prevents
           // re-attempting the failed provider on subsequent turns.
-          const hasRemainingCandidates = i + 1 < candidates.length;
+          const hasRemainingCandidates = hasRemainingCandidate;
           if (params.sessionId) {
             emitFailoverEvent({
               sessionId: params.sessionId,
@@ -1659,7 +1684,7 @@ async function runWithModelFallbackInternal<T>(
             total: candidates.length,
             reason: decision.reason,
             error,
-            nextCandidate: candidates[i + 1],
+            nextCandidate,
             isPrimary,
             requestedModelMatched: requestedModel,
             fallbackConfigured: hasFallbackCandidates,
@@ -1688,7 +1713,7 @@ async function runWithModelFallbackInternal<T>(
             total: candidates.length,
             reason: decision.reason,
             error: decision.error,
-            nextCandidate: candidates[i + 1],
+            nextCandidate,
             isPrimary,
             requestedModelMatched: requestedModel,
             fallbackConfigured: hasFallbackCandidates,
@@ -1726,7 +1751,7 @@ async function runWithModelFallbackInternal<T>(
               total: candidates.length,
               reason: decision.reason,
               error,
-              nextCandidate: candidates[i + 1],
+              nextCandidate,
               isPrimary,
               requestedModelMatched: requestedModel,
               fallbackConfigured: hasFallbackCandidates,
@@ -1751,7 +1776,7 @@ async function runWithModelFallbackInternal<T>(
           attempt: i + 1,
           total: candidates.length,
           reason: decision.reason,
-          nextCandidate: candidates[i + 1],
+          nextCandidate,
           isPrimary,
           requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
@@ -1767,12 +1792,12 @@ async function runWithModelFallbackInternal<T>(
       attempts,
       options: {
         ...runOptions,
-        isFinalFallbackAttempt: i + 1 === candidates.length,
+        isFinalFallbackAttempt: !hasRemainingCandidate,
       },
       // Only the outer fallback loop knows another candidate remains. Carry
       // that fact through this attempt so the embedded runner does not freeze
       // the shared lane before the next candidate can run.
-      deferSessionSuspension: i + 1 < candidates.length,
+      deferSessionSuspension: hasRemainingCandidate,
       onDeferredSessionSuspension: (suspension) => {
         deferredSuspension.pending = suspension;
       },
@@ -1921,7 +1946,7 @@ async function runWithModelFallbackInternal<T>(
           requestedModel: params.model,
           attempt: i + 1,
           total: candidates.length,
-          nextCandidate: candidates[i + 1],
+          nextCandidate,
           isPrimary,
           requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
@@ -1933,7 +1958,7 @@ async function runWithModelFallbackInternal<T>(
       // there are remaining candidates.  Only abort/context-overflow errors
       // (handled above) are truly non-retryable.
       const isKnownFailover = isFailoverError(normalized);
-      if (!isKnownFailover && i === candidates.length - 1) {
+      if (!isKnownFailover && !hasRemainingCandidate) {
         throw err;
       }
 
@@ -1954,6 +1979,14 @@ async function runWithModelFallbackInternal<T>(
         });
       }
 
+      if (isKnownFailover && normalized.reason === "tls_certificate") {
+        tlsFailedProviders.add(candidate.provider);
+      }
+      const failedNextCandidateIndex = resolveNextFallbackCandidateIndex({
+        candidates,
+        currentIndex: i,
+        excludedProviders: tlsFailedProviders,
+      });
       lastError = isKnownFailover ? normalized : err;
       await observeFailedCandidate({
         attempts,
@@ -1966,7 +1999,7 @@ async function runWithModelFallbackInternal<T>(
         requestedModel: params.model,
         attempt: i + 1,
         total: candidates.length,
-        nextCandidate: candidates[i + 1],
+        nextCandidate: candidates[failedNextCandidateIndex],
         isPrimary,
         requestedModelMatched: requestedModel,
         fallbackConfigured: hasFallbackCandidates,
@@ -1978,6 +2011,9 @@ async function runWithModelFallbackInternal<T>(
         attempt: i + 1,
         total: candidates.length,
       });
+      if (failedNextCandidateIndex > i + 1) {
+        i = failedNextCandidateIndex - 1;
+      }
     }
   }
 

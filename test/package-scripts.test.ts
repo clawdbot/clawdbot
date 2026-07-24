@@ -175,6 +175,30 @@ describe("package scripts", () => {
     );
   });
 
+  it("runs SQLite snapshot path coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/infra/sqlite-snapshot.test.ts",
+    );
+  });
+
+  it("runs shared test-state cleanup coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/test-utils/openclaw-test-state.test.ts",
+    );
+  });
+
+  it("runs snapshot repository verification coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/snapshot/local-repository.windows.test.ts",
+    );
+  });
+
+  it("runs backup verification coverage in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "src/commands/backup-verify.test.ts",
+    );
+  });
+
   it("runs cross-OS installer behavior coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/openclaw-cross-os-installer.windows.test.ts",

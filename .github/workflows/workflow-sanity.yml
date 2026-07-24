@@ -180,7 +180,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ACTIONLINT_VERSION="1.7.11"
+          ACTIONLINT_VERSION="1.7.12"
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
           # GitHub release downloads occasionally return transient 5xx responses.

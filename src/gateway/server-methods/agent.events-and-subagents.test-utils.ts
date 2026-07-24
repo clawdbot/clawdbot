@@ -16,6 +16,7 @@ import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -958,14 +959,16 @@ describe("gateway agent handler", () => {
   it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
     mockMainSessionEntry({
       sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "12345",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "12345" },
+      }),
     });
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
         "agent:main:main": buildExistingMainStoreEntry({
-          lastChannel: "telegram",
-          lastTo: "12345",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "telegram", to: "12345" },
+          }),
         }),
       };
       return await updater(store);

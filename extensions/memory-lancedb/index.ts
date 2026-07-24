@@ -619,6 +619,21 @@ const PROMPT_ESCAPE_MAP: Record<string, string> = {
   "'": "&#39;",
 };
 
+const MEDIA_NOTE_HEADER = /^\[media attached(?: \d+\/\d+)?: /;
+
+function stripMediaNoteLine(line: string): string | null {
+  // Prompt assembly puts captions on following lines; inline legacy text stays ordinary content.
+  return MEDIA_NOTE_HEADER.test(line) && line.endsWith("]") ? null : line;
+}
+
+function dropMediaNoteLines(text: string): string {
+  return text
+    .split("\n")
+    .map(stripMediaNoteLine)
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
 export function looksLikePromptInjection(text: string): boolean {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -627,46 +642,16 @@ export function looksLikePromptInjection(text: string): boolean {
   return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-/**
- * Pattern matching [media attached: ...] and [media attached N/M: ...] annotations.
- * These are written by the Gateway's claim-check offload when a user sends an image.
- * When a message containing such an annotation is stored as a long-term memory and
- * later recalled, the verbatim text must NOT be re-interpreted as a live media
- * reference by detectImageReferences() because that makes old memories look like
- * fresh media attachments.
- */
-const MEDIA_ATTACHED_PATTERN = /\[media attached(?:\s+\d+\/\d+)?:[^\]]*\]/gi;
-/** Same pattern without the `g` flag, safe for repeated `.test()` calls. */
-const MEDIA_ATTACHED_PATTERN_TEST = /\[media attached(?:\s+\d+\/\d+)?:[^\]]*\]/i;
-
 export function escapeMemoryForPrompt(text: string): string {
-  return stripMediaAttachedAnnotations(text).replace(
-    /[&<>"']/g,
-    (char) => PROMPT_ESCAPE_MAP[char] ?? char,
-  );
-}
-
-function stripMediaAttachedAnnotations(text: string): string {
-  // Strip [media attached: ...] annotations before HTML-escaping so that
-  // detectImageReferences() cannot re-parse them as live media references.
-  const hadMedia = MEDIA_ATTACHED_PATTERN_TEST.test(text);
-  let stripped = text.replace(MEDIA_ATTACHED_PATTERN, "");
-  // Collapse runs of spaces/tabs only when media was actually stripped; otherwise
-  // intentional multi-space formatting (tabular data, indented code references,
-  // etc.) is preserved. Newlines are deliberately excluded from the collapse so
-  // multi-line memories keep their line structure after media removal.
-  if (hadMedia) {
-    stripped = stripped.replace(/[ \t]{2,}/g, " ").trim();
-  }
-  return stripped;
+  // Recalled context is model-only; hydration scans the bare turn/facts and masks legacy markers.
+  return text.replace(/[&<>"']/g, (char) => PROMPT_ESCAPE_MAP[char] ?? char);
 }
 
 function sanitizeRecallMemoryText(text: string): string | null {
-  const stripped = stripMediaAttachedAnnotations(text);
-  if (!stripped.trim()) {
+  if (!text.trim()) {
     return null;
   }
-  return looksLikeEnvelopeSludge(stripped) ? null : stripped;
+  return looksLikeEnvelopeSludge(text) ? null : text;
 }
 
 async function findCleanDuplicateMemory(
@@ -935,11 +920,6 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     return true;
   }
 
-  // Check for [media attached ...] annotations (use non-global variant for .test())
-  if (MEDIA_ATTACHED_PATTERN_TEST.test(text)) {
-    return true;
-  }
-
   // Check for JSON blobs that look like envelope metadata
   if (ENVELOPE_JSON_LINE_RE.test(text)) {
     return true;
@@ -1203,6 +1183,9 @@ export function sanitizeForMemoryCapture(text: string): string {
 
   // Strip leading timestamp prefix
   cleaned = cleaned.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
+  // Media notes are presentation-only prompt lines. Drop the whole rendered line;
+  // never parse attachment identity back out of its text projection.
+  cleaned = dropMediaNoteLines(cleaned);
   const afterDeliveryHints = stripLeadingMessageToolDeliveryHints(cleaned);
   strippedInjectedContext ||= afterDeliveryHints !== cleaned;
   cleaned = afterDeliveryHints;
@@ -1317,9 +1300,6 @@ export function sanitizeForMemoryCapture(text: string): string {
     allowAmbiguousMarkerFree: strippedInjectedContext,
   });
 
-  // Strip [media attached: ...] and [media attached N/M: ...] annotations
-  cleaned = cleaned.replace(MEDIA_ATTACHED_PATTERN, "");
-
   // Strip <active_memory_plugin>...</active_memory_plugin> blocks
   cleaned = cleaned.replace(/<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>/g, "");
 
@@ -1335,8 +1315,8 @@ export function sanitizeForMemoryCapture(text: string): string {
 export function formatRelevantMemoriesContext(
   memories: Array<{ category: MemoryCategory; text: string }>,
 ): string {
-  // Defense-in-depth: filter out contaminated memories that slipped through,
-  // but preserve useful old memories after stripping stale media annotations.
+  // Defense-in-depth: filter envelope contamination that slipped through while
+  // preserving legacy media text as inert historical content.
   const clean = memories.flatMap((entry) => {
     const text = sanitizeRecallMemoryText(entry.text);
     return text ? [{ category: entry.category, text }] : [];
@@ -1959,10 +1939,15 @@ export default definePluginEntry({
 
       try {
         const recallQuery = normalizeRecallQuery(
-          extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
-            event.prompt,
+          dropMediaNoteLines(
+            extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
+              event.prompt,
+          ),
           currentCfg.recallMaxChars,
         );
+        if (!recallQuery) {
+          return undefined;
+        }
         const recall = await runWithTimeout({
           timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
           task: async () => {

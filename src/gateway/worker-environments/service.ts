@@ -1528,6 +1528,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           options.liveEvents?.rotateCredential({
             credentialHash: minted.credentialHash,
             environmentId: binding.environmentId,
+            newProcessTurn: true,
             previousCredentialHash: previous.credentialHash,
             runEpoch: binding.ownerEpoch,
             sessionId: binding.sessionId,

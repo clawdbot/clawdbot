@@ -179,6 +179,21 @@ openclaw-new-session-page {
   opacity: 0.6;
 }
 
+.new-session-page__draft-toggle {
+  gap: 6px;
+  cursor: pointer;
+}
+
+.new-session-page__draft-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.new-session-page__draft-toggle:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
 /* Keep the anchor focusable while Web Awesome finishes its hide animation. */
 .new-session-page__trigger--hiding {
   pointer-events: none;

@@ -82,7 +82,7 @@ function createPostPluginDoctorExecutionFailure(
   };
 }
 
-async function runPostPluginDoctorInFreshProcess(params: {
+export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   root: string;
   yes: boolean;
   json: boolean;
@@ -177,7 +177,7 @@ async function applyFreshPostPluginDoctor(params: {
   }
   let pluginUpdate = params.pluginUpdate;
   try {
-    await runPostPluginDoctorInFreshProcess({ ...params, entryPath });
+    await runUpdateFinalizationDoctorInFreshProcess({ ...params, entryPath });
   } catch (err) {
     pluginUpdate = createPostPluginDoctorExecutionFailure(params.pluginUpdate, String(err));
   }

@@ -6,6 +6,7 @@ import {
 import {
   ErrorCodes,
   type ErrorShape,
+  type SessionVisibility,
   errorShape,
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -70,6 +71,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
+import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
@@ -272,6 +274,7 @@ export async function createGatewaySession(params: {
   model?: string;
   thinkingLevel?: string;
   incognito?: boolean;
+  visibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
@@ -615,6 +618,15 @@ export async function createGatewaySession(params: {
     );
     const parentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: parentAgentId });
     if (canonicalParentSessionKey === parentMainKey) {
+      if (params.visibility) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "sessions.create visibility requires a new session",
+          ),
+        };
+      }
       const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
       const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
       const execCwd = normalizeOptionalString(params.execCwd);
@@ -742,6 +754,8 @@ export async function createGatewaySession(params: {
         storePath: target.storePath,
       },
       async ({ existingEntry, sessionEntries }) => {
+        // This callback owns generated and explicit keys alike; no existing row
+        // is the canonical signal that this request will actually create one.
         if (
           isAgentHarnessSessionKey(target.canonicalKey) &&
           !authorizedHarnessCreation &&
@@ -779,6 +793,33 @@ export async function createGatewaySession(params: {
             error: errorShape(
               ErrorCodes.INVALID_REQUEST,
               "catalog session target requires a new session",
+            ),
+          };
+        }
+        if (
+          params.visibility &&
+          existingEntry === undefined &&
+          !isSessionVisibilityAllowed(params.cfg, params.visibility)
+        ) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `session visibility is disabled: ${params.visibility}`,
+              { details: { code: "SESSION_VISIBILITY_DISABLED", visibility: params.visibility } },
+            ),
+          };
+        }
+        if (
+          params.visibility &&
+          existingEntry !== undefined &&
+          resolveSessionVisibility(existingEntry) !== params.visibility
+        ) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "sessions.create visibility requires a new session",
             ),
           };
         }
@@ -873,6 +914,7 @@ export async function createGatewaySession(params: {
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
           ...(params.creation && createdNewEntry ? buildSessionCreationStamp(params.creation) : {}),
+          ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,

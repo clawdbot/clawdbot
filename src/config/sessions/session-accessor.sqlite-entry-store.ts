@@ -12,7 +12,7 @@ import {
   upsertConversationIdentity,
 } from "./session-accessor.sqlite-conversation.js";
 import {
-  clearSessionMembersForKey,
+  clearSessionCollaborationForKey,
   deleteSessionNodeArtifacts,
   rehomeLegacySessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
@@ -522,10 +522,10 @@ export function writeSessionEntry(
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;
   }
-  // Membership belongs to the exact canonical row being overwritten, which
-  // can differ from the selected alias during canonicalization.
+  // Collaboration rows belong to the exact canonical node being overwritten,
+  // which can differ from the selected alias during canonicalization.
   if (canonicalPreviousEntry && canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId) {
-    clearSessionMembersForKey(database, sessionKey);
+    clearSessionCollaborationForKey(database, sessionKey);
   }
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.

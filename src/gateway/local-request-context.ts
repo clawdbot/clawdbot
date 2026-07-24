@@ -16,7 +16,7 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
-import { createChatRunEntry, type ChatRunEntry } from "./server-chat-state.js";
+import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
@@ -93,28 +93,7 @@ function createLocalGatewayRequestContext(
     },
   };
   const sessionEvents = new Set<string>();
-  const chatRuns = new Map<string, ChatRunEntry>();
-  const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
-  const chatRunPlanSnapshots: NonNullable<GatewayRequestContext["chatRunPlanSnapshots"]> =
-    new Map();
-  const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
-  const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();
-  const chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"] = new Map();
-  const agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"] = new Map();
-  const bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"] = new Map();
-  // Clear every per-run buffer variant together; streamed assistant/thinking
-  // deltas share the client run id prefix but are tracked under separate keys.
-  const clearChatRunState = (runId: string) => {
-    chatRunBuffers.delete(runId);
-    chatRunPlanSnapshots.delete(runId);
-    chatDeltaSentAt.delete(runId);
-    chatDeltaLastBroadcastLen.delete(runId);
-    chatDeltaLastBroadcastText.delete(runId);
-    for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
-      agentDeltaSentAt.delete(key);
-      bufferedAgentEvents.delete(key);
-    }
-  };
+  const chatRunState = createChatRunState();
   const loadModelCatalogOwner = async ({
     agentId,
     agentDir,
@@ -167,29 +146,9 @@ function createLocalGatewayRequestContext(
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
-    chatAbortedRuns: new Map(),
-    chatRunBuffers,
-    chatRunPlanSnapshots,
-    chatDeltaSentAt,
-    chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText,
-    agentDeltaSentAt,
-    bufferedAgentEvents,
-    clearChatRunState,
-    addChatRun: (sessionId, entry) => {
-      chatRuns.set(sessionId, createChatRunEntry(entry));
-    },
-    removeChatRun: (sessionId, clientRunId, sessionKey) => {
-      const entry = chatRuns.get(sessionId);
-      if (!entry || entry.clientRunId !== clientRunId) {
-        return undefined;
-      }
-      if (sessionKey !== undefined && entry.sessionKey !== sessionKey) {
-        return undefined;
-      }
-      chatRuns.delete(sessionId);
-      return entry;
-    },
+    chatRunState,
+    addChatRun: chatRunState.registry.add,
+    removeChatRun: chatRunState.registry.remove,
     subscribeSessionEvents: (connId) => {
       sessionEvents.add(connId);
     },

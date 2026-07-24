@@ -297,7 +297,7 @@ export async function handleChatAbortRequest({
     return;
   }
 
-  const partialText = context.chatRunBuffers.get(runId);
+  const partialText = context.chatRunState.runs.get(runId)?.buffer;
   const res = abortChatRunById(ops, {
     runId,
     sessionKey: active.sessionKey,

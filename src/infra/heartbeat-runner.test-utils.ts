@@ -14,6 +14,8 @@ import { resolveCronJobsStorePath } from "../cron/store.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { HeartbeatDeps } from "./heartbeat-runner.js";
 
 // Heartbeat test utilities seed session stores and temporary heartbeat prompts
@@ -22,6 +24,9 @@ type HeartbeatSessionSeed = Partial<SessionEntry> & {
   lastChannel: string;
   lastProvider: string;
   lastTo: string;
+  deliveryContext?: DeliveryContext;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
 };
 
 type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
@@ -76,12 +81,29 @@ export async function seedSessionStore(
   sessionKey: string,
   session: HeartbeatSessionSeed,
 ): Promise<void> {
+  const {
+    deliveryContext,
+    lastAccountId,
+    lastChannel,
+    lastProvider: _lastProvider,
+    lastThreadId,
+    lastTo,
+    ...entry
+  } = session;
   await replaceSessionEntry(
     { storePath, sessionKey },
     {
       sessionId: session.sessionId ?? "sid",
       updatedAt: session.updatedAt ?? Date.now(),
-      ...session,
+      ...entry,
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: deliveryContext?.channel ?? lastChannel,
+          to: deliveryContext?.to ?? lastTo,
+          accountId: deliveryContext?.accountId ?? lastAccountId,
+          threadId: deliveryContext?.threadId ?? lastThreadId,
+        },
+      }),
     },
   );
 }

@@ -72,6 +72,28 @@ export function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string)
     );
   }
 }
+
+/** Require canonical shared-state ownership without requiring the latest schema. */
+export function assertOpenClawStateDatabaseOwner(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  const hasMetadataTable = database
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta' LIMIT 1")
+    .get();
+  const metadata = hasMetadataTable
+    ? (database.prepare("SELECT role FROM schema_meta WHERE meta_key = 'primary' LIMIT 1").get() as
+        | { role?: unknown }
+        | undefined)
+    : undefined;
+  if (metadata?.role !== "global") {
+    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
+    throw new Error(
+      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global.`,
+    );
+  }
+}
+
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
@@ -92,18 +114,13 @@ export function assertOpenClawStateDatabaseForMaintenance(
     );
   }
 
+  assertOpenClawStateDatabaseOwner(database, options);
   const metadata = database
-    .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
-    .get() as { role?: unknown; schema_version?: unknown } | undefined;
-  if (metadata?.role !== "global") {
-    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
-    throw new Error(
-      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global.`,
-    );
-  }
-  if (metadata.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
+    .get() as { schema_version?: unknown } | undefined;
+  if (metadata?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION) {
     const schemaVersion =
-      typeof metadata.schema_version === "number" ? metadata.schema_version : "invalid";
+      typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
     throw new Error(
       `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${OPENCLAW_STATE_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );

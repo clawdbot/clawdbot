@@ -8,10 +8,13 @@ import {
 } from "./session-attention-presentation.ts";
 import { resolveSessionIcon } from "./session-icon-registry.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
+import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
 
 export function renderSessionLeadingState(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
+  ownerActor: SessionCreatedActor | null | undefined,
+  attribution: "created" | "archived",
 ) {
   const running = session.hasActiveRun || session.status === "running";
   const sessionState = renderSessionState(session);
@@ -36,6 +39,44 @@ export function renderSessionLeadingState(
       leadingIndicator: html`<span class="sidebar-pinned-session__icon" aria-hidden="true"
         >${resolveSessionIcon(session.icon)}</span
       >`,
+    };
+  }
+  if (!session.isChild && ownerActor?.id?.trim()) {
+    const label =
+      pullRequestState === "open"
+        ? t("sessionsView.openPullRequest")
+        : t("chat.pullRequests.merged");
+    return {
+      running,
+      pinnedState,
+      leadingIndicator: html`<span
+        class="sidebar-session-avatar ${running ? "sidebar-session-avatar--running" : ""}"
+      >
+        ${renderSessionOwnerChip(ownerActor, "row", attribution)}
+        ${running
+          ? html`<span
+              class="sidebar-session-avatar__running-ring"
+              role="img"
+              aria-label=${t("sessionsView.activeRun")}
+              title=${t("sessionsView.activeRun")}
+            ></span>`
+          : nothing}
+        ${session.unread
+          ? html`<span
+              class="sidebar-session-avatar__badge sidebar-session-avatar__badge--unread"
+              role="img"
+              aria-label=${t("sessionsView.unread")}
+            ></span>`
+          : pullRequestState !== "none"
+            ? html`<span
+                class="sidebar-session-avatar__badge sidebar-session-pr-indicator--${pullRequestState}"
+                data-session-pr-state=${pullRequestState}
+                role="img"
+                aria-label=${label}
+                title=${label}
+              ></span>`
+            : nothing}
+      </span>`,
     };
   }
   if (running) {

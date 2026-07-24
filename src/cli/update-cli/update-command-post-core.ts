@@ -430,8 +430,9 @@ function stopPostCoreUpdateChild(child: ChildProcess): void {
  */
 export function resolvePostCoreUpdateChildStdio(
   platform: NodeJS.Platform = process.platform,
+  jsonMode = false,
 ): "inherit" | "pipe" {
-  return platform === "win32" ? "pipe" : "inherit";
+  return platform === "win32" || jsonMode ? "pipe" : "inherit";
 }
 
 function preparePostCorePluginInstallRecordsForFreshProcess(params: {
@@ -515,7 +516,8 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
-    const childStdio = resolvePostCoreUpdateChildStdio();
+    const jsonMode = params.opts.json === true;
+    const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
     const child = spawn(params.nodeRunner ?? resolveNodeRunner(), argv, {
       stdio: childStdio,
       env: {
@@ -537,9 +539,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
           : {}),
       },
     });
-    // When piped, relay child output to the parent process so terminal output is preserved.
+    // JSON callers own stdout, so child diagnostics must remain off that protocol stream.
     if (childStdio === "pipe") {
-      child.stdout?.pipe(process.stdout);
+      child.stdout?.pipe(jsonMode ? process.stderr : process.stdout);
       child.stderr?.pipe(process.stderr);
     }
 

@@ -1214,7 +1214,12 @@ function resolveSessionStorePathRelationship(
     return "same";
   }
   try {
-    return sameFileIdentity(fs.statSync(left), fs.statSync(right)) ? "same" : "different";
+    return sameFileIdentity(
+      fs.statSync(left, { bigint: true }),
+      fs.statSync(right, { bigint: true }),
+    )
+      ? "same"
+      : "different";
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {

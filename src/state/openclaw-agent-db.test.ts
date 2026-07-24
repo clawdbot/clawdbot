@@ -57,6 +57,8 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
+  normalizeSqliteSchemaShapeSql,
+  replaceNamedUniqueIndexesWithOrdinaryIndexes,
 } from "./sqlite-schema-shape.test-support.js";
 
 type AgentDbTestDatabase = Pick<
@@ -946,6 +948,12 @@ describe("openclaw agent database", () => {
         'window-created-by',
         '{"sessionId":"window-created-by","updatedAt":60,"createdBy":{"id":"legacy-human","label":"Legacy"}}',
         60,
+        NULL
+      ), (
+        'agent:worker-1:newer-alias',
+        'window-current',
+        '{"sessionId":"window-current","updatedAt":100,"previousSessionId":"wrong-window"}',
+        100,
         NULL
       );
       INSERT INTO transcript_events (session_id, seq, event_json, created_at)
@@ -2286,6 +2294,33 @@ describe("openclaw agent database", () => {
         )
         .run("session-1", "event-2", 2, "message-1", 2),
     ).toThrow(/UNIQUE constraint failed/iu);
+  });
+
+  it("repairs every canonical agent-state named unique index", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const created = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = created.path;
+    const canonicalShape = normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(created.db));
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    try {
+      expect(replaceNamedUniqueIndexesWithOrdinaryIndexes(drifted)).toHaveLength(5);
+      expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(drifted.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      drifted.close();
+    }
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
+      canonicalShape,
+    );
   });
 
   it("rejects same-name transcript index drift when duplicate rows block repair", () => {

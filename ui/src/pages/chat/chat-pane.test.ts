@@ -80,7 +80,6 @@ function createInitializationContext(): ApplicationContext {
         localMediaPreviewRoots: [],
         embedSandboxMode: "strict",
         allowExternalEmbedUrls: false,
-        chatMessageMaxWidth: null,
         terminalEnabled: false,
       },
     },

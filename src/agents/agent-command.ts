@@ -21,7 +21,7 @@ import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenanc
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
-import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, type DeliveryContext } from "../utils/delivery-context.shared.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
@@ -223,7 +223,7 @@ async function agentCommandInternal(
           cfg,
           entry: sessionEntry,
           sessionKey,
-          channel: sessionEntry?.channel,
+          channel: sessionDeliveryChannel(sessionEntry),
           chatType: sessionEntry?.chatType,
         });
         if (sendPolicy === "deny") {

@@ -207,9 +207,7 @@ function readLogoutProfileSelection(params: Record<string, unknown>): LogoutProf
 function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
-    chatRunBuffers: context.chatRunBuffers,
-    chatAbortedRuns: context.chatAbortedRuns,
-    clearChatRunState: context.clearChatRunState,
+    chatRunState: context.chatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     broadcast: context.broadcast,

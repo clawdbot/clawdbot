@@ -103,6 +103,7 @@ export async function prepareInternalSessionEffectsSession(params: {
   const now = Date.now();
   const entry = await upsertSessionEntry(scope, {
     ...buildSessionCreationStamp({ via: "internal", actor: { type: "system" } }),
+    delivery: { kind: "internal" },
     sessionId: scope.sessionId,
     ...(isIncognitoOpenClawAgentSqlitePath(params.storePath, { agentId: params.agentId })
       ? { incognito: true as const }

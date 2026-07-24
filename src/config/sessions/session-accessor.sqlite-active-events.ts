@@ -59,6 +59,7 @@ export type SessionTranscriptMessageEvent = {
 };
 
 export type SessionTranscriptMessageEventPage = {
+  activeLeafEntryId?: string | null;
   events: SessionTranscriptMessageEvent[];
   totalMessages: number;
 };
@@ -271,6 +272,37 @@ export function readSessionTranscriptMessageEvents(
   });
 }
 
+/** Reads the projected active leaf without materializing the transcript. */
+export function readSessionTranscriptActiveLeafEvents(
+  scope: SessionTranscriptReadScope,
+): TranscriptEvent[] {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const leafEventId = projection.state.leafEventId;
+    if (!leafEventId) {
+      return [];
+    }
+    const db = getActiveTranscriptKysely(projection.database);
+    const row = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "identity.session_id")
+            .onRef("event.seq", "=", "identity.seq"),
+        )
+        .select("event.event_json")
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.event_id", "=", leafEventId)
+        .limit(1),
+    );
+    if (!row) {
+      throw new Error(`Active transcript leaf event is missing: ${leafEventId}`);
+    }
+    return [JSON.parse(row.event_json) as TranscriptEvent];
+  });
+}
+
 /** Reads one append-stable forward page from the materialized active-message projection. */
 export function readSessionTranscriptVisibleMessageDelta(
   scope: SessionTranscriptReadScope,
@@ -452,7 +484,11 @@ export function readRecentSessionTranscriptMessageEvents(
       Math.floor(Number.isFinite(options.maxLines) ? options.maxLines : 0),
     );
     if (maxMessages === 0 || maxLines === 0) {
-      return { events: [], totalMessages: visible.total };
+      return {
+        activeLeafEntryId: projection.state.leafEventId,
+        events: [],
+        totalMessages: visible.total,
+      };
     }
     const maxBytes = Math.max(
       1024,
@@ -477,6 +513,7 @@ export function readRecentSessionTranscriptMessageEvents(
       bytes += eventBytes;
     }
     return {
+      activeLeafEntryId: projection.state.leafEventId,
       events: selected.toReversed(),
       totalMessages: visible.total,
     };
@@ -502,6 +539,7 @@ export function readSessionTranscriptMessageEventPage(
     const endExclusive = Math.max(0, totalMessages - offset);
     const start = Math.max(0, endExclusive - maxMessages);
     return {
+      activeLeafEntryId: projection.state.leafEventId,
       events: readVisibleMessageRange(projection, start, endExclusive),
       totalMessages,
     };

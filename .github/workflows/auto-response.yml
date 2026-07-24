@@ -35,12 +35,20 @@ jobs:
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: write
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-issues: write
+          permission-members: read
+          permission-metadata: read
+          permission-pull-requests: write
       - name: Run Barnacle auto-response
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:

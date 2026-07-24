@@ -568,6 +568,7 @@ export const en: TranslationMap = {
     worktreeNameInvalid: "Worktree names use lowercase letters, digits, and dashes.",
     incognito: "Incognito",
     incognitoDescription: "Keep this thread only until the Gateway restarts",
+    startAsDraft: "Start as draft",
     messagePlaceholder: "What should this thread work on?",
     readingAttachment: "Reading attachment",
     start: "Start thread",
@@ -590,7 +591,7 @@ export const en: TranslationMap = {
     filters: "Filters",
     createdBy: "Created by {name}",
     archivedBy: "Archived by {name}",
-    filterByCreator: "Filter by creator",
+    people: "People",
     allCreators: "All people",
     filterControls: "Thread filters",
     sourceFilters: "Thread source filters",
@@ -1365,6 +1366,11 @@ export const en: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Browser-local chat preferences.",
+      messageWidth: "Message width",
+      messageWidthHint:
+        "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
+      messageWidthInvalid:
+        "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Sidebar",
@@ -1650,6 +1656,7 @@ export const en: TranslationMap = {
     blockedAgentFilter: "blocked by agent filter",
   },
   nav: {
+    account: "Account",
     back: "Back",
     forward: "Forward",
     chat: "Chat",
@@ -3754,6 +3761,9 @@ export const en: TranslationMap = {
   },
   chat: {
     disconnected: "Disconnected from gateway.",
+    sendErrors: {
+      activeLeafChanged: "The thread switched branches — review and resend.",
+    },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
@@ -3771,10 +3781,27 @@ export const en: TranslationMap = {
       readOnly: "Read-only",
       suggest: "Suggest",
       draft: "Draft",
+      publishDraft: "Publish draft",
       members: "Members",
       selected: "Member",
       noPeople: "No paired people found.",
       readOnlyNotice: "Only the thread owner and members can act in this thread.",
+    },
+    sessionSuggestions: {
+      suggest: "Suggest",
+      suggestMessage: "Suggest message",
+      attachmentsUnsupported: "Remove attachments before submitting a text suggestion.",
+      sendNow: "Send {author}'s suggestion now",
+      queue: "Queue {author}'s suggestion",
+      edit: "Edit {author}'s suggestion",
+      dismiss: "Dismiss {author}'s suggestion",
+      typing: "{name} is typing…",
+      typingMany: "{names} are typing…",
+      state: {
+        pending: "Pending",
+        accepted: "Accepted",
+        dismissed: "Dismissed",
+      },
     },
     loadOlder: "Load older",
     sessionHeader: {
@@ -4266,7 +4293,7 @@ export const en: TranslationMap = {
       session: "Chat thread",
       sessionSearch: "Search threads",
       clearSessionSearch: "Clear thread search",
-      loadMoreSessions: "Load more threads",
+      loadMoreSessions: "Show more",
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Locked",

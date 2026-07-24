@@ -33,6 +33,9 @@ import {
 export type QueuedChatSendResult = "sent" | "pending" | "failed";
 export type QueuedChatStorageMode = "durable" | "memory";
 export type QueuedChatSendOptions = {
+  /** Exact submit-time leaf for fresh foreground sends; restored drains omit it.
+   * Any intervening leaf advance intentionally parks the draft for review. */
+  expectedLeafEntryId?: string | null;
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
   routingSessionKey?: string;

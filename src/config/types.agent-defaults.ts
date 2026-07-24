@@ -100,10 +100,6 @@ export type AgentStartupContextConfig = {
 export type AgentContextLimitsConfig = {
   /** Default max chars returned by memory_get before truncation metadata/notice (default: 12000). */
   memoryGetMaxChars?: number;
-  /** Default line window for memory_get when lines is omitted (default: 120). */
-  memoryGetDefaultLines?: number;
-  /** Advanced max chars for a single live tool result; unset uses model-context auto cap. */
-  toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
 };
@@ -313,7 +309,7 @@ export type AgentDefaultsConfig = {
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
-    /** Override the heartbeat prompt body (default: "Follow the heartbeat monitor scratch context when provided. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
+    /** Override the heartbeat prompt body. The default treats scratch as monitor prose and directs recurring work to cron jobs. */
     prompt?: string;
     /** Run timeout in seconds for heartbeat agent turns. Unset uses global timeout or heartbeat cadence capped at 600 seconds. */
     timeoutSeconds?: number;

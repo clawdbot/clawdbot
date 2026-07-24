@@ -740,7 +740,6 @@ describe("getMemorySearchManager caching", () => {
             workspace: "/tmp/workspace",
             contextLimits: {
               memoryGetMaxChars: 24_000,
-              memoryGetDefaultLines: 180,
             },
           },
         ],

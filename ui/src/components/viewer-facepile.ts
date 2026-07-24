@@ -102,6 +102,10 @@ export function hasSessionPresenceViewers(
   );
 }
 
+export function hasMultiplePresenceIdentities(value: unknown): boolean {
+  return projectPresencePayload(value).users.length >= 2;
+}
+
 export function presenceViewerLabel(user: PresenceViewer): string {
   return user.name ?? user.email ?? user.id;
 }

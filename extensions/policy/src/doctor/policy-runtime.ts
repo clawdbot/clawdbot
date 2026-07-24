@@ -5,7 +5,6 @@ import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/heal
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAuthProfileEvidence } from "../policy-state.js";
-import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
 import { CHECK_IDS } from "./check-ids.js";
 import {
   SUPPORTED_AUTH_PROFILE_METADATA,
@@ -338,43 +337,6 @@ export function authProfileHasMetadata(
   return SUPPORTED_AUTH_PROFILE_MODES.includes(
     profile.mode as (typeof SUPPORTED_AUTH_PROFILE_MODES)[number],
   );
-}
-
-function policyToolGlobMatches(tool: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`).test(tool);
-}
-
-export function toolListCoversTool(list: readonly string[], tool: string): boolean {
-  for (const entry of list) {
-    const normalized = normalizePolicyToolName(entry);
-    if (normalized === "*" || normalized === tool) {
-      return true;
-    }
-    if (POLICY_TOOL_GROUPS[normalized]?.includes(tool)) {
-      return true;
-    }
-    if (normalized.includes("*") && policyToolGlobMatches(tool, normalized)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function expandPolicyToolRequirement(value: string): readonly string[] {
-  const normalized = normalizePolicyToolName(value);
-  return POLICY_TOOL_GROUPS[normalized] ?? [normalized];
-}
-
-function normalizePolicyToolName(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "bash") {
-    return "exec";
-  }
-  if (normalized === "apply-patch") {
-    return "apply_patch";
-  }
-  return normalized;
 }
 
 export function normalizePolicyChannelId(value: string): string {

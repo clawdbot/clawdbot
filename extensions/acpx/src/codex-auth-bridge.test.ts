@@ -220,7 +220,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/codex-acp@1.1.4"');
+    expect(wrapper).toContain('"@agentclientprotocol/codex-acp@1.1.7"');
     expect(wrapper).toContain('"--", "codex-acp"');
     expect(wrapper).not.toContain("@zed-industries/codex-acp");
   });

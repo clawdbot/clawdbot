@@ -10,6 +10,7 @@ import {
   type CronAddOptions,
   type CronServiceDeps,
   type CronUpdatePrecondition,
+  type CronUpdateOptions,
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
@@ -105,16 +106,17 @@ export class CronService implements CronServiceContract {
     return await ops.add(this.state, input, opts);
   }
 
-  async update(id: string, patch: CronJobPatch) {
-    return await ops.update(this.state, id, patch);
+  async update(id: string, patch: CronJobPatch, opts?: CronUpdateOptions) {
+    return await ops.update(this.state, id, patch, opts);
   }
 
   async updateWithPrecondition(
     id: string,
     patch: CronJobPatch,
     precondition: CronUpdatePrecondition,
+    opts?: CronUpdateOptions,
   ) {
-    return await ops.updateWithPrecondition(this.state, id, patch, precondition);
+    return await ops.updateWithPrecondition(this.state, id, patch, precondition, opts);
   }
 
   async remove(id: string, opts?: { systemOwned?: boolean }) {

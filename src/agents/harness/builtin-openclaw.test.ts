@@ -11,13 +11,7 @@ describe("createOpenClawAgentHarness", () => {
   beforeEach(() => {
     runEmbeddedAttempt.mockReset();
     runEmbeddedAttempt.mockResolvedValue({
-      aborted: false,
-      externalAbort: false,
-      timedOut: false,
-      idleTimedOut: false,
-      timedOutDuringCompaction: false,
-      promptError: null,
-      promptErrorSource: null,
+      terminal: { kind: "ok" },
       sessionIdUsed: "session-1",
       messagesSnapshot: [],
       assistantTexts: ["done"],

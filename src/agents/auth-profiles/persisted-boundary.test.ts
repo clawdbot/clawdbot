@@ -3,10 +3,19 @@
  * Covers malformed credential coercion, state merging, legacy OAuth refs, and
  * main/agent store drift repair.
  */
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { resolveAuthProfileOrder } from "./order.js";
-import { coercePersistedAuthProfileStore, mergeAuthProfileStores } from "./persisted.js";
+import {
+  applyLegacyAuthStore,
+  coercePersistedAuthProfileStore,
+  loadLegacyAuthProfileStore,
+  mergeAuthProfileStores,
+} from "./persisted.js";
+import type { AuthProfileStore } from "./types.js";
 
 describe("persisted auth profile boundary", () => {
   it("normalizes malformed persisted credentials and state before runtime use", () => {
@@ -418,5 +427,83 @@ describe("persisted auth profile boundary", () => {
     });
     expect(merged.order?.anthropic).toEqual([profileId]);
     expect(merged.lastGood?.anthropic).toBe(profileId);
+  });
+});
+
+describe("applyLegacyAuthStore", () => {
+  const agentDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of agentDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function writeLegacyAuthJson(value: unknown): string {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-legacy-auth-"));
+    agentDirs.push(agentDir);
+    fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify(value), "utf8");
+    return agentDir;
+  }
+
+  it("preserves OAuth refresh material when migrating legacy auth.json", () => {
+    const agentDir = writeLegacyAuthJson({
+      chutes: {
+        type: "oauth",
+        provider: "chutes",
+        access: "ACCESS_TOKEN",
+        refresh: "REFRESH_TOKEN",
+        expires: 1_900_000_000_000,
+        clientId: "chutes-client-id-123",
+        idToken: "ID_TOKEN_xyz",
+        chatgptPlanType: "pro",
+      },
+    });
+    const legacy = loadLegacyAuthProfileStore(agentDir);
+    expect(legacy).not.toBeNull();
+
+    const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
+    applyLegacyAuthStore(store, legacy ?? {});
+
+    expect(store.profiles["chutes:default"]).toMatchObject({
+      type: "oauth",
+      provider: "chutes",
+      access: "ACCESS_TOKEN",
+      refresh: "REFRESH_TOKEN",
+      clientId: "chutes-client-id-123",
+      idToken: "ID_TOKEN_xyz",
+      chatgptPlanType: "pro",
+    });
+  });
+
+  it("preserves secret-ref credentials when migrating legacy auth.json", () => {
+    const agentDir = writeLegacyAuthJson({
+      openai: {
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", id: "OPENAI_API_KEY" },
+      },
+      anthropic: {
+        type: "token",
+        provider: "anthropic",
+        tokenRef: { source: "env", id: "ANTHROPIC_TOKEN" },
+      },
+    });
+    const legacy = loadLegacyAuthProfileStore(agentDir);
+    expect(legacy).not.toBeNull();
+
+    const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
+    applyLegacyAuthStore(store, legacy ?? {});
+
+    expect(store.profiles["openai:default"]).toMatchObject({
+      type: "api_key",
+      provider: "openai",
+      keyRef: { source: "env", id: "OPENAI_API_KEY" },
+    });
+    expect(store.profiles["anthropic:default"]).toMatchObject({
+      type: "token",
+      provider: "anthropic",
+      tokenRef: { source: "env", id: "ANTHROPIC_TOKEN" },
+    });
   });
 });

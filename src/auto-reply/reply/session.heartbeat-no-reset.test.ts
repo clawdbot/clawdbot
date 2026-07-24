@@ -6,7 +6,14 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { MsgContext } from "../templating.js";
-import { initSessionState } from "./session.js";
+import { finalizeInboundContext } from "./inbound-context.js";
+import { initSessionState as initSessionStateRaw } from "./session.js";
+
+const initSessionState = (
+  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
+    ctx: MsgContext;
+  },
+) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),

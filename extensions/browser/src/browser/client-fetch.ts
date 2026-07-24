@@ -5,7 +5,11 @@
  * in-process dispatcher, adding loopback auth and operator-facing diagnostics.
  */
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
-import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  extractErrorCode,
+  formatErrorMessage,
+  toErrorObject,
+} from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -442,15 +446,12 @@ export async function fetchBrowserJson<T>(
     let abortListener: (() => void) | undefined;
     const abortPromise: Promise<never> = abortCtrl.signal.aborted
       ? Promise.reject(
-          toLintErrorObject(abortCtrl.signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+          toErrorObject(abortCtrl.signal.reason ?? new Error("aborted"), "Non-Error rejection"),
         )
       : new Promise((_, reject) => {
           abortListener = () =>
             reject(
-              toLintErrorObject(
-                abortCtrl.signal.reason ?? new Error("aborted"),
-                "Non-Error rejection",
-              ),
+              toErrorObject(abortCtrl.signal.reason ?? new Error("aborted"), "Non-Error rejection"),
             );
           abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
         });
@@ -506,18 +507,4 @@ export async function fetchBrowserJson<T>(
     }
     throw enhanceBrowserFetchError(url, err, timeoutMs);
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

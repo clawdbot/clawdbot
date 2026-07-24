@@ -211,8 +211,8 @@ describe("runHeartbeatOnce commitments", () => {
     });
   }
 
-  it("keeps free-form reasons from changing normal heartbeat task priority", async () => {
-    const { result, sendTelegram, sessionStore, store } = await withTempHeartbeatSandbox(
+  it("keeps free-form reasons from changing cron-carried heartbeat task priority", async () => {
+    const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
         const sessionKey = "agent:main:telegram:user-155462274";
@@ -229,13 +229,6 @@ describe("runHeartbeatOnce commitments", () => {
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
         };
-        await seedHeartbeatScratchForTest({
-          content: `tasks:
-  - name: deployment-status
-    interval: 5m
-    prompt: Check deployment status with the normal tools
-`,
-        });
         await seedSessionStore(storePath, sessionKey, {
           lastChannel: "telegram",
           lastProvider: "telegram",
@@ -270,6 +263,15 @@ describe("runHeartbeatOnce commitments", () => {
           cfg,
           agentId: "main",
           reason: "commitment",
+          source: "interval",
+          intent: "task",
+          tasks: [
+            {
+              jobId: "job-deployment-status",
+              name: "deployment-status",
+              prompt: "Check deployment status with the normal tools",
+            },
+          ],
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
@@ -282,9 +284,6 @@ describe("runHeartbeatOnce commitments", () => {
         return {
           result: resultResult,
           sendTelegram: sendTelegramResult,
-          sessionStore: readSessionStoreForTest<{
-            heartbeatTaskState?: Record<string, number>;
-          }>(storePath),
           store: await loadCommitmentStore(),
         };
       },
@@ -292,9 +291,6 @@ describe("runHeartbeatOnce commitments", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
-    expect(sessionStore["agent:main:telegram:user-155462274"]?.heartbeatTaskState).toEqual({
-      "deployment-status": nowMs,
-    });
     expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
       status: "pending",
@@ -692,7 +688,7 @@ describe("runHeartbeatOnce commitments", () => {
     });
   });
 
-  it("appends scratch directives to commitment prompt when tasks are configured but none are due", async () => {
+  it("appends scratch directives to the commitment prompt", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
@@ -710,24 +706,15 @@ describe("runHeartbeatOnce commitments", () => {
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
         };
-        // Scratch has a tasks block (task ran recently — NOT due) plus extra prose directives.
         await seedHeartbeatScratchForTest({
-          content: `Do not contact the user unless critical.
-
-tasks:
-  - name: check-deployment
-    interval: 5m
-    prompt: Check deployment status
-`,
+          content: "Do not contact the user unless critical.\n",
         });
-        // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval, not due).
         await seedSessionStore(storePath, sessionKey, {
           sessionId: "sid",
           updatedAt: nowMs,
           lastChannel: "telegram",
           lastProvider: "telegram",
           lastTo: "155462274",
-          heartbeatTaskState: { "check-deployment": nowMs },
         });
         await saveCommitmentStore(undefined, {
           version: 1,
@@ -743,10 +730,8 @@ tasks:
             // Must contain commitment text
             expect(ctx.Body).toContain("Due inferred follow-up commitments");
             expect(ctx.Body).toContain("How did the interview go?");
-            // Must also contain scratch directives outside the tasks block
+            // Must also contain the monitor scratch directive.
             expect(ctx.Body).toContain("Do not contact the user unless critical.");
-            // Must NOT contain the task prompt (task is not due)
-            expect(ctx.Body).not.toContain("Check deployment status");
             return { text: "How did the interview go?" };
           },
         );

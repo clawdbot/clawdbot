@@ -35,10 +35,12 @@ export const WORKER_PROTOCOL_METHODS = [
 ] as const;
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
+export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
 export const WORKER_PROTOCOL_FEATURES = [
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;

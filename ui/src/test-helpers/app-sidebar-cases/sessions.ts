@@ -124,35 +124,35 @@ describe("AppSidebar session pagination", () => {
       sidebar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 
     expect(rows()).toHaveLength(10);
-    expect(button("Load more threads")).not.toBeNull();
+    expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(20);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(30);
     expect(button("Collapse")).toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(40);
-    expect(button("Load more threads")).not.toBeNull();
+    expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
-    button("Load more threads")?.click();
+    button("Show more")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(41);
-    expect(button("Load more threads")).toBeNull();
+    expect(button("Show more")).toBeNull();
     expect(button("Collapse")).not.toBeNull();
 
     button("Collapse")?.click();
     await sidebar.updateComplete;
     expect(rows()).toHaveLength(10);
-    expect(button("Load more threads")).not.toBeNull();
+    expect(button("Show more")).not.toBeNull();
     expect(button("Collapse")).toBeNull();
   });
 });

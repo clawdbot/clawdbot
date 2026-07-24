@@ -268,7 +268,8 @@ export function writePreRegisteredChatAbort(params: {
     stopReason: params.stopReason,
     endedAt,
   });
-  params.context.chatAbortedRuns.set(params.runId, createChatAbortMarker(endedAt));
+  params.context.chatRunState.getOrCreate(params.runId).abortMarker =
+    createChatAbortMarker(endedAt);
   const pendingKey = pendingChatSendDedupeKey(params.runId);
   const pendingAttemptId = normalizeUnknownText(
     (params.context.dedupe.get(pendingKey)?.payload as PreRegisteredAgentDedupePayload | undefined)

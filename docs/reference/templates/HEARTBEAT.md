@@ -16,12 +16,12 @@ Shipped default content:
 
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
 
-# Add tasks below when you want the agent to check something periodically.
+# Add a short checklist below when the heartbeat should inspect shared context.
 ```
 
-Add short tasks below the comment lines only when you want periodic checks. Keep it small: heartbeat runs read this file every tick (default every 30 minutes), so bloated instructions burn tokens on every wake.
+Add a short checklist below the comment lines only when one heartbeat turn should inspect the items together. Keep it small: heartbeat runs read this file every tick (default every 30 minutes), so bloated instructions burn tokens on every wake.
 
-For due-only checks instead of a plain checklist, use a structured `tasks:` block with per-task `interval` and `prompt` fields; see [HEARTBEAT.md](/gateway/heartbeat#heartbeatmd-optional) for the format and behavior.
+For independently scheduled or due-only checks, create [cron jobs](/automation/cron-jobs). Heartbeat scratch no longer supports scheduler syntax. Run `openclaw doctor --fix` to convert older `tasks:` blocks.
 
 ## Related
 

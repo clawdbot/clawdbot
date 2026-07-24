@@ -2,22 +2,38 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
   listConversations,
   registerConversationAddresses,
   resolveConversation,
 } from "./conversation-registry.js";
-import { deleteSessionEntryLifecycle, upsertSessionEntry } from "./session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  upsertSessionEntry as upsertCanonicalSessionEntry,
+} from "./session-accessor.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { SessionEntry, SessionOrigin } from "./types.js";
+
+type LegacyDeliveryFixture = Partial<SessionEntry> & {
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+};
+
+const upsertSessionEntry = (
+  scope: Parameters<typeof upsertCanonicalSessionEntry>[0],
+  entry: LegacyDeliveryFixture,
+) => upsertCanonicalSessionEntry(scope, normalizeLegacySessionEntryDelivery(entry as SessionEntry));
 
 describe("conversation registry", () => {
   let tempDir: string;

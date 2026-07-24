@@ -72,6 +72,7 @@ export function resolveSlackGroupToolPolicy(
   // No messageProvider: this path historically never matched channel-prefixed sender keys.
   return resolveScopeToolsPolicy({
     ...scope,
+    senderPolicyMode: params.senderPolicyMode,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

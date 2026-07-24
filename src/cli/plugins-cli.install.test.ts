@@ -31,6 +31,7 @@ import {
   readConfigFileSnapshotForWrite,
   parseClawHubPluginSpec,
   promptYesNo,
+  reportClawHubPluginInstallTelemetry,
   recordHookInstall,
   recordPluginInstall,
   resetPluginsCliTestState,
@@ -1661,7 +1662,37 @@ describe("plugins cli install", () => {
     expect(readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(2);
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
     expect(runtimeLogsContain("Installed plugin: demo")).toBe(true);
+    expect(reportClawHubPluginInstallTelemetry).toHaveBeenCalledWith({
+      baseUrl: "https://clawhub.ai",
+      packageName: "demo",
+      version: "1.2.3",
+    });
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+  });
+
+  it("does not report a ClawHub install when durable persistence fails", async () => {
+    loadConfig.mockReturnValue(createEmptyPluginConfig());
+    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
+    installPluginFromClawHub.mockResolvedValue(
+      createClawHubInstallResult({
+        pluginId: "demo",
+        packageName: "demo",
+        version: "1.2.3",
+        channel: "official",
+      }),
+    );
+    enablePluginInConfig.mockReturnValue({ config: createEnabledPluginConfig("demo") });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: createEnabledPluginConfig("demo"),
+      warnings: [],
+    });
+    writeConfigFile.mockRejectedValueOnce(new Error("persistence failed"));
+
+    await expect(runPluginsCommand(["plugins", "install", "clawhub:demo"])).rejects.toThrow(
+      "persistence failed",
+    );
+
+    expect(reportClawHubPluginInstallTelemetry).not.toHaveBeenCalled();
   });
 
   it("passes ClawHub risk acknowledgement to explicit ClawHub installs", async () => {

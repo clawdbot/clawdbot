@@ -52,6 +52,10 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
 import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
@@ -86,8 +90,8 @@ function resolveStatusChannelFeatureLine(params: {
   const telegramConfig = params.cfg.channels?.telegram;
   const accountId = normalizeAccountId(
     params.statusAccountId ??
-      params.sessionEntry?.lastAccountId ??
-      params.sessionEntry?.origin?.accountId ??
+      deliveryContextFromSession(params.sessionEntry)?.accountId ??
+      sessionDeliveryOrigin(params.sessionEntry)?.accountId ??
       telegramConfig?.defaultAccount,
   );
   const accountConfig = resolveNormalizedAccountEntry(

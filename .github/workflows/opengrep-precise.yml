@@ -58,11 +58,11 @@ jobs:
       - name: Install opengrep
         env:
           # Pin both the install script (by commit SHA) and the binary version.
-          # The script SHA must match the v1.22.0 release tag in opengrep/opengrep
+          # The script SHA must match the v1.25.0 release tag in opengrep/opengrep
           # so a compromised or force-pushed `main` cannot RCE in our CI runner.
           # Bump both together when upgrading.
-          OPENGREP_VERSION: v1.22.0
-          OPENGREP_INSTALL_SHA: f458d7f0d52cc58eae1ca3cf3d5caf101e637519
+          OPENGREP_VERSION: v1.25.0
+          OPENGREP_INSTALL_SHA: 27b5fba1b315fbc63d0fd474d01f5d8235cc86e2
         run: |
           # Download first so a timed-out transfer cannot execute a partial installer.
           installer="$(mktemp "${RUNNER_TEMP}/opengrep-install.XXXXXX")"

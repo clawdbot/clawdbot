@@ -1,4 +1,8 @@
 import {
+  deliveryContextFromSession,
+  sessionDeliveryChannel,
+} from "../../utils/delivery-context.shared.js";
+import {
   normalizeSqliteChatType,
   normalizeSqliteText,
 } from "./session-accessor.sqlite-normalize.js";
@@ -7,14 +11,30 @@ import { normalizeSqliteStatus } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeSqliteSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
+  const raw = entry as unknown as Record<string, unknown>;
+  const hasLegacyDeliveryFields = [
+    "route",
+    "deliveryContext",
+    "origin",
+    "channel",
+    "lastChannel",
+    "lastTo",
+    "lastAccountId",
+    "lastThreadId",
+  ].some((key) => key in raw);
+  const delivery =
+    entry.delivery ?? (hasLegacyDeliveryFields ? undefined : { kind: "none" as const });
   if (typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)) {
-    return entry;
+    if (entry.delivery === delivery) {
+      return entry;
+    }
+    return delivery ? { ...entry, delivery } : entry;
   }
   const updatedAt =
     typeof entry.sessionStartedAt === "number" && Number.isFinite(entry.sessionStartedAt)
       ? entry.sessionStartedAt
       : Date.now();
-  return { ...entry, updatedAt };
+  return delivery ? { ...entry, delivery, updatedAt } : { ...entry, updatedAt };
 }
 
 export function bindSqliteSessionRoot(params: {
@@ -136,20 +156,11 @@ function finiteSqliteNumber(value: unknown): number | null {
 }
 
 function resolveSqliteSessionChannel(entry: SessionEntry): string | null {
-  return (
-    normalizeSqliteText(entry.channel) ??
-    normalizeSqliteText(entry.deliveryContext?.channel) ??
-    normalizeSqliteText(entry.lastChannel) ??
-    normalizeSqliteText(entry.origin?.provider)
-  );
+  return normalizeSqliteText(sessionDeliveryChannel(entry));
 }
 
 function resolveSqliteSessionAccountId(entry: SessionEntry): string | null {
-  return (
-    normalizeSqliteText(entry.deliveryContext?.accountId) ??
-    normalizeSqliteText(entry.lastAccountId) ??
-    normalizeSqliteText(entry.origin?.accountId)
-  );
+  return normalizeSqliteText(deliveryContextFromSession(entry)?.accountId);
 }
 
 function resolveSqliteSessionDisplayName(entry: SessionEntry): string | null {

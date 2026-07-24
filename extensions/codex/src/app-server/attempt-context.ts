@@ -12,7 +12,6 @@ import {
   type ContextEngineProjection,
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -20,6 +19,7 @@ import {
   prepareMemorySystemPromptAddition,
 } from "openclaw/plugin-sdk/core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";

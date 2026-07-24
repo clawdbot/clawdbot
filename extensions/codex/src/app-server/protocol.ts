@@ -1,5 +1,9 @@
-export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
-export type JsonObject = { [key: string]: JsonValue };
+import type { JsonObject, JsonValue } from "./protocol-json.js";
+import type * as CodexMcpProtocol from "./protocol-mcp.js";
+
+export type { CodexListMcpServerStatusResponse, CodexMcpServerStatus } from "./protocol-mcp.js";
+export type { JsonObject, JsonValue } from "./protocol-json.js";
+
 export type CodexServiceTier = string;
 export type CodexApprovalPolicy =
   | "untrusted"
@@ -691,16 +695,6 @@ type CodexHooksListResponse = {
   nextCursor?: string | null;
 };
 
-export type CodexMcpServerStatus = {
-  name: string;
-  tools: JsonObject;
-};
-
-export type CodexListMcpServerStatusResponse = {
-  data: CodexMcpServerStatus[];
-  nextCursor?: string | null;
-};
-
 export type CodexConfigReadResponse = {
   config: JsonObject;
   layers?: JsonValue[] | null;
@@ -748,6 +742,8 @@ type CodexAppServerRequestParamsOverride = {
   "thread/goal/get": CodexThreadGoalGetParams;
   "thread/goal/clear": CodexThreadGoalClearParams;
   "turn/interrupt": CodexTurnInterruptParams;
+  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadParams;
+  "mcpServer/tool/call": CodexMcpProtocol.ToolCallParams;
 };
 
 type CodexAppServerRequestResultMap = {
@@ -764,7 +760,9 @@ type CodexAppServerRequestResultMap = {
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;
   "marketplace/add": JsonValue;
-  "mcpServerStatus/list": CodexListMcpServerStatusResponse;
+  "mcpServerStatus/list": CodexMcpProtocol.CodexListMcpServerStatusResponse;
+  "mcpServer/resource/read": CodexMcpProtocol.ResourceReadResult;
+  "mcpServer/tool/call": CodexMcpProtocol.ToolCallResult;
   "model/list": CodexModelListResponse;
   "modelProvider/capabilities/read": CodexModelProviderCapabilitiesReadResponse;
   "plugin/install": CodexPluginInstallResponse;

@@ -114,6 +114,7 @@ beforeEach(() => {
           ],
         }),
         nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "execution-args",
         sideQuestionToolMode: "disabled",
         resolveExecutionArgs: (context) => context.baseArgs,
       },
@@ -337,7 +338,7 @@ describe("runSystemAgentTurn", () => {
     expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
     expect(call.cliToolAvailability).toEqual({
       native: [],
-      mcp: ["mcp__openclaw__openclaw"],
+      openClaw: ["openclaw"],
     });
     expect(call.toolsAllow).toBeUndefined();
     expect(requireValue(call.systemAgentTool, "missing CLI OpenClaw tool").proposalRef).toBe(

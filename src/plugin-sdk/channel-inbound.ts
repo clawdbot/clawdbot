@@ -188,6 +188,11 @@ export type {
   InboundReplyDispatchResult,
   InboundReplyRecordOptions,
 } from "../channels/message/inbound-reply-dispatch.js";
+export {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+  type ChannelPartialDeliveryError,
+} from "../channels/turn/delivery-result.js";
 
 export {
   toHistoryMediaEntries,

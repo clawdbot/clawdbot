@@ -3,6 +3,7 @@
  */
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createChatRunState } from "../server-chat-state.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -262,24 +263,25 @@ describe("chat.abort authorization", () => {
   });
 
   it("clears agent text throttle state through the real abort caller", async () => {
+    const chatRunState = createChatRunState();
+    chatRunState.getOrCreate("run-1").agentText = {
+      assistant: {
+        lastSentAt: Date.now(),
+        bufferedEvent: {
+          payload: {
+            runId: "run-1",
+            seq: 1,
+            stream: "assistant",
+            ts: Date.now(),
+            data: { text: "pending", delta: "pending" },
+          },
+        },
+      },
+    };
     const context = createChatAbortContext({
+      chatRunState,
       chatAbortControllers: new Map([
         ["run-1", createActiveRun("main", { owner: { connId: "conn-owner", deviceId: "dev-1" } })],
-      ]),
-      agentDeltaSentAt: new Map([["run-1:assistant", Date.now()]]),
-      bufferedAgentEvents: new Map([
-        [
-          "run-1:assistant",
-          {
-            payload: {
-              runId: "run-1",
-              seq: 1,
-              stream: "assistant",
-              ts: Date.now(),
-              data: { text: "pending", delta: "pending" },
-            },
-          },
-        ],
       ]),
     });
 
@@ -293,8 +295,7 @@ describe("chat.abort authorization", () => {
     const [ok, payload] = respond.mock.calls.at(-1) ?? [];
     expect(ok).toBe(true);
     expect(payload).toMatchObject({ aborted: true, runIds: ["run-1"] });
-    expect(context.agentDeltaSentAt.has("run-1:assistant")).toBe(false);
-    expect(context.bufferedAgentEvents.has("run-1:assistant")).toBe(false);
+    expect(context.chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
   });
 
   it("only aborts session-scoped runs owned by the requester", async () => {

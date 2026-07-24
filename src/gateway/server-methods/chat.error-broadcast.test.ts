@@ -3,6 +3,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createChatRunState } from "../server-chat-state.js";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -10,7 +11,6 @@ function createMockContext() {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const chatAbortControllers = new Map();
-  const chatAbortedRuns = new Map();
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map();
 
@@ -18,7 +18,7 @@ function createMockContext() {
     broadcast,
     nodeSendToSession,
     chatAbortControllers,
-    chatAbortedRuns,
+    chatRunState: createChatRunState(),
     agentRunSeq,
     dedupe,
     getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
@@ -29,6 +29,39 @@ function createMockContext() {
 }
 
 describe("chat.send error broadcast", () => {
+  it("rejects a claimed leaf for a session that has not materialized", async () => {
+    const ctx = createMockContext();
+    const respond = vi.fn();
+
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
+      params: {
+        sessionKey: "main",
+        message: "hello",
+        expectedLeafEntryId: "stale-leaf",
+        idempotencyKey: "test-fresh-stale-leaf",
+      },
+      respond: respond as never,
+      context: ctx as unknown as GatewayRequestContext,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        details: { reason: "active-leaf-changed" },
+      }),
+    );
+    expect(ctx.addChatRun).not.toHaveBeenCalled();
+    expect(ctx.broadcast).not.toHaveBeenCalled();
+  });
+
   it("rejects a stale expected session routing contract before dispatch", async () => {
     const ctx = createMockContext();
     const respond = vi.fn();

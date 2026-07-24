@@ -26,6 +26,7 @@ import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
+import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
   abortActiveCronTaskRuns,
@@ -606,6 +607,11 @@ export function buildGatewayCronService(params: {
               state,
               streamBatch,
               toolsAllow: job.payload.toolsAllow,
+              scheduledToolPolicy: resolveCronScheduledToolPolicy({
+                toolsAllow: job.payload.toolsAllow,
+                scheduledToolPolicy: job.scheduledToolPolicy,
+                owner: job.owner,
+              }),
               abortSignal,
             }),
         }
@@ -656,6 +662,13 @@ export function buildGatewayCronService(params: {
         agentId,
         sessionKey,
         heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
+        ...(opts?.scheduledEveryMs !== undefined
+          ? { scheduledEveryMs: opts.scheduledEveryMs }
+          : {}),
+        ...(opts?.scheduledAnchorMs !== undefined
+          ? { scheduledAnchorMs: opts.scheduledAnchorMs }
+          : {}),
+        ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
       });
     },
     runHeartbeatOnce: async (opts) => {
@@ -829,6 +842,11 @@ export function buildGatewayCronService(params: {
         state: job.state.triggerState,
         streamBatch,
         toolsAllow: job.payload.toolsAllow,
+        scheduledToolPolicy: resolveCronScheduledToolPolicy({
+          toolsAllow: job.payload.toolsAllow,
+          scheduledToolPolicy: job.scheduledToolPolicy,
+          owner: job.owner,
+        }),
         timeoutSeconds: job.payload.timeoutSeconds,
         toolBudget: job.payload.toolBudget,
         abortSignal,

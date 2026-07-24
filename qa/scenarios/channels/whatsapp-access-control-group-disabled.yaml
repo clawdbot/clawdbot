@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.room-allowlist-access-policy
+      - whatsapp.group-allowlists
   objective: Verify groupPolicy disabled rejects group messages.
   gatewayConfigPatch:
     channels:

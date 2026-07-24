@@ -4,6 +4,7 @@ import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heart
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
   CronTriggerEvaluationResult,
@@ -360,8 +361,14 @@ export type CronAddOptions = {
   enabledExplicit?: boolean;
   /** Gateway-owned system payloads (heartbeat monitors) require this opt-in. */
   systemOwned?: boolean;
+  /** Authenticated caller provenance stamped by the service, never public input. */
+  scheduledToolPolicy?: CronScheduledToolPolicy;
 };
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
+/** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
+export type CronUpdateOptions = {
+  scheduledToolPolicy?: CronScheduledToolPolicy;
+};
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

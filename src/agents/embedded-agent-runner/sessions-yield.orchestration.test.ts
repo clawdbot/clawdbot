@@ -35,7 +35,6 @@ describe("sessions_yield orchestration", () => {
     // Simulate an attempt where sessions_yield was called
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        promptError: null,
         sessionIdUsed: sessionId,
         yieldDetected: true,
       }),
@@ -69,7 +68,6 @@ describe("sessions_yield orchestration", () => {
     // Edge case: both flags set (shouldn't happen, but clientToolCalls wins)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        promptError: null,
         yieldDetected: true,
         clientToolCalls: [{ name: "hosted_tool", params: { arg: "value" } }],
       }),
@@ -94,7 +92,6 @@ describe("sessions_yield orchestration", () => {
     // Pre-fix this slot was a single variable that only kept the last call.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        promptError: null,
         clientToolCalls: [
           { name: "create_graph", params: { nodes: ["a", "b"] } },
           { name: "activate_graph", params: {} },
@@ -127,7 +124,6 @@ describe("sessions_yield orchestration", () => {
       // diagnostic — the spawned subagent will produce results.
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
-          promptError: null,
           yieldDetected: true,
           assistantTexts: [],
           acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "child-key" }],
@@ -148,7 +144,6 @@ describe("sessions_yield orchestration", () => {
     it("yield with async started tool — diagnostic suppressed", async () => {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
-          promptError: null,
           yieldDetected: true,
           assistantTexts: [],
           toolMetas: [{ toolName: "my_async_tool", asyncStarted: true }],
@@ -168,7 +163,7 @@ describe("sessions_yield orchestration", () => {
   });
 
   it("normal attempt without yield has no stopReason override", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
 
     const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
@@ -183,7 +178,6 @@ describe("sessions_yield orchestration", () => {
   it("emits diagnostic payload when yieldDetected has no continuation evidence", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        promptError: null,
         yieldDetected: true,
         assistantTexts: [],
       }),
@@ -210,7 +204,6 @@ describe("sessions_yield orchestration", () => {
     // Normalized helpers filter whitespace-only text — yield still parks
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        promptError: null,
         yieldDetected: true,
         assistantTexts: [],
         didSendViaMessagingTool: true,
@@ -235,7 +228,6 @@ describe("sessions_yield orchestration", () => {
     // An explicit empty spawn array is not a valid continuation
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        promptError: null,
         yieldDetected: true,
         assistantTexts: [],
         acceptedSessionSpawns: [],

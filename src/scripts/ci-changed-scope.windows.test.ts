@@ -12,4 +12,16 @@ describe("detectChangedScope Windows routing", () => {
       });
     }
   });
+
+  it("routes shared test-state fixture changes to Windows", () => {
+    for (const fixturePath of [
+      "src/test-utils/openclaw-test-state.ts",
+      "src/test-utils/openclaw-test-state.test.ts",
+    ]) {
+      expect(detectChangedScope([fixturePath]), fixturePath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+  });
 });

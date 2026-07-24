@@ -3578,6 +3578,7 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "test-auth-token",
+        basePath: "/rosita",
         onOpenImage,
       },
     );

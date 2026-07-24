@@ -73,6 +73,7 @@ describe("persistReplySessionEntry", () => {
         sessionId: "session-2",
         updatedAt: 400,
         thinkingLevel: "medium",
+        delivery: { kind: "none" },
       };
       await replaceSessionEntry({ sessionKey: "main", storePath }, currentEntry);
 
@@ -136,6 +137,7 @@ describe("persistReplySessionEntry", () => {
         ...initialEntry,
         updatedAt: 400,
         archivedAt: 300,
+        delivery: { kind: "none" },
       };
       await replaceSessionEntry({ sessionKey: "main", storePath }, archivedEntry);
 

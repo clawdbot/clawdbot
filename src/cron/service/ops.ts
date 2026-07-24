@@ -84,6 +84,7 @@ import type {
   CronAddOptions,
   CronEvent,
   CronServiceState,
+  CronUpdateOptions,
   CronUpdatePrecondition,
   CronWakeMode,
 } from "./state.js";
@@ -756,6 +757,7 @@ function declarativeFields(job: CronJob, includeEnabled: boolean) {
     pacing: job.pacing,
     trigger: job.trigger,
     payload: job.payload,
+    scheduledToolPolicy: job.scheduledToolPolicy,
     delivery: job.delivery,
     displayName: job.displayName,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
@@ -811,6 +813,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
         enabledExplicit: opts?.enabledExplicit === true,
         nowMs: now,
         cronConfig: state.deps.cronConfig,
+        scheduledToolPolicy: opts?.scheduledToolPolicy,
       });
       const includeEnabled = opts?.enabledExplicit === true;
       if (
@@ -837,7 +840,9 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       throw new Error(`cron job already exists: ${normalizedId}`);
     }
     const snapshot = snapshotStoreForRollback(state);
-    const job = createJob(state, normalizedInput);
+    const job = createJob(state, normalizedInput, {
+      scheduledToolPolicy: opts?.scheduledToolPolicy,
+    });
     state.store?.jobs.push(job);
 
     // Auto-disable notifications describe durable state, so publish them only
@@ -880,8 +885,9 @@ async function updateLoadedJob(params: {
   id: string;
   patch: CronJobPatch;
   precondition?: CronUpdatePrecondition;
+  opts?: CronUpdateOptions;
 }) {
-  const { state, id, patch, precondition } = params;
+  const { state, id, patch, precondition, opts } = params;
   warnIfDisabled(state, "update");
   // Mirrors the add-time boundary: no caller may patch a job into (or edit)
   // the system-owned heartbeat payload; the gateway converges via add only.
@@ -907,6 +913,7 @@ async function updateLoadedJob(params: {
     defaultAgentId: state.deps.defaultAgentId,
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
+    scheduledToolPolicy: opts?.scheduledToolPolicy,
   });
   if (patch.agentId !== undefined) {
     const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
@@ -930,8 +937,13 @@ async function updateLoadedJob(params: {
 }
 
 /** Updates a cron job patch in-place, recomputes affected schedule state, and persists it. */
-export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
-  return await locked(state, async () => await updateLoadedJob({ state, id, patch }));
+export async function update(
+  state: CronServiceState,
+  id: string,
+  patch: CronJobPatch,
+  opts?: CronUpdateOptions,
+) {
+  return await locked(state, async () => await updateLoadedJob({ state, id, patch, opts }));
 }
 
 /** Updates a cron job only after a store-locked caller precondition passes. */
@@ -940,8 +952,12 @@ export async function updateWithPrecondition(
   id: string,
   patch: CronJobPatch,
   precondition: CronUpdatePrecondition,
+  opts?: CronUpdateOptions,
 ) {
-  return await locked(state, async () => await updateLoadedJob({ state, id, patch, precondition }));
+  return await locked(
+    state,
+    async () => await updateLoadedJob({ state, id, patch, precondition, opts }),
+  );
 }
 
 /** Removes a cron job by id and re-arms the timer when the in-memory store changes. */

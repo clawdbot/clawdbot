@@ -13,7 +13,11 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  listSessionEntries,
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
@@ -308,7 +312,7 @@ async function writeDirectTelegramTranscriptMessages(params: {
     entry: {
       sessionId: params.sessionId,
       chatType: "direct",
-      channel: "telegram",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
       updatedAt: 1,
     },
   });

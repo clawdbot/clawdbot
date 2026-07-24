@@ -51,6 +51,15 @@ import {
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
 
+export {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
+  sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
+} from "../utils/delivery-context.shared.js";
+
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
 // Beta.5 Codex resolves and loads synchronously; beta.5 Feishu dedupes targets

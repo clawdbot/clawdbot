@@ -37,6 +37,7 @@ import {
   setChatError,
   waitForPendingChatSettings,
 } from "./chat-send-queue-state.ts";
+import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import {
   cancelPendingSendBeforeRequest,
@@ -215,6 +216,7 @@ export async function handleSendChat(
   const message = (messageOverride ?? host.chatMessage).trim();
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
+  const expectedLeafEntryId = resolveDisplayedLeafEntryId(host as unknown as ChatState);
   const attachments = host.chatAttachments ?? [];
   const attachmentsToSend = messageOverride == null ? snapshotChatAttachments(attachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
@@ -607,6 +609,7 @@ export async function handleSendChat(
         restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
         attachments: hasAttachments ? attachmentsToSend : undefined,
         previousAttachments: cleared.previousAttachments,
+        ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
         restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
         refreshSessions,
         routingSessionKey: submittedSessionKey,

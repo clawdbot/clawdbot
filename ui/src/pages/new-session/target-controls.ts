@@ -31,3 +31,21 @@ export function renderAgentSelect(params: {
     </span>
   `;
 }
+
+export function renderStartAsDraftToggle(params: {
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return html`<label class="new-session-page__trigger new-session-page__draft-toggle">
+    <input
+      type="checkbox"
+      .checked=${params.checked}
+      ?disabled=${params.disabled}
+      @change=${(event: Event) =>
+        params.onChange((event.currentTarget as HTMLInputElement).checked)}
+    />
+    <span aria-hidden="true">👻</span>
+    <span>${t("newSession.startAsDraft")}</span>
+  </label>`;
+}

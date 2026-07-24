@@ -20,7 +20,7 @@ export type RecordSessionMetaFromInbound = (params: {
 export type UpdateLastRoute = (params: {
   storePath: string;
   sessionKey: string;
-  channel?: SessionEntry["lastChannel"];
+  channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;

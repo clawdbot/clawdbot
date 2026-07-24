@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtim
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   loadCombinedSessionStoreForGateway,
@@ -56,7 +57,7 @@ function isPrivateConversation(params: {
     return false;
   }
   const key = params.key.trim().toLowerCase();
-  const chatTypes = [params.entry.chatType, params.entry.origin?.chatType].filter(
+  const chatTypes = [params.entry.chatType, sessionDeliveryOrigin(params.entry)?.chatType].filter(
     (chatType): chatType is NonNullable<typeof chatType> => chatType !== undefined,
   );
   if (

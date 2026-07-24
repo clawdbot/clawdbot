@@ -46,7 +46,7 @@
     "jsdom": "29.1.1",
     "openclaw": "workspace:*",
     "playwright": "1.61.1",
-    "vite": "8.1.3",
+    "vite": "8.1.5",
     "vitest": "4.1.10"
   }
 }

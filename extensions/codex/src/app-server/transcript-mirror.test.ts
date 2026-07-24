@@ -1202,6 +1202,9 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
 
     expect(mirrorOutcome.assistantTranscriptOwned).toBe(true);
+    expect(mirrorOutcome.assistantTranscriptIdempotencyKey).toBe(
+      "codex-app-server:thread-1:turn-1:assistant",
+    );
     expect(mirrorOutcome.mirroredMessages).toMatchObject([
       { role: "assistant", content: [{ type: "text", text: "[redacted by hook]" }] },
     ]);

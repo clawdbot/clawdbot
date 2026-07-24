@@ -103,6 +103,13 @@ const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
       WHERE lease_id IS NOT NULL
     `,
   },
+  {
+    name: "idx_worker_inference_turns_pending_run",
+    definition: `
+      ON worker_inference_turns(session_id, run_epoch, run_id)
+      WHERE state = 'pending'
+    `,
+  },
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
 
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();

@@ -12,7 +12,11 @@ import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
-import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  listSessionEntries,
+  normalizeSessionDeliveryState,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { setZalouserRuntime } from "./src/runtime.js";
@@ -180,7 +184,9 @@ describe("zalouser doctor state migration", () => {
         sessionId: "session-1",
         updatedAt: 1,
         chatType: "direct",
-        lastAccountId: "default",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "zalouser", accountId: "default" },
+        }),
       },
     });
     await upsertSessionEntry({
@@ -233,7 +239,14 @@ describe("zalouser doctor state migration", () => {
         env,
         storePath,
         sessionKey,
-        entry: { sessionId, updatedAt, chatType: "direct", lastAccountId: "default" },
+        entry: {
+          sessionId,
+          updatedAt,
+          chatType: "direct",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "zalouser", accountId: "default" },
+          }),
+        },
       });
     }
     const migration = findMigration("zalouser-direct-session-keys");
