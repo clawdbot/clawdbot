@@ -11,6 +11,7 @@ import {
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
   requiresClaudeDefaultSampling,
@@ -67,9 +68,26 @@ describe("Claude model contracts", () => {
     expect(requiresClaudeDefaultSampling({ id: "claude-mythos-5" })).toBe(true);
   });
 
+  it("recognizes Claude Opus 5 as adaptive-default with the full effort range", () => {
+    expect(resolveClaudeOpus5ModelIdentity({ id: "claude-opus-5" })).toBe("claude-opus-5");
+    expect(resolveClaudeOpus5ModelIdentity({ id: "us.anthropic.claude-opus-5" })).toBe(
+      "claude-opus-5",
+    );
+    expect(resolveClaudeOpus5ModelIdentity({ id: "claude-opus-4-8" })).toBeUndefined();
+    expect(supportsClaudeAdaptiveThinking({ id: "claude-opus-5" })).toBe(true);
+    expect(supportsClaudeNativeMaxEffort({ id: "claude-opus-5" })).toBe(true);
+    expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-5" })).toBe(true);
+    expect(requiresClaudeDefaultSampling({ id: "claude-opus-5" })).toBe(true);
+    const profile = resolveClaudeThinkingProfile("claude-opus-5");
+    expectLevelIdsInclude(profile, ["off", "adaptive", "xhigh", "max"]);
+    expectFields(profile, { defaultLevel: "high" });
+  });
+
   it("does not classify later numeric model versions as supported aliases", () => {
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-60" })).toBe(false);
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-50" })).toBe(false);
+    expect(supportsClaudeAdaptiveThinking({ id: "claude-opus-50" })).toBe(false);
+    expect(resolveClaudeOpus5ModelIdentity({ id: "claude-opus-50" })).toBeUndefined();
     expect(supportsClaudeAdaptiveThinking({ id: "claude-mythos-50" })).toBe(false);
     expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-80" })).toBe(false);
     expect(requiresClaudeDefaultSampling({ id: "claude-opus-4-8" })).toBe(true);

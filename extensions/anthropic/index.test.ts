@@ -120,6 +120,20 @@ describe("anthropic provider replay hooks", () => {
     expect(registerSessionCatalog).not.toHaveBeenCalled();
   });
 
+  it("publishes Claude Opus 5 CLI metadata without downgrading its API contract", () => {
+    expect(
+      buildClaudeCliCatalogEntries().find((model) => model.id === "claude-opus-5"),
+    ).toMatchObject({
+      id: "claude-opus-5",
+      name: "Claude Opus 5 (Claude CLI)",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+    });
+  });
+
   it("publishes Claude Sonnet 5 CLI metadata without downgrading its API contract", () => {
     expect(
       buildClaudeCliCatalogEntries().find((model) => model.id === "claude-sonnet-5"),
