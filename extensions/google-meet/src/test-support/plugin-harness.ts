@@ -170,7 +170,9 @@ export function setupGoogleMeetPlugin(
     description: "test",
     version: "0",
     source: "test",
-    config: options.fullConfig ?? {},
+    // Foreground plugin tests opt into autonomous transcript collection explicitly;
+    // otherwise its poller can outlive a test and retain the shared browser-tab lock.
+    config: { transcripts: { enabled: false }, ...options.fullConfig },
     pluginConfig: config,
     runtime: {
       gateway: {
