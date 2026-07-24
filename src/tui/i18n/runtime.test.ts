@@ -31,12 +31,12 @@ describe("TUI status localization", () => {
     expect(localization.t("tui.status.activeSessions", { count: 2 })).toBe("Active sessions: 2");
   });
 
-  it("continues from an unsupported platform locale to a supported locale", () => {
+  it("does not bypass an unsupported higher-priority process locale", () => {
     const localization = createTuiLocalization({
       env: { LC_ALL: "fr-FR", LC_MESSAGES: "zh_CN.UTF-8" },
     });
 
-    expect(localization.context.locale).toBe("zh-CN");
-    expect(localization.t("tui.status.linked")).toBe("已链接");
+    expect(localization.context.locale).toBe("en");
+    expect(localization.t("tui.status.linked")).toBe("linked");
   });
 });
