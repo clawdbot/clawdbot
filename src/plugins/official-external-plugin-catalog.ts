@@ -794,6 +794,17 @@ async function parseHostedCatalogFeedBody(params: {
       feed = verification.payload;
     } else {
       const root = parseOfficialExternalPluginCatalogShardRoot(verification.payload);
+      const rootGeneratedAtMs = parseOfficialExternalPluginCatalogTimestamp(root.generatedAt);
+      const rootExpiresAtMs = parseOfficialExternalPluginCatalogTimestamp(root.expiresAt);
+      if (rootGeneratedAtMs === undefined || rootExpiresAtMs === undefined) {
+        throw new Error("hosted catalog shard root requires valid timestamps");
+      }
+      if (rootExpiresAtMs <= rootGeneratedAtMs) {
+        throw new Error("hosted catalog shard root expiresAt must be later than generatedAt");
+      }
+      if (rootExpiresAtMs <= params.now.getTime() && params.allowExpired !== true) {
+        throw new Error(`hosted catalog shard root expired at ${root.expiresAt}`);
+      }
       const shardBodies = snapshot?.shardBodies ?? (await params.loadShardBodies?.(root));
       if (!shardBodies) {
         throw new Error("hosted catalog shard set is unavailable");

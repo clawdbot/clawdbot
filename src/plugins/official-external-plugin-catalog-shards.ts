@@ -332,6 +332,7 @@ export function validateOfficialExternalPluginCatalogShardSet(
     id: root.feedId,
     sequence: root.sequence,
     generatedAt: root.generatedAt,
+    expiresAt: root.expiresAt,
     ...(root.metadata.description === null ? {} : { description: root.metadata.description }),
     entries,
   };

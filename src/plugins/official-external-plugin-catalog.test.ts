@@ -882,7 +882,7 @@ describe("official external plugin catalog", () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url === "https://packages.acme.example/openclaw/feed") {
-        return new Response(fixture.signedRoot.body, {
+        return dsseResponse(fixture.signedRoot.body, {
           status: 200,
           headers: { etag: '"root-12"' },
         });
@@ -929,8 +929,12 @@ describe("official external plugin catalog", () => {
       snapshotStore,
       now: () => new Date("2026-06-30T00:00:00.000Z"),
     });
-    expect(expiredOffline.source).toBe("bundled-fallback");
-    expect(expiredOffline.entries).toEqual([]);
+    expect(expiredOffline.source).toBe("hosted-snapshot");
+    expect(expiredOffline.entries).toMatchObject([
+      { id: "@acme/alpha", state: "unavailable" },
+      { id: "@acme/beta", state: "unavailable" },
+    ]);
+    expect(expiredOffline.entries.every((entry) => entry.install === undefined)).toBe(true);
   });
 
   it("fails closed when catalog shard bytes do not match the signed root", async () => {
@@ -938,7 +942,7 @@ describe("official external plugin catalog", () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url === "https://packages.acme.example/openclaw/feed") {
-        return new Response(fixture.signedRoot.body, { status: 200 });
+        return dsseResponse(fixture.signedRoot.body, { status: 200 });
       }
       const shard = fixture.shards.find((candidate) => candidate.url === url);
       return new Response(
@@ -971,7 +975,7 @@ describe("official external plugin catalog", () => {
       const url = input instanceof Request ? input.url : input.toString();
       fetchedUrls.push(url);
       if (url === "https://packages.acme.example/openclaw/feed") {
-        return new Response(fixture.signedRoot.body, { status: 200 });
+        return dsseResponse(fixture.signedRoot.body, { status: 200 });
       }
       if (url.endsWith("/0.json")) {
         return new Response(null, { status: 503 });
@@ -1017,7 +1021,7 @@ describe("official external plugin catalog", () => {
       payloadType: HOSTED_CATALOG_SHARD_ROOT_PAYLOAD_TYPE,
       privateKeyPem: fixture.signedRoot.privateKeyPem,
     });
-    const fetchImpl = vi.fn(async () => new Response(signedRoot.body, { status: 200 }));
+    const fetchImpl = vi.fn(async () => dsseResponse(signedRoot.body, { status: 200 }));
 
     const result = await loadHostedCatalog({
       feedProfile: "acme",
@@ -1036,7 +1040,7 @@ describe("official external plugin catalog", () => {
 
   it("rejects expired signed shard roots before fetching any shard", async () => {
     const fixture = shardedHostedCatalogFixture();
-    const fetchImpl = vi.fn(async () => new Response(fixture.signedRoot.body, { status: 200 }));
+    const fetchImpl = vi.fn(async () => dsseResponse(fixture.signedRoot.body, { status: 200 }));
 
     const result = await loadHostedCatalog({
       feedProfile: "acme",
@@ -1049,7 +1053,7 @@ describe("official external plugin catalog", () => {
     expect(result.source).toBe("bundled-fallback");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     if (result.source === "bundled-fallback") {
-      expect(result.error).toContain("shard root has expired");
+      expect(result.error).toContain("shard root expired at");
     }
   });
 

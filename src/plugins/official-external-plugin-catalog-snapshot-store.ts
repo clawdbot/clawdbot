@@ -132,9 +132,7 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
           })
         : document;
     const payload =
-      typeof wireDocument.payload === "string"
-        ? decodeBase64Payload(wireDocument.payload)
-        : body;
+      typeof wireDocument.payload === "string" ? decodeBase64Payload(wireDocument.payload) : body;
     const feed =
       typeof wireDocument.payload === "string"
         ? (JSON.parse(payload) as {
