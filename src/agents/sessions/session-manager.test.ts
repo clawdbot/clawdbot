@@ -205,7 +205,7 @@ describe("SessionManager.open", () => {
     const manager = SessionManager.inMemory("/tmp");
     const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
     const secondId = manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
-    manager.appendLeafControl({
+    const control = manager.appendLeafControl({
       targetId: firstId,
       appendParentId: secondId,
       appendMode: "side",
@@ -214,6 +214,8 @@ describe("SessionManager.open", () => {
     const thirdId = manager.appendMessage({ role: "user", content: "third", timestamp: 3 });
 
     expect(manager.getBranch().map((entry) => entry.id)).toEqual([firstId, thirdId]);
+    manager.branch(control.id);
+    expect(manager.getLeafId()).toBe(firstId);
     expect(() =>
       manager.appendLeafControl({
         targetId: thirdId,

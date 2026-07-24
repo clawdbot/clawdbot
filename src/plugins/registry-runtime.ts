@@ -319,6 +319,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
       }
       for (const sessionFile of sessionFiles) {
+        const sessionKeyMatch = entries.find(({ sessionKey }) => sessionKey === sessionFile);
+        if (sessionKeyMatch) {
+          assertSessionEntryOwned({
+            action: params.action,
+            entry: sessionKeyMatch.entry,
+            sessionKey: sessionKeyMatch.sessionKey,
+          });
+          continue;
+        }
         const marker = parseSqliteSessionFileMarker(sessionFile);
         if (!marker) {
           throw new Error("Plugin session ownership checks require a SQLite transcript marker.");

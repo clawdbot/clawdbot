@@ -414,7 +414,7 @@ export class SessionManagerCore {
 
   protected rememberLeafControl(leafEntry: SessionLeafControl): void {
     this.opaqueFileEntries.push({ index: this.fileEntries.length, record: leafEntry });
-    this.opaqueParentsById.set(leafEntry.id, this.leafId);
+    this.opaqueParentsById.set(leafEntry.id, leafEntry.targetId);
   }
 
   getAppendParentId(): string | null {
@@ -509,7 +509,7 @@ export class SessionManagerCore {
       options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
     replaceTranscriptEventsSync(
       this.persistenceTarget,
-      this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode),
+      this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode ?? this.appendMode),
     );
   }
 
