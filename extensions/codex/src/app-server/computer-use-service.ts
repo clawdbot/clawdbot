@@ -17,7 +17,7 @@ const CLIENT_RELATIVE_PATH = path.join(
 const COPY_TIMEOUT_MS = 120_000;
 const activeInstalls = new Map<string, Promise<CodexComputerUseServiceStatus>>();
 
-export type CodexComputerUseServiceStatus = {
+type CodexComputerUseServiceStatus = {
   status: "installed" | "already_installed" | "source_missing" | "unsupported";
   changed: boolean;
   targetPath?: string;
