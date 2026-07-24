@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/zoom-meetings",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "description": "OpenClaw Zoom browser meeting participant plugin.",
   "private": true,
   "type": "module",
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.7.2-beta.4"
+    "openclaw": ">=2026.7.2-beta.5"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -24,10 +24,10 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": ">=2026.7.2-beta.4"
+      "pluginApi": ">=2026.7.2-beta.5"
     },
     "build": {
-      "openclawVersion": "2026.7.2-beta.4"
+      "openclawVersion": "2026.7.2-beta.5"
     }
   }
 }
