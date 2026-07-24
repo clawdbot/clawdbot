@@ -33,8 +33,6 @@ import {
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   type SessionEntry,
 } from "../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -165,6 +163,7 @@ const memoryDeps = {
   incrementCompactionCount,
   updateSessionEntry: updateSessionEntryDefault,
   emitAgentEvent,
+  resolveSessionLogPath,
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
 };
@@ -181,6 +180,7 @@ function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): v
     incrementCompactionCount,
     updateSessionEntry: updateSessionEntryDefault,
     emitAgentEvent,
+    resolveSessionLogPath,
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
     ...overrides,
@@ -396,37 +396,12 @@ function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalize
 }
 
 function resolveSessionLogPath(
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  sessionKey?: string,
-  opts?: { agentId?: string; storePath?: string },
+  _sessionId?: string,
+  _sessionEntry?: SessionEntry,
+  _sessionKey?: string,
+  _opts?: { agentId?: string; storePath?: string },
 ): string | undefined {
-  if (!sessionId) {
-    return undefined;
-  }
-
-  try {
-    const transcriptPath = normalizeOptionalString(
-      (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
-    );
-    const sessionFile = transcriptPath;
-    if (parseSqliteSessionFileMarker(sessionFile)) {
-      return sessionFile;
-    }
-    if (!sessionFile) {
-      return undefined;
-    }
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const pathOpts = resolveSessionFilePathOptions({
-      agentId,
-      storePath: opts?.storePath,
-    });
-    // Normalize sessionFile through resolveSessionFilePath so relative entries
-    // are resolved against the sessions dir/store layout, not process.cwd().
-    return resolveSessionFilePath(sessionId, { sessionFile }, pathOpts);
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
 function deriveTranscriptUsageSnapshot(
@@ -541,7 +516,7 @@ async function readSessionLogSnapshot(params: {
   includeByteSize: boolean;
   includeUsage: boolean;
 }): Promise<SessionLogSnapshot> {
-  const logPath = resolveSessionLogPath(
+  const logPath = memoryDeps.resolveSessionLogPath(
     params.sessionId,
     params.sessionEntry,
     params.sessionKey,
@@ -982,7 +957,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   try {
     await notifyStartCompaction();
     const sessionFile =
-      resolveSessionLogPath(
+      memoryDeps.resolveSessionLogPath(
         entry.sessionId,
         entry,
         params.sessionKey ?? params.followupRun.run.sessionKey,
@@ -1081,14 +1056,14 @@ export async function runPreflightCompactionIfNeeded(params: {
       const previousSessionId = params.followupRun.run.sessionId;
       params.followupRun.run.sessionId = entry.sessionId;
       params.replyOperation.updateSessionId(entry.sessionId);
-      params.followupRun.run.sessionFile = params.sessionKey;
       const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
       if (queueKey) {
+        params.followupRun.run.sessionFile = queueKey;
         deps.refreshQueuedFollowupSession({
           key: queueKey,
           previousSessionId,
           nextSessionId: entry.sessionId,
-          nextSessionFile: params.sessionKey,
+          nextSessionFile: queueKey,
         });
       }
     }
@@ -1498,11 +1473,12 @@ export async function runMemoryFlushIfNeeded(params: {
         params.replyOperation.updateSessionId(updatedEntry.sessionId);
         const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
         if (queueKey) {
+          params.followupRun.run.sessionFile = queueKey;
           memoryDeps.refreshQueuedFollowupSession({
             key: queueKey,
             previousSessionId,
             nextSessionId: updatedEntry.sessionId,
-            nextSessionFile: params.sessionKey,
+            nextSessionFile: queueKey,
           });
         }
       }

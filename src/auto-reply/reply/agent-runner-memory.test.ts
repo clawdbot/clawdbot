@@ -323,6 +323,10 @@ describe("runMemoryFlushIfNeeded", () => {
       incrementCompactionCount: incrementCompactionCountMock as never,
       registerAgentRunContext: vi.fn() as never,
       emitAgentEvent: emitAgentEventMock as never,
+      resolveSessionLogPath: (
+        _sessionId: string | undefined,
+        entry: (SessionEntry & { transcriptPath?: string }) | undefined,
+      ) => entry?.transcriptPath,
       randomUUID: () => "00000000-0000-0000-0000-000000000001",
       now: () => 1_700_000_000_000,
     });
