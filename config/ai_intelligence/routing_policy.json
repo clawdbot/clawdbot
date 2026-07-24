@@ -1,37 +1,150 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "rules": [
     {
       "task": "private_property_data",
       "required_privacy_tier": "local",
-      "preferred_models": ["ollama-hermes3-8b", "ollama-gemma3-12b"],
-      "fallback_models": ["ollama-llama3.2-3b"]
+      "preferred_models": [
+        "ollama-hermes3-8b",
+        "ollama-gemma3-12b"
+      ],
+      "fallback_models": [
+        "ollama-llama3.2-3b"
+      ],
+      "criterion_weights": {
+        "privacy": 10,
+        "local_deployment": 10,
+        "low_hallucination": 9,
+        "repository_understanding": 5,
+        "documentation": 5,
+        "speed": 4,
+        "cost": 6
+      },
+      "allowed_statuses": [
+        "production",
+        "production-fallback"
+      ]
     },
     {
       "task": "home_assistant",
-      "preferred_models": ["ollama-hermes3-8b", "openai-frontier"],
-      "fallback_models": ["ollama-gemma3-12b"]
+      "preferred_models": [
+        "ollama-hermes3-8b",
+        "openai-frontier"
+      ],
+      "fallback_models": [
+        "ollama-gemma3-12b"
+      ],
+      "criterion_weights": {
+        "home_assistant": 10,
+        "tool_calling": 9,
+        "python": 8,
+        "debugging": 8,
+        "privacy": 7,
+        "linux_admin": 6,
+        "low_hallucination": 8
+      },
+      "allowed_statuses": [
+        "production",
+        "production-fallback"
+      ]
     },
     {
       "task": "linux_admin",
-      "preferred_models": ["openai-frontier", "claude", "kimi-k3"],
-      "fallback_models": ["ollama-gemma3-12b"]
+      "preferred_models": [
+        "openai-frontier",
+        "claude",
+        "kimi-k3"
+      ],
+      "fallback_models": [
+        "ollama-gemma3-12b"
+      ],
+      "criterion_weights": {
+        "linux_admin": 10,
+        "docker": 9,
+        "postgresql": 8,
+        "debugging": 10,
+        "code_generation": 8,
+        "tool_calling": 8,
+        "low_hallucination": 9
+      },
+      "allowed_statuses": [
+        "production",
+        "production-fallback"
+      ]
     },
     {
       "task": "long_context_engineering",
-      "preferred_models": ["openai-frontier", "claude", "kimi-k3"],
-      "fallback_models": ["ollama-hermes3-8b"]
+      "preferred_models": [
+        "openai-frontier",
+        "claude",
+        "kimi-k3"
+      ],
+      "fallback_models": [
+        "ollama-hermes3-8b"
+      ],
+      "criterion_weights": {
+        "long_context": 10,
+        "repository_understanding": 10,
+        "code_generation": 9,
+        "debugging": 9,
+        "documentation": 8,
+        "agent_orchestration": 8,
+        "low_hallucination": 9
+      },
+      "allowed_statuses": [
+        "production",
+        "production-fallback"
+      ]
     },
     {
       "task": "swift",
-      "preferred_models": ["openai-frontier", "claude"],
-      "fallback_models": ["gemini"]
+      "preferred_models": [
+        "openai-frontier",
+        "claude"
+      ],
+      "fallback_models": [
+        "gemini"
+      ],
+      "criterion_weights": {
+        "swift": 10,
+        "code_generation": 9,
+        "debugging": 9,
+        "documentation": 7,
+        "repository_understanding": 7,
+        "low_hallucination": 8
+      },
+      "allowed_statuses": [
+        "production",
+        "production-fallback"
+      ]
     },
     {
       "task": "routine_local_query",
       "required_privacy_tier": "local",
-      "preferred_models": ["ollama-hermes3-8b", "ollama-llama3.2-3b"],
-      "fallback_models": ["ollama-gemma3-12b"]
+      "preferred_models": [
+        "ollama-hermes3-8b",
+        "ollama-llama3.2-3b"
+      ],
+      "fallback_models": [
+        "ollama-gemma3-12b"
+      ],
+      "criterion_weights": {
+        "privacy": 10,
+        "local_deployment": 10,
+        "speed": 9,
+        "cost": 8,
+        "low_hallucination": 7,
+        "documentation": 5
+      },
+      "allowed_statuses": [
+        "production",
+        "production-fallback"
+      ]
     }
+  ],
+  "routing_mode": "production-safe",
+  "evaluation_statuses": [
+    "evaluation",
+    "watch"
   ]
 }
