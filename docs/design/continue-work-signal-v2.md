@@ -1816,7 +1816,7 @@ The intended first completion surface is:
 ```ts
 type DelegateArtifactRef = {
   kind: "delegate_artifact";
-  claimId: string; // opaque capability handle; never a path, URL, or content address
+  claimId: string; // opaque identifier only; never a path, URL, content address, or bearer credential
   name: string;
   mimeType?: string;
   sizeBytes: number;
@@ -1829,7 +1829,7 @@ type DelegateReturn = {
 };
 ```
 
-The host owns both the claim identifier and all authorization decisions. `name`, MIME type, size, and digest help a recipient assess a result but are not sufficient to retrieve it.
+The host owns both the claim identifier and all authorization decisions. A `claimId` is an opaque identifier only: possession is never authorization, it carries no bearer capability, and it cannot resolve without separate authenticated recipient, producing-run, delivery, and current-lifecycle checks. `name`, MIME type, size, and digest help a recipient assess a result but are not sufficient to retrieve it.
 
 #### A.6.2 Immutable claim record, lifecycle, and recovery
 
@@ -1857,9 +1857,21 @@ Every child-to-recipient return therefore SHALL have a typed, host-authored arri
 
 The recipient need not receive the full original task, another session's private history, or child-only workspace data. The projection provides only the approved causal context needed to judge: **this was produced there, for this declared purpose, then; it reached me now; and it is/was valid under this claim.** A legacy record lacking a required provenance field must say that context is unavailable; it must not fabricate a complete-looking envelope. Artifact-capable inter-session returns must not arrive unlabeled.
 
-#### A.6.4 Authorization and explicit resolution
+#### A.6.4 Authorization, v1 return-policy authority, and explicit resolution
 
-Publishing is authorized only for the active producing delegate run and its approved output boundary. Resolving or materializing is authorized only for an intended recipient whose claim remains available under current policy. Recipient authorization is evaluated again at resolution time; claim IDs are opaque references, not bearer permission to bypass those checks.
+Publishing is authorized only for the active producing delegate run and its approved output boundary. Resolving or materializing is authorized only for an intended recipient whose claim remains available under current policy. Recipient authorization is evaluated again at resolution time; claim IDs are opaque identifiers, not bearer permission to bypass those checks.
+
+**V1 return-policy authority.** V1 introduces no agent-authored generic policy language and no recipient expansion beyond the existing typed `continue_delegate()` return-target fields. At accepted dispatch, the host validates the requested route under the ordinary same-host targeting rules, resolves the route once, and records an immutable `continue_delegate-recipient-snapshot-v1` policy record with its version, the dispatch ID, and the exact authorized recipient session identities. An artifact-capable dispatch whose target cannot be resolved and authorized at that point fails closed before child spawn.
+
+The V1 mapping is exact:
+
+- no target fields → the dispatching parent alone;
+- `targetSessionKey` → that one resolved target alone;
+- `targetSessionKeys` → the deduplicated, resolved listed targets;
+- `fanoutMode: "tree"` → the ancestor sessions in the accepted continuation chain at dispatch; and
+- `fanoutMode: "all"` → the addressable same-host sessions in the host snapshot at dispatch.
+
+A later-created session, a target discovered only after dispatch, a changed route, or a replay attempt does not expand this policy. Completion delivery and replay use the stored recipient snapshot, preserving the route facts for provenance even if a recipient later becomes unavailable. The host MUST also bind each delivery to the producing run, immutable completion event, recipient identity, and policy snapshot; a claim identifier alone has no authority. A future typed return-policy surface may supersede this V1 mapping only with a new policy version and explicit migration/replay semantics.
 
 The implementation must make artifact resolution explicit and auditable. It must bind the resolution to a claim ID, recipient identity, delivery/completion provenance, and a chosen safe destination or renderer. It must not use parent trust in final prose, workspace paths, file hashes, arbitrary URLs, or channel-media handles as an authorization substitute. Multi-recipient delivery may share retained bytes only if every recipient gets an independently authorized claim binding or an equivalently auditable recipient binding; no guessed sibling/session identifier may resolve another recipient's result.
 
@@ -1874,6 +1886,7 @@ Before an implementation can ship, tests must prove all of the following:
 5. **Cleanup and retention:** removing the child workspace does not erase an in-retention claim; expiry, revocation, purge, unauthorized access, missing bytes, and corrupt metadata fail closed with no fallback path/URL/content.
 6. **Isolation:** a sibling, guessed session, guessed claim ID, fan-out outsider, or post-expiry recipient cannot resolve, materialize, or receive another recipient's artifact.
 7. **No implicit promotion:** final prose, tool output, workspace paths, hashes, URLs, and `message(action=send, media=...)` cannot create a claim; claims do not auto-mount, prompt-inject, or channel-upload.
+8. **Identifier and policy isolation:** possession of a claim ID without the authenticated recipient/run/delivery binding fails; the V1 policy snapshot matches the accepted default, explicit, tree, or host-wide route exactly and cannot expand after dispatch or during replay.
 
 This is intentionally a wider lifecycle than adding an `attachments` field to a completion callback. The implementation unit is the managed claim plus its provenance-preserving recipient delivery, not just its serialized metadata.
 
