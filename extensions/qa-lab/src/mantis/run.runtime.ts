@@ -7,6 +7,7 @@ import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence
 import { trimToValue } from "../mantis-options.runtime.js";
 import {
   assertMantisCommandNotAborted,
+  createMantisWorktreeDirectory,
   defaultMantisCommandRunner,
   removeMantisWorktree,
   resolveMantisCommandTimeouts,
@@ -15,6 +16,7 @@ import {
   type MantisCommandRunner,
   type MantisCommandTimeoutOverrides,
   type MantisCommandTimeouts,
+  type MantisWorktreeOwnership,
 } from "./run-command.runtime.js";
 
 export type MantisBeforeAfterOptions = {
@@ -444,7 +446,7 @@ async function runLane(params: {
     stage: "worktree-add",
     timeoutMs: params.commandTimeouts["worktree-add"],
   } satisfies MantisCommandExecution;
-  let worktreeCreationStarted = false;
+  let worktreeOwnership: MantisWorktreeOwnership | undefined;
   let laneResult: LaneResult | undefined;
   let workloadFailed = false;
   let workloadError: unknown;
@@ -458,7 +460,20 @@ async function runLane(params: {
       execution: worktreeAddExecution,
       lane: params.lane,
     });
-    worktreeCreationStarted = true;
+    try {
+      worktreeOwnership = await createMantisWorktreeDirectory({
+        repoRoot: params.repoRoot,
+        worktreeDir,
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(
+          `${params.lane} worktree path already exists; refusing to reuse ${worktreeDir}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     await runMantisCommand({
       command: "git",
       args: worktreeAddArgs,
@@ -551,7 +566,7 @@ async function runLane(params: {
     workloadFailed = true;
     workloadError = error;
   } finally {
-    if (worktreeCreationStarted) {
+    if (worktreeOwnership) {
       try {
         await removeMantisWorktree({
           commandTimeouts: params.commandTimeouts,
@@ -559,6 +574,7 @@ async function runLane(params: {
           repoRoot: params.repoRoot,
           runner: params.runner,
           worktreeDir,
+          ownership: worktreeOwnership,
         });
       } catch (error) {
         cleanupFailed = true;

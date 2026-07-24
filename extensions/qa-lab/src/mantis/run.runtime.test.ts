@@ -483,6 +483,211 @@ describe("mantis before/after runtime", () => {
     ]);
   });
 
+  it("refuses to reuse an existing worktree directory", async () => {
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "existing-worktree");
+    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const sentinelPath = path.join(baselineWorktreeDir, "keep.txt");
+    await fs.mkdir(baselineWorktreeDir, { recursive: true });
+    await fs.writeFile(sentinelPath, "keep", "utf8");
+    const runner = vi.fn(async () => successfulCommandResult());
+
+    await expect(
+      runMantisBeforeAfter({
+        baseline: "baseline-ref",
+        candidate: "candidate-ref",
+        commandRunner: runner,
+        outputDir: ".artifacts/qa-e2e/mantis/existing-worktree",
+        repoRoot,
+        skipBuild: true,
+        skipInstall: true,
+      }),
+    ).rejects.toThrow(
+      `baseline worktree path already exists; refusing to reuse ${baselineWorktreeDir}`,
+    );
+    expect(runner).not.toHaveBeenCalled();
+    await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("keep");
+  });
+
+  it("fails closed when the worktree parent is replaced before fallback cleanup", async () => {
+    const outputDir = path.join(
+      repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      "mantis",
+      "cleanup-parent-replaced",
+    );
+    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const worktreeParentDir = path.dirname(baselineWorktreeDir);
+    const displacedParentDir = path.join(repoRoot, "displaced-worktree-parent");
+    const displacedSentinelPath = path.join(displacedParentDir, "baseline", "keep.txt");
+    const replacementSentinelPath = path.join(baselineWorktreeDir, "replacement.txt");
+    const stages: string[] = [];
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      stages.push(`${execution.stage}:${args[1] ?? ""}`);
+      if (command === "git" && execution.stage === "worktree-add") {
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        if (args[1] === "remove") {
+          await fs.writeFile(path.join(baselineWorktreeDir, "keep.txt"), "keep", "utf8");
+          await fs.rename(worktreeParentDir, displacedParentDir);
+          await fs.mkdir(baselineWorktreeDir, { recursive: true });
+          await fs.writeFile(replacementSentinelPath, "replacement", "utf8");
+          return failedCommandResult();
+        }
+        return successfulCommandResult("");
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+
+    const result = await runMantisBeforeAfter({
+      baseline: "baseline-ref",
+      candidate: "candidate-ref",
+      commandRunner: runner,
+      outputDir: ".artifacts/qa-e2e/mantis/cleanup-parent-replaced",
+      repoRoot,
+      skipBuild: true,
+      skipInstall: true,
+    }).then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ error, status: "rejected" as const }),
+    );
+
+    expect(result.status).toBe("rejected");
+    if (result.status === "rejected") {
+      expect(result.error).toBeInstanceOf(AggregateError);
+      const aggregate = result.error as AggregateError;
+      expect((aggregate.errors[1] as Error).message).toContain(
+        `Mantis worktree path was replaced before cleanup: ${baselineWorktreeDir}`,
+      );
+    }
+
+    expect(stages).toEqual([
+      "worktree-add:add",
+      `qa:${baselineWorktreeDir}`,
+      "worktree-cleanup:remove",
+      "worktree-cleanup:list",
+    ]);
+    await expect(fs.readFile(displacedSentinelPath, "utf8")).resolves.toBe("keep");
+    await expect(fs.readFile(replacementSentinelPath, "utf8")).resolves.toBe("replacement");
+  });
+
+  it("fails closed after a successful Git cleanup when the worktree target was replaced", async () => {
+    const outputDir = path.join(
+      repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      "mantis",
+      "cleanup-target-replaced",
+    );
+    const baselineWorktreeDir = path.join(outputDir, "worktrees", "baseline");
+    const displacedWorktreeDir = path.join(repoRoot, "displaced-worktree");
+    const displacedSentinelPath = path.join(displacedWorktreeDir, "keep.txt");
+    const replacementSentinelPath = path.join(baselineWorktreeDir, "replacement.txt");
+    const stages: string[] = [];
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      stages.push(`${execution.stage}:${args[1] ?? ""}`);
+      if (command === "git" && execution.stage === "worktree-add") {
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        if (args[1] === "remove") {
+          await fs.writeFile(path.join(baselineWorktreeDir, "keep.txt"), "keep", "utf8");
+          await fs.rename(baselineWorktreeDir, displacedWorktreeDir);
+          await fs.mkdir(baselineWorktreeDir);
+          await fs.writeFile(replacementSentinelPath, "replacement", "utf8");
+          return successfulCommandResult();
+        }
+        return successfulCommandResult("");
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+
+    const result = await runMantisBeforeAfter({
+      baseline: "baseline-ref",
+      candidate: "candidate-ref",
+      commandRunner: runner,
+      outputDir: ".artifacts/qa-e2e/mantis/cleanup-target-replaced",
+      repoRoot,
+      skipBuild: true,
+      skipInstall: true,
+    }).then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ error, status: "rejected" as const }),
+    );
+
+    expect(result.status).toBe("rejected");
+    if (result.status === "rejected") {
+      expect(result.error).toBeInstanceOf(AggregateError);
+      const aggregate = result.error as AggregateError;
+      expect((aggregate.errors[1] as Error).message).toContain(
+        `Mantis worktree path was replaced before cleanup: ${baselineWorktreeDir}`,
+      );
+    }
+
+    expect(stages).toEqual([
+      "worktree-add:add",
+      `qa:${baselineWorktreeDir}`,
+      "worktree-cleanup:remove",
+      "worktree-cleanup:list",
+    ]);
+    await expect(fs.readFile(displacedSentinelPath, "utf8")).resolves.toBe("keep");
+    await expect(fs.readFile(replacementSentinelPath, "utf8")).resolves.toBe("replacement");
+  });
+
+  it("accepts an already-absent unregistered worktree after Git cleanup fails", async () => {
+    const outputDir = path.join(
+      repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      "mantis",
+      "cleanup-already-absent",
+    );
+    const runner = vi.fn(async (command: string, args: readonly string[], execution) => {
+      if (command === "git" && execution.stage === "worktree-add") {
+        return successfulCommandResult();
+      }
+      if (command === "pnpm" && execution.stage === "qa") {
+        await writeLegacyLaneSummary({ args, scenario: "discord-status-reactions-tool-only" });
+        return successfulCommandResult();
+      }
+      if (command === "git" && execution.stage === "worktree-cleanup") {
+        if (args[1] === "remove") {
+          await fs.rm(String(args[4]), { force: true, recursive: true });
+          return failedCommandResult();
+        }
+        return successfulCommandResult("");
+      }
+      throw new Error(`unexpected ${execution.stage} command`);
+    });
+
+    const result = await runMantisBeforeAfter({
+      baseline: "baseline-ref",
+      candidate: "candidate-ref",
+      commandRunner: runner,
+      outputDir: ".artifacts/qa-e2e/mantis/cleanup-already-absent",
+      repoRoot,
+      skipBuild: true,
+      skipInstall: true,
+    });
+
+    expect(result.status).toBe("pass");
+    await expect(fs.stat(path.join(outputDir, "worktrees", "baseline"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.stat(path.join(outputDir, "worktrees", "candidate"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("keeps workload failure first when cleanup also fails", async () => {
     const workloadError = new Error("workload failed");
     const cleanupError = new Error("cleanup failed");

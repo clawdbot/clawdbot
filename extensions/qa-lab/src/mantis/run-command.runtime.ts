@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements Mantis command-stage behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -7,6 +8,7 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { assertNoSymlinkParents, root } from "openclaw/plugin-sdk/security-runtime";
 import { readQaScenarioById } from "../scenario-catalog.js";
 
 type MantisCommandStage = "worktree-add" | "install" | "build" | "qa" | "worktree-cleanup";
@@ -18,6 +20,12 @@ export type MantisCommandExecution = {
   timeoutMs: number;
 };
 type MantisCommandResult = Awaited<ReturnType<typeof runCommandWithTimeout>>;
+export type MantisWorktreeOwnership = {
+  parentDevice: number;
+  parentInode: number;
+  targetDevice: number;
+  targetInode: number;
+};
 export type MantisCommandRunner = (
   command: string,
   args: readonly string[],
@@ -168,6 +176,168 @@ function isPathWithinOrEqual(parentPath: string, childPath: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function hasSameFileIdentity(
+  first: { dev: number; ino: number },
+  second: { dev: number; ino: number },
+): boolean {
+  return first.dev === second.dev && first.ino === second.ino;
+}
+
+export async function createMantisWorktreeDirectory(params: {
+  repoRoot: string;
+  worktreeDir: string;
+}): Promise<MantisWorktreeOwnership> {
+  const repoRoot = path.resolve(params.repoRoot);
+  const worktreeDir = path.resolve(params.worktreeDir);
+  const parentDir = path.dirname(worktreeDir);
+
+  await assertNoSymlinkParents({ rootDir: repoRoot, targetPath: worktreeDir });
+  const parentStat = await fs.lstat(parentDir);
+  await fs.mkdir(worktreeDir);
+  const targetStat = await fs.lstat(worktreeDir);
+  return {
+    parentDevice: parentStat.dev,
+    parentInode: parentStat.ino,
+    targetDevice: targetStat.dev,
+    targetInode: targetStat.ino,
+  };
+}
+
+async function verifyMantisWorktreeOwnership(params: {
+  ownership: MantisWorktreeOwnership;
+  repoRoot: string;
+  worktreeDir: string;
+}): Promise<boolean> {
+  // Recheck the owned path immediately before recursive removal; otherwise a
+  // replaced parent or target could redirect cleanup outside the Mantis output.
+  await assertNoSymlinkParents({
+    rootDir: path.resolve(params.repoRoot),
+    targetPath: path.resolve(params.worktreeDir),
+  });
+  let parentStat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    parentStat = await fs.lstat(path.dirname(params.worktreeDir));
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return false;
+    }
+    throw error;
+  }
+  let targetStat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    targetStat = await fs.lstat(params.worktreeDir);
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return false;
+    }
+    throw error;
+  }
+  if (
+    !hasSameFileIdentity(parentStat, {
+      dev: params.ownership.parentDevice,
+      ino: params.ownership.parentInode,
+    }) ||
+    !hasSameFileIdentity(targetStat, {
+      dev: params.ownership.targetDevice,
+      ino: params.ownership.targetInode,
+    })
+  ) {
+    throw new Error(`Mantis worktree path was replaced before cleanup: ${params.worktreeDir}`);
+  }
+  return true;
+}
+
+async function removeMantisWorktreeDirectory(params: {
+  ownership: MantisWorktreeOwnership;
+  repoRoot: string;
+  worktreeDir: string;
+}): Promise<void> {
+  // Recursive fallback removal stays anchored to the canonical repo root; a raw
+  // fs.rm path could follow a swapped parent into an unrelated directory.
+  const canonicalRepoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const worktreeDir = path.resolve(params.worktreeDir);
+  if (!(await verifyMantisWorktreeOwnership(params))) {
+    return;
+  }
+  const canonicalWorktreeDir = await fs.realpath(worktreeDir);
+  if (
+    canonicalWorktreeDir === canonicalRepoRoot ||
+    !isPathWithinOrEqual(canonicalRepoRoot, canonicalWorktreeDir)
+  ) {
+    throw new Error(`Mantis worktree path escaped the repository: ${params.worktreeDir}`);
+  }
+
+  const relativeWorktreeDir = path
+    .relative(canonicalRepoRoot, canonicalWorktreeDir)
+    .split(path.sep)
+    .join(path.posix.sep);
+  const repoRootHandle = await root(canonicalRepoRoot);
+  const quarantineRelativePath = path.posix.join(
+    path.posix.dirname(relativeWorktreeDir),
+    `.mantis-cleanup-${process.pid}-${randomUUID()}`,
+  );
+  await repoRootHandle.move(relativeWorktreeDir, quarantineRelativePath);
+  const quarantinedStat = await repoRootHandle.stat(quarantineRelativePath);
+  if (
+    quarantinedStat.isSymbolicLink ||
+    !hasSameFileIdentity(quarantinedStat, {
+      dev: params.ownership.targetDevice,
+      ino: params.ownership.targetInode,
+    })
+  ) {
+    throw new Error(`Mantis worktree target changed while quarantining ${params.worktreeDir}`);
+  }
+  const removeRelative = async (relativePath: string): Promise<void> => {
+    if (!(await repoRootHandle.exists(relativePath))) {
+      return;
+    }
+    if (relativePath === quarantineRelativePath) {
+      const stat = await repoRootHandle.stat(relativePath);
+      if (
+        stat.isSymbolicLink ||
+        !hasSameFileIdentity(stat, {
+          dev: params.ownership.targetDevice,
+          ino: params.ownership.targetInode,
+        })
+      ) {
+        throw new Error(`Mantis worktree quarantine changed before removal: ${relativePath}`);
+      }
+    }
+    let entries: { isDirectory: boolean; isSymbolicLink: boolean; name: string }[];
+    try {
+      entries = await repoRootHandle.list(relativePath, { withFileTypes: true });
+    } catch (error) {
+      if (!(await repoRootHandle.exists(relativePath))) {
+        return;
+      }
+      throw error;
+    }
+    for (const entry of entries) {
+      const childPath = path.posix.join(relativePath, entry.name);
+      if (entry.isDirectory && !entry.isSymbolicLink) {
+        await removeRelative(childPath);
+      } else {
+        await repoRootHandle.remove(childPath);
+      }
+    }
+    if (relativePath === quarantineRelativePath) {
+      const stat = await repoRootHandle.stat(relativePath);
+      if (
+        stat.isSymbolicLink ||
+        !hasSameFileIdentity(stat, {
+          dev: params.ownership.targetDevice,
+          ino: params.ownership.targetInode,
+        })
+      ) {
+        throw new Error(`Mantis worktree quarantine changed during removal: ${relativePath}`);
+      }
+    }
+    await repoRootHandle.remove(relativePath);
+  };
+
+  await removeRelative(relativeWorktreeDir);
+}
+
 async function normalizeWorktreePath(filePath: string, repoRoot: string): Promise<string> {
   const resolvedPath = path.isAbsolute(filePath)
     ? path.resolve(filePath)
@@ -226,6 +396,7 @@ export async function removeMantisWorktree(params: {
   repoRoot: string;
   runner: MantisCommandRunner;
   worktreeDir: string;
+  ownership: MantisWorktreeOwnership;
 }) {
   const cleanupExecution = {
     cwd: params.repoRoot,
@@ -233,6 +404,17 @@ export async function removeMantisWorktree(params: {
     stage: "worktree-cleanup",
     timeoutMs: params.commandTimeouts["worktree-cleanup"],
   } satisfies MantisCommandExecution;
+  try {
+    await verifyMantisWorktreeOwnership({
+      ownership: params.ownership,
+      repoRoot: params.repoRoot,
+      worktreeDir: params.worktreeDir,
+    });
+  } catch (ownershipError) {
+    throw new Error(`Mantis worktree cleanup refused a replaced path: ${params.worktreeDir}`, {
+      cause: ownershipError,
+    });
+  }
   try {
     // Cleanup has its own deadline so aborted workload runs can still release registrations.
     await runMantisCommand({
@@ -242,6 +424,17 @@ export async function removeMantisWorktree(params: {
       lane: params.lane,
       runner: params.runner,
     });
+    if (
+      await verifyMantisWorktreeOwnership({
+        ownership: params.ownership,
+        repoRoot: params.repoRoot,
+        worktreeDir: params.worktreeDir,
+      })
+    ) {
+      throw new Error(
+        `${params.lane} worktree-cleanup succeeded but left owned path ${params.worktreeDir}`,
+      );
+    }
   } catch (removeError) {
     let listResult: MantisCommandResult;
     try {
@@ -293,14 +486,40 @@ export async function removeMantisWorktree(params: {
       );
     }
 
-    await fs
-      .rm(params.worktreeDir, { force: true, recursive: true })
-      .catch((removeDirectoryError: unknown) => {
-        throw createUnregisteredDirectoryRemovalAggregate({
-          errors: [removeError, removeDirectoryError],
-          lane: params.lane,
-          worktreeDir: params.worktreeDir,
-        });
+    let ownershipError: unknown;
+    let worktreeStillOwned = false;
+    try {
+      worktreeStillOwned = await verifyMantisWorktreeOwnership({
+        ownership: params.ownership,
+        repoRoot: params.repoRoot,
+        worktreeDir: params.worktreeDir,
       });
+    } catch (error) {
+      ownershipError = error;
+    }
+    if (ownershipError) {
+      throw createCleanupVerificationAggregate({
+        errors: [removeError, ownershipError],
+        lane: params.lane,
+        worktreeDir: params.worktreeDir,
+      });
+    }
+
+    if (!worktreeStillOwned) {
+      return;
+    }
+    try {
+      await removeMantisWorktreeDirectory({
+        ownership: params.ownership,
+        repoRoot: params.repoRoot,
+        worktreeDir: params.worktreeDir,
+      });
+    } catch (removeDirectoryError) {
+      throw createUnregisteredDirectoryRemovalAggregate({
+        errors: [removeError, removeDirectoryError],
+        lane: params.lane,
+        worktreeDir: params.worktreeDir,
+      });
+    }
   }
 }
