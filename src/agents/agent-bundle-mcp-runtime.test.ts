@@ -1852,7 +1852,7 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("cancels an invalidated catalog generation and returns the current generation", async () => {
+  it("returns the current generation when a response is immediately invalidated", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-inflight-invalidated-"));
     const serverPath = path.join(tempDir, "inflight-invalidated.mjs");
     const logPath = path.join(tempDir, "server.log");
@@ -1902,9 +1902,22 @@ function handle(message) {
   if (message.method === "tools/list") {
     listCount += 1;
     if (listCount === 1) {
-      send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+      process.stdout.write(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            tools: [{ name: "old_tool", inputSchema: { type: "object", properties: {} } }],
+          },
+        }) +
+          "\\n" +
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/tools/list_changed",
+          }) +
+          "\\n",
+      );
       log("sent tools/list_changed");
-      setTimeout(() => sendToolList(message.id, "old_tool"), 10);
       return;
     }
     sendToolList(message.id, "new_tool");
@@ -1952,11 +1965,6 @@ process.on("SIGINT", shutdown);`,
     try {
       const currentCatalog = await runtime.getCatalog();
       await waitForFileText(logPath, "sent tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
-      await waitForFileText(
-        logPath,
-        "recv notifications/cancelled",
-        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
-      );
 
       expect(currentCatalog.tools.map((tool) => tool.toolName)).toEqual(["new_tool"]);
       expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["new_tool"]);

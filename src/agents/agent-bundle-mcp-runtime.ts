@@ -1026,7 +1026,12 @@ export function createSessionMcpRuntime(params: {
         ? AbortSignal.any([options.signal, refresh.controller.signal])
         : refresh.controller.signal;
       try {
-        return await waitForSessionMcpRequest(refresh.promise, waitSignal);
+        const nextCatalog = await waitForSessionMcpRequest(refresh.promise, waitSignal);
+        if (refresh.generation !== catalogInvalidationGeneration) {
+          retryBaseCatalog = catalog ?? undefined;
+          continue;
+        }
+        return nextCatalog;
       } catch (error) {
         options?.signal?.throwIfAborted();
         failIfDisposed();
