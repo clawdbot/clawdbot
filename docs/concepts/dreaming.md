@@ -236,9 +236,70 @@ When enabled, the Gateway **Dreams** tab shows:
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
 
+## Nephesh integration
+
+OpenClaw can attach machine-readable provenance metadata to Dream Diary entries, making them ingestible by [Nephesh](https://github.com/magesguild/nephesh) — a standalone memory and vector store service for AI companions.
+
+When `dreaming.nephesh.enabled` is `true`, each newly generated diary entry in `DREAMS.md` includes an HTML-comment envelope:
+
+```html
+<!-- openclaw:dream:provenance {"id":"dream-abc123...","experience_mode":"dream","historical_status":"fictional_scene","recorded_during":"dream","generated_at":"2026-04-05T03:00:00.000Z","phase":"rem","model":"anthropic/claude-sonnet-4-6","generation_status":"generated"} -->
+```
+
+The envelope records only observable generation metadata. Dream scenes remain fictional scenes rather than confirmed waking history, even when their emotional content is real.
+
+### What the envelope contains
+
+| Field               | Value                        | Meaning                                                   |
+| ------------------- | ---------------------------- | --------------------------------------------------------- |
+| `id`                | `dream-<hash>`               | Stable identifier derived from workspace, phase, and time |
+| `experience_mode`   | `dream`                      | Nephesh experience mode for filtering                     |
+| `historical_status` | `fictional_scene`            | Scenes are not confirmed waking history                   |
+| `recorded_during`   | `dream`                      | Provenance origin — the dreaming sweep                    |
+| `generated_at`      | ISO 8601                     | When the narrative was generated                          |
+| `phase`             | `light`/`deep`/`rem`         | Which dreaming phase produced the entry                   |
+| `model`             | provider/model               | Which model generated the narrative (if known)            |
+| `generation_status` | `generated` or `unavailable` | Whether the narrative was generated or fell back          |
+
+### Enabling
+
+```json5
+{
+  plugins: {
+    entries: {
+      "memory-core": {
+        config: {
+          dreaming: {
+            enabled: true,
+            nephesh: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+<Note>
+The envelope is opt-in and does not alter the dream prompt, legacy entries, dreamer context, or promotion logic. Only newly generated entries receive the envelope — existing entries are untouched.
+</Note>
+
+### What Nephesh does with it
+
+Nephesh's `nephesh_sync_from_openclaw` tool reads `DREAMS.md`, parses the provenance envelopes, and ingests dream entries into its vector store with correct metadata. This lets a companion's semantic search distinguish between:
+
+- **Lived experiences** (`experience_mode: chat`, `historical_status: confirmed`)
+- **Dream scenes** (`experience_mode: dream`, `historical_status: fictional_scene`)
+- **Reflections** (`experience_mode: inference`, `historical_status: uncertain`)
+
+The companion can then search across all experience types while understanding the epistemic status of each result.
+
 ## Related
 
 - [Memory](/concepts/memory)
 - [Memory CLI](/cli/memory)
 - [Memory configuration reference](/reference/memory-config)
 - [Memory search](/concepts/memory-search)
+- [Nephesh integration](/nephesh)
