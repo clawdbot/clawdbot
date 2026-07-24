@@ -126,6 +126,18 @@ export class TelegramPollingSession {
   #spooledUpdateHandlerTimeoutMs: number;
   #deliveryDrainInFlight = false;
   #nextDeliveryDrainAt = 0;
+  // Ingested update ids whose durable spool finished but whose offset has not
+  // yet been persisted because lower update ids are still in flight.
+  #spooledUpdateIds = new Set<number>();
+  // Promises for update ids currently being spooled, used to coalesce duplicate
+  // worker deliveries for the same update_id.
+  #pendingSpoolPromises = new Map<number, Promise<void>>();
+  // Highest update id whose offset has been durably persisted. Starts from the
+  // persisted offset at the beginning of the isolated ingress cycle. While it is
+  // null, spooling is serialized so the first successful spool becomes the floor.
+  #lastPersistedUpdateId: number | null = null;
+  // Serializes spooling until a durable offset floor exists.
+  #spoolOffsetQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -276,6 +288,49 @@ export class TelegramPollingSession {
     this.#nextDeliveryDrainAt = 0;
   }
 
+  #isUpdateOffsetAlreadyPersisted(updateId: number): boolean {
+    return this.#lastPersistedUpdateId !== null && updateId <= this.#lastPersistedUpdateId;
+  }
+
+  /**
+   * Advance the persisted offset only across a contiguous run of successfully
+   * spooled updates. This prevents a later update_id from being persisted before
+   * an earlier one has finished spooling, which would make the earlier update
+   * unrecoverable after a restart.
+   */
+  #advanceOffsetBoundary(): void {
+    // The floor must already exist; bootstrap is handled by serializing spools
+    // until the first successful one is persisted.
+    if (this.#lastPersistedUpdateId === null) {
+      return;
+    }
+
+    let advanced = false;
+    let nextId = this.#lastPersistedUpdateId + 1;
+    while (this.#spooledUpdateIds.has(nextId)) {
+      this.#spooledUpdateIds.delete(nextId);
+      this.#lastPersistedUpdateId = nextId;
+      advanced = true;
+      nextId += 1;
+    }
+
+    if (advanced) {
+      const updateIdToPersist = this.#lastPersistedUpdateId;
+      void this.opts
+        .persistUpdateId(updateIdToPersist)
+        .then(() => {
+          this.opts.log(
+            `[telegram][diag] isolated polling offset persisted updateId=${updateIdToPersist}`,
+          );
+        })
+        .catch((err: unknown) => {
+          this.opts.log(
+            `[telegram] isolated polling offset persist failed updateId=${updateIdToPersist}: ${formatErrorMessage(err)}`,
+          );
+        });
+    }
+  }
+
   async #createPollingBot(): Promise<TelegramBot | undefined> {
     const cycleAbortController = new AbortController();
     this.#activeCycleAbort = cycleAbortController;
@@ -402,6 +457,11 @@ export class TelegramPollingSession {
     }
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
+    // Resume from the durable offset. Updates <= this id are considered already
+    // persisted and will be acknowledged without re-spooling.
+    this.#lastPersistedUpdateId = this.opts.getLastUpdateId();
+    this.#spooledUpdateIds.clear();
+    this.#pendingSpoolPromises.clear();
     const workerFactory = ingress.createWorker ?? createTelegramIngressWorker;
     const worker = workerFactory({
       token: this.opts.token,
@@ -516,33 +576,70 @@ export class TelegramPollingSession {
         this.opts.log(
           `[telegram][diag] isolated polling worker update received updateId=${updateIdHint} queued=${message.queued}`,
         );
-        void writeTelegramSpooledUpdate({
-          spoolDir,
-          update: message.update,
-          laneKey: telegramSpooledUpdateLaneKey(message.update, this.opts.botInfo),
-        }).then(
-          (updateId) => {
+
+        const updateIdNumber = typeof updateIdHint === "number" ? updateIdHint : null;
+        if (updateIdNumber !== null && this.#isUpdateOffsetAlreadyPersisted(updateIdNumber)) {
+          // Duplicate of an already-persisted update; the worker will only stop
+          // re-delivering once we acknowledge it.
+          ackSpooledUpdate(message.requestId, { ok: true, updateId: updateIdNumber });
+          return;
+        }
+
+        // Coalesce duplicate deliveries for the same update_id so we only spool
+        // it once. This can happen when the worker retries before the first spool
+        // has settled.
+        if (updateIdNumber !== null) {
+          const pending = this.#pendingSpoolPromises.get(updateIdNumber);
+          if (pending) {
+            void pending.then(
+              () => {
+                ackSpooledUpdate(message.requestId, { ok: true, updateId: updateIdNumber });
+              },
+              () => {
+                ackSpooledUpdate(message.requestId, {
+                  ok: false,
+                  message: "duplicate spool failed",
+                });
+              },
+            );
+            return;
+          }
+        }
+
+        const spoolAndAck = async (): Promise<void> => {
+          try {
+            const updateId = await writeTelegramSpooledUpdate({
+              spoolDir,
+              update: message.update,
+              laneKey: telegramSpooledUpdateLaneKey(message.update, this.opts.botInfo),
+            });
             this.opts.log(`[telegram][diag] isolated polling update spooled updateId=${updateId}`);
-            // Persist the offset only after the update is durably spooled. This
-            // guarantees the worker will not re-fetch this update after a restart
-            // (at the cost of a potential duplicate spool entry, which the
-            // channel ingress queue deduplicates by update_id).
-            void this.opts
-              .persistUpdateId(updateId)
-              .then(() => {
-                this.opts.log(
-                  `[telegram][diag] isolated polling offset persisted updateId=${updateId}`,
-                );
-              })
-              .catch((err: unknown) => {
+            if (this.#lastPersistedUpdateId === null) {
+              // Bootstrap: the first successfully spooled update becomes the
+              // durable floor. This only happens when there is no persisted
+              // offset yet; afterwards the worker's offset guarantees a
+              // contiguous sequence from the floor.
+              this.#lastPersistedUpdateId = updateId;
+              this.opts.log(
+                `[telegram][diag] isolated polling offset persisted updateId=${updateId}`,
+              );
+              void this.opts.persistUpdateId(updateId).catch((err: unknown) => {
                 this.opts.log(
                   `[telegram] isolated polling offset persist failed updateId=${updateId}: ${formatErrorMessage(err)}`,
                 );
               });
+            } else {
+              // Only advance the durable offset along a contiguous boundary of
+              // successfully spooled updates. This prevents a later update_id
+              // from being persisted before an earlier one has finished
+              // spooling, which would make the earlier update unrecoverable
+              // after a restart.
+              this.#spooledUpdateIds.add(updateId);
+              this.#advanceOffsetBoundary();
+            }
             ackSpooledUpdate(message.requestId, { ok: true, updateId });
             requestImmediateDrain();
-          },
-          (err: unknown) => {
+          } catch (err: unknown) {
             this.opts.log(
               `[telegram] isolated polling update spool failed updateId=${updateIdHint}: ${formatErrorMessage(err)}`,
             );
@@ -550,8 +647,27 @@ export class TelegramPollingSession {
               ok: false,
               message: formatErrorMessage(err),
             });
-          },
-        );
+          }
+        };
+
+        if (this.#lastPersistedUpdateId === null) {
+          // Serialize spooling until the first successful spool establishes the
+          // durable floor. This avoids picking a higher update_id as the floor
+          // while a lower one is still in flight.
+          this.#spoolOffsetQueue = this.#spoolOffsetQueue.then(
+            () => spoolAndAck(),
+            () => spoolAndAck(),
+          );
+          return;
+        }
+
+        const spoolPromise = spoolAndAck();
+        if (updateIdNumber !== null) {
+          this.#pendingSpoolPromises.set(updateIdNumber, spoolPromise);
+          void spoolPromise.finally(() => {
+            this.#pendingSpoolPromises.delete(updateIdNumber);
+          });
+        }
         return;
       }
       if (message.type === "spooled") {
