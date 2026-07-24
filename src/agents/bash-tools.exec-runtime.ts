@@ -12,12 +12,7 @@ import {
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
 } from "../infra/exec-approvals.js";
-export {
-  isRequestedExecTargetAllowed,
-  renderExecHostLabel,
-  renderExecTargetLabel,
-  resolveExecTarget,
-} from "../infra/exec-target-resolution.js";
+export { renderExecTargetLabel, resolveExecTarget } from "../infra/exec-target-resolution.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";

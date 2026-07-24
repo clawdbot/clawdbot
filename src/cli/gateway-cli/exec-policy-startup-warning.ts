@@ -40,7 +40,7 @@ function buildSecurityClampRemediation(globalScope: ExecPolicyScopeSnapshot): st
   return `Run "openclaw exec-policy show" to inspect the clamping scope. See ${EXEC_APPROVALS_DOCS_URL} before changing host approvals.`;
 }
 
-export function buildGlobalExecPolicyClampWarning(params: {
+function buildGlobalExecPolicyClampWarning(params: {
   cfg: OpenClawConfig;
   approvals: ExecApprovalsFile;
   approvalsPath?: string;

@@ -2,7 +2,7 @@
 import type { ExecHost, ExecTarget } from "./exec-approvals.js";
 
 /** Renders a host label for user-facing exec policy messages. */
-export function renderExecHostLabel(host: ExecHost) {
+function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
 }
 

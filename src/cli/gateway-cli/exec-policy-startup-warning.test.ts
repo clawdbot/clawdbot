@@ -13,15 +13,28 @@ vi.mock("../../infra/exec-approvals.js", async (importOriginal) => {
   };
 });
 
-import {
-  buildCurrentGlobalExecPolicyClampWarning,
-  buildGlobalExecPolicyClampWarning,
-} from "./exec-policy-startup-warning.js";
+import { buildCurrentGlobalExecPolicyClampWarning } from "./exec-policy-startup-warning.js";
 
-describe("buildGlobalExecPolicyClampWarning", () => {
+/**
+ * Drives the startup warning through its only production entry point, feeding
+ * approvals via the same snapshot reader gateway startup uses.
+ */
+function clampWarningFor(params: {
+  cfg: Parameters<typeof buildCurrentGlobalExecPolicyClampWarning>[0];
+  approvals: unknown;
+  approvalsPath?: string;
+}): string | undefined {
+  execApprovalsMocks.readExecApprovalsSnapshot.mockReturnValue({
+    file: params.approvals,
+    path: params.approvalsPath,
+  });
+  return buildCurrentGlobalExecPolicyClampWarning(params.cfg);
+}
+
+describe("global exec policy clamp startup warning", () => {
   it("warns when auto resolves to gateway and host approvals clamp global full security", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: { tools: { exec: { security: "full" } } },
         approvalsPath: "/tmp/openclaw-exec-approvals.json",
         approvals: {
@@ -37,7 +50,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("does not warn when auto resolves to sandbox", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: {
           agents: { defaults: { sandbox: { mode: "all" } } },
           tools: { exec: { host: "auto", security: "full" } },
@@ -54,7 +67,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("does not warn when auto resolves to the main agent sandbox", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: {
           agents: { list: [{ id: "main", sandbox: { mode: "all" } }] },
           tools: { exec: { host: "auto", security: "full" } },
@@ -71,7 +84,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("does not warn when auto resolves to a configured default agent sandbox", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: {
           agents: { list: [{ id: "ops", default: true, sandbox: { mode: "all" } }] },
           tools: { exec: { host: "auto", security: "full" } },
@@ -88,7 +101,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("warns when only an unrelated agent sandbox owns auto exec", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: {
           agents: { list: [{ id: "main" }, { id: "ops", sandbox: { mode: "all" } }] },
           tools: { exec: { host: "auto", security: "full" } },
@@ -105,7 +118,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("warns when the main agent disables the default sandbox", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: {
           agents: {
             defaults: { sandbox: { mode: "all" } },
@@ -125,7 +138,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("warns for auto when sandbox can only own non-main sessions", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: {
           agents: { defaults: { sandbox: { mode: "non-main" } } },
           tools: { exec: { host: "auto", security: "full" } },
@@ -142,7 +155,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("warns for auto when only an agent-level sandbox can own non-main sessions", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: {
           agents: { list: [{ id: "ops", sandbox: { mode: "non-main" } }] },
           tools: { exec: { host: "auto", security: "full" } },
@@ -159,7 +172,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("warns for explicit gateway even when sandbox is available", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: {
           agents: { defaults: { sandbox: { mode: "all" } } },
           tools: { exec: { host: "gateway", security: "full" } },
@@ -176,7 +189,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("warns when host approvals clamp global full security to deny", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: { tools: { exec: { security: "full" } } },
         approvalsPath: "/tmp/openclaw-exec-approvals.json",
         approvals: {
@@ -189,7 +202,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
   });
 
   it("uses diagnostic guidance for mode-based configs", () => {
-    const warning = buildGlobalExecPolicyClampWarning({
+    const warning = clampWarningFor({
       cfg: { tools: { exec: { mode: "full" } } },
       approvalsPath: "/tmp/openclaw-exec-approvals.json",
       approvals: {
@@ -207,7 +220,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
   });
 
   it("uses diagnostic guidance when an agent approval clamps the global scope", () => {
-    const warning = buildGlobalExecPolicyClampWarning({
+    const warning = clampWarningFor({
       cfg: { tools: { exec: { security: "full" } } },
       approvalsPath: "/tmp/openclaw-exec-approvals.json",
       approvals: {
@@ -226,7 +239,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("does not warn for node-managed global exec policy", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: { tools: { exec: { host: "node", security: "full" } } },
         approvalsPath: "/tmp/openclaw-exec-approvals.json",
         approvals: {
@@ -240,7 +253,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("does not warn for sandbox-managed global exec policy", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: { tools: { exec: { host: "sandbox", security: "full" } } },
         approvalsPath: "/tmp/openclaw-exec-approvals.json",
         approvals: {
@@ -254,7 +267,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("does not warn when host approvals have no policy overrides", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: { tools: { exec: { security: "full" } } },
         approvalsPath: "/tmp/openclaw-exec-approvals.json",
         approvals: { version: 1, agents: {} },
@@ -264,7 +277,7 @@ describe("buildGlobalExecPolicyClampWarning", () => {
 
   it("does not warn when requested security is already effective", () => {
     expect(
-      buildGlobalExecPolicyClampWarning({
+      clampWarningFor({
         cfg: { tools: { exec: { security: "allowlist" } } },
         approvalsPath: "/tmp/openclaw-exec-approvals.json",
         approvals: {
