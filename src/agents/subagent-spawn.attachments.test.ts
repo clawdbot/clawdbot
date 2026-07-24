@@ -129,6 +129,15 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.error).toMatch(/attachments_invalid_name/);
   });
 
+  it.each([
+    ["case-insensitive manifest alias", ".MANIFEST.JSON"],
+    ["overlong UTF-8 basename", "é".repeat(128)],
+  ])("%s returns attachments_invalid_name", async (_label, name) => {
+    const result = await spawnWithName(name);
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_invalid_name/);
+  });
+
   it("name with newline returns attachments_invalid_name", async () => {
     const result = await spawnWithName("foo\nbar");
     expect(result.status).toBe("error");
@@ -143,6 +152,22 @@ describe("spawnSubagentDirect filename validation", () => {
         attachments: [
           { name: "file.txt", content: validContent, encoding: "base64" },
           { name: "file.txt", content: validContent, encoding: "base64" },
+        ],
+      },
+      ctx,
+    );
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/attachments_duplicate_name/);
+  });
+
+  it("case-folded and normalization-equivalent names return attachments_duplicate_name", async () => {
+    const { spawnSubagentDirect } = subagentSpawnModule;
+    const result = await spawnSubagentDirect(
+      {
+        task: "test",
+        attachments: [
+          { name: "Café.txt", content: validContent, encoding: "base64" },
+          { name: "cafe\u0301.TXT", content: validContent, encoding: "base64" },
         ],
       },
       ctx,

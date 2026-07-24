@@ -328,6 +328,30 @@ describe("continue_delegate tool", () => {
     expect(consumePendingDelegates("test-session")).toEqual([]);
   });
 
+  it("clamps configured admission limits to durable snapshot ceilings", async () => {
+    setRuntimeConfigSnapshot({
+      tools: {
+        sessions_spawn: {
+          attachments: {
+            enabled: true,
+            maxFiles: 500,
+            maxFileBytes: 2 * 1024 * 1024,
+            maxTotalBytes: 10 * 1024 * 1024,
+          },
+        },
+      },
+    });
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    await expect(
+      tool.execute("call-over-durable-file-ceiling", {
+        task: "must be rejected before post-compaction persistence",
+        attachments: [{ name: "handoff.txt", content: "x".repeat(1024 * 1024 + 1) }],
+      }),
+    ).rejects.toThrow("attachments_file_bytes_exceeded");
+    expect(consumePendingDelegates("test-session")).toEqual([]);
+  });
+
   it("resets the per-turn budget at the provider-turn boundary for the same tool instance", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { maxDelegatesPerTurn: 2 } } },

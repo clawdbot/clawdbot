@@ -10,6 +10,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import {
+  DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
   prepareInlineAttachmentSnapshots,
   validateInlineAttachmentSnapshots,
   type InlineAttachment,
@@ -73,22 +74,24 @@ function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
       tools?: { sessions_spawn?: { attachments?: Record<string, unknown> } };
     }
   ).tools?.sessions_spawn?.attachments;
+  const boundedLimit = (value: unknown, ceiling: number): number =>
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.min(Math.max(0, Math.floor(value)), ceiling)
+      : ceiling;
   return {
     enabled: attachmentsCfg?.enabled === true,
-    maxTotalBytes:
-      typeof attachmentsCfg?.maxTotalBytes === "number" &&
-      Number.isFinite(attachmentsCfg.maxTotalBytes)
-        ? Math.max(0, Math.floor(attachmentsCfg.maxTotalBytes))
-        : 5 * 1024 * 1024,
-    maxFiles:
-      typeof attachmentsCfg?.maxFiles === "number" && Number.isFinite(attachmentsCfg.maxFiles)
-        ? Math.max(0, Math.floor(attachmentsCfg.maxFiles))
-        : 50,
-    maxFileBytes:
-      typeof attachmentsCfg?.maxFileBytes === "number" &&
-      Number.isFinite(attachmentsCfg.maxFileBytes)
-        ? Math.max(0, Math.floor(attachmentsCfg.maxFileBytes))
-        : 1 * 1024 * 1024,
+    maxTotalBytes: boundedLimit(
+      attachmentsCfg?.maxTotalBytes,
+      DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS.maxTotalBytes,
+    ),
+    maxFiles: boundedLimit(
+      attachmentsCfg?.maxFiles,
+      DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS.maxFiles,
+    ),
+    maxFileBytes: boundedLimit(
+      attachmentsCfg?.maxFileBytes,
+      DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS.maxFileBytes,
+    ),
     retainOnSessionKeep: attachmentsCfg?.retainOnSessionKeep === true,
   };
 }

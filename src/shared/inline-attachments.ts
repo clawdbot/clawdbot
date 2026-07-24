@@ -40,6 +40,9 @@ export const DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS = {
   maxFileBytes: 1 * 1024 * 1024,
 } as const;
 
+/** Portable basename ceiling shared by supported local filesystems. */
+export const MAX_INLINE_ATTACHMENT_BASENAME_BYTES = 255;
+
 export type InlineAttachmentSnapshotLimits = {
   maxTotalBytes: number;
   maxFiles: number;
@@ -87,7 +90,12 @@ function validateInlineAttachmentName(name: string): void {
   ) {
     throw new Error(`attachments_invalid_name (${name})`);
   }
-  if (name === "." || name === ".." || name === ".manifest.json") {
+  if (Buffer.byteLength(name, "utf8") > MAX_INLINE_ATTACHMENT_BASENAME_BYTES) {
+    throw new Error(
+      `attachments_invalid_name (too long: ${MAX_INLINE_ATTACHMENT_BASENAME_BYTES} bytes)`,
+    );
+  }
+  if (name === "." || name === ".." || name.toLowerCase() === ".manifest.json") {
     throw new Error(`attachments_invalid_name (${name})`);
   }
 }
@@ -124,15 +132,16 @@ export function prepareInlineAttachmentSnapshots(params: {
       throw new Error("attachments_invalid_member (mimeType must be a string)");
     }
 
-    const name = normalizeOptionalString(item.name) ?? "";
+    const name = (normalizeOptionalString(item.name) ?? "").normalize("NFC");
     const content = item.content;
     const encoding = item.encoding ?? "utf8";
     const mimeType = normalizeOptionalString(item.mimeType) ?? "";
     validateInlineAttachmentName(name);
-    if (seen.has(name)) {
+    const canonicalNameKey = name.toLowerCase();
+    if (seen.has(canonicalNameKey)) {
       throw new Error(`attachments_duplicate_name (${name})`);
     }
-    seen.add(name);
+    seen.add(canonicalNameKey);
     if (params.requireImageMime && !mimeType.startsWith("image/")) {
       throw new Error(
         `attachments_unsupported_for_acp (name=${name} mimeType=${mimeType || "unknown"})`,
