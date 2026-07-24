@@ -461,7 +461,8 @@ describe("qa scenario catalog", () => {
     expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
     expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
     expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
-    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(gatewayRestartContract).toContain("transport.buildAgentDelivery");
+    expect(gatewayRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
     const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
     const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
