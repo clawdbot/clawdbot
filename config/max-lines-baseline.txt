@@ -522,7 +522,6 @@ src/agents/subagent-registry-lifecycle.ts
 src/agents/subagent-registry-run-manager.ts
 src/agents/subagent-registry.steer-restart.test.ts
 src/agents/subagent-registry.test.ts
-src/agents/subagent-registry.ts
 src/agents/subagent-spawn.test.ts
 src/agents/subagent-spawn.ts
 src/agents/system-prompt.test.ts

@@ -891,6 +891,30 @@ func TestValidateDocChunkTranslationAcceptsReorderedInlineCode(t *testing.T) {
 	}
 }
 
+func TestUnwrapUnexpectedInlineCodeSpans(t *testing.T) {
+	t.Parallel()
+
+	source := "Use labels in ordinary prose.\n"
+	translated := "Verwende `Bezeichnungen` in `normalem Text`.\n"
+	want := "Verwende Bezeichnungen in normalem Text.\n"
+	if got := unwrapUnexpectedInlineCodeSpans(source, translated); got != want {
+		t.Fatalf("unexpected inline-code repair:\n%s\nwant:\n%s", got, want)
+	}
+	if err := validateDocChunkTranslation(source, want); err != nil {
+		t.Fatalf("expected repaired translation to validate: %v", err)
+	}
+}
+
+func TestUnwrapUnexpectedInlineCodeSpansPreservesSourceCodeContract(t *testing.T) {
+	t.Parallel()
+
+	source := "Use `--source`.\n"
+	translated := "Verwende `--target`.\n"
+	if got := unwrapUnexpectedInlineCodeSpans(source, translated); got != translated {
+		t.Fatalf("expected source inline-code contract to remain untouched: %q", got)
+	}
+}
+
 func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 	t.Parallel()
 
