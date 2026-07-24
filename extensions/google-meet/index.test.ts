@@ -2948,8 +2948,9 @@ describe("google-meet plugin", () => {
           return { ok: true };
         }
         if (request.path === "/act") {
-          if (String(request.body?.fn).includes("state = window.__openclawMeetCaptions")) {
-            const finalizing = String(request.body?.fn).includes("if (true &&");
+          const script = String(request.body?.fn);
+          if (script.includes("const expectedSessionId =")) {
+            const finalizing = script.includes("if (true &&");
             if (
               !finalizing &&
               transcriptReadIndex >= (options?.skipNonFinalTranscriptGateReads ?? 0)
@@ -3105,13 +3106,9 @@ describe("google-meet plugin", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
+      const transcript = { epoch: "page-1", lines: [{ text: "before reload" }] };
       mockLocalMeetBrowserRequestWithTabState({
-        transcriptSequence: [
-          { epoch: "page-1", lines: [] },
-          { epoch: "page-1", lines: [{ text: "before reload" }] },
-          { epoch: "page-2", lines: [{ text: "after reload" }] },
-          { epoch: "page-2", lines: [{ text: "after reload" }] },
-        ],
+        transcript,
       });
       const { methods } = setup({ defaultMode: "transcribe", defaultTransport: "chrome" });
       const joined = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.join", {
@@ -3121,6 +3118,8 @@ describe("google-meet plugin", () => {
       const first = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
         sessionId: joined.session.id,
       })) as { nextIndex: number; lines: Array<{ text: string }> };
+      transcript.epoch = "page-2";
+      transcript.lines = [{ text: "after reload" }];
       const second = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
         sessionId: joined.session.id,
         sinceIndex: first.nextIndex,
@@ -3190,9 +3189,7 @@ describe("google-meet plugin", () => {
       const finalCaptures = callGatewayFromCli.mock.calls.filter((call) => {
         const request = call[2] as { body?: { fn?: string } };
         const script = String(request.body?.fn);
-        return (
-          script.includes("state = window.__openclawMeetCaptions") && script.includes("if (true &&")
-        );
+        return script.includes("const expectedSessionId =") && script.includes("if (true &&");
       });
       expect(finalCaptures).toHaveLength(1);
       const result = (await invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
@@ -4404,7 +4401,7 @@ describe("google-meet plugin", () => {
       const { methods } = setup({
         chrome: {
           audioBridgeCommand: ["bridge", "start"],
-          waitForInCallMs: 10,
+          waitForInCallMs: 100,
         },
       });
       const handler = methods.get("googlemeet.join") as

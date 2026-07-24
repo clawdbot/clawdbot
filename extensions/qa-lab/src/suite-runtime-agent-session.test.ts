@@ -179,7 +179,12 @@ describe("qa suite runtime agent session helpers", () => {
         gateway: { tempRoot },
       } as never),
     ).resolves.toEqual({
-      "session-1": { sessionId: "session-1", status: "running", updatedAt: 10 },
+      "session-1": {
+        sessionId: "session-1",
+        status: "running",
+        updatedAt: 10,
+        delivery: { kind: "none" },
+      },
     });
   });
 
