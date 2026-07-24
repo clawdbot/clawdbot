@@ -660,6 +660,53 @@ describe("canonical configured Gateway readiness", () => {
       "PluginsLoaded",
     ]);
   });
+
+  it("promotes selected canonical plugin failures without duplicating their condition", async () => {
+    const runtime = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: { errors: [{ id: "broken", activated: true, error: "load failed" }] },
+    });
+
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: {
+        gateway: { readiness: { requiredCriteria: ["openclaw.plugins-loaded"] } },
+      },
+      evaluateGateway: () => readySnapshot() as ReadinessResult,
+      evaluateRuntime: async () => runtime,
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.failures).toContain("PluginLoadFailures");
+    expect(result.conditions.filter((entry) => entry.type === "PluginsLoaded")).toEqual([
+      expect.objectContaining({ status: "False", requirement: "required" }),
+    ]);
+  });
+
+  it("can require the canonical event-loop condition", async () => {
+    const gateway = readySnapshot() as ReadinessResult;
+    gateway.conditions = gateway.conditions?.map((condition) =>
+      condition.type === "EventLoopHealthy"
+        ? { ...condition, status: "False", reason: "EventLoopDegraded" }
+        : condition,
+    );
+
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: {
+        gateway: { readiness: { requiredCriteria: ["openclaw.event-loop-healthy"] } },
+      },
+      evaluateGateway: () => gateway,
+      evaluateRuntime: async () =>
+        buildRuntimeReadiness({ configLoaded: true, gateway: "responding" }),
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.failures).toContain("EventLoopDegraded");
+    expect(result.conditions.find((entry) => entry.type === "EventLoopHealthy")).toMatchObject({
+      status: "False",
+      requirement: "required",
+    });
+  });
   it("returns a structured required failure when extended evaluation times out", async () => {
     const gateway = readySnapshot() as ReadinessResult;
     const result = await evaluateConfiguredGatewayReadiness({
@@ -684,6 +731,26 @@ describe("canonical configured Gateway readiness", () => {
       message: "Readiness evaluation did not complete within its bounded deadline.",
     });
     expect(result.conditions?.[0]?.type).toBe("ReadinessEvaluationComplete");
+  });
+
+  it("retains selected canonical conditions when extended evaluation times out", async () => {
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: {
+        gateway: { readiness: { requiredCriteria: ["openclaw.plugins-loaded"] } },
+      },
+      evaluateGateway: () => readySnapshot() as ReadinessResult,
+      evaluateRuntime: () => new Promise<never>(() => {}),
+      timeoutMs: 5,
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.conditions.find((entry) => entry.type === "PluginsLoaded")).toEqual({
+      type: "PluginsLoaded",
+      status: "Unknown",
+      requirement: "required",
+      reason: "CriterionEvaluationUnavailable",
+      message: "Readiness criterion PluginsLoaded was selected but could not be evaluated.",
+    });
   });
 
   it("redacts unexpected extended evaluation failures", async () => {

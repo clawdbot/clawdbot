@@ -2,6 +2,7 @@
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReadinessCondition, CanonicalReadinessResult } from "../../readiness/conditions.js";
+import { applySelectedCanonicalRequirements } from "../../readiness/selection.js";
 import {
   CORE_READINESS_SUBJECT_REFS,
   normalizeRelatedSubjectRefs,
@@ -370,7 +371,7 @@ function mergeReadinessResults(
   gateway: ReadinessResult,
   runtime: CanonicalReadinessResult,
   identity: ReadinessIdentity,
-  options?: { runtimeConditionsFirst?: boolean },
+  options?: { config?: OpenClawConfig; runtimeConditionsFirst?: boolean },
 ): CanonicalGatewayReadinessResult {
   const gatewayConditions: ReadinessCondition[] = [];
   for (const condition of gateway.conditions ?? []) {
@@ -379,9 +380,12 @@ function mergeReadinessResults(
       subjectRef: condition.subjectRef ?? CORE_READINESS_SUBJECT_REFS.gateway,
     });
   }
-  const conditions = options?.runtimeConditionsFirst
+  const mergedConditions = options?.runtimeConditionsFirst
     ? [...runtime.conditions, ...gatewayConditions]
     : [...gatewayConditions, ...runtime.conditions];
+  const conditions = options?.config
+    ? applySelectedCanonicalRequirements(options.config, mergedConditions)
+    : mergedConditions;
   const conditionKeys = new Set<string>();
   for (const condition of conditions) {
     const relatedSubjectRefs = normalizeRelatedSubjectRefs(condition.relatedSubjectRefs);
@@ -496,6 +500,7 @@ export async function evaluateConfiguredGatewayReadiness(params: {
 
 async function evaluateCanonicalGatewayReadiness(params: {
   identity: ReadinessIdentity;
+  config: OpenClawConfig;
   evaluateGateway: ReadinessChecker;
   evaluateRuntime: () => Promise<CanonicalReadinessResult>;
   timeoutMs?: number;
@@ -506,7 +511,7 @@ async function evaluateCanonicalGatewayReadiness(params: {
       Promise.resolve().then(async () => {
         gateway = await params.evaluateGateway();
         const runtime = await params.evaluateRuntime();
-        return mergeReadinessResults(gateway, runtime, params.identity);
+        return mergeReadinessResults(gateway, runtime, params.identity, { config: params.config });
       }),
       params.timeoutMs,
     );
@@ -514,8 +519,8 @@ async function evaluateCanonicalGatewayReadiness(params: {
     return mergeReadinessResults(
       gateway ?? { ready: false, failing: [], uptimeMs: 0 },
       buildReadinessEvaluationFailure(error, params.identity),
-      params.identity,
-      { runtimeConditionsFirst: true },
+        params.identity,
+        { config: params.config, runtimeConditionsFirst: true },
     );
   }
 }

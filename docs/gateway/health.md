@@ -73,8 +73,10 @@ conditions without selecting a hosting profile:
       requiredCriteria: ["openclaw.workspace-writable", "plugin.storage.backend"],
       advisoryCriteria: [
         "openclaw.config-current",
+        "openclaw.event-loop-healthy",
         "openclaw.model-route-ready",
         "openclaw.secrets-ready",
+        "plugin.policy.conformant",
         "plugin.metrics.exporter",
       ],
     },
@@ -119,15 +121,24 @@ providers, call a model, or probe an external service.
 | Selector ID                   | Condition           | What it verifies                                       |
 | ----------------------------- | ------------------- | ------------------------------------------------------ |
 | `openclaw.config-current`     | `ConfigCurrent`     | Active config matches the latest source generation     |
+| `openclaw.event-loop-healthy` | `EventLoopHealthy`  | Gateway event-loop delay remains below its threshold   |
 | `openclaw.model-route-ready`  | `ModelRouteReady`   | Default model is cataloged and has available auth      |
+| `openclaw.plugins-loaded`     | `PluginsLoaded`     | Selected plugins loaded without activation failures    |
 | `openclaw.secrets-ready`      | `SecretsReady`      | No runtime owner is degraded by secret resolution      |
 | `openclaw.workspace-writable` | `WorkspaceWritable` | Default workspace accepts a bounded write/delete check |
 
 These criteria are evaluated only when selected. Put one in
 `advisoryCriteria` to observe it first, then move it to `requiredCriteria` when
-that condition should block new work. `PluginsLoaded` remains an always-present
-advisory and includes plugins quarantined before activation as well as plugin
-loader errors.
+that condition should block new work. `PluginsLoaded` and `EventLoopHealthy`
+remain always-present advisories unless their selectors promote them. The plugin
+condition includes plugins quarantined before activation as well as loader
+errors.
+
+The bundled Policy plugin demonstrates a plugin-owned criterion. When selected,
+`plugin.policy.conformant` reuses the plugin's policy evaluation and reports
+whether it produced any findings. Keep it in `advisoryCriteria` to expose drift
+without changing the HTTP readiness status; promote it to `requiredCriteria`
+only when policy conformance is an admission requirement.
 
 OpenClaw also exposes opt-in criteria for the agent execution surfaces that a
 host may depend on:

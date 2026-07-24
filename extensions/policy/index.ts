@@ -3,6 +3,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { POLICY_CLI_DESCRIPTOR } from "./src/cli-output-mode.js";
 import { registerPolicyCli } from "./src/cli.js";
 import { registerPolicyDoctorChecks } from "./src/doctor/register.js";
+import { createPolicyReadinessCriterion } from "./src/readiness.js";
 
 export default definePluginEntry({
   id: "policy",
@@ -17,6 +18,7 @@ export default definePluginEntry({
         descriptors: [POLICY_CLI_DESCRIPTOR],
       },
     );
+    api.registerReadinessCriterion(createPolicyReadinessCriterion());
     registerPolicyDoctorChecks();
   },
 });

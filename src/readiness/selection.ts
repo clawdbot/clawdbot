@@ -32,6 +32,14 @@ type SelectedCriterion = {
   requirement: ReadinessRequirement;
 };
 
+export const EVENT_LOOP_HEALTHY_CRITERION_ID = "openclaw.event-loop-healthy";
+export const PLUGINS_LOADED_CRITERION_ID = "openclaw.plugins-loaded";
+
+const CANONICAL_CONDITION_TYPES = new Map<string, ReadinessCondition["type"]>([
+  [EVENT_LOOP_HEALTHY_CRITERION_ID, "EventLoopHealthy"],
+  [PLUGINS_LOADED_CRITERION_ID, "PluginsLoaded"],
+]);
+
 function resolveSelectedReadinessCriteria(config: OpenClawConfig): SelectedCriterion[] {
   const required = config.gateway?.readiness?.requiredCriteria ?? [];
   const advisory = config.gateway?.readiness?.advisoryCriteria ?? [];
@@ -43,6 +51,38 @@ function resolveSelectedReadinessCriteria(config: OpenClawConfig): SelectedCrite
     selected.set(id, "required");
   }
   return Array.from(selected, ([id, requirement]) => ({ id, requirement }));
+}
+
+export function applySelectedCanonicalRequirements(
+  config: OpenClawConfig,
+  conditions: readonly ReadinessCondition[],
+): ReadinessCondition[] {
+  const selected = resolveSelectedReadinessCriteria(config);
+  const requirementsByType = new Map<ReadinessCondition["type"], ReadinessRequirement>();
+  for (const { id, requirement } of selected) {
+    const type = CANONICAL_CONDITION_TYPES.get(id);
+    if (type !== undefined) {
+      requirementsByType.set(type, requirement);
+    }
+  }
+  const projected = conditions.map((condition) => {
+    const requirement = requirementsByType.get(condition.type);
+    return requirement === undefined ? condition : { ...condition, requirement };
+  });
+  const presentTypes = new Set(projected.map((condition) => condition.type));
+  for (const [type, requirement] of requirementsByType) {
+    if (presentTypes.has(type)) {
+      continue;
+    }
+    projected.push({
+      type,
+      status: "Unknown",
+      requirement,
+      reason: "CriterionEvaluationUnavailable",
+      message: `Readiness criterion ${type} was selected but could not be evaluated.`,
+    });
+  }
+  return projected;
 }
 
 function unavailableCondition(id: string, requirement: ReadinessRequirement): ReadinessCondition {
@@ -100,7 +140,9 @@ export function createSelectedReadinessResolver() {
     env?: NodeJS.ProcessEnv;
     stateServices?: StateServiceReadinessSnapshot;
   }): Promise<ReadinessContribution> => {
-    const selected = resolveSelectedReadinessCriteria(params.config);
+    const selected = resolveSelectedReadinessCriteria(params.config).filter(
+      ({ id }) => !CANONICAL_CONDITION_TYPES.has(id),
+    );
     if (selected.length === 0) {
       return { conditions: [], subjects: [] };
     }
