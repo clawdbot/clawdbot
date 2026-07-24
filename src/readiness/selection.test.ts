@@ -106,6 +106,25 @@ describe("createSelectedReadinessResolver", () => {
     ]);
   });
 
+  it("maps an execution capability selector to its canonical condition type", async () => {
+    const resolve = createSelectedReadinessResolver();
+
+    await expect(
+      resolve({
+        config: {
+          gateway: { readiness: { requiredCriteria: ["openclaw.harness-ready"] } },
+        },
+        registry: { readinessCriteria: [] },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        type: "HarnessReady",
+        status: "True",
+        requirement: "required",
+      }),
+    ]);
+  });
+
   it("fails closed for an unregistered required criterion", async () => {
     const resolve = createSelectedReadinessResolver();
 

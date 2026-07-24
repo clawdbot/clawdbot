@@ -581,6 +581,11 @@ baseline and do not require a hosting profile. See [Health checks](/gateway/heal
 for the core selector catalog and evaluation semantics, and the
 [Plugin SDK](/plugins/sdk-overview#infrastructure) for plugin registration.
 
+Built-in capability selectors include `openclaw.workspace-writable`,
+`openclaw.context-engine-ready`, `openclaw.tool-catalog-ready`,
+`openclaw.mcp-runtime-ready`, `openclaw.sandbox-ready`, and
+`openclaw.harness-ready`. They are not enabled unless listed by the operator.
+
 ## Gateway
 
 ```json5
