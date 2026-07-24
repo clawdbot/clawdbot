@@ -788,10 +788,32 @@ async function ensurePrivateDirectory(
   directoryPath: string,
   scopeLabel: string,
 ): Promise<DurableSqliteDirectoryReceipt> {
+  let expectedExistingIdentity: Stats | undefined;
+  if (process.platform !== "win32") {
+    try {
+      const existingIdentity = await fs.lstat(directoryPath);
+      assertDirectory(existingIdentity, directoryPath, scopeLabel);
+      // Repair only after ownership and ancestors prove another user cannot
+      // redirect chmod, then bind the durability pin to that exact directory.
+      await assertTrustedStagingRoot(existingIdentity, directoryPath, {
+        allowModeRepair: true,
+      });
+      applyPrivateModeSync(directoryPath, SNAPSHOT_DIRECTORY_MODE);
+      const repairedIdentity = await fs.lstat(directoryPath);
+      if (!sameFileIdentity(existingIdentity, repairedIdentity)) {
+        throw new Error(`${scopeLabel} changed during private mode repair: ${directoryPath}`);
+      }
+      expectedExistingIdentity = repairedIdentity;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
   return await ensureDurableSqliteDirectory({
     directoryPath,
     label: scopeLabel,
-    repairExistingMode: process.platform === "win32" ? undefined : SNAPSHOT_DIRECTORY_MODE,
+    expectedExistingIdentity,
     create: async (targetPath) => {
       if (process.platform === "win32") {
         const parentResult = await ensureAbsoluteDirectory(path.dirname(targetPath), {
@@ -1183,6 +1205,7 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
 async function assertTrustedStagingRoot(
   expectedIdentity: Stats,
   rootPath: string,
+  options: { allowModeRepair?: boolean } = {},
 ): Promise<string> {
   const resolvedRootPath = path.resolve(rootPath);
   const trustedRootPath = await fs.realpath(resolvedRootPath);
@@ -1202,7 +1225,7 @@ async function assertTrustedStagingRoot(
     );
   }
   if (process.platform === "darwin") {
-    await assertTrustedMacosAcl(trustedRootPath, true);
+    await assertTrustedMacosAcl(trustedRootPath, options.allowModeRepair !== true);
   }
   await assertTrustedPosixStagingAncestors(trustedRootPath, rootIdentity, uid);
   return trustedRootPath;

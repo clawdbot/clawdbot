@@ -19,6 +19,12 @@ async function createTempDir(): Promise<string> {
   return tempDir;
 }
 
+function isDirectoryOpen(flags: string | number | undefined): boolean {
+  return (
+    flags === "r" || (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0)
+  );
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true })));
 });
@@ -590,8 +596,12 @@ describe("createVerifiedSqliteSnapshot", () => {
     const sqlite = requireNodeSqlite();
     createEmptySqliteDatabase(sqlite, sourcePath);
     const originalOpen = fs.open.bind(fs);
+    let targetDirectoryOpenCount = 0;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      if (path.resolve(String(filePath)) === tempDir) {
+      if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === tempDir) {
+        targetDirectoryOpenCount += 1;
+      }
+      if (targetDirectoryOpenCount === 2 && path.resolve(String(filePath)) === tempDir) {
         throw Object.assign(new Error("directory sync failed"), { code: "EIO" });
       }
       return await originalOpen(filePath, flags, mode);
@@ -606,6 +616,50 @@ describe("createVerifiedSqliteSnapshot", () => {
       openSpy.mockRestore();
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a transient publication directory replacement during sync",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      const displacedPath = `${tempDir}.displaced`;
+      const replacementPath = `${tempDir}.replacement`;
+      const sqlite = requireNodeSqlite();
+      createEmptySqliteDatabase(sqlite, sourcePath);
+      const originalOpen = fs.open.bind(fs);
+      let targetDirectoryOpenCount = 0;
+      let replaced = false;
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        const resolvedPath = path.resolve(String(filePath));
+        if (isDirectoryOpen(flags) && resolvedPath === tempDir) {
+          targetDirectoryOpenCount += 1;
+          if (targetDirectoryOpenCount === 2) {
+            replaced = true;
+            await fs.rename(tempDir, displacedPath);
+            await fs.mkdir(tempDir);
+            const replacementHandle = await originalOpen(filePath, flags, mode);
+            await fs.rename(tempDir, replacementPath);
+            await fs.rename(displacedPath, tempDir);
+            return replacementHandle;
+          }
+        }
+        return await originalOpen(filePath, flags, mode);
+      });
+
+      try {
+        await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+          /handle changed during directory sync/u,
+        );
+        expect(replaced).toBe(true);
+        await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        openSpy.mockRestore();
+        await fs.rm(replacementPath, { recursive: true, force: true });
+        await fs.rename(displacedPath, tempDir).catch(() => undefined);
+      }
+    },
+  );
 
   it("validates both the source and transformed snapshot", async () => {
     const tempDir = await createTempDir();
