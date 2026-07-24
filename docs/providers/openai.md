@@ -1067,9 +1067,9 @@ routes** accordion under [Advanced configuration](#advanced-configuration).
 
 For chat or Responses traffic on Azure (beyond image generation), use the
 onboarding flow or a dedicated Azure provider config; `openai.baseUrl` alone
-does not pick up the Azure API/auth shape. A separate
-`azure-openai-responses/*` provider exists; see the Server-side compaction
-accordion below.
+does not pick up the Azure API/auth shape. See the dedicated
+[Azure OpenAI](/providers/azure-openai) page for `azure-openai-responses`
+setup.
 </Note>
 
 ## Advanced configuration

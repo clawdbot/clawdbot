@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/providers/azure-openai-responses",
+      "destination": "/providers/azure-openai"
+    },
+    {
       "source": "/cli/crestodian",
       "destination": "/cli/openclaw"
     },
@@ -1496,6 +1500,7 @@
                   "providers/bedrock-mantle",
                   "providers/anthropic",
                   "providers/arcee",
+                  "providers/azure-openai",
                   "providers/azure-speech",
                   "providers/cerebras",
                   "providers/chutes",
