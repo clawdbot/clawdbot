@@ -415,6 +415,7 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
           agentId: "main",
           sessionId,
           sessionKey: "agent:main:test",
+          storePath,
         },
       });
 

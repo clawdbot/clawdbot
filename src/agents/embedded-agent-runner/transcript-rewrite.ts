@@ -73,6 +73,7 @@ async function rewriteSqliteRuntimeTranscript(params: {
         agentId: params.target.agentId,
         sessionId: params.target.sessionId,
         sessionKey: params.target.sessionKey,
+        storePath: params.target.storePath,
       },
     });
     return { changed: true, bytesFreed, rewrittenEntries };
