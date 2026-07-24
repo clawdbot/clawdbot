@@ -14,6 +14,11 @@ import {
 import { createPluginReadinessResolver } from "./plugin-readiness.js";
 import { CORE_READINESS_SUBJECT_REFS } from "./subjects.js";
 import {
+  buildSessionStorageReadinessCondition,
+  createSessionStorageReadinessEvidenceResolver,
+  SESSION_STORAGE_READY_CRITERION_ID,
+} from "./session-storage.js";
+import {
   createStateServiceReadinessResolver,
   type StateServiceReadinessSnapshot,
 } from "./state-services.js";
@@ -82,6 +87,7 @@ function stateServiceSelectorId(condition: ReadinessCondition): string | undefin
 
 export function createSelectedReadinessResolver() {
   const resolveWorkspace = createWorkspaceReadinessEvidenceResolver();
+  const resolveSessionStorage = createSessionStorageReadinessEvidenceResolver();
   const resolvePlugins = createPluginReadinessResolver();
   const resolveActivation = createActivationReadinessResolver();
   const resolveExecutionCapabilities = createExecutionCapabilityReadinessResolver();
@@ -103,9 +109,12 @@ export function createSelectedReadinessResolver() {
     const pluginIds = new Set(
       selected.filter((entry) => entry.id.startsWith("plugin.")).map((entry) => entry.id),
     );
-    const [workspaceEvidence, pluginContribution] = await Promise.all([
+    const [workspaceEvidence, sessionStorageEvidence, pluginContribution] = await Promise.all([
       selectedIds.has(WORKSPACE_WRITABLE_CRITERION_ID)
         ? resolveWorkspace({ config: params.config, env: params.env })
+        : Promise.resolve(undefined),
+      selectedIds.has(SESSION_STORAGE_READY_CRITERION_ID)
+        ? resolveSessionStorage({ config: params.config, env: params.env })
         : Promise.resolve(undefined),
       resolvePlugins({ registry: params.registry, config: params.config, criterionIds: pluginIds }),
     ]);
@@ -142,6 +151,12 @@ export function createSelectedReadinessResolver() {
       conditions.set(
         WORKSPACE_WRITABLE_CRITERION_ID,
         buildWorkspaceReadinessCondition(workspaceEvidence),
+      );
+    }
+    if (sessionStorageEvidence) {
+      conditions.set(
+        SESSION_STORAGE_READY_CRITERION_ID,
+        buildSessionStorageReadinessCondition(sessionStorageEvidence),
       );
     }
     for (const condition of pluginContribution.conditions) {
