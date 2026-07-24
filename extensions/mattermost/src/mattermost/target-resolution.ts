@@ -12,7 +12,7 @@ import {
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
 } from "./client.js";
-import { mapMattermostChannelTypeToChatType } from "./monitor-gating.js";
+import { mapMattermostChannelTypeToChatType } from "./monitor-auth.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 type MattermostOpaqueTargetResolution = {

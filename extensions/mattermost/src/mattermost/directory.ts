@@ -9,7 +9,7 @@ import {
   type MattermostClient,
   type MattermostUser,
 } from "./client.js";
-import { mapMattermostChannelTypeToChatType } from "./monitor-gating.js";
+import { mapMattermostChannelTypeToChatType } from "./monitor-auth.js";
 import type { ChannelDirectoryEntry, OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 
 type MattermostDirectoryParams = {

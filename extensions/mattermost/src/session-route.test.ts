@@ -195,6 +195,17 @@ describe("mattermost session route", () => {
     expect(channelRoute.baseSessionKey).toBe("agent:main:mattermost:channel:pub999");
   });
 
+  it("ignores a non-canonical session key containing an embedded Mattermost route", () => {
+    const route = resolveMattermostOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "mattermost:channel:priv123",
+      currentSessionKey: "agent:main:other:group:peer:mattermost:group:priv123:thread:root-post",
+    });
+
+    expect(expectRoute(route).peer.kind).toBe("channel");
+  });
+
   it("returns null when the target is empty after normalization", () => {
     expect(
       resolveMattermostOutboundSessionRoute({

@@ -743,14 +743,15 @@ async function resolveCronDeliveryRouteSessionKey(params: {
  * `agent:…:mattermost:group:<id>:thread:<root>`), routing the delivery from the
  * isolated key re-derives the namespace from the lossy `channel:<id>` target and
  * forks a phantom `channel:<id>` session, splitting the thread (#95646). Prefer the
- * job's bound session identity so the existing currentSessionKey-based namespace
- * resolution keeps `group:<id>` — no channel-type cache needed (which is what made
- * the cache-based attempts brittle on cold restart). Falls back to the isolated key
- * for unbound jobs or cron-namespace bindings.
+ * job's bound Mattermost conversation identity so the existing currentSessionKey-
+ * based namespace resolution keeps `group:<id>`. Keep this provider-specific: other
+ * adapters have their own current-session semantics and are outside #95646. Falls
+ * back to the isolated key for all other bindings.
  */
 export function selectCronRouteCurrentSessionKey(job: CronJob, agentSessionKey: string): string {
   const bound = (job.sessionKey ?? "").trim();
-  if (bound && !isCronSessionKey(bound) && parseAgentSessionKey(bound)) {
+  const parsed = parseAgentSessionKey(bound);
+  if (parsed && /^mattermost:(direct|group|channel):[^:]+(?::thread:[^:]+)?$/i.test(parsed.rest)) {
     return bound;
   }
   return agentSessionKey;

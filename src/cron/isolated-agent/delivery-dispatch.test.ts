@@ -28,9 +28,24 @@ describe("selectCronRouteCurrentSessionKey", () => {
     expect(selectCronRouteCurrentSessionKey(job("   "), ISOLATED_RUN_KEY)).toBe(ISOLATED_RUN_KEY);
   });
 
-  it("falls back to the isolated run key for cron-namespace bindings", () => {
+  it("falls back to the isolated run key for non-Mattermost and malformed bindings", () => {
     expect(
       selectCronRouteCurrentSessionKey(job("agent:main:cron:job-2:run:run-2"), ISOLATED_RUN_KEY),
+    ).toBe(ISOLATED_RUN_KEY);
+    expect(
+      selectCronRouteCurrentSessionKey(
+        job("agent:main:telegram:group:-100123:thread:42"),
+        ISOLATED_RUN_KEY,
+      ),
+    ).toBe(ISOLATED_RUN_KEY);
+    expect(selectCronRouteCurrentSessionKey(job("agent:main:main"), ISOLATED_RUN_KEY)).toBe(
+      ISOLATED_RUN_KEY,
+    );
+    expect(
+      selectCronRouteCurrentSessionKey(
+        job("agent:main:mattermost:group:peer:unexpected"),
+        ISOLATED_RUN_KEY,
+      ),
     ).toBe(ISOLATED_RUN_KEY);
   });
 });

@@ -21,11 +21,14 @@ function mattermostSessionKeyPeerKind(
   if (!sessionKey || !peerId) {
     return undefined;
   }
-  const match = /:mattermost:(direct|group|channel):([^:]+)/i.exec(sessionKey);
-  if (!match || match[2] !== peerId) {
+  const match = /^agent:[^:]+:mattermost:(direct|group|channel):([^:]+)(?::thread:[^:]+)?$/i.exec(
+    sessionKey,
+  );
+  const kind = match?.[1]?.toLowerCase();
+  if (!kind || match?.[2] !== peerId) {
     return undefined;
   }
-  return match[1].toLowerCase() as "direct" | "group" | "channel";
+  return kind as "direct" | "group" | "channel";
 }
 
 export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
