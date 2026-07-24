@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -70,6 +70,54 @@ function resolveCanonicalPathFromExistingParent(lexicalPath: string): {
   }
 }
 
+function resolveDanglingSymlinkTargetPath(lexicalPath: string): string {
+  let resolved = path.parse(lexicalPath).root;
+  const remaining = lexicalPath.slice(resolved.length).split(path.sep).filter(Boolean);
+  const visitedStates = new Set<string>();
+  while (remaining.length > 0) {
+    const segment = remaining.shift();
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      resolved = path.dirname(resolved);
+      continue;
+    }
+    const candidate = path.join(resolved, segment);
+    try {
+      const stat = lstatSync(candidate);
+      if (!stat.isSymbolicLink()) {
+        resolved = candidate;
+        continue;
+      }
+      const stateKey = `${candidate}\0${remaining.join(path.sep)}`;
+      if (visitedStates.has(stateKey)) {
+        const error = new Error(
+          `Symlink loop while resolving ${lexicalPath}.`,
+        ) as NodeJS.ErrnoException;
+        error.code = "ELOOP";
+        throw error;
+      }
+      visitedStates.add(stateKey);
+      const target = readlinkSync(candidate);
+      if (path.isAbsolute(target)) {
+        resolved = path.parse(target).root;
+        remaining.unshift(...target.slice(resolved.length).split(path.sep));
+      } else {
+        // Process raw target components in order: normalizing `..` here would skip
+        // filesystem resolution of a preceding symlink and could change ownership.
+        remaining.unshift(...target.split(path.sep));
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return path.join(resolved, segment, ...remaining);
+      }
+      throw error;
+    }
+  }
+  return resolved;
+}
+
 function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathIdentity {
   const lexicalPath = path.resolve(pathname);
   try {
@@ -85,7 +133,9 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
       throw error;
     }
     // Preserve symlink/alias identity before the leaf exists by canonicalizing its nearest parent.
-    const parentIdentity = resolveCanonicalPathFromExistingParent(lexicalPath);
+    const parentIdentity = resolveCanonicalPathFromExistingParent(
+      resolveDanglingSymlinkTargetPath(lexicalPath),
+    );
     return {
       lexicalPath,
       ...parentIdentity,

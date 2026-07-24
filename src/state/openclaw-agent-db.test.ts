@@ -1657,6 +1657,33 @@ describe("openclaw agent database", () => {
       const aliasPath = path.join(aliasDir, "worker.sqlite");
       expect(fs.existsSync(realPath)).toBe(false);
       expect(isSameOpenClawAgentDatabasePath(realPath, aliasPath)).toBe(true);
+      const futureRealPath = path.join(realDir, "future-worker.sqlite");
+      const danglingAliasPath = path.join(stateDir, "future-worker-alias.sqlite");
+      fs.symlinkSync(futureRealPath, danglingAliasPath);
+      expect(isSameOpenClawAgentDatabasePath(futureRealPath, danglingAliasPath)).toBe(true);
+      const deepDir = path.join(realDir, "deep");
+      const deepAliasDir = path.join(stateDir, "deep-alias");
+      fs.mkdirSync(deepDir);
+      fs.symlinkSync(deepDir, deepAliasDir, "dir");
+      const relativeAliasPath = path.join(deepAliasDir, "relative-worker.sqlite");
+      const relativeRealPath = path.join(realDir, "relative-worker.sqlite");
+      fs.symlinkSync("../relative-worker.sqlite", relativeAliasPath);
+      expect(isSameOpenClawAgentDatabasePath(relativeRealPath, relativeAliasPath)).toBe(true);
+      const redirectedDir = path.join(stateDir, "redirected-databases");
+      const redirectedNestedDir = path.join(redirectedDir, "nested");
+      const redirectLink = path.join(stateDir, "redirect-link");
+      fs.mkdirSync(redirectedNestedDir, { recursive: true });
+      fs.symlinkSync(redirectedNestedDir, redirectLink, "dir");
+      const redirectedRealPath = path.join(redirectedDir, "redirected-worker.sqlite");
+      const redirectedAliasPath = path.join(stateDir, "redirected-worker-alias.sqlite");
+      fs.symlinkSync("redirect-link/../redirected-worker.sqlite", redirectedAliasPath);
+      expect(isSameOpenClawAgentDatabasePath(redirectedRealPath, redirectedAliasPath)).toBe(true);
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          path.join(stateDir, "redirected-worker.sqlite"),
+          redirectedAliasPath,
+        ),
+      ).toBe(false);
       const loopPath = path.join(stateDir, "database-loop.sqlite");
       fs.symlinkSync(loopPath, loopPath);
       expect(() => isSameOpenClawAgentDatabasePath(loopPath, realPath)).toThrow(
