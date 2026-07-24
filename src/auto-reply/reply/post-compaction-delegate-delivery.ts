@@ -20,9 +20,10 @@ import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { generateChainId } from "../../infra/secure-random.js";
-import type {
-  QueuedSessionDelivery,
-  SessionDeliveryContext,
+import {
+  SessionDeliveryDeferredError,
+  type QueuedSessionDelivery,
+  type SessionDeliveryContext,
 } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -454,6 +455,12 @@ export async function deliverQueuedPostCompactionDelegate(
   ) {
     return;
   }
+  const runtimeConfig = deps.resolveContinuationRuntimeConfig(cfg);
+  if (!runtimeConfig.enabled) {
+    throw new SessionDeliveryDeferredError(
+      "post-compaction delegate delivery deferred while continuation is disabled",
+    );
+  }
   const storePath = deps.resolveStorePath(cfg.session?.store, { agentId });
   const sessionEntry = deps.loadSessionEntry({
     storePath,
@@ -463,7 +470,7 @@ export async function deliverQueuedPostCompactionDelegate(
     maxChainLength: maxCompactionChainLength,
     costCapTokens: compactionCostCapTokens,
     crossSessionTargeting,
-  } = deps.resolveContinuationRuntimeConfig(cfg);
+  } = runtimeConfig;
   const currentCompactionChainCount = sessionEntry?.continuationChainCount ?? 0;
   const compactionChainTokens = sessionEntry?.continuationChainTokens ?? 0;
 

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   enqueuePostCompactionDelegateDelivery as enqueuePostCompactionDelegateDeliveryQueue,
   loadPendingSessionDelivery,
+  SessionDeliveryDeferredError,
 } from "../../infra/session-delivery-queue-storage.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { ContinuationRuntimeConfig } from "../continuation/types.js";
@@ -594,6 +595,64 @@ describe("post-compaction delegate dispatch extraction", () => {
         }),
         expect.any(Object),
       );
+    });
+  });
+
+  it("defers disabled queued delivery without mutating source state and delivers exactly once after re-enable", async () => {
+    await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
+      const storePath = path.join(tempDir, "sessions.json");
+      const stateDir = path.join(tempDir, "state");
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
+      const deliveryId = await enqueuePostCompactionDelegateDeliveryQueue(
+        {
+          sessionKey: "main",
+          delegate: {
+            task: "hold while continuation is disabled",
+            createdAt: 1,
+            attachments: [{ name: "state.md", content: "must not materialize while disabled" }],
+          },
+          sequence: 0,
+        },
+        stateDir,
+      );
+      const entry = expectDefined(
+        await loadPendingSessionDelivery(deliveryId, stateDir),
+        "queued disabled delivery",
+      ) as QueuedPostCompactionDelegateDelivery;
+      const disabled = createDeliveryDeps({ storePath, runtimeConfig: { enabled: false } });
+
+      await expect(
+        deliverQueuedPostCompactionDelegate({ entry }, disabled.deps),
+      ).rejects.toBeInstanceOf(SessionDeliveryDeferredError);
+      expect(disabled.deps.loadSessionEntry).not.toHaveBeenCalled();
+      expect(disabled.spawnSubagentDirect).not.toHaveBeenCalled();
+      expect(disabled.markPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
+      expect(disabled.markPendingDelegateFailed).not.toHaveBeenCalled();
+      expect(await loadPendingSessionDelivery(deliveryId, stateDir)).toBeTruthy();
+
+      await drainPostCompactionDelegateDeliveriesDispatch({
+        sessionKey: "main",
+        stateDir,
+        deliveryDeps: disabled.deps,
+      });
+      expect(disabled.spawnSubagentDirect).not.toHaveBeenCalled();
+      expect(await loadPendingSessionDelivery(deliveryId, stateDir)).toBeTruthy();
+
+      const enabled = createDeliveryDeps({ storePath, runtimeConfig: { enabled: true } });
+      await drainPostCompactionDelegateDeliveriesDispatch({
+        sessionKey: "main",
+        stateDir,
+        deliveryDeps: enabled.deps,
+      });
+      expect(enabled.spawnSubagentDirect).toHaveBeenCalledTimes(1);
+      expect(await loadPendingSessionDelivery(deliveryId, stateDir)).toBeNull();
+
+      await drainPostCompactionDelegateDeliveriesDispatch({
+        sessionKey: "main",
+        stateDir,
+        deliveryDeps: enabled.deps,
+      });
+      expect(enabled.spawnSubagentDirect).toHaveBeenCalledTimes(1);
     });
   });
 

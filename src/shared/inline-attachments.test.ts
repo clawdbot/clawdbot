@@ -176,4 +176,21 @@ describe("inline attachment snapshots", () => {
       from.mockRestore();
     }
   });
+
+  it("rejects ill-formed UTF-16 content before byte measurement or allocation", () => {
+    for (const content of ["\uD800", "\uDC00"]) {
+      expect(() =>
+        prepareInlineAttachmentSnapshots({
+          attachments: [{ name: "snapshot.txt", content }],
+          limits: DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
+        }),
+      ).toThrow("attachments_invalid_content (invalid Unicode)");
+    }
+
+    const prepared = prepareInlineAttachmentSnapshots({
+      attachments: [{ name: "supplementary.txt", content: "A😀B" }],
+      limits: DEFAULT_INLINE_ATTACHMENT_SNAPSHOT_LIMITS,
+    });
+    expect(prepared.attachments[0]?.bytes).toBe(Buffer.byteLength("A😀B", "utf8"));
+  });
 });

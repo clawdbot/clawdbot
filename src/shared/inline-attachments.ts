@@ -189,6 +189,9 @@ export function prepareInlineAttachmentSnapshots(params: {
     }
     const name = rawName.normalize("NFC");
     const content = item.content;
+    if (!isWellFormedAttachmentName(content)) {
+      throw new Error("attachments_invalid_content (invalid Unicode)");
+    }
     const encoding = item.encoding ?? "utf8";
     const mimeType = rawMimeType;
     validateInlineAttachmentName(name);
