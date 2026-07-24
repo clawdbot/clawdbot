@@ -623,7 +623,7 @@ export const pt_BR: TranslationMap = {
     filters: "Filtros",
     createdBy: "Criado por {name}",
     archivedBy: "Arquivada por {name}",
-    filterByCreator: "Filtrar por criador",
+    people: "Pessoas",
     allCreators: "Todas as pessoas",
     filterControls: "Filtros de sessão",
     sourceFilters: "Filtros de origem da sessão",
@@ -1410,6 +1410,11 @@ export const pt_BR: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Preferências de chat locais do navegador.",
+      messageWidth: "Largura da mensagem",
+      messageWidthHint:
+        "Largura CSS opcional para a transcrição centralizada, como 960px, 82% ou min(1280px, 82%).",
+      messageWidthInvalid:
+        "Insira uma largura CSS, como 960px, 82%, min(1280px, 82%) ou calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Barra lateral",
@@ -1698,6 +1703,7 @@ export const pt_BR: TranslationMap = {
     blockedAgentFilter: "bloqueado pelo filtro de agente",
   },
   nav: {
+    account: "Conta",
     back: "Voltar",
     forward: "Avançar",
     chat: "Chat",
@@ -3863,6 +3869,22 @@ export const pt_BR: TranslationMap = {
       noPeople: "Nenhuma pessoa pareada encontrada.",
       readOnlyNotice:
         "Somente o proprietário e os membros da conversa podem realizar ações nesta conversa.",
+    },
+    sessionSuggestions: {
+      suggest: "Sugerir",
+      suggestMessage: "Sugerir mensagem",
+      attachmentsUnsupported: "Remova os anexos antes de enviar uma sugestão de texto.",
+      sendNow: "Enviar a sugestão de {author} agora",
+      queue: "Colocar a sugestão de {author} na fila",
+      edit: "Editar a sugestão de {author}",
+      dismiss: "Descartar a sugestão de {author}",
+      typing: "{name} está digitando…",
+      typingMany: "{names} estão digitando…",
+      state: {
+        pending: "Pendente",
+        accepted: "Aceita",
+        dismissed: "Descartada",
+      },
     },
     loadOlder: "Carregar anteriores",
     sessionHeader: {

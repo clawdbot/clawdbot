@@ -623,7 +623,7 @@ export const uk: TranslationMap = {
     filters: "Фільтри",
     createdBy: "Створено {name}",
     archivedBy: "Архівовано користувачем {name}",
-    filterByCreator: "Фільтрувати за автором",
+    people: "Люди",
     allCreators: "Усі люди",
     filterControls: "Фільтри сесій",
     sourceFilters: "Фільтри джерела сеансів",
@@ -1414,6 +1414,11 @@ export const uk: TranslationMap = {
     chatPrefs: {
       title: "Чат",
       hint: "Локальні налаштування чату в браузері.",
+      messageWidth: "Ширина повідомлення",
+      messageWidthHint:
+        "Необов’язкова ширина CSS для відцентрованої стенограми, наприклад 960px, 82% або min(1280px, 82%).",
+      messageWidthInvalid:
+        "Введіть ширину CSS, наприклад 960px, 82%, min(1280px, 82%) або calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Бічна панель",
@@ -1704,6 +1709,7 @@ export const uk: TranslationMap = {
     blockedAgentFilter: "заблоковано фільтром агента",
   },
   nav: {
+    account: "Обліковий запис",
     back: "Назад",
     forward: "Вперед",
     chat: "Чат",
@@ -3847,13 +3853,29 @@ export const uk: TranslationMap = {
       visibility: "Видимість",
       shared: "Спільна",
       readOnly: "Лише для читання",
-      suggest: "Пропозиції",
+      suggest: "Запропонувати",
       draft: "Чернетка",
       publishDraft: "Опублікувати чернетку",
       members: "Учасники",
       selected: "Учасник",
       noPeople: "Не знайдено пов’язаних користувачів.",
       readOnlyNotice: "Лише власник гілки та учасники можуть виконувати дії в цій гілці.",
+    },
+    sessionSuggestions: {
+      suggest: "Запропонувати",
+      suggestMessage: "Запропонувати повідомлення",
+      attachmentsUnsupported: "Видаліть вкладення, перш ніж надсилати текстову пропозицію.",
+      sendNow: "Надіслати пропозицію від {author} зараз",
+      queue: "Додати пропозицію від {author} до черги",
+      edit: "Редагувати пропозицію від {author}",
+      dismiss: "Відхилити пропозицію від {author}",
+      typing: "{name} вводить текст…",
+      typingMany: "{names} вводять текст…",
+      state: {
+        pending: "Очікується",
+        accepted: "Прийнято",
+        dismissed: "Відхилено",
+      },
     },
     loadOlder: "Завантажити старіші",
     sessionHeader: {

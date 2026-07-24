@@ -604,7 +604,7 @@ export const th: TranslationMap = {
     filters: "ตัวกรอง",
     createdBy: "สร้างโดย {name}",
     archivedBy: "เก็บถาวรโดย {name}",
-    filterByCreator: "กรองตามผู้สร้าง",
+    people: "ผู้คน",
     allCreators: "ทุกคน",
     filterControls: "ตัวกรองเซสชัน",
     sourceFilters: "ตัวกรองแหล่งที่มาของเซสชัน",
@@ -1384,6 +1384,10 @@ export const th: TranslationMap = {
     chatPrefs: {
       title: "แชต",
       hint: "การตั้งค่าแชตเฉพาะเบราว์เซอร์",
+      messageWidth: "ความกว้างของข้อความ",
+      messageWidthHint:
+        "ความกว้าง CSS สำหรับบทสนทนาที่จัดกึ่งกลาง (ไม่บังคับ) เช่น 960px, 82% หรือ min(1280px, 82%)",
+      messageWidthInvalid: "ป้อนความกว้าง CSS เช่น 960px, 82%, min(1280px, 82%) หรือ calc(100% - 2rem)",
     },
     sidebarPrefs: {
       title: "แถบด้านข้าง",
@@ -1665,6 +1669,7 @@ export const th: TranslationMap = {
     blockedAgentFilter: "ถูกบล็อกโดยตัวกรองเอเจนต์",
   },
   nav: {
+    account: "บัญชี",
     back: "ย้อนกลับ",
     forward: "ไปข้างหน้า",
     chat: "แชต",
@@ -3766,6 +3771,22 @@ export const th: TranslationMap = {
       selected: "สมาชิก",
       noPeople: "ไม่พบบุคคลที่จับคู่ไว้",
       readOnlyNotice: "เฉพาะเจ้าของเธรดและสมาชิกเท่านั้นที่ดำเนินการในเธรดนี้ได้",
+    },
+    sessionSuggestions: {
+      suggest: "แนะนำ",
+      suggestMessage: "เสนอข้อความ",
+      attachmentsUnsupported: "นำไฟล์แนบออกก่อนส่งข้อความแนะนำ",
+      sendNow: "ส่งคำแนะนำของ {author} ตอนนี้",
+      queue: "เพิ่มคำแนะนำของ {author} ลงในคิว",
+      edit: "แก้ไขคำแนะนำของ {author}",
+      dismiss: "ยกเลิกคำแนะนำของ {author}",
+      typing: "{name} กำลังพิมพ์…",
+      typingMany: "{names} กำลังพิมพ์…",
+      state: {
+        pending: "รอดำเนินการ",
+        accepted: "ยอมรับแล้ว",
+        dismissed: "ยกเลิกแล้ว",
+      },
     },
     loadOlder: "โหลดรายการก่อนหน้า",
     sessionHeader: {
