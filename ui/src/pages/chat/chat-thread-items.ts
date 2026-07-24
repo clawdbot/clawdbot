@@ -617,18 +617,21 @@ export function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: 
     : desiredTimestamp;
 }
 
-export function sortChatItemsByVisibleTime(
+// Insert live tool/stream items into an already-ordered list of stable chat rows
+// (history, queued sends, canvas previews, etc.) by visible timestamp. Stable
+// rows keep their relative order; only tool cards and stream segments are
+// repositioned. This avoids reordering optimistic user bubbles or final
+// assistant replies when their timestamps come from different clocks (#112943).
+export function insertChatItemsByTimestamp(
   items: ChatItem[],
+  inserts: ChatItem[],
+  timestampsByKey: ReadonlyMap<string, number>,
   toolStreamPredecessors: ReadonlyMap<string, string>,
-): ChatItem[] {
-  const timestampsByKey = new Map<string, number>();
-  for (const item of items) {
-    const timestamp = chatItemTimestamp(item);
-    if (timestamp != null) {
-      timestampsByKey.set(item.key, timestamp);
-    }
-  }
-  return items
+): void {
+  // Sort inserts among themselves by timestamp, preserving the original index
+  // order for ties and honoring predecessor relationships so a stream segment
+  // stays before the tool card it introduced.
+  const sortedInserts = inserts
     .map((item, index) => {
       const timestamp = chatItemTimestamp(item);
       const predecessorKey = toolStreamPredecessors.get(item.key);
@@ -665,6 +668,36 @@ export function sortChatItemsByVisibleTime(
       return a.index - b.index;
     })
     .map(({ item }) => item);
+
+  for (const item of sortedInserts) {
+    const timestamp = chatItemTimestamp(item);
+    const predecessorKey = toolStreamPredecessors.get(item.key);
+    const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
+    const effectiveTimestamp =
+      timestamp != null && predecessorTimestamp != null
+        ? Math.max(timestamp, predecessorTimestamp)
+        : timestamp;
+
+    if (effectiveTimestamp == null) {
+      items.push(item);
+      continue;
+    }
+
+    const insertionIndex = items.findIndex((existing) => {
+      const existingTimestamp = chatItemTimestamp(existing);
+      // Timestamped inserts render before stable items that lack a timestamp.
+      if (existingTimestamp == null) {
+        return true;
+      }
+      return existingTimestamp > effectiveTimestamp;
+    });
+
+    if (insertionIndex === -1) {
+      items.push(item);
+    } else {
+      items.splice(insertionIndex, 0, item);
+    }
+  }
 }
 
 export function messageKey(message: unknown, index: number, transcriptKey?: string): string {

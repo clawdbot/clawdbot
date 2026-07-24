@@ -112,6 +112,21 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
 }
 
 describe("assistant commentary grouping", () => {
+  it("keeps user before assistant when the assistant timestamp lags the user timestamp", () => {
+    // Regression for #112943: Gateway clock can lag behind the browser clock,
+    // giving the assistant reply an earlier timestamp than the user prompt.
+    // Stable transcript rows must stay in insertion order; only tool/stream
+    // items get reordered by timestamp.
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "User prompt", timestamp: 2_000 },
+        { role: "assistant", content: "Server reply.", timestamp: 1_000 },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant"]);
+  });
+
   it("keeps keyed commentary separate from the terminal assistant reply", () => {
     const groups = messageGroups({
       messages: [
