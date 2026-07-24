@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
@@ -485,14 +486,8 @@ function createTaskRunStatusIndexPhysicalDrift(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
   try {
+    insertTaskRunProbe(database, "task-index-repair");
     database.exec(`
-      INSERT INTO task_runs (
-        task_id, runtime, owner_key, scope_kind, task, status,
-        delivery_status, notify_policy, created_at
-      ) VALUES (
-        'task-index-repair', 'subagent', 'owner', 'session', 'repair index',
-        'running', 'pending', 'summary', 1
-      );
       DROP INDEX idx_task_runs_status;
       CREATE INDEX idx_task_runs_status ON task_runs(task_id);
     `);
@@ -515,6 +510,18 @@ function createTaskRunStatusIndexPhysicalDrift(databasePath: string): void {
   } finally {
     database.close();
   }
+}
+
+function insertTaskRunProbe(database: DatabaseSync, taskId: string): void {
+  database
+    .prepare(
+      `INSERT INTO task_runs (
+         task_id, runtime, owner_key, scope_kind, task, status,
+         delivery_status, notify_policy, created_at
+       ) VALUES (?, 'subagent', 'owner', 'session', 'sqlite read probe',
+                 'running', 'pending', 'summary', 1)`,
+    )
+    .run(taskId);
 }
 
 function createUnsafeSchemaMetaIndexDrift(databasePath: string): void {
@@ -540,8 +547,11 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
   committedRowsAfterRecovery: number;
   immutableDirtyRowsBeforeKill: number;
   integrity: string;
+  journalBytesBeforeReadOnly: number;
   journalExistsAfterReadOnly: boolean;
   journalExistsAfterRecovery: boolean;
+  journalShaAfterReadOnly: string;
+  journalShaBeforeReadOnly: string;
   readOnly: {
     error: string | null;
     opened: boolean;
@@ -550,6 +560,7 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
 } {
   const probeSource = `
     import { spawn } from "node:child_process";
+    import { createHash } from "node:crypto";
     import fs from "node:fs";
     import path from "node:path";
     import { DatabaseSync } from "node:sqlite";
@@ -656,9 +667,13 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
         throw new Error(\`writer was not killed: \${JSON.stringify(outcome)} \${writerStderr}\`);
       }
 
+      const hashJournal = () =>
+        createHash("sha256").update(fs.readFileSync(journalPath)).digest("hex");
+      const journalBytesBeforeReadOnly = fs.statSync(journalPath).size;
+      const journalShaBeforeReadOnly = hashJournal();
       let readOnly;
       try {
-        const database = openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
+        const database = await openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
         const readOnlyRow = database?.db
           .prepare("SELECT COUNT(*) AS count FROM hot_journal_probe WHERE value = 'uncommitted'")
           .get();
@@ -676,6 +691,7 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
         };
       }
       const journalExistsAfterReadOnly = fs.existsSync(journalPath);
+      const journalShaAfterReadOnly = hashJournal();
       const reopened = openOpenClawStateDatabase({ path: databasePath });
       const row = reopened.db
         .prepare("SELECT COUNT(*) AS count FROM hot_journal_probe WHERE value = 'committed'")
@@ -686,8 +702,11 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
         committedRowsAfterRecovery: Number(row?.count ?? 0),
         immutableDirtyRowsBeforeKill,
         integrity: integrity?.integrity_check,
+        journalBytesBeforeReadOnly,
         journalExistsAfterReadOnly,
         journalExistsAfterRecovery: fs.existsSync(journalPath),
+        journalShaAfterReadOnly,
+        journalShaBeforeReadOnly,
         readOnly,
       }));
     } finally {
@@ -711,8 +730,11 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
     committedRowsAfterRecovery: number;
     immutableDirtyRowsBeforeKill: number;
     integrity: string;
+    journalBytesBeforeReadOnly: number;
     journalExistsAfterReadOnly: boolean;
     journalExistsAfterRecovery: boolean;
+    journalShaAfterReadOnly: string;
+    journalShaBeforeReadOnly: string;
     readOnly: {
       error: string | null;
       opened: boolean;
@@ -2292,7 +2314,141 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     );
   });
 
-  it("rejects noncanonical indexes from read-only state without rewriting them", () => {
+  it("opens sidecar-free WAL state without creating files beside the source", async () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const walHeader = new DatabaseSync(databasePath);
+    walHeader.exec("PRAGMA journal_mode = WAL; PRAGMA wal_checkpoint(TRUNCATE);");
+    walHeader.close();
+    fs.rmSync(`${databasePath}-wal`, { force: true });
+    fs.rmSync(`${databasePath}-shm`, { force: true });
+    const beforeBytes = fs.readFileSync(databasePath);
+    const beforeEntries = fs.readdirSync(stateDir).toSorted();
+
+    const database = await openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
+    expect(database).toBeDefined();
+    const openedPath = database?.db.prepare("PRAGMA database_list").get() as
+      | { file?: unknown }
+      | undefined;
+    expect(openedPath?.file).toEqual(expect.any(String));
+    expect(path.resolve(String(openedPath?.file))).not.toBe(path.resolve(databasePath));
+    expect(database?.db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    const privateDirectory = path.dirname(String(openedPath?.file));
+    expect(database?.walMaintenance.close()).toBe(true);
+
+    expect(fs.existsSync(privateDirectory)).toBe(false);
+    expect(fs.readFileSync(databasePath)).toEqual(beforeBytes);
+    expect(fs.readdirSync(stateDir).toSorted()).toEqual(beforeEntries);
+  });
+
+  it("reports success when retrying transient read-only snapshot cleanup", async () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const database = await openExistingOpenClawStateDatabaseReadOnly({ path: databasePath });
+    const openedPath = database?.db.prepare("PRAGMA database_list").get() as
+      | { file?: unknown }
+      | undefined;
+    const privateDirectory = path.dirname(String(openedPath?.file));
+    const rmSync = fs.rmSync.bind(fs);
+    let failRemoval = true;
+    vi.spyOn(fs, "rmSync").mockImplementation(((pathname, options) => {
+      if (pathname === privateDirectory && failRemoval) {
+        failRemoval = false;
+        const error = new Error("busy");
+        (error as NodeJS.ErrnoException).code = "EBUSY";
+        throw error;
+      }
+      return rmSync(pathname, options);
+    }) as typeof fs.rmSync);
+
+    expect(database?.walMaintenance.close()).toBe(false);
+    expect(fs.existsSync(privateDirectory)).toBe(true);
+    expect(database?.walMaintenance.close()).toBe(true);
+    expect(fs.existsSync(privateDirectory)).toBe(false);
+    expect(database?.walMaintenance.close()).toBe(false);
+  });
+
+  it("reads committed live WAL rows without changing source database content", async () => {
+    const stateDir = createTempStateDir();
+    const writer = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    writer.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA wal_autocheckpoint = 0;");
+    insertTaskRunProbe(writer.db, "task-live-wal");
+    expect(fs.existsSync(`${writer.path}-wal`)).toBe(true);
+    expect(fs.existsSync(`${writer.path}-shm`)).toBe(true);
+    const beforeMain = fs.readFileSync(writer.path);
+    const beforeWal = fs.readFileSync(`${writer.path}-wal`);
+    const beforeShmSize = fs.statSync(`${writer.path}-shm`).size;
+    const beforeEntries = fs.readdirSync(stateDir).toSorted();
+
+    const database = await openExistingOpenClawStateDatabaseReadOnly({ path: writer.path });
+    expect(
+      database?.db.prepare("SELECT task_id FROM task_runs WHERE task_id = ?").get("task-live-wal"),
+    ).toEqual({ task_id: "task-live-wal" });
+    const openedPath = database?.db.prepare("PRAGMA database_list").get() as
+      | { file?: unknown }
+      | undefined;
+    expect(path.resolve(String(openedPath?.file))).not.toBe(path.resolve(writer.path));
+    const privateDirectory = path.dirname(String(openedPath?.file));
+    expect(database?.walMaintenance.close()).toBe(true);
+
+    expect(fs.existsSync(privateDirectory)).toBe(false);
+    expect(fs.readFileSync(writer.path)).toEqual(beforeMain);
+    expect(fs.readFileSync(`${writer.path}-wal`)).toEqual(beforeWal);
+    expect(fs.statSync(`${writer.path}-shm`).size).toBe(beforeShmSize);
+    expect(fs.readdirSync(stateDir).toSorted()).toEqual(beforeEntries);
+  });
+
+  it("reads committed WAL rows without recreating a missing source SHM", async () => {
+    const { DatabaseSync } = requireNodeSqlite();
+    const sourceDir = createTempStateDir();
+    const writer = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: sourceDir } });
+    writer.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA wal_autocheckpoint = 0;");
+    insertTaskRunProbe(writer.db, "task-wal-without-shm");
+    const fixtureDir = createTempStateDir();
+    const fixturePath = path.join(fixtureDir, "wal-without-shm.sqlite");
+    fs.copyFileSync(writer.path, fixturePath);
+    fs.copyFileSync(`${writer.path}-wal`, `${fixturePath}-wal`);
+    const mainOnlyPath = path.join(createTempStateDir(), "main-only.sqlite");
+    fs.copyFileSync(writer.path, mainOnlyPath);
+    closeOpenClawStateDatabaseForTest();
+    expect(fs.existsSync(`${fixturePath}-shm`)).toBe(false);
+    const immutable = new DatabaseSync(`${pathToFileURL(mainOnlyPath).href}?mode=ro&immutable=1`, {
+      readOnly: true,
+    });
+    expect(
+      immutable
+        .prepare("SELECT task_id FROM task_runs WHERE task_id = ?")
+        .get("task-wal-without-shm"),
+    ).toBeUndefined();
+    immutable.close();
+    const beforeMain = fs.readFileSync(fixturePath);
+    const beforeWal = fs.readFileSync(`${fixturePath}-wal`);
+    const beforeEntries = fs.readdirSync(fixtureDir).toSorted();
+
+    const database = await openExistingOpenClawStateDatabaseReadOnly({ path: fixturePath });
+    expect(
+      database?.db
+        .prepare("SELECT task_id FROM task_runs WHERE task_id = ?")
+        .get("task-wal-without-shm"),
+    ).toEqual({ task_id: "task-wal-without-shm" });
+    const openedPath = database?.db.prepare("PRAGMA database_list").get() as
+      | { file?: unknown }
+      | undefined;
+    const privateDirectory = path.dirname(String(openedPath?.file));
+    expect(path.resolve(String(openedPath?.file))).not.toBe(path.resolve(fixturePath));
+    expect(database?.walMaintenance.close()).toBe(true);
+
+    expect(fs.existsSync(privateDirectory)).toBe(false);
+    expect(fs.existsSync(`${fixturePath}-shm`)).toBe(false);
+    expect(fs.readFileSync(fixturePath)).toEqual(beforeMain);
+    expect(fs.readFileSync(`${fixturePath}-wal`)).toEqual(beforeWal);
+    expect(fs.readdirSync(fixtureDir).toSorted()).toEqual(beforeEntries);
+  });
+
+  it("rejects noncanonical indexes from read-only state without rewriting them", async () => {
     const stateDir = createTempStateDir();
     const databasePath = createCanonicalAuditStateDatabase(stateDir);
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -2307,7 +2463,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       drifted.close();
     }
 
-    expect(() => openExistingOpenClawStateDatabaseReadOnly(options)).toThrow(
+    await expect(openExistingOpenClawStateDatabaseReadOnly(options)).rejects.toThrow(
       /missing or drifted index idx_task_runs_status/iu,
     );
 
@@ -2325,16 +2481,16 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  it("rejects physical canonical-index corruption from read-only state", () => {
+  it("rejects physical canonical-index corruption from read-only state", async () => {
     const stateDir = createTempStateDir();
     const databasePath = createCanonicalAuditStateDatabase(stateDir);
     createTaskRunStatusIndexPhysicalDrift(databasePath);
 
-    expect(() =>
+    await expect(
       openExistingOpenClawStateDatabaseReadOnly({
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
-    ).toThrow(/integrity_check failed.*idx_task_runs_status/iu);
+    ).rejects.toThrow(/integrity_check failed.*idx_task_runs_status/iu);
   });
 
   it("rejects unrelated current-schema index corruption before exposure", () => {
@@ -2453,10 +2609,13 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         committedRowsAfterRecovery: 256,
         immutableDirtyRowsBeforeKill: expect.any(Number),
         integrity: "ok",
+        journalBytesBeforeReadOnly: expect.any(Number),
         journalExistsAfterReadOnly: true,
         journalExistsAfterRecovery: false,
       });
       expect(result.immutableDirtyRowsBeforeKill).toBeGreaterThan(0);
+      expect(result.journalBytesBeforeReadOnly).toBeGreaterThan(0);
+      expect(result.journalShaAfterReadOnly).toBe(result.journalShaBeforeReadOnly);
     },
   );
 
