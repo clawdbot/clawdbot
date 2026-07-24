@@ -1750,6 +1750,34 @@ describe("Anthropic provider", () => {
     expect(result.errorMessage).toContain("ended before message_stop");
   });
 
+  it("terminates the stream when the thrown error is a circular structure", async () => {
+    // Socket/HTTP layers raise self-referential error objects; a bare
+    // JSON.stringify in stream teardown throws and strands the run (#106568).
+    const circular: Record<string, unknown> = { code: "ECONNRESET" };
+    circular.self = circular;
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () => Promise.reject(circular),
+        })),
+      },
+    };
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes).toEqual(["error"]);
+    expect(result.stopReason).toBe("error");
+    expect(typeof result.errorMessage).toBe("string");
+  });
+
   it("strips Fable thinking when replay targets Anthropic Vertex", async () => {
     let capturedPayload: unknown;
     const stream = streamAnthropic(
