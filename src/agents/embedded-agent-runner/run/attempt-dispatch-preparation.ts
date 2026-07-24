@@ -105,20 +105,23 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   });
   const attemptFastMode = resolveAttemptFastModeParam();
   const existingSessionTarget = sessionPromptState.sessionTarget;
-  const matchingSessionTarget =
-    existingSessionTarget?.sessionKey === resolvedSessionKey ? existingSessionTarget : undefined;
-  const resolvedTranscriptTarget = resolvedSessionKey
-    ? await resolveSessionTranscriptRuntimeReadTarget({
-        agentId: matchingSessionTarget?.agentId ?? workspaceResolution.agentId,
-        sessionId: matchingSessionTarget?.sessionId ?? sessionPromptState.sessionId,
-        sessionKey: resolvedSessionKey,
-        storePath:
-          matchingSessionTarget?.storePath ??
-          resolveStorePath(params.config?.session?.store, {
+  const reusableSessionTarget =
+    existingSessionTarget?.sessionKey === resolvedSessionKey ||
+    existingSessionTarget?.sessionId === sessionPromptState.sessionId
+      ? existingSessionTarget
+      : undefined;
+  const resolvedTranscriptTarget =
+    reusableSessionTarget ??
+    (resolvedSessionKey
+      ? await resolveSessionTranscriptRuntimeReadTarget({
+          agentId: workspaceResolution.agentId,
+          sessionId: sessionPromptState.sessionId,
+          sessionKey: resolvedSessionKey,
+          storePath: resolveStorePath(params.config?.session?.store, {
             agentId: workspaceResolution.agentId,
           }),
-      })
-    : undefined;
+        })
+      : undefined);
   const resolvedSessionTarget = resolvedTranscriptTarget
     ? { ...sessionPromptState.sessionTarget, ...resolvedTranscriptTarget }
     : sessionPromptState.sessionTarget;
