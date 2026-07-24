@@ -23,6 +23,7 @@ import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-
 import { resolveTelegramAdoptionStallTimeoutMs } from "./telegram-ingress-drain.js";
 import {
   resolveTelegramIngressSpoolDir,
+  resolveTelegramUpdateId,
   telegramSpooledUpdateLaneKey,
   writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
@@ -292,7 +293,10 @@ export class TelegramPollingSession {
     const updateOffset = {
       lastUpdateId,
       persistenceFloorUpdateId: persistedLastUpdateId,
-      onUpdateId: this.opts.persistUpdateId,
+      // In isolated mode the offset is persisted as soon as the update is
+      // durably spooled (see #runIsolatedIngressCycle), so the bot's update
+      // tracker does not need to persist it again after dispatch.
+      ...(this.opts.isolatedIngress?.enabled ? {} : { onUpdateId: this.opts.persistUpdateId }),
     };
     try {
       return createTelegramBot({
@@ -476,6 +480,9 @@ export class TelegramPollingSession {
         }
       };
       if (message.type === "poll-start") {
+        this.opts.log(
+          `[telegram][diag] isolated polling worker poll-start offset=${message.offset ?? "null"}`,
+        );
         liveness.noteGetUpdatesStarted({ offset: message.offset }, message.startedAt);
         pollState.startedAt = message.startedAt;
         pollState.offset = message.offset;
@@ -505,16 +512,40 @@ export class TelegramPollingSession {
         return;
       }
       if (message.type === "update") {
+        const updateIdHint = resolveTelegramUpdateId(message.update) ?? "unknown";
+        this.opts.log(
+          `[telegram][diag] isolated polling worker update received updateId=${updateIdHint} queued=${message.queued}`,
+        );
         void writeTelegramSpooledUpdate({
           spoolDir,
           update: message.update,
           laneKey: telegramSpooledUpdateLaneKey(message.update, this.opts.botInfo),
         }).then(
           (updateId) => {
+            this.opts.log(`[telegram][diag] isolated polling update spooled updateId=${updateId}`);
+            // Persist the offset only after the update is durably spooled. This
+            // guarantees the worker will not re-fetch this update after a restart
+            // (at the cost of a potential duplicate spool entry, which the
+            // channel ingress queue deduplicates by update_id).
+            void this.opts
+              .persistUpdateId(updateId)
+              .then(() => {
+                this.opts.log(
+                  `[telegram][diag] isolated polling offset persisted updateId=${updateId}`,
+                );
+              })
+              .catch((err: unknown) => {
+                this.opts.log(
+                  `[telegram] isolated polling offset persist failed updateId=${updateId}: ${formatErrorMessage(err)}`,
+                );
+              });
             ackSpooledUpdate(message.requestId, { ok: true, updateId });
             requestImmediateDrain();
           },
           (err: unknown) => {
+            this.opts.log(
+              `[telegram] isolated polling update spool failed updateId=${updateIdHint}: ${formatErrorMessage(err)}`,
+            );
             ackSpooledUpdate(message.requestId, {
               ok: false,
               message: formatErrorMessage(err),
