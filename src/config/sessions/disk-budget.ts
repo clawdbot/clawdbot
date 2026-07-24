@@ -21,7 +21,7 @@ import {
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -258,7 +258,7 @@ async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFil
 }
 
 async function readSqliteDatabaseFiles(storePath: string): Promise<SessionsDirFileStat[]> {
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+  const databasePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path;
   if (!databasePath) {
     return [];
   }
@@ -286,7 +286,7 @@ export async function measureSessionPhysicalDiskUsage(
   const sessionsDirFiles = await readSessionsDirFiles(path.dirname(storePath));
   const promptBlobFiles = await readSessionPromptBlobFiles(path.dirname(storePath));
   const databaseFiles = await readSqliteDatabaseFiles(storePath);
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+  const databasePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path;
   const databaseMainPath = databasePath ? canonicalizePathForComparison(databasePath) : undefined;
   const databaseWalPath = databasePath
     ? canonicalizePathForComparison(`${databasePath}-wal`)

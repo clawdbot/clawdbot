@@ -1696,6 +1696,11 @@ describe("openclaw agent database", () => {
           redirectedAliasPath,
         ),
       ).toBe(false);
+      const livePath = path.join(stateDir, "live-worker.sqlite");
+      fs.writeFileSync(livePath, "live");
+      const danglingTraversalAlias = path.join(stateDir, "dangling-traversal.sqlite");
+      fs.symlinkSync("missing/../live-worker.sqlite", danglingTraversalAlias);
+      expect(isSameOpenClawAgentDatabasePath(danglingTraversalAlias, livePath)).toBe(false);
       const loopPath = path.join(stateDir, "database-loop.sqlite");
       fs.symlinkSync(loopPath, loopPath);
       expect(() => isSameOpenClawAgentDatabasePath(loopPath, realPath)).toThrow(

@@ -2,6 +2,7 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -278,8 +279,12 @@ export type CronServiceState = {
 
 /** Creates mutable cron service state with a concrete clock dependency. */
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
+  // The public CronService constructor shipped before roster-aware callers.
+  // Preserve its implicit owner unless a static or dynamic configured default exists.
+  const defaultAgentId =
+    deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
   return {
-    deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
+    deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,

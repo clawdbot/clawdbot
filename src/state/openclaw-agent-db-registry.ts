@@ -183,41 +183,10 @@ function isParentFilesystemCaseInsensitive(params: {
   }
 }
 
-function resolveCanonicalPathFromExistingParent(lexicalPath: string): {
-  realPath: string;
-  parentDevice: bigint;
-  parentInode: bigint;
-  parentRealPath: string;
-  unresolvedSuffix: string;
+function resolveDanglingSymlinkTargetPath(lexicalPath: string): {
+  existingPath: string;
+  unresolvedSegments: string[];
 } {
-  const missingSegments: string[] = [];
-  let current = lexicalPath;
-  while (true) {
-    try {
-      const stat = statSync(current, { bigint: true });
-      const parentRealPath = realpathSync.native(current);
-      return {
-        realPath: path.join(parentRealPath, ...missingSegments),
-        parentDevice: stat.dev,
-        parentInode: stat.ino,
-        parentRealPath,
-        unresolvedSuffix: missingSegments.join(path.sep),
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      throw new Error(`Cannot resolve an existing parent for ${lexicalPath}.`);
-    }
-    missingSegments.unshift(path.basename(current));
-    current = parent;
-  }
-}
-
-function resolveDanglingSymlinkTargetPath(lexicalPath: string): string {
   let resolved = path.parse(lexicalPath).root;
   const remaining = lexicalPath.slice(resolved.length).split(path.sep).filter(Boolean);
   const visitedSymlinks = new Set<string>();
@@ -261,12 +230,15 @@ function resolveDanglingSymlinkTargetPath(lexicalPath: string): string {
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return path.join(resolved, segment, ...remaining);
+        // Once a component is missing, later `..` components cannot traverse it
+        // on the filesystem. Preserve the raw suffix so lexical normalization
+        // cannot alias this dangling path to a live database.
+        return { existingPath: resolved, unresolvedSegments: [segment, ...remaining] };
       }
       throw error;
     }
   }
-  return resolved;
+  return { existingPath: resolved, unresolvedSegments: [] };
 }
 
 function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathIdentity {
@@ -283,13 +255,17 @@ function resolveAgentDatabasePathIdentity(pathname: string): AgentDatabasePathId
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
-    // Preserve symlink/alias identity before the leaf exists by canonicalizing its nearest parent.
-    const parentIdentity = resolveCanonicalPathFromExistingParent(
-      resolveDanglingSymlinkTargetPath(lexicalPath),
-    );
+    // Preserve symlink/alias identity before the leaf exists without lexically
+    // collapsing unresolved components such as `missing/../live.sqlite`.
+    const dangling = resolveDanglingSymlinkTargetPath(lexicalPath);
+    const parentStat = statSync(dangling.existingPath, { bigint: true });
+    const parentRealPath = realpathSync.native(dangling.existingPath);
     return {
       lexicalPath,
-      ...parentIdentity,
+      parentDevice: parentStat.dev,
+      parentInode: parentStat.ino,
+      parentRealPath,
+      unresolvedSuffix: dangling.unresolvedSegments.join(path.sep),
     };
   }
 }

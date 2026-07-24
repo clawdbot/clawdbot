@@ -16,6 +16,7 @@ describe("agent roster resolution", () => {
     expect(listAgentIds({})).toEqual(["main"]);
     expect(listAgentIds({ agents: { entries: {} } })).toEqual([]);
     expect(resolveDefaultAgentId({})).toBe("main");
+    expect(resolveDefaultAgentId({ agents: { list: undefined } })).toBe("main");
     expect(resolveDefaultAgentId({ agents: { defaults: { workspace: "/srv/main" } } })).toBe(
       "main",
     );

@@ -1,6 +1,6 @@
 import { lstatSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
   isSameOpenClawAgentDatabasePath,
@@ -252,10 +252,13 @@ export function resolveSqliteTargetFromSessionStorePath(
       );
     }
     const databaseOwner = resolveDatabaseOwner(unsuffixedTarget.path);
+    const configuredDefaultAgentId = normalizeAgentId(
+      options.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,
+    );
     const ownerAgentId =
       registeredOwners[0] ??
       databaseOwner ??
-      (options.agentId ? normalizeAgentId(options.agentId) : undefined);
+      (options.agentId ? normalizeAgentId(options.agentId) : configuredDefaultAgentId);
     return {
       ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
       path: unsuffixedTarget.path,
@@ -263,10 +266,41 @@ export function resolveSqliteTargetFromSessionStorePath(
         ? { ownerSource: "database-registry" as const }
         : databaseOwner
           ? { ownerSource: "database-path" as const }
-          : {}),
+          : { ownerSource: "configured-default" as const }),
     };
   }
   return resolveCustomStoreSqlitePath({ unsuffixedPath: unsuffixedTarget.path, options });
+}
+
+/** Lists durable owners recorded in the fixed store's bounded SQLite sibling family. */
+export function listDurableSqliteTargetOwnersForSessionStorePath(storePath: string): string[] {
+  const unsuffixedTarget = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+  if (unsuffixedTarget.agentId || path.resolve(storePath).endsWith(".sqlite")) {
+    const owner = resolveDatabaseOwner(unsuffixedTarget.path);
+    return owner ? [owner] : [];
+  }
+  const directory = path.dirname(unsuffixedTarget.path);
+  const baseName = path.basename(unsuffixedTarget.path, ".sqlite");
+  const candidateNames = new Set([path.basename(unsuffixedTarget.path)]);
+  try {
+    for (const fileName of readdirSync(directory)) {
+      if (fileName.startsWith(`${baseName}.`) && fileName.endsWith(".sqlite")) {
+        candidateNames.add(fileName);
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const owners = new Set<string>();
+  for (const fileName of candidateNames) {
+    const owner = resolveDatabaseOwner(path.join(directory, fileName));
+    if (owner) {
+      owners.add(owner);
+    }
+  }
+  return [...owners];
 }
 
 /** Extracts the agent id from the canonical per-agent SQLite database path. */

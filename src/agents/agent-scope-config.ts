@@ -105,11 +105,13 @@ export function readAgentRosterProperty(raw: unknown): AgentRosterProperty | und
   if (!agents || typeof agents !== "object" || Array.isArray(agents)) {
     return undefined;
   }
-  if (Object.hasOwn(agents, "entries")) {
-    return { kind: "entries", value: (agents as Record<string, unknown>)["entries"] };
+  const entries = (agents as Record<string, unknown>)["entries"];
+  if (Object.hasOwn(agents, "entries") && entries !== undefined) {
+    return { kind: "entries", value: entries };
   }
-  if (Object.hasOwn(agents, "list")) {
-    return { kind: "list", value: (agents as Record<string, unknown>)["list"] };
+  const list = (agents as Record<string, unknown>)["list"];
+  if (Object.hasOwn(agents, "list") && list !== undefined) {
+    return { kind: "list", value: list };
   }
   return undefined;
 }

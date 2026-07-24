@@ -9,7 +9,10 @@ import {
   importSqliteSessionRows,
   loadExactSqliteSessionEntry,
 } from "../config/sessions/session-accessor.sqlite.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveSqliteTargetFromSessionStorePath,
+  resolveUnsuffixedSqliteTargetFromSessionStorePath,
+} from "../config/sessions/session-sqlite-target.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
@@ -218,8 +221,9 @@ function resolveDoctorSessionSqliteConfig(options: DoctorSessionSqliteOptions): 
   if (options.cfg) {
     return options.cfg;
   }
+  const requestedAgentId = normalizeAgentId(options.agent ?? LEGACY_IMPLICIT_AGENT_ID);
   return options.store
-    ? { agents: { entries: { [LEGACY_IMPLICIT_AGENT_ID]: { default: true } } } }
+    ? { agents: { entries: { [requestedAgentId]: { default: true } } } }
     : getRuntimeConfig();
 }
 
@@ -519,7 +523,9 @@ function isLegacySessionRecordOwnedByTarget(
 }
 
 function shouldFilterLegacySessionRecordsByTarget(target: SessionStoreTarget): boolean {
-  return !resolveSqliteTargetFromSessionStorePath(target.storePath).agentId;
+  // Filtering depends on whether the authored store path encodes an owner,
+  // not on the configured/default owner selected for its SQLite target.
+  return !resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).agentId;
 }
 
 function resolveLegacyTranscriptPath(

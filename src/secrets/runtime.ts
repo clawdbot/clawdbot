@@ -9,6 +9,7 @@ import {
 } from "../agents/auth-profiles.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import {
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshotMetadata,
@@ -157,7 +158,10 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   const sourceConfig = structuredClone(params.config);
   const assignmentSourceConfig = structuredClone(params.assignmentConfig ?? params.config);
-  const resolvedConfig = structuredClone(assignmentSourceConfig);
+  // SDK callers can still prepare secrets from an authored pre-roster object.
+  // Collect against the same in-memory roster that normal config loading exposes.
+  const resolvedConfig = migratePersistedImplicitMainRoster(structuredClone(assignmentSourceConfig))
+    .config as OpenClawConfig;
   const includeConfigRefs = params.includeConfigRefs ?? true;
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
   let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];

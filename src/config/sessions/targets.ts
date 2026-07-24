@@ -18,7 +18,10 @@ import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
 import { readSqliteSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  listDurableSqliteTargetOwnersForSessionStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
   type SessionStoreTarget,
@@ -137,6 +140,11 @@ export function listKnownSessionStoreAgentIds(
       ids.add(normalizeAgentId(durableTarget.unsuffixedOwnerAgentId));
     } else if (durableTarget.ownerSource === "database-path" && durableTarget.agentId) {
       ids.add(normalizeAgentId(durableTarget.agentId));
+    }
+    // Retired owners may survive only in suffixed fixed-store databases after
+    // their registry rows are removed. Scan this store's exact sibling family.
+    for (const durableOwner of listDurableSqliteTargetOwnersForSessionStorePath(storePath)) {
+      ids.add(normalizeAgentId(durableOwner));
     }
   }
   for (const registered of listOpenClawRegisteredAgentDatabases({ env })) {

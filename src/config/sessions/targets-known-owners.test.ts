@@ -62,4 +62,36 @@ describe("known session store owners", () => {
       expect(listKnownSessionStoreAgentIds(cfg, { env }).toSorted()).toEqual(["ops", "retired"]);
     });
   });
+
+  it("finds a retired owner in a durable suffixed sibling without a registry row", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const storePath = path.join(stateDir, "shared", "sessions.json");
+      const cfg: OpenClawConfig = {
+        session: { store: storePath },
+        agents: { entries: { ops: { default: true } } },
+      };
+
+      await replaceSessionEntry(
+        {
+          agentId: "retired",
+          defaultAgentId: "ops",
+          env,
+          storePath,
+          sessionKey: "agent:retired:cron:old:run:suffixed",
+        },
+        { sessionId: "retired-suffixed-session", updatedAt: 1 },
+      );
+      const retiredDatabasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: "retired",
+        defaultAgentId: "ops",
+        env,
+      }).path;
+      expect(path.basename(retiredDatabasePath)).toBe("openclaw-agent.retired.sqlite");
+      unregisterOpenClawAgentDatabase({ agentId: "retired", env, path: retiredDatabasePath });
+
+      expect(listKnownSessionStoreAgentIds(cfg, { env }).toSorted()).toEqual(["ops", "retired"]);
+    });
+  });
 });

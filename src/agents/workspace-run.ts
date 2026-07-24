@@ -32,9 +32,9 @@ export type ResolveRunWorkspaceResult = {
   agentIdSource: AgentIdSource;
 };
 
-export const RUN_WORKSPACE_ROSTER_REQUIRED_ERROR_CODE = "RUN_WORKSPACE_ROSTER_REQUIRED";
+const RUN_WORKSPACE_ROSTER_REQUIRED_ERROR_CODE = "RUN_WORKSPACE_ROSTER_REQUIRED";
 
-export class RunWorkspaceRosterRequiredError extends Error {
+class RunWorkspaceRosterRequiredError extends Error {
   readonly code = RUN_WORKSPACE_ROSTER_REQUIRED_ERROR_CODE;
 
   constructor() {
@@ -43,7 +43,7 @@ export class RunWorkspaceRosterRequiredError extends Error {
   }
 }
 
-export class RunWorkspaceAgentNotConfiguredError extends Error {
+class RunWorkspaceAgentNotConfiguredError extends Error {
   readonly code = "RUN_WORKSPACE_AGENT_NOT_CONFIGURED";
   readonly agentId: string;
 
