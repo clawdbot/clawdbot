@@ -1,6 +1,8 @@
 // Covers ClawHub metadata and artifact fetch helpers.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -152,7 +154,7 @@ const oversizedArchiveCases: Array<{
       downloadClawHubSkillArchiveUrl({
         baseUrl: "https://clawhub.ai",
         url: "https://downloads.example.com/skill.zip",
-        fetchImpl: async () => response,
+        fetchImpl: vi.fn(async () => response),
       }),
     expectedResource: "skill archive download at /skill.zip",
   },
@@ -1643,14 +1645,14 @@ describe("clawhub helpers", () => {
     const archive = await downloadClawHubSkillArchiveUrl({
       baseUrl: "https://clawhub.ai",
       url: "https://codeload.github.com/NVIDIA/skills/zip/abcdef",
-      fetchImpl: async (input, init) => {
+      fetchImpl: vi.fn(async (input, init) => {
         requestedUrl = input instanceof Request ? input.url : String(input);
         requestedInit = init;
         return new Response(new Uint8Array([7, 8, 9]), {
           status: 200,
           headers: { "content-type": "application/zip" },
         });
-      },
+      }),
     });
 
     try {
@@ -1661,6 +1663,61 @@ describe("clawhub helpers", () => {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
       await expectPathMissing(archiveDir);
+    }
+  });
+
+  it("blocks off-registry resolver archive URLs that target internal addresses", async () => {
+    const payload = Buffer.from([1, 2, 3, 4]);
+    let hits = 0;
+    const server = createServer((_request, response) => {
+      hits += 1;
+      response.writeHead(200, { "content-type": "application/zip" });
+      response.end(payload);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const port = (server.address() as AddressInfo).port;
+    try {
+      await expect(
+        downloadClawHubSkillArchiveUrl({
+          baseUrl: "https://clawhub.ai",
+          url: `http://127.0.0.1:${port}/skill.zip`,
+        }),
+      ).rejects.toThrow();
+      expect(hits).toBe(0);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("still downloads archive URLs served from the configured registry origin", async () => {
+    const payload = Buffer.from([9, 8, 7, 6]);
+    let hits = 0;
+    const server = createServer((_request, response) => {
+      hits += 1;
+      response.writeHead(200, { "content-type": "application/zip" });
+      response.end(payload);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const port = (server.address() as AddressInfo).port;
+    const registry = `http://127.0.0.1:${port}`;
+    const archive = await downloadClawHubSkillArchiveUrl({
+      baseUrl: registry,
+      url: `${registry}/skill.zip`,
+    });
+    try {
+      expect(hits).toBe(1);
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(payload);
+    } finally {
+      await archive.cleanup();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });

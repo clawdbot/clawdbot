@@ -14,6 +14,7 @@ import { hasValidIsoCalendarComponents } from "../shared/iso-time.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
+import { fetchWithSsrFGuard } from "./net/fetch-guard.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import {
   parseStrictNonNegativeInteger,
@@ -1581,6 +1582,13 @@ export async function downloadClawHubSkillArchiveUrl(params: {
   const requestUrl = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
   const registryOrigin = new URL(`${normalizeBaseUrl(params.baseUrl)}/`).origin;
   const skipAuth = explicitToken == null && requestUrl.origin !== registryOrigin;
+  if (skipAuth) {
+    return await downloadUntrustedClawHubSkillArchiveUrl({
+      url: requestUrl.href,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+    });
+  }
   const { response, url, hasToken } = await clawhubRequest({
     baseUrl: params.baseUrl,
     url: params.url,
@@ -1610,6 +1618,45 @@ export async function downloadClawHubSkillArchiveUrl(params: {
     artifact: "archive",
     cleanup: target.cleanup,
   };
+}
+
+async function downloadUntrustedClawHubSkillArchiveUrl(params: {
+  url: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubDownloadResult> {
+  const { response, finalUrl, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    timeoutMs: resolveClawHubRequestTimeoutMs(params.timeoutMs),
+    ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
+    auditContext: "clawhub-skill-archive-download",
+  });
+  try {
+    const finalRequestUrl = new URL(finalUrl);
+    if (!response.ok) {
+      throw await buildClawHubError(response, finalRequestUrl, false, params.timeoutMs);
+    }
+    const bytes = await readClawHubResponseBytes({
+      response,
+      timeoutMs: params.timeoutMs,
+      resourceLabel: `skill archive download at ${finalRequestUrl.pathname}`,
+    });
+    const sha256Hex = formatSha256Hex(bytes);
+    const target = await createTempDownloadTarget({
+      prefix: "openclaw-clawhub-skill",
+      fileName: "skill.zip",
+    });
+    await fs.writeFile(target.path, bytes);
+    return {
+      archivePath: target.path,
+      integrity: formatSha256Integrity(bytes),
+      sha256Hex,
+      artifact: "archive",
+      cleanup: target.cleanup,
+    };
+  } finally {
+    await release();
+  }
 }
 
 export async function downloadClawHubGitHubSkillArchive(params: {
