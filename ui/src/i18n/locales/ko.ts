@@ -615,7 +615,7 @@ export const ko: TranslationMap = {
     filters: "필터",
     createdBy: "{name} 생성",
     archivedBy: "{name}님이 보관함으로 이동",
-    filterByCreator: "생성자별 필터",
+    people: "사람",
     allCreators: "모든 사용자",
     filterControls: "세션 필터",
     sourceFilters: "세션 소스 필터",
@@ -1399,6 +1399,11 @@ export const ko: TranslationMap = {
     chatPrefs: {
       title: "채팅",
       hint: "브라우저 로컬 채팅 환경설정입니다.",
+      messageWidth: "메시지 너비",
+      messageWidthHint:
+        "가운데 정렬된 대화 내용의 선택적 CSS 너비입니다. 예: 960px, 82% 또는 min(1280px, 82%).",
+      messageWidthInvalid:
+        "960px, 82%, min(1280px, 82%) 또는 calc(100% - 2rem)와 같은 CSS 너비를 입력하세요.",
     },
     sidebarPrefs: {
       title: "사이드바",
@@ -1685,6 +1690,7 @@ export const ko: TranslationMap = {
     blockedAgentFilter: "에이전트 필터에 의해 차단됨",
   },
   nav: {
+    account: "계정",
     back: "뒤로",
     forward: "앞으로",
     chat: "채팅",
@@ -3819,6 +3825,22 @@ export const ko: TranslationMap = {
       selected: "멤버",
       noPeople: "페어링된 사용자를 찾을 수 없습니다.",
       readOnlyNotice: "스레드 소유자와 멤버만 이 스레드에서 작업할 수 있습니다.",
+    },
+    sessionSuggestions: {
+      suggest: "제안",
+      suggestMessage: "메시지 제안",
+      attachmentsUnsupported: "텍스트 제안을 제출하기 전에 첨부 파일을 제거하세요.",
+      sendNow: "{author}의 제안 지금 보내기",
+      queue: "{author}의 제안 대기열에 추가",
+      edit: "{author}의 제안 편집",
+      dismiss: "{author}의 제안 거절",
+      typing: "{name} 님이 입력 중…",
+      typingMany: "{names} 님이 입력 중…",
+      state: {
+        pending: "대기 중",
+        accepted: "수락됨",
+        dismissed: "거절됨",
+      },
     },
     loadOlder: "이전 항목 불러오기",
     sessionHeader: {

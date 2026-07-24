@@ -595,7 +595,7 @@ export const zh_TW: TranslationMap = {
     filters: "篩選條件",
     createdBy: "由 {name} 建立",
     archivedBy: "由 {name} 封存",
-    filterByCreator: "依建立者篩選",
+    people: "人員",
     allCreators: "所有人",
     filterControls: "工作階段篩選器",
     sourceFilters: "工作階段來源篩選器",
@@ -1375,6 +1375,10 @@ export const zh_TW: TranslationMap = {
     chatPrefs: {
       title: "聊天",
       hint: "瀏覽器本機的聊天偏好設定。",
+      messageWidth: "訊息寬度",
+      messageWidthHint: "置中對話記錄的選用 CSS 寬度，例如 960px、82% 或 min(1280px, 82%)。",
+      messageWidthInvalid:
+        "請輸入 CSS 寬度，例如 960px、82%、min(1280px, 82%) 或 calc(100% - 2rem)。",
     },
     sidebarPrefs: {
       title: "側邊欄",
@@ -1652,6 +1656,7 @@ export const zh_TW: TranslationMap = {
     blockedAgentFilter: "被代理程式篩選器封鎖",
   },
   nav: {
+    account: "帳戶",
     back: "返回",
     forward: "前進",
     chat: "聊天",
@@ -3744,6 +3749,22 @@ export const zh_TW: TranslationMap = {
       selected: "成員",
       noPeople: "找不到已配對的人員。",
       readOnlyNotice: "只有對話串擁有者和成員可以在此對話串中執行操作。",
+    },
+    sessionSuggestions: {
+      suggest: "建議",
+      suggestMessage: "建議訊息",
+      attachmentsUnsupported: "提交文字建議前，請先移除附件。",
+      sendNow: "立即傳送 {author} 的建議",
+      queue: "將 {author} 的建議加入佇列",
+      edit: "編輯 {author} 的建議",
+      dismiss: "忽略 {author} 的建議",
+      typing: "{name} 正在輸入…",
+      typingMany: "{names} 正在輸入…",
+      state: {
+        pending: "待處理",
+        accepted: "已接受",
+        dismissed: "已忽略",
+      },
     },
     loadOlder: "載入較早內容",
     sessionHeader: {

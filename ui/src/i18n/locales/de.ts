@@ -627,7 +627,7 @@ export const de: TranslationMap = {
     filters: "Filter",
     createdBy: "Erstellt von {name}",
     archivedBy: "Archiviert von {name}",
-    filterByCreator: "Nach Ersteller filtern",
+    people: "Personen",
     allCreators: "Alle Personen",
     filterControls: "Sitzungsfilter",
     sourceFilters: "Filter für Sitzungsquellen",
@@ -1417,6 +1417,11 @@ export const de: TranslationMap = {
     chatPrefs: {
       title: "Chat",
       hint: "Browserlokale Chat-Einstellungen.",
+      messageWidth: "Nachrichtenbreite",
+      messageWidthHint:
+        "Optionale CSS-Breite für den zentrierten Chatverlauf, z. B. 960px, 82% oder min(1280px, 82%).",
+      messageWidthInvalid:
+        "Geben Sie eine CSS-Breite ein, z. B. 960px, 82%, min(1280px, 82%) oder calc(100% - 2rem).",
     },
     sidebarPrefs: {
       title: "Seitenleiste",
@@ -1707,6 +1712,7 @@ export const de: TranslationMap = {
     blockedAgentFilter: "durch Agentenfilter blockiert",
   },
   nav: {
+    account: "Konto",
     back: "Zurück",
     forward: "Weiter",
     chat: "Chat",
@@ -3893,6 +3899,22 @@ export const de: TranslationMap = {
       noPeople: "Keine gekoppelten Personen gefunden.",
       readOnlyNotice:
         "Nur der Eigentümer des Threads und Mitglieder können in diesem Thread Aktionen ausführen.",
+    },
+    sessionSuggestions: {
+      suggest: "Vorschlagen",
+      suggestMessage: "Nachricht vorschlagen",
+      attachmentsUnsupported: "Entfernen Sie Anhänge, bevor Sie einen Textvorschlag übermitteln.",
+      sendNow: "Vorschlag von {author} jetzt senden",
+      queue: "Vorschlag von {author} in die Warteschlange stellen",
+      edit: "Vorschlag von {author} bearbeiten",
+      dismiss: "Vorschlag von {author} verwerfen",
+      typing: "{name} schreibt…",
+      typingMany: "{names} schreiben…",
+      state: {
+        pending: "Ausstehend",
+        accepted: "Angenommen",
+        dismissed: "Verworfen",
+      },
     },
     loadOlder: "Ältere laden",
     sessionHeader: {
