@@ -1699,6 +1699,7 @@ html.openclaw-native-macos
 
 .sidebar-session-pagination {
   display: flex;
+  justify-content: center;
   gap: 14px;
   padding: 0 10px 10px;
 }

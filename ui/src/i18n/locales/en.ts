@@ -4293,7 +4293,7 @@ export const en: TranslationMap = {
       session: "Chat thread",
       sessionSearch: "Search threads",
       clearSessionSearch: "Clear thread search",
-      loadMoreSessions: "Load more threads",
+      loadMoreSessions: "Show more",
       model: "Chat model",
       modelSection: "Model",
       modelLocked: "Locked",
