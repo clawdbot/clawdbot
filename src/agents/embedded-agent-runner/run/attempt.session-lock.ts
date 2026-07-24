@@ -605,11 +605,11 @@ export function installPromptSubmissionLockRelease(params: {
 }
 
 // Pin SDK retries to 0 for calls made inside the embedded prompt lock window.
-// The in-window default is always 0, never the configured provider retry: the
-// lock is released across the model call, model-fallback owns the one whole-attempt
-// retry, and an in-window SDK retry would run against a released lock and race
-// session takeover, silently losing the message (#87180). Only an explicit per-call
-// options.maxRetries overrides it, because caller-provided options spread last.
+// The in-window value is always 0 — neither the configured provider default nor
+// a caller-provided maxRetries can widen it: the lock is released across the model
+// call, and an in-window SDK retry would run against a released lock and race
+// session takeover, silently losing the message (#87180). The outer reply owner
+// restores the configured retry budget, where each retry reacquires the lock.
 export function installEmbeddedPromptRetryDefault(session: unknown): void {
   const agent = (session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
@@ -628,9 +628,11 @@ export function installEmbeddedPromptRetryDefault(session: unknown): void {
       unknown,
       { maxRetries?: number } | undefined,
     ];
-    // Inject maxRetries:0 as the in-window default; caller-provided options spread
-    // last so an explicit maxRetries still wins.
-    return innerStreamFn(model, context, { maxRetries: 0, ...callOptions });
+    // Force maxRetries:0 last so it wins over both the configured provider default
+    // (resolved downstream in sdk.ts) and any explicit per-call maxRetries. The
+    // released-lock window must never retry in-window (#87180); the outer owner
+    // restores the configured retry budget where each retry reacquires the lock.
+    return innerStreamFn(model, context, { ...callOptions, maxRetries: 0 });
   };
   wrappedStreamFn.openclawEmbeddedPromptRetryDefaultInstalled = true;
   // The outermost wrapper hides inner markers, so carry the lock-release marker

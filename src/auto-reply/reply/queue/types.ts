@@ -160,6 +160,14 @@ export type FollowupRun = {
     provider: string;
     model: string;
     requestedRouteResolution?: ModelFallbackRouteResolution;
+    /**
+     * Configured provider retry budget (settings.retry.provider.maxRetries),
+     * resolved once at run preparation. The embedded prompt-lock window pins SDK
+     * retries to 0 (#87180), so the outer reply orchestrator restores this budget
+     * as its whole-attempt transient-retry count where each retry reacquires the
+     * session lock. Unset means the shipped single outer retry.
+     */
+    providerRetryMaxRetries?: number;
     /** Prevents the queued run from selecting configured fallback models. */
     modelSelectionLocked?: boolean;
     hasSessionModelOverride?: boolean;

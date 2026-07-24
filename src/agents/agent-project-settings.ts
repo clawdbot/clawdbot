@@ -48,6 +48,22 @@ function createRuntimeEmbeddedAgentSettingsManager(
   );
 }
 
+/**
+ * Resolves the configured provider retry budget (settings.retry.provider.maxRetries)
+ * from the same project/plugin settings the embedded runner reads. The reply
+ * orchestrator wires this once onto the prepared run so the outer whole-attempt
+ * retry owner can restore the budget the in-window SDK pin drops (#87180); unset
+ * leaves the shipped single outer retry.
+ */
+export function resolveConfiguredProviderRetryMaxRetries(params: {
+  cwd: string;
+  agentDir: string;
+  cfg?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+}): number | undefined {
+  return createEmbeddedAgentSettingsManager(params).getProviderRetrySettings().maxRetries;
+}
+
 /** Creates the runtime SettingsManager with project/plugin settings and compaction overrides. */
 export function createPreparedEmbeddedAgentSettingsManager(params: {
   cwd: string;

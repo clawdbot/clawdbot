@@ -277,4 +277,108 @@ describe("runAgentTurnWithFallback: transient connection/timeout retry (#87180)"
     // No transient retry through the timeout disjunct: a single cycle only.
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
   });
+
+  it("restores the configured provider retry budget as the whole-attempt retry count (#87180)", async () => {
+    // settings.retry.provider.maxRetries is dropped in-window by the SDK pin, so
+    // the outer owner restores it: with a resolved budget of 3, a persistently
+    // transient error runs 1 initial cycle + 3 retries (4 cycles). Each retry
+    // re-runs the whole fallback chain, so the session lock is reacquired per
+    // attempt, then a terminal failure is surfaced once the budget is exhausted.
+    state.runWithModelFallbackMock.mockRejectedValue(new Error("Connection error."));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.providerRetryMaxRetries = 3;
+    vi.useFakeTimers();
+    try {
+      const promise = runAgentTurnWithFallback({
+        commandBody: "hello",
+        followupRun,
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+        opts: {},
+        typingSignals: createMockTypingSignaler(),
+        blockReplyPipeline: null,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        applyReplyToMode: (payload) => payload,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        pendingToolTasks: new Set(),
+        resetSessionAfterRoleOrderingConflict: async () => false,
+        isHeartbeat: false,
+        sessionKey: "main",
+        getActiveSessionEntry: () => undefined,
+        resolvedVerboseLevel: "off",
+      });
+      // Three fixed backoffs (2_500ms each) separate the four cycles.
+      await vi.advanceTimersByTimeAsync(8_000);
+      const result = await promise;
+
+      expect(result.kind).toBe("final");
+      // 1 initial cycle + exactly 3 configured retries.
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("succeeds within the configured provider retry budget when a transient error clears (#87180)", async () => {
+    // With a budget of 3, two transient failures are absorbed before a clean
+    // cycle succeeds — the extra budget is used, not the shipped single retry.
+    state.runWithModelFallbackMock
+      .mockRejectedValueOnce(new Error("Connection error."))
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+        result: await params.run("anthropic", "claude"),
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "recovered" }],
+      meta: {
+        agentMeta: { sessionId: "session", provider: "anthropic", model: "claude" },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.providerRetryMaxRetries = 3;
+    vi.useFakeTimers();
+    try {
+      const promise = runAgentTurnWithFallback({
+        commandBody: "hello",
+        followupRun,
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+        opts: {},
+        typingSignals: createMockTypingSignaler(),
+        blockReplyPipeline: null,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        applyReplyToMode: (payload) => payload,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        pendingToolTasks: new Set(),
+        resetSessionAfterRoleOrderingConflict: async () => false,
+        isHeartbeat: false,
+        sessionKey: "main",
+        getActiveSessionEntry: () => undefined,
+        resolvedVerboseLevel: "off",
+      });
+      await vi.advanceTimersByTimeAsync(6_000);
+      const result = await promise;
+
+      expect(result.kind).toBe("success");
+      // 1 initial cycle + 2 retries before the third cycle recovers.
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

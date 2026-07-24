@@ -982,15 +982,36 @@ describe("installEmbeddedPromptRetryDefault", () => {
     expect(streamFn).toHaveBeenCalledWith("model", "context", { maxRetries: 0 });
   });
 
-  it("preserves an explicit maxRetries over the embedded prompt default", async () => {
+  it("does not let the configured provider retry leak into the released-lock window (#87180)", async () => {
+    // Model sdk.ts resolution: optionsLocal?.maxRetries ?? providerRetrySettings.maxRetries.
+    // The pin injects an explicit maxRetries:0, so the configured provider budget
+    // (3 here) can never apply while the prompt lock is released.
+    const configuredMaxRetries = 3;
+    const received: Array<number | undefined> = [];
+    const streamFn = vi.fn(
+      async (_model: unknown, _context: unknown, options?: { maxRetries?: number }) => {
+        received.push(options?.maxRetries ?? configuredMaxRetries);
+      },
+    );
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session);
+    await session.agent.streamFn("model", "context");
+
+    expect(received).toEqual([0]);
+  });
+
+  it("forces maxRetries:0 even when the caller sets an explicit maxRetries in-window (#87180 hardening)", async () => {
     const streamFn = vi.fn(async (..._args: unknown[]) => {});
     const session = { agent: { streamFn } };
 
     installEmbeddedPromptRetryDefault(session);
     await session.agent.streamFn("model", "context", { maxRetries: 3, temperature: 0.2 });
 
+    // The released-lock window pins retries to 0; an explicit per-call maxRetries
+    // cannot widen it. Other request options are preserved.
     expect(streamFn).toHaveBeenCalledWith("model", "context", {
-      maxRetries: 3,
+      maxRetries: 0,
       temperature: 0.2,
     });
   });
@@ -1028,8 +1049,10 @@ describe("installEmbeddedPromptRetryDefault", () => {
     // Inner provider streamFn runs once per turn, not once per stacked wrapper.
     expect(streamFn).toHaveBeenCalledTimes(2);
     expect(streamFn).toHaveBeenNthCalledWith(1, "model", "context", { maxRetries: 0 });
+    // The explicit per-call maxRetries is forced to 0 in the released-lock window;
+    // other options survive.
     expect(streamFn).toHaveBeenNthCalledWith(2, "model", "context", {
-      maxRetries: 3,
+      maxRetries: 0,
       temperature: 0.2,
     });
 
