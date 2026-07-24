@@ -613,7 +613,7 @@ export const hi: TranslationMap = {
     filters: "फ़िल्टर",
     createdBy: "{name} द्वारा बनाया गया",
     archivedBy: "{name} द्वारा संग्रहीत",
-    filterByCreator: "निर्माता के अनुसार फ़िल्टर करें",
+    people: "लोग",
     allCreators: "सभी लोग",
     filterControls: "सत्र फ़िल्टर",
     sourceFilters: "सेशन स्रोत फ़िल्टर",
@@ -1395,6 +1395,11 @@ export const hi: TranslationMap = {
     chatPrefs: {
       title: "चैट",
       hint: "ब्राउज़र-स्थानीय चैट प्राथमिकताएँ।",
+      messageWidth: "संदेश की चौड़ाई",
+      messageWidthHint:
+        "केंद्रित ट्रांसक्रिप्ट के लिए वैकल्पिक CSS चौड़ाई, जैसे 960px, 82%, या min(1280px, 82%)।",
+      messageWidthInvalid:
+        "CSS चौड़ाई दर्ज करें, जैसे 960px, 82%, min(1280px, 82%), या calc(100% - 2rem)।",
     },
     sidebarPrefs: {
       title: "साइडबार",
@@ -1678,6 +1683,7 @@ export const hi: TranslationMap = {
     blockedAgentFilter: "agent फ़िल्टर द्वारा अवरुद्ध",
   },
   nav: {
+    account: "खाता",
     back: "वापस",
     forward: "आगे",
     chat: "चैट",
@@ -3795,6 +3801,22 @@ export const hi: TranslationMap = {
       selected: "सदस्य",
       noPeople: "कोई युग्मित व्यक्ति नहीं मिला।",
       readOnlyNotice: "इस थ्रेड में केवल थ्रेड का स्वामी और सदस्य ही कार्रवाई कर सकते हैं।",
+    },
+    sessionSuggestions: {
+      suggest: "सुझाव दें",
+      suggestMessage: "संदेश सुझाएँ",
+      attachmentsUnsupported: "टेक्स्ट सुझाव सबमिट करने से पहले अटैचमेंट हटाएँ।",
+      sendNow: "{author} का सुझाव अभी भेजें",
+      queue: "{author} का सुझाव कतार में लगाएँ",
+      edit: "{author} का सुझाव संपादित करें",
+      dismiss: "{author} का सुझाव खारिज करें",
+      typing: "{name} टाइप कर रहे हैं…",
+      typingMany: "{names} टाइप कर रहे हैं…",
+      state: {
+        pending: "लंबित",
+        accepted: "स्वीकृत",
+        dismissed: "खारिज",
+      },
     },
     loadOlder: "पुराने लोड करें",
     sessionHeader: {
