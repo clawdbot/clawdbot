@@ -1311,33 +1311,59 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
 }
 
+const GATEWAY_INVOCATION_PROFILE_ENV_KEYS = [HOSTING_PROFILE_ENV] as const;
+
+function captureGatewayInvocationProfileEnvironment(): Record<string, string | undefined> {
+  return Object.fromEntries(
+    GATEWAY_INVOCATION_PROFILE_ENV_KEYS.map((key) => [key, process.env[key]]),
+  );
+}
+
+function restoreGatewayInvocationProfileEnvironment(
+  snapshot: Record<string, string | undefined>,
+): void {
+  for (const key of GATEWAY_INVOCATION_PROFILE_ENV_KEYS) {
+    const value = snapshot[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
 /** Run foreground Gateway startup with one consent-gated invalid-config repair attempt. */
 export async function runGatewayCommand(
   opts: GatewayRunOpts,
   hooks: GatewayRunRuntimeHooks = {},
   recoveryDeps?: InvalidConfigRecoveryDeps,
 ) {
+  const profileEnvironment = captureGatewayInvocationProfileEnvironment();
   try {
-    await runGatewayCommandOnce(opts, hooks);
-  } catch (error) {
-    if (!isInvalidConfigError(error)) {
-      throw error;
-    }
-    defaultRuntime.error(`Gateway failed to start: ${formatErrorMessage(error)}`);
-    if (opts.allowUnconfigured || !isDoctorRecoverableInvalidConfigError(error)) {
+    try {
+      await runGatewayCommandOnce(opts, hooks);
+    } catch (error) {
+      if (!isInvalidConfigError(error)) {
+        throw error;
+      }
+      defaultRuntime.error(`Gateway failed to start: ${formatErrorMessage(error)}`);
+      if (opts.allowUnconfigured || !isDoctorRecoverableInvalidConfigError(error)) {
+        defaultRuntime.exit(EXIT_CONFIG_ERROR);
+        return;
+      }
+      const { offerInvalidConfigRecovery } = await import("../invalid-config-recovery.js");
+      const recovery = await offerInvalidConfigRecovery({
+        runtime: defaultRuntime,
+        deps: recoveryDeps,
+        retry: async () => await runGatewayCommandOnce(opts, hooks),
+      });
+      if (recovery.status === "recovered") {
+        return;
+      }
       defaultRuntime.exit(EXIT_CONFIG_ERROR);
-      return;
     }
-    const { offerInvalidConfigRecovery } = await import("../invalid-config-recovery.js");
-    const recovery = await offerInvalidConfigRecovery({
-      runtime: defaultRuntime,
-      deps: recoveryDeps,
-      retry: async () => await runGatewayCommandOnce(opts, hooks),
-    });
-    if (recovery.status === "recovered") {
-      return;
-    }
-    defaultRuntime.exit(EXIT_CONFIG_ERROR);
+  } finally {
+    restoreGatewayInvocationProfileEnvironment(profileEnvironment);
   }
 }
 

@@ -1515,7 +1515,13 @@ describe("gateway run option collisions", () => {
     expect(options.startupConfigSnapshotRead).toEqual({ snapshot: configState.snapshot });
   });
 
-  it("sets the selected hosting profile before gateway startup", async () => {
+  it("scopes the selected hosting profile to one gateway invocation", async () => {
+    let observedProfile: string | undefined;
+    startGatewayServer.mockImplementationOnce(async () => {
+      observedProfile = process.env.OPENCLAW_HOSTING_PROFILE;
+      return { close: vi.fn(async () => {}) };
+    });
+
     await runGatewayCli([
       "gateway",
       "run",
@@ -1524,7 +1530,8 @@ describe("gateway run option collisions", () => {
       "--allow-unconfigured",
     ]);
 
-    expect(process.env.OPENCLAW_HOSTING_PROFILE).toBe("container");
+    expect(observedProfile).toBe("container");
+    expect(process.env.OPENCLAW_HOSTING_PROFILE).toBeUndefined();
     expect(startGatewayServer).toHaveBeenCalledOnce();
     expect(gatewayStartOptions().hostingProfileOverride).toBe("container");
   });
