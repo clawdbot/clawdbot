@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -2609,13 +2608,7 @@ describe("followup queue collect routing", () => {
       const recorder = calls[0]?.userTurnTranscriptRecorder;
       expect(recorder).toBeDefined();
       const persisted = await recorder?.persistFallback();
-      expect(persisted?.sessionFile).toBe(
-        formatSqliteSessionFileMarker({
-          agentId: "agent",
-          sessionId: "new-session",
-          storePath,
-        }),
-      );
+      expect(persisted?.sessionFile).toBe("agent:agent:main");
       await expect(
         loadTranscriptEvents({
           agentId: "agent",

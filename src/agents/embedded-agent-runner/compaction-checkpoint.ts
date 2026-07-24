@@ -1,3 +1,4 @@
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 /** Owns the shared checkpoint lifecycle around both compaction entry points. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -23,6 +24,7 @@ export async function persistCompactionCheckpoint(params: {
   tokensBefore?: number;
   tokensAfter?: number;
   sessionFile: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   leafId?: string;
   createdAt?: number;
 }): Promise<boolean> {
@@ -30,7 +32,9 @@ export async function persistCompactionCheckpoint(params: {
     return false;
   }
   try {
-    const transcriptState = await readSessionLeafStateFromTranscriptAsync(params.sessionFile);
+    const transcriptState = params.sessionTarget
+      ? null
+      : await readSessionLeafStateFromTranscriptAsync(params.sessionFile);
     const checkpointPosition = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: params.leafId,
       transcriptState,
@@ -45,7 +49,7 @@ export async function persistCompactionCheckpoint(params: {
       firstKeptEntryId: params.firstKeptEntryId,
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
-      postSessionFile: params.sessionFile,
+      postSessionFile: params.sessionTarget ? undefined : params.sessionFile,
       postLeafId: checkpointPosition.leafId,
       postEntryId: checkpointPosition.entryId,
       createdAt: params.createdAt,

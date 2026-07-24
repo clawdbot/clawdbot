@@ -289,48 +289,6 @@ describe("session cost usage", () => {
     });
   });
 
-  it("does not fall back from empty SQLite transcripts to stale JSONL usage files", async () => {
-    const root = await makeSessionCostRoot("sqlite-cost-empty");
-    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
-    const sessionKey = "agent:main:empty-sqlite-cost";
-    const sessionId = "empty-sqlite-cost-session";
-    const sqliteMarker = `sqlite:main:${sessionId}:${storePath}`;
-    const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
-
-    await withStateDir(root, async () => {
-      await upsertSessionEntry(
-        { sessionKey, storePath },
-        {
-          sessionFile: sqliteMarker,
-          sessionId,
-          updatedAt: Date.UTC(2026, 5, 25, 12, 0, 0),
-        },
-      );
-      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
-      await fs.writeFile(
-        legacyJsonl,
-        transcriptText(sessionId, {
-          type: "message",
-          timestamp: "2026-06-25T12:00:00.000Z",
-          message: {
-            role: "assistant",
-            usage: { input: 100, output: 100, totalTokens: 200, cost: { total: 0.2 } },
-          },
-        }),
-        "utf-8",
-      );
-
-      expect(
-        resolveExistingUsageSessionFile({
-          agentId: "main",
-          sessionEntry: { sessionFile: sqliteMarker, sessionId, updatedAt: 1 },
-          sessionFile: legacyJsonl,
-          sessionId,
-        }),
-      ).toBe(sqliteMarker);
-    });
-  });
-
   it("includes SQLite-only sessions in cached usage summaries", async () => {
     const root = await makeSessionCostRoot("sqlite-cost");
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
@@ -340,10 +298,7 @@ describe("session cost usage", () => {
     const sessionFile = `sqlite:main:${sessionId}:${storePath}`;
 
     await withStateDir(root, async () => {
-      await upsertSessionEntry(
-        { sessionKey, storePath },
-        { sessionFile, sessionId, updatedAt: now },
-      );
+      await upsertSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: now });
       await persistSessionTranscriptTurn(
         { agentId: "main", sessionId, sessionKey, storePath },
         {
@@ -419,15 +374,6 @@ describe("session cost usage", () => {
         },
         { interval: 10, timeout: 2_000 },
       );
-
-      const sessionEntry = { sessionFile, sessionId, updatedAt: now };
-      const summaryFromStalePath = await loadSessionCostSummary({
-        agentId: "main",
-        sessionEntry,
-        sessionFile: legacyJsonl,
-        sessionId,
-      });
-      expect(summaryFromStalePath?.totalTokens).toBe(18);
 
       await expect(loadSessionUsageTimeSeries({ agentId: "main", sessionFile })).resolves.toEqual({
         sessionId: undefined,

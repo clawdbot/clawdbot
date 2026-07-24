@@ -5,7 +5,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { formatSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../../config/sessions/legacy-sqlite-marker.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -87,17 +90,52 @@ async function runNewWithPreviousSessionEntry(params: {
   workspaceDirOverride?: string;
   timestamp?: Date;
 }): Promise<{ files: string[]; memoryContent: string }> {
+  const baseConfig =
+    params.cfg ??
+    ({
+      agents: { defaults: { workspace: params.tempDir } },
+    } satisfies OpenClawConfig);
+  const legacySessionFile = params.previousSessionEntry.sessionFile;
+  const marker = parseSqliteSessionFileMarker(legacySessionFile);
+  const storePath =
+    marker?.storePath ?? baseConfig.session?.store ?? path.join(params.tempDir, "sessions.json");
+  if (legacySessionFile && !marker) {
+    const content = await fs.readFile(legacySessionFile, "utf8").catch(() => "");
+    if (content) {
+      let parentId: string | null = null;
+      const events = content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line, index) => {
+          const event = JSON.parse(line) as Record<string, unknown>;
+          const id = `fixture-${index + 1}`;
+          const normalized = { ...event, id, parentId };
+          parentId = id;
+          return normalized;
+        });
+      await replaceTranscriptEvents(
+        {
+          agentId: "main",
+          sessionId: params.previousSessionEntry.sessionId,
+          sessionKey: params.sessionKey ?? "agent:main:main",
+          storePath,
+        },
+        events,
+      );
+    }
+  }
+  const cfg = {
+    ...baseConfig,
+    session: { ...baseConfig.session, store: storePath },
+  } satisfies OpenClawConfig;
   const event = createHookEvent(
     "command",
     params.action ?? "new",
     params.sessionKey ?? "agent:main:main",
     {
-      cfg:
-        params.cfg ??
-        ({
-          agents: { defaults: { workspace: params.tempDir } },
-        } satisfies OpenClawConfig),
-      previousSessionEntry: params.previousSessionEntry,
+      cfg,
+      previousSessionEntry: { sessionId: params.previousSessionEntry.sessionId },
       ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
     },
   );

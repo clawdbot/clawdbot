@@ -7,7 +7,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
@@ -770,13 +769,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(result.sessionKey).toBe("agent:main:main");
     expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
-    expect(result.sessionEntry.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: result.sessionId,
-        storePath,
-      }),
-    );
+    expect(result.sessionEntry).not.toHaveProperty("sessionFile");
   });
 
   it("stamps trusted creation provenance during fast bootstrap", () => {

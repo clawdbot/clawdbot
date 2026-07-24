@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
@@ -250,45 +249,6 @@ describe("resolveSessionEntryResetFreshness", () => {
     expect(result.freshness).toMatchObject({
       fresh: false,
       staleReason: "idle",
-    });
-  });
-
-  it("uses transcript header startedAt when entry lifecycle metadata is missing", async () => {
-    const sessionKey = "agent:main:main:thread:header";
-    const now = new Date("2026-01-02T12:00:00Z").getTime();
-    const headerTimestamp = new Date(now - 2 * DAY_MS).toISOString();
-    const transcriptPath = path.join(tempDir, "session-header-fallback.jsonl");
-    fs.writeFileSync(
-      transcriptPath,
-      `${JSON.stringify({
-        type: "session",
-        id: "session-header-fallback",
-        timestamp: headerTimestamp,
-      })}\n`,
-      "utf-8",
-    );
-    await upsertSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionFile: transcriptPath,
-        sessionId: "session-header-fallback",
-        updatedAt: now,
-      },
-    );
-
-    const result = resolveSessionEntryResetFreshness({
-      sessionKey,
-      storePath,
-      sessionCfg: { reset: { mode: "daily" } },
-      resetType: "thread",
-      now,
-    });
-
-    expect(result.state).toBe("stale");
-    expect(result.lifecycleTimestamps.sessionStartedAt).toBe(Date.parse(headerTimestamp));
-    expect(result.freshness).toMatchObject({
-      fresh: false,
-      staleReason: "daily",
     });
   });
 });

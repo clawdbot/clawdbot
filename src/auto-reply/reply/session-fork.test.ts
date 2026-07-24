@@ -182,7 +182,7 @@ describe("forkSessionEntryFromParent", () => {
       throw new Error("expected fork");
     }
     expect(result.fork.sessionId).not.toBe("parent-session");
-    expect(result.fork.sessionFile).toContain(`sqlite:main:${result.fork.sessionId}:`);
+    expect(result.fork.sessionFile).toBe(sessionKey);
     expect(fs.existsSync(storePath)).toBe(false);
 
     const stored = loadSessionEntry({ agentId: "main", sessionKey, storePath });
@@ -193,7 +193,6 @@ describe("forkSessionEntryFromParent", () => {
         sessionId: "parent-session",
       },
       label: "forked child",
-      sessionFile: result.fork.sessionFile,
       sessionId: result.fork.sessionId,
       updatedAt: expect.any(Number),
     });
@@ -268,14 +267,7 @@ describe("forkSessionEntryFromParent", () => {
         updatedAt: expect.any(Number),
       },
     });
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-      forkedFromParent: true,
-      sessionId: "",
-      updatedAt: expect.any(Number),
-    });
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath })?.forkSource,
-    ).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   });
 
   it("skips stale-token SQLite parents using transcript usage estimates", async () => {

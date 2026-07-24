@@ -28,6 +28,7 @@ import {
   branchSqliteCompactionCheckpointSession,
   restoreSqliteCompactionCheckpointSession,
 } from "../config/sessions/session-accessor.sqlite.js";
+import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.types.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -741,6 +742,7 @@ export function createFileBackedCompactionCheckpointStore(): CompactionCheckpoin
 async function captureCompactionCheckpointSnapshotAsync(params: {
   sessionManager?: SessionManagerCheckpointView;
   sessionFile: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   maxBytes?: number;
 }): Promise<CapturedCompactionCheckpointSnapshot | null> {
   const getLeafId =
@@ -756,8 +758,8 @@ async function captureCompactionCheckpointSnapshotAsync(params: {
     return null;
   }
   const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES;
-  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-  if (sqliteMarker) {
+  const sqliteTarget = params.sessionTarget ?? parseSqliteSessionFileMarker(sessionFile);
+  if (sqliteTarget) {
     if (typeof params.sessionManager?.getEntries !== "function") {
       return null;
     }
@@ -775,7 +777,7 @@ async function captureCompactionCheckpointSnapshotAsync(params: {
       sessionId:
         typeof params.sessionManager.getSessionId === "function"
           ? params.sessionManager.getSessionId()
-          : sqliteMarker.sessionId,
+          : sqliteTarget.sessionId,
       leafId,
       ...(position.entryId ? { entryId: position.entryId } : {}),
     };

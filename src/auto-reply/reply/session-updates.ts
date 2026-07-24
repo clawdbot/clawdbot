@@ -7,6 +7,7 @@ import {
 } from "../../agents/exec-defaults.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -344,10 +345,7 @@ export async function incrementCompactionCount(params: {
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
   }
-  const nextEntry = {
-    ...entry,
-    ...updates,
-  };
+  const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
   sessionStore[sessionKey] = nextEntry;
   if (storePath) {
     const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {

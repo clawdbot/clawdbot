@@ -129,7 +129,7 @@ type ManualCompactionEvidence = {
   compacted: boolean;
   rowCountAfter: number;
   rowCountBefore: number;
-  sessionFileMarker: string;
+  transcriptIdentity: string;
   sessionId: string;
   sessionKey: string;
 };
@@ -1225,12 +1225,8 @@ async function runManualCompactionProof(
   if (checkpointCount < 1) {
     throw new Error(`manual compaction did not write checkpoint metadata: ${JSON.stringify(row)}`);
   }
-  const sessionFileMarker = typeof row.entry.sessionFile === "string" ? row.entry.sessionFile : "";
-  if (!sessionFileMarker.startsWith("sqlite:")) {
-    throw new Error(`manual compaction entry did not keep a SQLite marker: ${sessionFileMarker}`);
-  }
-  if (fsSync.existsSync(sessionFileMarker)) {
-    throw new Error(`manual compaction marker unexpectedly exists as a file: ${sessionFileMarker}`);
+  if (Object.hasOwn(row.entry, "sessionFile")) {
+    throw new Error(`manual compaction entry retained file-era identity: ${JSON.stringify(row)}`);
   }
 
   return {
@@ -1238,7 +1234,7 @@ async function runManualCompactionProof(
     compacted: compacted.compacted,
     rowCountAfter: countSqliteTranscriptEvents(context.agentDbPath, row.sessionId),
     rowCountBefore,
-    sessionFileMarker,
+    transcriptIdentity: context.manualCompactionSessionKey,
     sessionId: row.sessionId,
     sessionKey: context.manualCompactionSessionKey,
   };

@@ -1592,16 +1592,15 @@ async function continueClaudeSession(
           pluginExtensions: { anthropic: { sessionCatalog: marker } },
         },
         afterCreate: async (entry) => {
-          if (!entry.entry.sessionFile) {
-            throw new Error("Claude session creation did not produce a transcript file");
-          }
           await importClaudeHistory({
             items: history,
             threadId,
-            sessionFile: entry.entry.sessionFile,
             sessionId: entry.sessionId,
             sessionKey: entry.key,
             agentId: entry.agentId,
+            storePath: api.runtime.agent.session.resolveStorePath(config.session?.store, {
+              agentId: entry.agentId,
+            }),
             ...(record.cwd ? { cwd: record.cwd } : {}),
             config,
           });

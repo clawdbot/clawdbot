@@ -331,6 +331,7 @@ async function runSystemAgentTurnWithDeps(
     runId,
     messageChannel: "openclaw",
     messageProvider: "openclaw",
+    disableTrajectory: true,
   };
   // Directives are per-turn: the tool records at most one interactive handoff
   // and the engine executes it after the reply.

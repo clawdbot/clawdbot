@@ -63,37 +63,6 @@ async function createCompactionSessionFixture(entry: SessionEntry) {
   return { storePath, sessionKey, sessionStore };
 }
 
-async function rotateCompactionSessionFile(params: {
-  tempPrefix: string;
-  sessionFile: (tmp: string) => string;
-  newSessionId: string;
-}) {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
-  tempDirs.push(tmp);
-  const storePath = path.join(tmp, "sessions.json");
-  const sessionKey = "main";
-  const entry = {
-    sessionId: "s1",
-    sessionFile: params.sessionFile(tmp),
-    updatedAt: Date.now(),
-    compactionCount: 0,
-  } as SessionEntry;
-  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-  await seedSessionStore({ storePath, sessionKey, entry });
-  await incrementCompactionCount({
-    sessionEntry: entry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    newSessionId: params.newSessionId,
-  });
-  const stored: Record<string, SessionEntry> = {
-    [sessionKey]: await loadStoredEntry(storePath, sessionKey),
-  };
-  const expectedDir = await fs.realpath(tmp);
-  return { stored, sessionKey, expectedDir };
-}
-
 describe("history helpers", () => {
   function createHistoryMapWithTwoEntries() {
     const historyMap = new Map<string, { sender: string; body: string }[]>();
@@ -712,48 +681,6 @@ describe("incrementCompactionCount", () => {
     expect(
       expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").totalTokensFresh,
     ).toBe(false);
-  });
-
-  it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
-    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
-      tempPrefix: "openclaw-compact-rotate-",
-      sessionFile: (tmp) => path.join(tmp, "s1-topic-456.jsonl"),
-      newSessionId: "s2",
-    });
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "s2",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
-      path.join(expectedDir, "s2-topic-456.jsonl"),
-    );
-  });
-
-  it("preserves fork transcript filenames when compaction rotates transcripts", async () => {
-    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
-      tempPrefix: "openclaw-compact-fork-",
-      sessionFile: (tmp) => path.join(tmp, "2026-03-23T12-34-56-789Z_s1.jsonl"),
-      newSessionId: "s2",
-    });
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "s2",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
-      path.join(expectedDir, "2026-03-23T12-34-56-789Z_s2.jsonl"),
-    );
-  });
-
-  it("keeps rewritten absolute sessionFile paths that stay inside the sessions directory", async () => {
-    const { stored, sessionKey, expectedDir } = await rotateCompactionSessionFile({
-      tempPrefix: "openclaw-compact-unsafe-",
-      sessionFile: (tmp) => path.join(tmp, "outside", "s1.jsonl"),
-      newSessionId: "s2",
-    });
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionId).toBe(
-      "s2",
-    );
-    expect(expectDefined(stored[sessionKey], "stored[sessionKey] test invariant").sessionFile).toBe(
-      path.join(expectedDir, "outside", "s2.jsonl"),
-    );
   });
 
   it("increments compaction count by an explicit amount", async () => {

@@ -83,7 +83,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       compacted: true,
       sessionKey: report.manualCompactionSessionKey,
     });
-    expect(report.manualCompaction?.sessionFileMarker.startsWith("sqlite:")).toBe(true);
+    expect(report.manualCompaction?.transcriptIdentity).toBe(report.manualCompactionSessionKey);
     expect(report.manualCompaction?.rowCountBefore).toBeGreaterThanOrEqual(2);
     expect(report.manualCompaction?.rowCountAfter).toBeGreaterThanOrEqual(1);
     expect(

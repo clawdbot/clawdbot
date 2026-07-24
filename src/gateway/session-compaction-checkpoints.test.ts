@@ -154,8 +154,8 @@ describe("session-compaction-checkpoints", () => {
     if (branched.status !== "created" || restored.status !== "created") {
       throw new Error("expected SQLite checkpoint branch and restore");
     }
-    expect(branched.entry.sessionFile).toContain("sqlite:main:");
-    expect(restored.entry.sessionFile).toContain("sqlite:main:");
+    expect(branched.entry).not.toHaveProperty("sessionFile");
+    expect(restored.entry).not.toHaveProperty("sessionFile");
     expect(fsSync.readdirSync(dir).some((file) => file.endsWith(".jsonl"))).toBe(false);
 
     const branchEvents = await loadTranscriptEvents({

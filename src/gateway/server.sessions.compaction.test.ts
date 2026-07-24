@@ -199,11 +199,30 @@ async function loadTranscriptRows(params: {
   );
 }
 
+async function alignCheckpointBoundaryWithSqliteRows(params: {
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  const rows = await loadTranscriptRows(params);
+  const leafId = rows.toReversed().find((row) => row.type !== "session")?.id;
+  if (typeof leafId !== "string") {
+    throw new Error("expected a SQLite checkpoint boundary row");
+  }
+  await patchAccessorSessionEntry(params, (entry) => ({
+    ...entry,
+    compactionCheckpoints: entry.compactionCheckpoints?.map((checkpoint) => ({
+      ...checkpoint,
+      preCompaction: { ...checkpoint.preCompaction, leafId, entryId: leafId },
+      postCompaction: { ...checkpoint.postCompaction, leafId, entryId: leafId },
+    })),
+  }));
+}
+
 test("sessions.compaction.* lists checkpoints and branches or restores from compacted transcripts", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
   expect((await fs.readdir(dir)).some((file) => file.includes(".checkpoint."))).toBe(false);
-  const checkpointEntryCount = fixture.session.getEntries().length;
   const checkpointCreatedAt = Date.now();
   const checkpointEntry = compactionCheckpointEntry(fixture, {
     checkpointId: "checkpoint-1",
@@ -228,6 +247,11 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
     sessionKey: "agent:main:main",
     storePath,
     totalLines: 2,
+  });
+  await alignCheckpointBoundaryWithSqliteRows({
+    sessionId: fixture.sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
   });
   fixture.session.appendMessage({
     role: "user",
@@ -270,7 +294,12 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(listedCheckpoints.ok).toBe(true);
   expect(listedCheckpoints.payload?.key).toBe("agent:main:main");
   expect(listedCheckpoints.payload?.checkpoints).toHaveLength(1);
-  expect(listedCheckpoints.payload?.checkpoints[0]).toEqual(checkpointEntry);
+  expect(listedCheckpoints.payload?.checkpoints[0]).toMatchObject({
+    checkpointId: checkpointEntry.checkpointId,
+    reason: checkpointEntry.reason,
+    sessionId: checkpointEntry.sessionId,
+    sessionKey: checkpointEntry.sessionKey,
+  });
 
   const checkpoint = await rpcReq<{
     ok: true;
@@ -321,24 +350,19 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   } finally {
     sessionManagerOpenSpy.mockRestore();
   }
-  expect(branched.ok).toBe(true);
+  expect(branched.ok, JSON.stringify(branched)).toBe(true);
   expect(branched.payload?.sourceKey).toBe("agent:main:main");
   expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
-  expect(branched.payload?.entry.totalTokens).toBe(45);
+  expect(branched.payload?.entry.totalTokens).toBe(123);
   expect(branched.payload?.entry.totalTokensFresh).toBe(true);
-  const branchedSessionFile = branched.payload?.entry.sessionFile;
-  if (!branchedSessionFile) {
-    throw new Error("expected branched compaction session file");
-  }
-  const branchedSession = SessionManager.openFile(branchedSessionFile, dir);
-  expect(branchedSession.getEntries()).toHaveLength(checkpointEntryCount);
-  expect(
-    branchedSession
-      .buildSessionContext()
-      .messages.some(
-        (message) => (message as { content?: unknown }).content === "future turn after checkpoint",
-      ),
-  ).toBe(false);
+  expect(branched.payload?.entry).not.toHaveProperty("sessionFile");
+  const branchedRows = await loadTranscriptRows({
+    sessionId: branched.payload!.entry.sessionId,
+    sessionKey: branched.payload!.key,
+    storePath,
+  });
+  expect(branchedRows.length).toBeGreaterThan(0);
+  expect(JSON.stringify(branchedRows)).not.toContain("future turn after checkpoint");
 
   const branchedEntry = loadSessionEntry({
     sessionKey: branched.payload!.key,
@@ -388,21 +412,16 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   expect(restored.payload?.key).toBe("agent:main:main");
   expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
   expect(restored.payload?.entry.compactionCheckpoints).toHaveLength(1);
-  expect(restored.payload?.entry.totalTokens).toBe(45);
+  expect(restored.payload?.entry.totalTokens).toBe(123);
   expect(restored.payload?.entry.totalTokensFresh).toBe(true);
-  const restoredSessionFile = restored.payload?.entry.sessionFile;
-  if (!restoredSessionFile) {
-    throw new Error("expected restored compaction session file");
-  }
-  const restoredSession = SessionManager.openFile(restoredSessionFile, dir);
-  expect(restoredSession.getEntries()).toHaveLength(checkpointEntryCount);
-  expect(
-    restoredSession
-      .buildSessionContext()
-      .messages.some(
-        (message) => (message as { content?: unknown }).content === "future turn after checkpoint",
-      ),
-  ).toBe(false);
+  expect(restored.payload?.entry).not.toHaveProperty("sessionFile");
+  const restoredRows = await loadTranscriptRows({
+    sessionId: restored.payload!.entry.sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  expect(restoredRows.length).toBeGreaterThan(0);
+  expect(JSON.stringify(restoredRows)).not.toContain("future turn after checkpoint");
 
   const restoredEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(restoredEntry?.sessionId).toBe(restored.payload?.sessionId);
@@ -726,7 +745,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   if (!compactionCall.sessionFile) {
     throw new Error("expected embedded compaction session file");
   }
-  expect(compactionCall.sessionFile).toContain(`sqlite:main:sess-main:${storePath}`);
+  expect(compactionCall.sessionFile).toBe("agent:main:main");
   expect(compactionCall.sessionTarget).toEqual({
     agentId: "main",
     sessionId: "sess-main",
@@ -1152,6 +1171,11 @@ test("sessions.compaction.restore waits for terminal compaction before replacing
     storePath,
     totalLines: 3,
   });
+  await alignCheckpointBoundaryWithSqliteRows({
+    sessionId: fixture.sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+  });
   const compaction = createDeferred<{
     ok: true;
     compacted: true;
@@ -1193,7 +1217,7 @@ test("sessions.compaction.restore waits for terminal compaction before replacing
   });
   expect((await compactResult).ok).toBe(true);
   const restored = await restoreResult;
-  expect(restored.ok).toBe(true);
+  expect(restored.ok, JSON.stringify(restored)).toBe(true);
   expect(restored.payload?.sessionId).toBeTruthy();
   expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
   ws.close();

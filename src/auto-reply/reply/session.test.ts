@@ -9,7 +9,6 @@ import { getOrCreateSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tool
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
@@ -69,7 +68,7 @@ const browserMaintenanceMocks = vi.hoisted(() => ({
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
-  storePath: string;
+  sessionKey: string;
 };
 
 vi.mock("./session-fork.js", () => ({
@@ -530,27 +529,9 @@ beforeEach(() => {
   });
   sessionForkMocks.forkSessionFromParent
     .mockReset()
-    .mockImplementation(async ({ parentEntry, storePath }: ForkSessionParamsForTest) => {
-      if (!parentEntry.sessionFile) {
-        return null;
-      }
-      const sessionsDir = path.dirname(storePath);
-      await fs.mkdir(sessionsDir, { recursive: true });
+    .mockImplementation(async ({ sessionKey }: ForkSessionParamsForTest) => {
       const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
-      const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
-      await fs.writeFile(
-        sessionFile,
-        `${JSON.stringify({
-          type: "session",
-          version: 3,
-          id: sessionId,
-          timestamp: new Date().toISOString(),
-          cwd: process.cwd(),
-          parentSession: parentEntry.sessionFile,
-        })}\n`,
-        "utf-8",
-      );
-      return { sessionId, sessionFile: await fs.realpath(sessionFile) };
+      return { sessionId, sessionFile: sessionKey };
     });
 });
 afterEach(async () => {
@@ -700,63 +681,25 @@ describe("initSessionState thread forking", () => {
       sessionKey: parentSessionKey,
       sessionId: parentSessionId,
     });
-    expect(result.sessionEntry.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: result.sessionEntry.sessionId,
-        storePath,
-      }),
-    );
+    expect(result.sessionEntry).not.toHaveProperty("sessionFile");
     const forkCall = requireMockCallArg(sessionForkMocks.forkSessionFromParent, "fork session");
     expect(forkCall.parentEntry).toMatchObject({
       sessionId: parentSessionId,
-      sessionFile: parentSessionFile,
     });
+    expect(forkCall.parentEntry).not.toHaveProperty("sessionFile");
     warn.mockRestore();
   });
 
   it("forks from parent when thread session key already exists but was not forked yet", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-existing-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-
     const parentSessionId = "parent-session";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
-    const header = {
-      type: "session",
-      version: 3,
-      id: parentSessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
-    };
-    const message = {
-      type: "message",
-      id: "m1",
-      parentId: null,
-      timestamp: new Date().toISOString(),
-      message: { role: "user", content: "Parent prompt" },
-    };
-    const assistantMessage = {
-      type: "message",
-      id: "m2",
-      parentId: "m1",
-      timestamp: new Date().toISOString(),
-      message: { role: "assistant", content: "Parent reply" },
-    };
-    await fs.writeFile(
-      parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
-      "utf-8",
-    );
-
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:slack:channel:c1";
     const threadSessionKey = "agent:main:slack:channel:c1:thread:123";
     await writeSessionStoreFast(storePath, {
       [parentSessionKey]: {
         sessionId: parentSessionId,
-        sessionFile: parentSessionFile,
         updatedAt: Date.now(),
       },
       [threadSessionKey]: {
@@ -774,6 +717,14 @@ describe("initSessionState thread forking", () => {
         },
       },
     });
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: parentSessionId, sessionKey: parentSessionKey, storePath },
+      { message: { role: "user", content: "Parent prompt" } },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId: parentSessionId, sessionKey: parentSessionKey, storePath },
+      { message: { role: "assistant", content: "Parent reply" } },
+    );
 
     const cfg = {
       session: { store: storePath },
@@ -972,13 +923,7 @@ describe("initSessionState thread forking", () => {
     });
 
     expect(result.sessionEntry.lastThreadId).toBe(456);
-    expect(result.sessionEntry.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: result.sessionEntry.sessionId,
-        storePath,
-      }),
-    );
+    expect(result.sessionEntry).not.toHaveProperty("sessionFile");
   });
 
   it("records topic-specific SQLite session identity from SessionKey", async () => {
@@ -1001,13 +946,7 @@ describe("initSessionState thread forking", () => {
       });
 
       expect(result.sessionKey).toBe("agent:main:telegram:group:123:topic:456");
-      expect(result.sessionEntry.sessionFile).toBe(
-        formatSqliteSessionFileMarker({
-          agentId: "main",
-          sessionId: result.sessionEntry.sessionId,
-          storePath,
-        }),
-      );
+      expect(result.sessionEntry).not.toHaveProperty("sessionFile");
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -1797,13 +1736,7 @@ describe("initSessionState RawBody", () => {
       });
 
       expect(result.sessionEntry.sessionId).toBe(sessionId);
-      expect(result.sessionEntry.sessionFile).toBe(
-        formatSqliteSessionFileMarker({
-          agentId: "worker1",
-          sessionId,
-          storePath,
-        }),
-      );
+      expect(result.sessionEntry).not.toHaveProperty("sessionFile");
       expect(result.storePath).toBe(storePath);
     });
   });

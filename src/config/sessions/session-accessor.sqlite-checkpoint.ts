@@ -74,7 +74,7 @@ type SqliteRestoreCheckpointSessionParams = {
 export async function branchSqliteCompactionCheckpointSession(
   params: SqliteBranchCheckpointSessionParams,
 ): Promise<SqliteCompactionCheckpointSessionMutationResult> {
-  const sourceKey = normalizeSqliteSessionKey(params.sourceStoreKey ?? params.sourceKey);
+  const sourceKey = normalizeSqliteSessionKey(params.sourceKey);
   const targetKey = normalizeSqliteSessionKey(params.nextKey);
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -110,7 +110,7 @@ export async function branchSqliteCompactionCheckpointSession(
 export async function restoreSqliteCompactionCheckpointSession(
   params: SqliteRestoreCheckpointSessionParams,
 ): Promise<SqliteCompactionCheckpointSessionMutationResult> {
-  const sessionKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
+  const sessionKey = normalizeSqliteSessionKey(params.sessionKey);
   const targetKey = normalizeSqliteSessionKey(params.sessionKey);
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -157,6 +157,9 @@ function branchSqliteCompactionCheckpointSessionInTransaction(
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
   }
+  if (currentEntry.modelSelectionLocked === true) {
+    return { status: "model-selection-locked" };
+  }
   const checkpoint = readSessionCompactionCheckpoint(currentEntry, params.checkpointId);
   if (!checkpoint) {
     return { status: "missing-checkpoint" };
@@ -200,6 +203,9 @@ function restoreSqliteCompactionCheckpointSessionInTransaction(
   const currentEntry = readSessionEntryRow(database, params.sourceKey)?.entry;
   if (!currentEntry?.sessionId) {
     return { status: "missing-session" };
+  }
+  if (currentEntry.modelSelectionLocked === true) {
+    return { status: "model-selection-locked" };
   }
   const checkpoint = readSessionCompactionCheckpoint(currentEntry, params.checkpointId);
   if (!checkpoint) {
