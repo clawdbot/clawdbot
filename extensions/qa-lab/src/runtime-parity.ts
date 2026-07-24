@@ -42,6 +42,7 @@ export type RuntimeParityCell = {
   runtime: RuntimeId;
   transcriptBytes: string;
   toolCalls: RuntimeParityToolCall[];
+  providerPlanToolCalls?: RuntimeParityToolCall[];
   finalText: string;
   usage: RuntimeParityUsage;
   wallClockMs: number;
@@ -792,35 +793,12 @@ function hasProvenTerminalImageResult(scenarioResult: QaSuiteScenarioLike) {
 const PROVEN_TERMINAL_IMAGE_RESULT_HASH = parity.stableHash({ kind: "media", status: "success" });
 
 function resolveRuntimeParityToolCalls(params: {
-  mockToolCalls: RuntimeParityToolCall[] | null;
   transcriptToolCalls: RuntimeParityToolCall[];
   terminalImageResultProven?: boolean;
 }): RuntimeParityToolCall[] {
-  const mockImageCalls = (params.mockToolCalls ?? []).filter(
-    (toolCall) => toolCall.tool === "image_generate",
-  );
-  const transcriptImageCalls = params.transcriptToolCalls.filter(
-    (toolCall) => toolCall.tool === "image_generate",
-  );
-  const imageCaptureIsUnambiguous = parity.hasSingleDistinctLeftToolCallShape(
-    mockImageCalls,
-    transcriptImageCalls,
-  );
-  let selected: RuntimeParityToolCall[];
-  if (!params.mockToolCalls) {
-    selected = params.transcriptToolCalls;
-  } else if (
-    hasMissingToolResult(params.mockToolCalls) &&
-    !hasMissingToolResult(params.transcriptToolCalls) &&
-    parity.compareCapturedToolCallShape(params.mockToolCalls, params.transcriptToolCalls) ===
-      undefined
-  ) {
-    selected = params.transcriptToolCalls;
-  } else {
-    selected = params.mockToolCalls;
-  }
+  let selected = params.transcriptToolCalls;
   const imageCalls = selected.filter((toolCall) => toolCall.tool === "image_generate");
-  if (params.terminalImageResultProven && imageCaptureIsUnambiguous && imageCalls.length === 1) {
+  if (params.terminalImageResultProven && imageCalls.length === 1) {
     selected = selected.map((toolCall) => {
       if (
         toolCall.tool !== "image_generate" ||
@@ -1118,10 +1096,10 @@ export async function captureRuntimeParityCell(
     runtime: params.runtime,
     transcriptBytes,
     toolCalls: resolveRuntimeParityToolCalls({
-      mockToolCalls,
       transcriptToolCalls,
       terminalImageResultProven,
     }),
+    ...(mockToolCalls ? { providerPlanToolCalls: mockToolCalls } : {}),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
     wallClockMs: params.wallClockMs,
