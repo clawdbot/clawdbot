@@ -28,7 +28,7 @@ describe("agent roster resolution", () => {
       expect(
         tryResolveDefaultAgentId({
           agents: { entries: { alpha: { default: marker } } },
-        } as OpenClawConfig),
+        } as unknown as OpenClawConfig),
       ).toBeUndefined();
     }
   });
