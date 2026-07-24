@@ -830,7 +830,9 @@ export async function createVerifiedSqliteSnapshot(
       await loadSqliteVecExtension({ db: source });
       assertSqliteIntegrity(source, options.sourcePath);
       options.validate?.(source, options.sourcePath);
-      source.prepare("VACUUM INTO ?").run(resolveSqliteFilesystemPath(stagedPath));
+      // Copy in incremental steps so concurrent writers are blocked only while
+      // each batch is read. Compaction happens after releasing the live source.
+      await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
     } finally {
       source.close();
     }
@@ -842,12 +844,15 @@ export async function createVerifiedSqliteSnapshot(
     try {
       snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
       await loadSqliteVecExtension({ db: snapshot });
+      // Online backup preserves WAL mode. Switch the private copy to rollback
+      // journaling so verification and restore need only the published file.
+      snapshot.exec("PRAGMA journal_mode = DELETE;");
       if (options.transform) {
         await options.transform(snapshot);
-        // A transform may delete sensitive rows. Compact again so the
-        // published artifact cannot retain their bytes in free pages.
-        snapshot.exec("VACUUM;");
       }
+      // Compact the private copy so the published artifact is single-file and
+      // cannot retain deleted or transformed data in free pages.
+      snapshot.exec("VACUUM;");
       assertSqliteIntegrity(snapshot, options.targetPath);
       options.validate?.(snapshot, options.targetPath);
       const userVersion = readSqliteUserVersion(snapshot);
