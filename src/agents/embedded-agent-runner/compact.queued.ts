@@ -670,7 +670,11 @@ async function compactResolvedContextEngine(
           postCompactionSessionTarget = resolvedDelegatedTarget;
         } else if (delegatedSessionFile) {
           const marker = parseSqliteSessionFileMarker(delegatedSessionFile);
-          if (marker && delegatedSessionId && marker.sessionId !== delegatedSessionId) {
+          if (
+            marker &&
+            (marker.agentId !== runtimeTarget.agentId ||
+              (delegatedSessionId && marker.sessionId !== delegatedSessionId))
+          ) {
             throw new Error("Legacy context-engine successor identity is inconsistent");
           }
           const keyedEntry = delegatedSessionFile.startsWith("agent:")

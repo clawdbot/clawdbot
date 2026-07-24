@@ -254,6 +254,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
 }
 
 async function resolveCliContextCompactionSuccess(params: {
+  agentId: string;
   cfg: OpenClawConfig;
   compactResult: Awaited<ReturnType<ContextEngine["compact"]>>;
   sessionFile: string;
@@ -294,6 +295,7 @@ async function resolveCliContextCompactionSuccess(params: {
     ),
   });
   if (
+    resolvedTarget.agentId !== params.agentId ||
     resolvedTarget.sessionKey !== params.sessionKey ||
     (params.storePath && path.resolve(resolvedTarget.storePath) !== path.resolve(params.storePath))
   ) {
@@ -311,6 +313,7 @@ async function resolveCliContextCompactionSuccess(params: {
 }
 
 async function compactCliTranscript(params: {
+  agentId: string;
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
@@ -424,6 +427,7 @@ async function compactCliTranscript(params: {
   }
 
   const successor = await resolveCliContextCompactionSuccess({
+    agentId: params.agentId,
     cfg: params.cfg,
     compactResult,
     sessionFile: params.sessionFile,
@@ -749,6 +753,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     await applyAutoCompactionGuard(contextEngine);
 
     const contextOutcome = await compactCliTranscript({
+      agentId: params.sessionAgentId,
       contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
