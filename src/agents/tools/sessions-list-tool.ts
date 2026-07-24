@@ -214,18 +214,18 @@ export function createSessionsListTool(opts?: {
           if (!entry || typeof entry !== "object" || typeof entry.key !== "string") {
             return [];
           }
-          let agentId =
+          let stateAgentId =
             typeof entry.agentId === "string" && entry.agentId ? entry.agentId : undefined;
-          if (!agentId) {
+          if (!stateAgentId) {
             try {
-              agentId = resolveAgentIdFromSessionKey(entry.key, defaultAgentId);
+              stateAgentId = resolveAgentIdFromSessionKey(entry.key, defaultAgentId);
             } catch {
               // Malformed rows remain subject to the fail-closed visibility checker below,
               // but cannot participate in agent state-version lookup.
               return [];
             }
           }
-          return [{ sessionKey: entry.key, agentId }];
+          return [{ sessionKey: entry.key, agentId: stateAgentId }];
         }),
       );
       const storePath = typeof list?.path === "string" ? list.path : undefined;
