@@ -30,9 +30,10 @@ function resolveCustomStoreSqlitePath(params: {
     ...new Set(
       (
         params.registeredOwnerAgentIds ??
-        resolveOpenClawRegisteredAgentDatabaseOwners(unsuffixedPath, {
-          ...(params.env ? { env: params.env } : {}),
-        })
+        resolveOpenClawRegisteredAgentDatabaseOwners(
+          unsuffixedPath,
+          params.env ? { env: params.env } : {},
+        )
       ).map(normalizeAgentId),
     ),
   ];
