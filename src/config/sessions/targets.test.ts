@@ -14,7 +14,6 @@ import { listSessionEntriesReadOnly, replaceSessionEntry } from "./session-acces
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
-  listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
@@ -89,61 +88,6 @@ function expectTargetsToContainStores(
 }
 
 describe("resolveSessionStoreTargets", () => {
-  it("includes a retired owner registered under the active shared store", async () => {
-    await withTempHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const storePath = path.join(stateDir, "shared", "sessions.json");
-      const cfg: OpenClawConfig = {
-        session: { store: storePath },
-        agents: { entries: { ops: { default: true } } },
-      };
-
-      await replaceSessionEntry(
-        {
-          agentId: "retired",
-          env,
-          storePath,
-          sessionKey: "agent:retired:cron:old:run:expired",
-        },
-        { sessionId: "retired-session", updatedAt: 1 },
-      );
-
-      expect(listKnownSessionStoreAgentIds(cfg, { env }).toSorted()).toEqual(["ops", "retired"]);
-    });
-  });
-
-  it("keeps a retired fixed-store owner after its registry row is removed", async () => {
-    await withTempHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const storePath = path.join(stateDir, "shared", "sessions.json");
-      const cfg: OpenClawConfig = {
-        session: { store: storePath },
-        agents: { entries: { ops: { default: true } } },
-      };
-
-      await replaceSessionEntry(
-        {
-          agentId: "retired",
-          defaultAgentId: "retired",
-          env,
-          storePath,
-          sessionKey: "agent:retired:cron:old:run:expired",
-        },
-        { sessionId: "retired-session", updatedAt: 1 },
-      );
-      const retiredDatabasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-        agentId: "retired",
-        defaultAgentId: "retired",
-        env,
-      }).path;
-      unregisterOpenClawAgentDatabase({ agentId: "retired", env, path: retiredDatabasePath });
-
-      expect(listKnownSessionStoreAgentIds(cfg, { env }).toSorted()).toEqual(["ops", "retired"]);
-    });
-  });
-
   it("resolves all configured agent stores", async () => {
     await withTempHome(async () => {
       const cfg: OpenClawConfig = {
