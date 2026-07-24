@@ -155,6 +155,7 @@ import {
   failStagedPostCompactionDelegatesForCleanup,
   finalizeStagedPostCompactionDelegates,
   hasRecoverablePendingDelegate,
+  listRecoverableStagedPostCompactionDelegates,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
@@ -444,6 +445,30 @@ describe("delegate store — TaskFlow-backed", () => {
       expect(flow.stateJson).not.toHaveProperty("attachments");
       expect(JSON.stringify(flow.stateJson)).not.toContain(corruption.content);
     }
+  });
+
+  it("dead-letters stale corrupt running post-compaction recovery state and scrubs raw bytes", () => {
+    const content = "RUNNING_POST_COMPACTION_CONTENT_MUST_NOT_RETAIN";
+    const secret = "RUNNING_POST_COMPACTION_UNKNOWN_MEMBER_MUST_NOT_RETAIN";
+    const flowId = queueRawPendingFlow("session-running-post-compaction-corrupt", {
+      kind: "continuation_delegate",
+      task: "reject corrupt crash orphan",
+      postCompaction: true,
+      attachments: [{ name: "brief.md", content, extra: secret }],
+    });
+    const flow = expectDefined(mockFlows.get(flowId), "running post-compaction flow");
+    flow.controllerId = CONTINUATION_POST_COMPACTION_CONTROLLER_ID;
+    flow.status = "running";
+    flow.updatedAt = 100;
+
+    expect(listRecoverableStagedPostCompactionDelegates({ runningUpdatedAtOrBefore: 100 })).toEqual(
+      [],
+    );
+    const failed = expectDefined(mockFlows.get(flowId), "failed post-compaction flow");
+    expect(failed.status).toBe("failed");
+    expect(failed.stateJson).not.toHaveProperty("attachments");
+    expect(JSON.stringify(failed.stateJson)).not.toContain(content);
+    expect(JSON.stringify(failed.stateJson)).not.toContain(secret);
   });
 
   it("replaces corrupt non-record recovered state with a minimal scrubbed value", () => {

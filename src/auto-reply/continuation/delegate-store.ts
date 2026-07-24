@@ -19,7 +19,6 @@ import {
   listRecoverablePendingFlows,
   rejectCorruptDelegateFlow,
   resetDelegateFlowDiagnosticsForTests,
-  warnCorruptRecoverablePostCompactionFlow,
   type PendingDelegateCutoffOptions,
 } from "./delegate-flow-store.js";
 import type {
@@ -586,7 +585,7 @@ export function listRecoverableStagedPostCompactionDelegates(options?: {
     }
     const delegate = decodeDelegateFlow(flow);
     if (!delegate) {
-      warnCorruptRecoverablePostCompactionFlow(flow);
+      rejectCorruptDelegateFlow(flow, { kind: "post-compaction", sessionKey: flow.ownerKey });
       continue;
     }
     if (isAwaitingNextCompactionDelegateFlow(flow)) {
