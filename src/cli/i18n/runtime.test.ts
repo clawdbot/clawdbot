@@ -30,7 +30,7 @@ describe("CLI runtime localization", () => {
     );
   });
 
-  it("continues past unsupported platform locales to a supported CLI locale", () => {
+  it("honors the highest-priority POSIX locale instead of falling through", () => {
     const localization = createCliLocalization({
       env: {
         LC_ALL: "fr-FR",
@@ -38,7 +38,7 @@ describe("CLI runtime localization", () => {
       },
     });
 
-    expect(localization.context.locale).toBe("zh-CN");
-    expect(localization.t("cli.update.dryRun.noChanges")).toBe("未应用任何更改。");
+    expect(localization.context.locale).toBe("en");
+    expect(localization.t("cli.update.dryRun.noChanges")).toBe("No changes were applied.");
   });
 });
