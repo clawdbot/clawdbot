@@ -227,9 +227,10 @@ async function loadPendingPostCompactionDeliverySourceKeys(): Promise<Set<string
  * drop, no premature terminalize. At-least-once on the crash seam is
  * intentional.
  *
- * Honors the continuation deny-gate: when continuation is disabled, recovery is
- * a no-op (rows stay recoverable for when it is re-enabled), matching
- * {@link recoverPendingContinuationDelegates}.
+ * Honors the continuation deny-gate: when continuation is disabled, recovery
+ * classifies cutoff-eligible crash-orphans only to dead-letter malformed rows,
+ * then performs no dispatch. Valid rows stay recoverable for when it is
+ * re-enabled, matching {@link recoverPendingContinuationDelegates}.
  */
 
 export async function requeueAwaitingNextCompactionDelegates(options: {
@@ -246,12 +247,12 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
   runningUpdatedAtOrBefore: number;
 }): Promise<{ sessions: number; dispatched: number; failed: number }> {
   const runtimeConfig = resolveContinuationRuntimeConfig();
-  if (!runtimeConfig.enabled) {
-    return { sessions: 0, dispatched: 0, failed: 0 };
-  }
   const recoverable = listRecoverableStagedPostCompactionDelegates({
     runningUpdatedAtOrBefore: options.runningUpdatedAtOrBefore,
   });
+  if (!runtimeConfig.enabled) {
+    return { sessions: 0, dispatched: 0, failed: 0 };
+  }
   if (recoverable.length === 0) {
     return { sessions: 0, dispatched: 0, failed: 0 };
   }

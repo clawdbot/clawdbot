@@ -185,10 +185,11 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       return { applied: true, flow: { ...flow } };
     },
   ),
-  failFlow: vi.fn((params: { flowId: string }) => {
+  failFlow: vi.fn((params: { flowId: string; stateJson?: unknown }) => {
     const flow = mockFlows.get(params.flowId);
     if (flow) {
       flow.status = "failed";
+      flow.stateJson = params.stateJson ?? flow.stateJson;
     }
     return { applied: Boolean(flow) };
   }),
@@ -826,12 +827,24 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(1);
   });
 
-  it("is a no-op when continuation is disabled (deny-gate)", async () => {
+  it("classifies corrupt stale rows but holds valid rows when continuation is disabled", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { enabled: false } } },
     });
-    const sessionKey = "agent:main:subagent:pc-disabled";
-    const flowId = stageAndClaimRunning(sessionKey, "should not fire while disabled");
+    const validFlowId = stageAndClaimRunning(
+      "agent:main:subagent:pc-disabled-valid",
+      "should not fire while disabled",
+    );
+    const corruptFlowId = stageAndClaimRunning(
+      "agent:main:subagent:pc-disabled-corrupt",
+      "must be scrubbed while disabled",
+    );
+    const secret = "DISABLED_POST_COMPACTION_ROOT_SECRET_MUST_NOT_RETAIN";
+    const corruptFlow = expectDefined(mockFlows.get(corruptFlowId), "corrupt disabled flow");
+    corruptFlow.stateJson = {
+      ...(corruptFlow.stateJson as Record<string, unknown>),
+      extra: secret,
+    };
 
     const result = await recoverAndReleaseStagedPostCompactionDelegates({
       runningUpdatedAtOrBefore: Date.now(),
@@ -839,7 +852,8 @@ describe("recoverAndReleaseStagedPostCompactionDelegates", () => {
 
     expect(result).toMatchObject({ sessions: 0, dispatched: 0, failed: 0 });
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
-    // Row stays running/recoverable for when continuation is re-enabled.
-    expect(mockFlows.get(flowId)).toMatchObject({ status: "running" });
+    expect(mockFlows.get(validFlowId)).toMatchObject({ status: "running" });
+    expect(mockFlows.get(corruptFlowId)).toMatchObject({ status: "failed", stateJson: {} });
+    expect(JSON.stringify(mockFlows.get(corruptFlowId)?.stateJson)).not.toContain(secret);
   });
 });
