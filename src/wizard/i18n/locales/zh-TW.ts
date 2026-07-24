@@ -1,4 +1,4 @@
-import { catalogFamily } from "../catalog-family.js";
+import { catalogFamily, optionalCatalogFamily } from "../catalog-family.js";
 import authoringCatalog from "../catalogs/generated/zh-TW.json" with { type: "json" };
 // Traditional Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
@@ -112,7 +112,10 @@ export const zh_TW = {
       warningTitle: "Tailscale 警告",
     },
     completion: catalogFamily(authoringCatalog.messages, "wizard.completion"),
-    postInstallMigration: catalogFamily(authoringCatalog.messages, "wizard.postInstallMigration"),
+    postInstallMigration: optionalCatalogFamily(
+      authoringCatalog.messages,
+      "wizard.postInstallMigration",
+    ),
     migration: {
       apply: "現在套用這次遷移？",
       appliedTitle: "遷移已套用",

@@ -9,6 +9,9 @@ localization into configuration, protocol, or provider logic.
 - Author reviewed English in `i18n/catalogs/en.json` for adopted families.
 - Treat `i18n/catalogs/generated/` as workflow-owned output. Do not hand-edit
   generated locale files.
+- Require adopted families in reviewed English. Use `optionalCatalogFamily`
+  only for generated locale adapters so an in-flight source PR falls back to
+  English until the trusted refresh adds that family.
 - The existing wizard catalog source is already registered. Add registry rows
   only when adopting a new source path, and change the shared gate or
   Localization Catalog Refresh workflow only when its coverage must expand.
