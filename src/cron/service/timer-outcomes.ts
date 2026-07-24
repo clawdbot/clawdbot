@@ -112,21 +112,24 @@ export function applyJobResult(
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
   const alertConfig = resolveFailureAlert(state, job);
   if (result.status === "error") {
-    if (ownsSchedulerState) {
-      job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
-      job.state.consecutiveSkipped = 0;
-      maybeEmitFailureAlert(state, {
-        job,
-        alertConfig,
-        status: "error",
-        error: result.error,
-        errorReason: job.state.lastErrorReason,
-        consecutiveCount: job.state.consecutiveErrors,
-        ...(opts?.replayFailureAlertAtMs !== undefined
-          ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
-          : {}),
-      });
-    }
+    // A failed run genuinely failed regardless of who triggered it: record the
+    // error count and emit the failure alert for manual runs too. Only the
+    // scheduler-consuming reactions (recurring backoff/nextRunAtMs advance,
+    // success-path counter reset) stay origin-gated below, so a manual failure
+    // surfaces the error without perturbing the pending scheduled slot (#83538).
+    job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    job.state.consecutiveSkipped = 0;
+    maybeEmitFailureAlert(state, {
+      job,
+      alertConfig,
+      status: "error",
+      error: result.error,
+      errorReason: job.state.lastErrorReason,
+      consecutiveCount: job.state.consecutiveErrors,
+      ...(opts?.replayFailureAlertAtMs !== undefined
+        ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
+        : {}),
+    });
   } else if (result.status === "skipped") {
     if (ownsSchedulerState) {
       job.state.consecutiveErrors = 0;
@@ -171,9 +174,60 @@ export function applyJobResult(
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
-      // One-shot lifecycle (retry/disable) is consuming; operator manual runs
-      // leave enabled/nextRunAtMs/counters intact so the scheduled fire stands.
-      if (consumesOneShot) {
+      if (result.status === "error") {
+        // A failed one-shot runs the same transient-retry vs permanent-disable
+        // decision as a scheduled fire. A permanent failure disables the job for
+        // every origin (a dead one-shot must not fire again), but the transient
+        // retry only reschedules for scheduler-owning callers: an operator run
+        // preserves the pending slot so the scheduled fire still stands, exactly
+        // like the recurring error-backoff branch below (#83538/#83933).
+        const retryDecision = resolveTransientCronRetryDecision({
+          cronConfig: state.deps.cronConfig,
+          error: result.error,
+          errorClassification: result.errorClassification,
+          lastErrorReason: job.state.lastErrorReason,
+          executionStarted: result.executionStarted,
+          consecutiveErrors: job.state.consecutiveErrors,
+        });
+        if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
+          if (ownsSchedulerState) {
+            // Schedule retry with backoff (#24355).
+            job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
+            state.deps.log.info(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveErrors: retryDecision.consecutiveErrors,
+                backoffMs: retryDecision.backoffMs,
+                nextRunAtMs: job.state.nextRunAtMs,
+                retryCategory: retryDecision.retryCategory,
+              },
+              "cron: scheduling one-shot retry after transient error",
+            );
+          }
+        } else {
+          // Permanent error or max retries exhausted: disable.
+          // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
+          // so exhausted-retry jobs are disabled but intentionally kept in the store
+          // to preserve the error state for inspection.
+          job.enabled = false;
+          job.state.nextRunAtMs = undefined;
+          state.deps.log.warn(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              consecutiveErrors: retryDecision.consecutiveErrors,
+              error: result.error,
+              reason: retryDecision.reason,
+              retryCategory: retryDecision.retryCategory,
+            },
+            "cron: disabling one-shot job after error",
+          );
+        }
+      } else if (consumesOneShot) {
+        // Successful/quiet one-shot lifecycle (disabled-heartbeat retry,
+        // disable-on-done) is scheduler-consuming; an operator manual run leaves
+        // enabled/nextRunAtMs intact so the scheduled fire still stands (#83538).
         if (retryDisabledHeartbeatOneShot) {
           const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
             cronConfig: state.deps.cronConfig,
@@ -209,48 +263,6 @@ export function applyJobResult(
           // One-shot done or skipped: disable to prevent tight-loop (#11452).
           job.enabled = false;
           job.state.nextRunAtMs = undefined;
-        } else if (result.status === "error") {
-          const retryDecision = resolveTransientCronRetryDecision({
-            cronConfig: state.deps.cronConfig,
-            error: result.error,
-            errorClassification: result.errorClassification,
-            lastErrorReason: job.state.lastErrorReason,
-            executionStarted: result.executionStarted,
-            consecutiveErrors: job.state.consecutiveErrors,
-          });
-          if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
-            // Schedule retry with backoff (#24355).
-            job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
-            state.deps.log.info(
-              {
-                jobId: job.id,
-                jobName: job.name,
-                consecutiveErrors: retryDecision.consecutiveErrors,
-                backoffMs: retryDecision.backoffMs,
-                nextRunAtMs: job.state.nextRunAtMs,
-                retryCategory: retryDecision.retryCategory,
-              },
-              "cron: scheduling one-shot retry after transient error",
-            );
-          } else {
-            // Permanent error or max retries exhausted: disable.
-            // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
-            // so exhausted-retry jobs are disabled but intentionally kept in the store
-            // to preserve the error state for inspection.
-            job.enabled = false;
-            job.state.nextRunAtMs = undefined;
-            state.deps.log.warn(
-              {
-                jobId: job.id,
-                jobName: job.name,
-                consecutiveErrors: retryDecision.consecutiveErrors,
-                error: result.error,
-                reason: retryDecision.reason,
-                retryCategory: retryDecision.retryCategory,
-              },
-              "cron: disabling one-shot job after error",
-            );
-          }
         }
       }
     } else if (!ownsSchedulerState && job.pacing !== undefined) {
@@ -486,24 +498,21 @@ export function applyTriggerNoFireResult(
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.updatedAtMs = result.endedAt;
-  // An operator due-check evaluates the trigger but must not touch
-  // scheduler-owned state: resetting counters, persisting the compared
-  // triggerState, or advancing nextRunAtMs would suppress or delay the next
-  // scheduled evaluation/fire (#83538). Timer/watcher keep quiet-tick behavior.
+  // An operator due-check evaluates the trigger but must not reset scheduler
+  // counters or advance nextRunAtMs; that would suppress or delay the next
+  // scheduled evaluation/fire (#83538). It still persists the evaluated gate
+  // state so a manual check that advanced the gate is not lost (#83933).
   const ownsSchedulerState = origin !== "operator";
   if (!result.triggerEval.busy) {
+    // Persist the compared gate state / eval bookkeeping for every origin so a
+    // stream batch or manual due-check that moved the gate is recorded.
+    applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
     if (ownsSchedulerState) {
       // A non-firing evaluation is successful scheduler work, not a payload run;
       // reset error machinery while leaving lastRun/delivery history untouched.
       job.state.consecutiveErrors = 0;
       job.state.scheduleErrorCount = 0;
       job.state.lastFailureAlertAtMs = undefined;
-      applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
-    } else {
-      // Operator observability only: record that a check happened without
-      // persisting the compared triggerState the scheduler re-evaluates against.
-      job.state.lastTriggerEvalAtMs = result.endedAt;
-      job.state.triggerEvalCount = (job.state.triggerEvalCount ?? 0) + 1;
     }
   }
   if (!ownsSchedulerState) {

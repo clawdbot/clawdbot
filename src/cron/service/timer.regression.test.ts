@@ -4487,7 +4487,7 @@ describe("cron service timer regressions", () => {
     expect(job.state.nextRunAtMs).toBe(backoffNextRunAtMs);
   });
 
-  it("manual error run does not increment consecutiveErrors (#83933)", () => {
+  it("manual error run records the error count like any failure (#83538)", () => {
     const startedAt = Date.parse("2026-05-20T10:00:00.000Z");
     const endedAt = startedAt + 100;
     const state = createCronServiceState({
@@ -4515,7 +4515,10 @@ describe("cron service timer regressions", () => {
       { origin: "operator" },
     );
 
-    expect(job.state.consecutiveErrors).toBe(3);
+    // A failed manual run is still a failure: the error count advances just like
+    // a scheduled fire. Only scheduler-owned reactions (backoff, disable) stay
+    // origin-gated (#83538).
+    expect(job.state.consecutiveErrors).toBe(4);
   });
 
   it("manual success run does not reset consecutiveErrors (#83933)", () => {
@@ -4587,7 +4590,7 @@ describe("cron service timer regressions", () => {
   });
 });
 
-it("#83933: manual error run does NOT trigger failure alert", () => {
+it("#83538: manual error run triggers a failure alert like a scheduled run", () => {
   const startedAt = Date.parse("2026-05-21T10:00:00.000Z");
   const endedAt = startedAt + 100;
   const sendCronFailureAlert = vi.fn(async () => undefined);
@@ -4622,7 +4625,8 @@ it("#83933: manual error run does NOT trigger failure alert", () => {
     state: { nextRunAtMs: startedAt },
   });
 
-  // Manual error run — should NOT trigger alert
+  // Manual error run — a failed run still failed, so it records the error and
+  // alerts (after: 1) exactly like a scheduled fire.
   applyJobResult(
     state,
     job,
@@ -4630,10 +4634,11 @@ it("#83933: manual error run does NOT trigger failure alert", () => {
     { origin: "operator" },
   );
 
-  expect(sendCronFailureAlert).not.toHaveBeenCalled();
-  expect(job.state.consecutiveErrors ?? 0).toBe(0);
+  expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+  expect(job.state.consecutiveErrors).toBe(1);
 
-  // Scheduled error run — SHOULD trigger alert (after: 1)
+  // Scheduled error run — accrues the error the same way; the alert stays within
+  // the shared 1h cooldown, so no second alert fires.
   applyJobResult(
     state,
     job,
@@ -4647,7 +4652,7 @@ it("#83933: manual error run does NOT trigger failure alert", () => {
   );
 
   expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-  expect(job.state.consecutiveErrors).toBe(1);
+  expect(job.state.consecutiveErrors).toBe(2);
 });
 
 it("#83933: manual at-job error does NOT disable job or clear nextRunAtMs", () => {
@@ -4690,7 +4695,9 @@ it("#83933: manual at-job error does NOT disable job or clear nextRunAtMs", () =
   expect(shouldDelete).toBe(false);
   expect(job.enabled).toBe(true);
   expect(job.state.nextRunAtMs).toBe(scheduledAt);
-  expect(job.state.consecutiveErrors ?? 0).toBe(0);
+  // The transient error is recorded, but its retry-reschedule is scheduler-owned
+  // so an operator run preserves the pending slot instead of moving it (#83538).
+  expect(job.state.consecutiveErrors).toBe(1);
 });
 
 it("#83933: manual success does NOT clear lastFailureAlertAtMs cooldown", () => {
@@ -4822,7 +4829,10 @@ it("#83933: manual error on every-job does NOT rewrite nextRunAtMs", () => {
   );
 
   expect(job.state.nextRunAtMs).toBe(originalNextRun);
-  expect(job.state.consecutiveErrors).toBe(2);
+  // The error count advances (recorded like any failure), but the recurring
+  // error-backoff that would rewrite nextRunAtMs is scheduler-owned, so an
+  // operator run preserves the pending scheduled slot (#83538).
+  expect(job.state.consecutiveErrors).toBe(3);
   expect(job.enabled).toBe(true);
 });
 

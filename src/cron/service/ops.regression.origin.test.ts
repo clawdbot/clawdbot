@@ -222,11 +222,12 @@ describe("cron service ops origin regressions", () => {
     const updated = state.store?.jobs.find((entry) => entry.id === job.id);
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
     expect(updated?.state.lastRunStatus).toBe("error");
-    // The bug misclassified an operator run as scheduled, bumping the error
-    // counter and disabling/backing off the job. Operator must record the
-    // outcome without perturbing scheduler-owned state (#83933).
+    // A manual run that fails still failed: the error count is recorded like any
+    // other failure. What stays non-consuming is scheduler-owned state — the
+    // operator run must not back off or disable the job, so the pending
+    // scheduled fire still stands (#83538/#83933).
     expect(updated?.state.lastRunWasManual).toBe(true);
-    expect(updated?.state.consecutiveErrors).toBe(3);
+    expect(updated?.state.consecutiveErrors).toBe(4);
     expect(updated?.enabled).toBe(true);
   });
 
