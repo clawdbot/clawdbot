@@ -53,8 +53,8 @@ type DynamicFastMode = boolean | (() => boolean | undefined);
 function isAnthropic1MModel(modelId: string): boolean {
   if (
     resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined ||
-    resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined ||
-    resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined
+    resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined
   ) {
     return true;
   }
@@ -192,9 +192,10 @@ export function createAnthropicServiceTierWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    // Sonnet 5 does not support Priority Tier; omit service_tier entirely.
+    // Opus 5 and Sonnet 5 do not support Priority Tier; omit service_tier entirely.
     if (
       isAnthropicOAuthApiKey(options?.apiKey) ||
+      resolveClaudeOpus5ModelIdentity(model) !== undefined ||
       resolveClaudeSonnet5ModelIdentity(model) !== undefined
     ) {
       return underlying(model, context, options);

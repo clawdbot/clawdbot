@@ -44,6 +44,9 @@ export function resolveClaudeThinkingProfile(
   if (resolveClaudeFable5ModelIdentity(ref) || resolveClaudeMythos5ModelIdentity(ref)) {
     return CLAUDE_FABLE_5_THINKING_PROFILE;
   }
+  if (resolveClaudeOpus5ModelIdentity(ref)) {
+    return CLAUDE_OPUS_5_THINKING_PROFILE;
+  }
   if (resolveClaudeSonnet5ModelIdentity(ref)) {
     return CLAUDE_SONNET_5_THINKING_PROFILE;
   }

@@ -51,6 +51,7 @@ export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
 export const ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS = 1_000_000;
+export const ANTHROPIC_OPUS_5_CONTEXT_TOKENS = 1_000_000;
 export const ANTHROPIC_SONNET_5_CONTEXT_TOKENS = 1_000_000;
 export const ANTHROPIC_OPUS_5_CONTEXT_TOKENS = 1_000_000;
 
@@ -209,6 +210,9 @@ export function resolveAnthropicFixedContextWindow(
     /^claude-mythos-5(?=$|[^a-z0-9])/.test(modelId)
   ) {
     return ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS;
+  }
+  if (resolveClaudeOpus5ModelIdentity({ id: modelId })) {
+    return ANTHROPIC_OPUS_5_CONTEXT_TOKENS;
   }
   if (resolveClaudeSonnet5ModelIdentity({ id: modelId })) {
     return ANTHROPIC_SONNET_5_CONTEXT_TOKENS;

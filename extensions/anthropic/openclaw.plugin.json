@@ -251,8 +251,8 @@
       "anthropic": {
         "aliases": {
           "opus-5": "claude-opus-5",
+          "opus": "claude-opus-5",
           "opus-4.8": "claude-opus-4-8",
-          "opus": "claude-opus-4-8",
           "opus-4.6": "claude-opus-4-6",
           "mythos-5": "claude-mythos-5",
           "sonnet-5": "claude-sonnet-5",
@@ -346,7 +346,7 @@
     "anthropic": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "claude-opus-4-8"
+        "image": "claude-opus-5"
       },
       "autoPriority": {
         "image": 20

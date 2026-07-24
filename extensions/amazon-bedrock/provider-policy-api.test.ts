@@ -37,6 +37,25 @@ describe("amazon-bedrock provider-policy-api", () => {
     ]);
   });
 
+  it("defaults Bedrock Claude Opus 5 to high adaptive thinking", () => {
+    const profile = resolveThinkingProfile({
+      provider: "amazon-bedrock",
+      modelId: "global.anthropic.claude-opus-5",
+    });
+
+    expect(profile?.levels.map((level) => level.id)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "adaptive",
+      "max",
+    ]);
+    expect(profile?.defaultLevel).toBe("high");
+  });
+
   it("leaves Bedrock Claude Opus 4.8 thinking off by default with max effort available", () => {
     const profile = resolveThinkingProfile({
       provider: "amazon-bedrock",
@@ -77,6 +96,11 @@ describe("amazon-bedrock provider-policy-api", () => {
       canonicalModelId: "claude-mythos-5",
       defaultLevel: "high",
       preservesCatalogOptOut: true,
+    },
+    {
+      canonicalModelId: "claude-opus-5",
+      defaultLevel: "high",
+      preservesCatalogOptOut: false,
     },
     {
       canonicalModelId: "claude-opus-4-8",
