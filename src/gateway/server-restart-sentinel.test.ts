@@ -1069,6 +1069,28 @@ describe("scheduleRestartSentinelWake", () => {
     );
   });
 
+  it("routes post-compaction queue recovery before generic writable session loading", async () => {
+    mocks.loadSessionEntry.mockImplementation(() => {
+      throw new Error("generic session store must not be loaded");
+    });
+
+    await expect(
+      deliverQueuedSessionDelivery({
+        deps: {} as never,
+        entry: {
+          id: "post-compaction-disabled-before-generic-load",
+          kind: "postCompactionDelegate",
+          sessionKey: "agent:main:main",
+          task: "remain pending while continuation is disabled",
+          createdAt: 1,
+          enqueuedAt: 1,
+          retryCount: 0,
+        },
+      }),
+    ).rejects.toThrow("continuation is disabled");
+    expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+  });
+
   it("fences an adopted generic turn in its explicit queue state directory", async () => {
     mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
       await params.turnAdoptionLifecycle?.onAdopted();

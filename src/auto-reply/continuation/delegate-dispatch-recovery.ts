@@ -17,6 +17,7 @@ import {
 } from "./delegate-dispatch.js";
 import {
   assertStagedPostCompactionFinalizationComplete,
+  classifyRecoverablePendingDelegates,
   clearRecoverableDelegatesChainTokensFold,
   finalizeStagedPostCompactionDelegates,
   listPendingDelegateSessionKeysForRecovery,
@@ -54,13 +55,17 @@ export async function recoverPendingContinuationDelegates(
   } = {},
 ): Promise<{ sessions: number; dispatched: number; rejected: number }> {
   const runtimeConfig = resolveContinuationRuntimeConfig();
+  const includeRunningUpdatedAtOrBefore = params.includeRunningUpdatedAtOrBefore ?? Date.now();
+  classifyRecoverablePendingDelegates({
+    queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore,
+    includeRunningUpdatedAtOrBefore,
+  });
   // Honor the deny-gate across the restart seam: if continuation is disabled,
-  // recovery must NOT replay queued/running delegates — re-driving them here
-  // would override the user's explicit `continuation.enabled=false`.
+  // recovery must NOT replay valid queued/running delegates — re-driving them
+  // here would override the user's explicit `continuation.enabled=false`.
   if (!runtimeConfig.enabled) {
     return { sessions: 0, dispatched: 0, rejected: 0 };
   }
-  const includeRunningUpdatedAtOrBefore = params.includeRunningUpdatedAtOrBefore ?? Date.now();
   const sessionKeys = listPendingDelegateSessionKeysForRecovery({
     queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore,
     includeRunningUpdatedAtOrBefore,

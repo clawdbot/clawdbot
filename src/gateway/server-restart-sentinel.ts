@@ -189,18 +189,12 @@ export async function deliverQueuedSessionDelivery(params: {
   entry: QueuedSessionDelivery;
   stateDir?: string;
 }) {
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
-  const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
-
   if (params.entry.kind === "postCompactionDelegate") {
-    await deliverQueuedPostCompactionDelegate({
-      entry: {
-        ...params.entry,
-        sessionKey: canonicalKey,
-      },
-    });
+    await deliverQueuedPostCompactionDelegate({ entry: params.entry });
     return;
   }
+  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
+  const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
     enqueueRestartSentinelWake(

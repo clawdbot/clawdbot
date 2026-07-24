@@ -62,6 +62,26 @@ export function listPendingDelegateSessionKeysForRecovery(
   return [...new Set(sessionKeys)].toSorted();
 }
 
+/** Decode cutoff-eligible recovery rows solely to terminalize malformed state. */
+export function classifyRecoverablePendingDelegates(
+  options: Omit<PendingDelegateCutoffOptions, "includeRunning"> = {},
+): void {
+  for (const flow of delegateFlowRecords.listAll()) {
+    if (
+      !isRecoverablePendingFlowWithinCutoffs(flow, {
+        includeRunning: true,
+        queuedCreatedAtOrBefore: options.queuedCreatedAtOrBefore,
+        includeRunningUpdatedAtOrBefore: options.includeRunningUpdatedAtOrBefore,
+      })
+    ) {
+      continue;
+    }
+    if (!decodeDelegateFlow(flow)) {
+      rejectCorruptDelegateFlow(flow, { kind: "pending", sessionKey: flow.ownerKey });
+    }
+  }
+}
+
 /**
  * Claim matured delegates in FIFO order. Queued rows retain their original
  * delay horizon; already-running recovery rows are never delay-gated.

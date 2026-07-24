@@ -185,10 +185,11 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       return { applied: true, flow: { ...flow } };
     },
   ),
-  failFlow: vi.fn((params: { flowId: string }) => {
+  failFlow: vi.fn((params: { flowId: string; stateJson?: unknown }) => {
     const flow = mockFlows.get(params.flowId);
     if (flow) {
       flow.status = "failed";
+      flow.stateJson = params.stateJson ?? flow.stateJson;
     }
     return { applied: Boolean(flow) };
   }),
@@ -360,6 +361,33 @@ const splitLintUse = [
 void splitLintUse;
 
 describe("tool delegate dispatch contract", () => {
+  it("classifies corrupt cutoff-eligible recovery rows while disabled without loading or dispatching valid rows", async () => {
+    const sessionKey = "agent:main:disabled-recovery";
+    enqueuePendingDelegate(sessionKey, { task: "valid held delegate" });
+    enqueuePendingDelegate(sessionKey, { task: "corrupt held delegate" });
+    const [validFlow, corruptFlow] = [...mockFlows.values()];
+    const valid = expectDefined(validFlow, "valid disabled recovery flow");
+    const corrupt = expectDefined(corruptFlow, "corrupt disabled recovery flow");
+    const secret = "DISABLED_PENDING_RECOVERY_SECRET_MUST_NOT_RETAIN";
+    corrupt.stateJson = {
+      ...(corrupt.stateJson as Record<string, unknown>),
+      extra: secret,
+    };
+    setRuntimeConfigSnapshot({ agents: { defaults: { continuation: { enabled: false } } } });
+
+    const result = await recoverPendingContinuationDelegates({
+      queuedCreatedAtOrBefore: Date.now(),
+      includeRunningUpdatedAtOrBefore: Date.now(),
+    });
+
+    expect(result).toEqual({ sessions: 0, dispatched: 0, rejected: 0 });
+    expect(valid).toMatchObject({ status: "queued" });
+    expect(corrupt).toMatchObject({ status: "failed", stateJson: {} });
+    expect(JSON.stringify(corrupt.stateJson)).not.toContain(secret);
+    expect(loadSessionStoreForRecoveryMock).not.toHaveBeenCalled();
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
   it("recovers a running delegate by reconciling the deterministic live child", async () => {
     const sessionKey = "agent:main:root";
     enqueuePendingDelegate(sessionKey, { task: "recover already spawned child" });
