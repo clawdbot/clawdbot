@@ -579,6 +579,7 @@ export function openOpenClawStateDatabase(
   const cached = cachedDatabases.get(pathname);
   if (cached?.db.isOpen) {
     assertOpenClawStateWriteAllowed({ database: cached.db, databasePath: pathname, env });
+    publishOpenClawStateDatabaseReadiness(pathname, "active");
     return cached;
   }
   if (cached) {

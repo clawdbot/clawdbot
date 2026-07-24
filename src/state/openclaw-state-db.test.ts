@@ -20,6 +20,7 @@ import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sq
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import { FIRST_USE_STATE_TABLES } from "./openclaw-state-db-contract.js";
+import { getOpenClawStateDatabaseReadiness } from "./openclaw-state-db-readiness.js";
 import {
   findOpenClawStateDatabaseSchemaMigrationRequiredError,
   OpenClawStateDatabaseSchemaMigrationRequiredError,
@@ -34,6 +35,7 @@ import {
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
+  recordOpenClawStateDatabaseOpenFailure,
   repairOpenClawStateDatabaseSchema,
   repairOpenClawStateDatabaseSchemaIfNeeded,
   runOpenClawStateWriteTransaction,
@@ -1080,6 +1082,29 @@ afterEach(() => {
 });
 
 describe("openclaw state database", () => {
+  it("publishes active and inactive lifecycle transitions", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const pathname = resolveOpenClawStateSqlitePath(env);
+
+    expect(getOpenClawStateDatabaseReadiness(pathname)).toBe("inactive");
+    openOpenClawStateDatabase({ env });
+    expect(getOpenClawStateDatabaseReadiness(pathname)).toBe("active");
+    closeOpenClawStateDatabaseForTest();
+    expect(getOpenClawStateDatabaseReadiness(pathname)).toBe("inactive");
+  });
+
+  it("publishes terminal activation failure and repair transitions", () => {
+    const stateDir = createTempStateDir();
+    const pathname = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+
+    recordOpenClawStateDatabaseOpenFailure(pathname, new Error("integrity failure"));
+    expect(getOpenClawStateDatabaseReadiness(pathname)).toBe("failed");
+
+    clearOpenClawStateDatabaseOpenFailure(pathname);
+    expect(getOpenClawStateDatabaseReadiness(pathname)).toBe("inactive");
+  });
+
   it("resolves under the shared state database directory", () => {
     const stateDir = createTempStateDir();
 
