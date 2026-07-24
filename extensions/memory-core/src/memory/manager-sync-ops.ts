@@ -404,7 +404,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       cleanupAgedMemoryReindexTempFiles(dbPath);
       reindexLock = acquireMemoryReindexLock(dbPath);
       const originalRevision = readMemoryDatabaseRevision(originalDb);
-      tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
+      // Always allow SQLite extensions on the shadow reindex database, even if
+      // vector is currently disabled, so sqlite-vec can be loaded on demand.
+      tempDb = openMemoryDatabaseAtPath(tempDbPath, true);
       this.db = tempDb;
       this.lastMetaSerialized = null;
       this.resetVectorState();

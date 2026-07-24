@@ -10,6 +10,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupAgedMemoryReindexTempFiles,
+  closeMemoryDatabase,
+  openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
 } from "./manager-db.js";
@@ -338,6 +340,29 @@ describe("memory manager database publication", () => {
         sourceDb.close();
       } catch {}
       targetDb.close();
+    }
+  });
+
+  it("opens databases with extension loading enabled only when requested", () => {
+    const disabledPath = path.join(fixtureRoot, "disabled.sqlite");
+    const enabledPath = path.join(fixtureRoot, "enabled.sqlite");
+
+    const disabledDb = openMemoryDatabaseAtPath(disabledPath, false);
+    try {
+      expect(() => disabledDb.loadExtension("/nonexistent/extension")).toThrow(
+        /extension loading is not allowed/i,
+      );
+    } finally {
+      closeMemoryDatabase(disabledDb);
+    }
+
+    const enabledDb = openMemoryDatabaseAtPath(enabledPath, true);
+    try {
+      expect(() => enabledDb.loadExtension("/nonexistent/extension")).not.toThrow(
+        /extension loading is not allowed/i,
+      );
+    } finally {
+      closeMemoryDatabase(enabledDb);
     }
   });
 

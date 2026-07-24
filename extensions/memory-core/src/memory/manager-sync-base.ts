@@ -638,7 +638,9 @@ export abstract class MemoryManagerSyncBase {
 
   protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
+    // Always allow SQLite extensions on the agent memory database. sqlite-vec
+    // is loaded on demand and degrades gracefully to FTS-only when unavailable.
+    return openMemoryDatabaseAtPath(dbPath, true, this.agentId);
   }
 
   protected async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
