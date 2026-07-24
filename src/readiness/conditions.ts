@@ -27,6 +27,7 @@ type BuiltInReadinessConditionType =
   | "GatewayResponding"
   | "PluginsLoaded"
   | "StateReady"
+  | "SessionStorageReady"
   | "DeliveryRuntimeReady"
   | "SchedulerReady";
 

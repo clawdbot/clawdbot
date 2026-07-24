@@ -149,11 +149,14 @@ Select only the capabilities that the deployment promises, and promote one to
 `requiredCriteria` only when its absence means the Gateway must not receive
 work.
 
-Built-in state and background-service selectors are also observational. They
-never open a database, install a delivery callback, start cron, or run recovery
-from a readiness request:
+Built-in state and background-service lifecycle selectors are observational.
+They never open a database, install a delivery callback, start cron, or run
+recovery from a readiness request. Session storage is the one active check in
+this group and only creates bounded temporary probes:
 
 - `openclaw.state-ready` reports whether the shared state database is active.
+- `openclaw.session-storage-ready` verifies the state root and configured
+  session-store parents with bounded, cached write, flush, and cleanup probes.
 - `openclaw.delivery-runtime-ready` reports whether durable session delivery
   recovery has an active runtime owner.
 - `openclaw.scheduler-ready` reports the scheduler lifecycle and startup
