@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -319,6 +320,199 @@ describe("local SQLite snapshot repository", () => {
     }
   });
 
+  it("fails creation when a nested repository parent edge cannot be synced", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "nested", "repository", "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const canonicalTempDir = await fs.realpath(tempDir);
+    const originalOpen = fs.open.bind(fs);
+    let syncFailed = false;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      if (
+        !syncFailed &&
+        flags === "r" &&
+        path.resolve(String(filePath)) === canonicalTempDir &&
+        fsSync.existsSync(repositoryPath)
+      ) {
+        syncFailed = true;
+        throw Object.assign(new Error("repository parent sync failed"), { code: "EIO" });
+      }
+      return await originalOpen(filePath, flags, mode);
+    });
+
+    try {
+      await expect(
+        provider.create({
+          path: sourcePath,
+          identity: { role: "generic", id: "nested-parent-sync" },
+        }),
+      ).rejects.toThrow(/could not sync created directory edge/u);
+    } finally {
+      openSpy.mockRestore();
+    }
+    expect(syncFailed).toBe(true);
+    await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+  });
+
+  it("fails restore when a nested target parent edge cannot be synced", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    const restorePath = path.join(tempDir, "restore", "nested", "source.sqlite");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const snapshot = await provider.create({
+      path: sourcePath,
+      identity: { role: "generic", id: "nested-restore-parent-sync" },
+    });
+    const canonicalTempDir = await fs.realpath(tempDir);
+    const originalOpen = fs.open.bind(fs);
+    let syncFailed = false;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      if (
+        !syncFailed &&
+        flags === "r" &&
+        path.resolve(String(filePath)) === canonicalTempDir &&
+        fsSync.existsSync(path.dirname(restorePath)) &&
+        !fsSync.existsSync(restorePath)
+      ) {
+        syncFailed = true;
+        throw Object.assign(new Error("restore parent sync failed"), { code: "EIO" });
+      }
+      return await originalOpen(filePath, flags, mode);
+    });
+
+    try {
+      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
+        /could not sync created directory edge/u,
+      );
+    } finally {
+      openSpy.mockRestore();
+    }
+    expect(syncFailed).toBe(true);
+    await expect(fs.access(restorePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("cleans a pending marker whose file sync fails", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createGenericDatabase(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+    const originalOpen = fs.open.bind(fs);
+    let syncFailed = false;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await originalOpen(filePath, flags, mode);
+      if (!syncFailed && flags === "wx+" && path.basename(String(filePath)) === ".pending") {
+        vi.spyOn(handle, "sync").mockImplementation(async () => {
+          syncFailed = true;
+          throw Object.assign(new Error("pending sync failed"), { code: "EIO" });
+        });
+      }
+      return handle;
+    });
+
+    try {
+      await expect(
+        provider.create({
+          path: sourcePath,
+          identity: { role: "generic", id: "pending-sync-failure" },
+        }),
+      ).rejects.toThrow(/pending sync failed/u);
+    } finally {
+      openSpy.mockRestore();
+    }
+    expect(syncFailed).toBe(true);
+    await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "publishes payload only after the pending directory is durable",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const repositoryPath = path.join(tempDir, "snapshots");
+      createGenericDatabase(sourcePath);
+      await fs.mkdir(repositoryPath, { mode: 0o700 });
+      const provider = createLocalSqliteSnapshotProvider({
+        repositoryPath,
+        now: () => new Date("2026-07-24T16:00:00.000Z"),
+      });
+      const events: string[] = [];
+      let snapshotDir: string | undefined;
+      const originalOpen = fs.open.bind(fs);
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        const resolvedPath = path.resolve(String(filePath));
+        const handle = await originalOpen(filePath, flags, mode);
+        if (flags === "wx+" && path.basename(resolvedPath) === ".pending") {
+          snapshotDir = path.dirname(resolvedPath);
+          const originalSync = handle.sync.bind(handle);
+          vi.spyOn(handle, "sync").mockImplementation(async () => {
+            events.push("pending-sync");
+            await originalSync();
+          });
+        } else if (flags === "r" && snapshotDir && resolvedPath === snapshotDir) {
+          const originalSync = handle.sync.bind(handle);
+          vi.spyOn(handle, "sync").mockImplementation(async () => {
+            events.push("snapshot-sync");
+            await originalSync();
+          });
+        } else if (flags === "r" && resolvedPath === repositoryPath) {
+          const originalSync = handle.sync.bind(handle);
+          vi.spyOn(handle, "sync").mockImplementation(async () => {
+            events.push("repository-sync");
+            await originalSync();
+          });
+        }
+        return handle;
+      });
+      const originalLink = fs.link.bind(fs);
+      const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+        if (snapshotDir && path.dirname(String(target)) === snapshotDir) {
+          events.push(`publish:${path.basename(String(target))}`);
+        }
+        await originalLink(source, target);
+      });
+      const originalUnlink = fsSync.unlinkSync.bind(fsSync);
+      const unlinkSpy = vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
+        if (path.basename(String(filePath)) === ".pending") {
+          events.push("pending-unlink");
+        }
+        originalUnlink(filePath);
+      });
+
+      try {
+        await provider.create({
+          path: sourcePath,
+          identity: { role: "generic", id: "publication-order" },
+        });
+      } finally {
+        openSpy.mockRestore();
+        linkSpy.mockRestore();
+        unlinkSpy.mockRestore();
+      }
+
+      const pendingSync = events.indexOf("pending-sync");
+      const repositorySync = events.indexOf("repository-sync");
+      const artifactPublish = events.indexOf(`publish:${SNAPSHOT_SQLITE_FILENAME}`);
+      const manifestPublish = events.indexOf(`publish:${SNAPSHOT_MANIFEST_FILENAME}`);
+      const pendingUnlink = events.indexOf("pending-unlink");
+      const snapshotSyncs = events
+        .map((event, index) => (event === "snapshot-sync" ? index : -1))
+        .filter((index) => index >= 0);
+      expect(snapshotSyncs).toHaveLength(3);
+      expect(pendingSync).toBeLessThan(snapshotSyncs[0] ?? -1);
+      expect(snapshotSyncs[0]).toBeLessThan(repositorySync);
+      expect(repositorySync).toBeLessThan(artifactPublish);
+      expect(artifactPublish).toBeLessThan(manifestPublish);
+      expect(manifestPublish).toBeLessThan(snapshotSyncs[1] ?? -1);
+      expect(snapshotSyncs[1]).toBeLessThan(pendingUnlink);
+      expect(pendingUnlink).toBeLessThan(snapshotSyncs[2] ?? -1);
+    },
+  );
+
   it("sorts snapshots newest first and ignores incomplete staging directories", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");
@@ -341,8 +535,29 @@ describe("local SQLite snapshot repository", () => {
     await fs.mkdir(path.join(repositoryPath, "interrupted-final"));
     await fs.writeFile(path.join(repositoryPath, "interrupted-final", ".pending"), "");
     await fs.mkdir(path.join(repositoryPath, "empty-final"));
+    await fs.mkdir(path.join(repositoryPath, "artifact-only"));
+    await fs.writeFile(
+      path.join(repositoryPath, "artifact-only", SNAPSHOT_SQLITE_FILENAME),
+      "partial",
+    );
+    await fs.mkdir(path.join(repositoryPath, "manifest-only"));
+    await fs.writeFile(
+      path.join(repositoryPath, "manifest-only", SNAPSHOT_MANIFEST_FILENAME),
+      "partial",
+    );
 
     await expect(provider.list()).resolves.toEqual([second, first]);
+  });
+
+  it("rejects unknown entries inside an incomplete snapshot directory", async () => {
+    const tempDir = await createTempDir();
+    const repositoryPath = path.join(tempDir, "snapshots");
+    await fs.mkdir(path.join(repositoryPath, "interrupted"), { recursive: true });
+    await fs.writeFile(path.join(repositoryPath, "interrupted", ".pending"), "");
+    await fs.writeFile(path.join(repositoryPath, "interrupted", "unexpected"), "");
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+
+    await expect(provider.list()).rejects.toThrow(/unexpected incomplete entry/u);
   });
 
   it("uses caller-owned verification scratch and stages restore beside the target", async () => {
@@ -906,7 +1121,7 @@ describe("local SQLite snapshot repository", () => {
     }
   });
 
-  it("does not report best-effort directory sync as a failed restore", async () => {
+  it("fails restore when the final cleanup directory sync fails", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");
     const repositoryPath = path.join(tempDir, "snapshots");
@@ -933,9 +1148,9 @@ describe("local SQLite snapshot repository", () => {
     });
 
     try {
-      await expect(provider.restoreFresh(snapshot.ref, restorePath)).resolves.toMatchObject({
-        ok: true,
-      });
+      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
+        /directory sync unavailable/u,
+      );
     } finally {
       openSpy.mockRestore();
     }
@@ -1456,7 +1671,7 @@ describe("local SQLite snapshot repository", () => {
 
       try {
         await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-          /restore target changed|outside snapshot repository/u,
+          /restore target changed|outside snapshot repository|must be a real directory/u,
         );
       } finally {
         realpathSpy.mockRestore();
@@ -1622,7 +1837,7 @@ describe("local SQLite snapshot repository", () => {
     await expect(provider.verify({ path: tempDir })).rejects.toThrow(/immediate child/u);
     await fs.writeFile(path.join(snapshot.ref.path, `${SNAPSHOT_SQLITE_FILENAME}-wal`), "orphan");
     await expect(provider.verify(snapshot.ref)).rejects.toThrow(/unexpected entry/u);
-    await expect(provider.list()).rejects.toThrow(/unexpected entry/u);
+    await expect(provider.list()).rejects.toThrow(/unexpected (?:incomplete )?entry/u);
   });
 
   it("bounds manifest reads before parsing untrusted snapshot metadata", async () => {
@@ -1661,7 +1876,7 @@ describe("local SQLite snapshot repository", () => {
           path: sourcePath,
           identity: { role: "generic", id: "symlink-repository" },
         }),
-      ).rejects.toThrow(/symlink|Invalid path/iu);
+      ).rejects.toThrow(/symlink|Invalid path|real directory/iu);
 
       const provider = createLocalSqliteSnapshotProvider({
         repositoryPath: realRepositoryPath,
