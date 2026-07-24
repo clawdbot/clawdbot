@@ -602,6 +602,7 @@ async function captureMeetStatusScript(params: {
     await chromeTransport.recoverCurrentMeetTab({
       runtime,
       config,
+      fullConfig: { transcripts: { enabled: false } },
       mode: "agent",
       readOnly: false,
       url: MEET_URL,
@@ -610,7 +611,7 @@ async function captureMeetStatusScript(params: {
     await chromeTransport.launchChromeMeet({
       runtime,
       config,
-      fullConfig: {},
+      fullConfig: { transcripts: { enabled: params.mode === "transcribe" } },
       meetingSessionId: params.captionSessionId ?? "session-1",
       mode: params.mode,
       url: MEET_URL,
@@ -4232,6 +4233,7 @@ describe("google-meet plugin", () => {
     };
     const context = createContext({
       JSON,
+      crypto: { randomUUID: () => "caption-epoch" },
       document,
       location: {
         href: MEET_URL_EN,
