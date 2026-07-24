@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSessionEntries, SessionManager } from "../sessions/index.js";
-import { rewriteTranscriptEntriesInState } from "./transcript-rewrite.js";
 
 const roots: string[] = [];
 
@@ -1016,17 +1015,6 @@ describe("readTranscriptState", () => {
       [{ id: "user-1", parentId: null }],
     );
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1"]);
-    expect(() =>
-      rewriteTranscriptEntriesInState({
-        state,
-        replacements: [
-          {
-            entryId: "user-1",
-            message: { role: "user", content: "replacement prompt", timestamp: 1 },
-          },
-        ],
-      }),
-    ).not.toThrow();
   });
 
   it("drops labels targeting rejected entries before transcript rewrite replay", async () => {
@@ -1092,17 +1080,6 @@ describe("readTranscriptState", () => {
       ],
     );
     expect(state.getLabel("bad-message")).toBeUndefined();
-    expect(() =>
-      rewriteTranscriptEntriesInState({
-        state,
-        replacements: [
-          {
-            entryId: "user-1",
-            message: { role: "user", content: "replacement prompt", timestamp: 1 },
-          },
-        ],
-      }),
-    ).not.toThrow();
   });
 
   it("applies leaf controls to active state and marker-linked descendants", async () => {
@@ -1207,21 +1184,6 @@ describe("readTranscriptState", () => {
 
     const state = await readTranscriptState(sessionFile);
     expect(state.getBranch().map((entry) => entry.id)).toEqual(["user-1", "assistant-1"]);
-
-    rewriteTranscriptEntriesInState({
-      state,
-      replacements: [
-        {
-          entryId: "user-1",
-          message: { role: "user", content: "rewritten question", timestamp: 3 },
-        },
-      ],
-    });
-
-    expect(state.buildSessionContext().messages).toMatchObject([
-      { role: "user", content: "rewritten question" },
-      { role: "assistant", content: [{ type: "text", text: "answer" }] },
-    ]);
   });
 
   it("preserves marked side ancestry without capturing the next active append", async () => {

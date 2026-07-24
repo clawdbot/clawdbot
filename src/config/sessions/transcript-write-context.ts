@@ -127,32 +127,6 @@ export async function acquireOwnedSessionTranscriptWriteLock(params: {
   };
 }
 
-export function canAdvanceOwnedSessionEntryCache(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-  snapshot: OwnedSessionTranscriptCacheSnapshot;
-}): boolean {
-  const context = ownedTranscriptWriteContext.getStore();
-  return Boolean(
-    context &&
-    contextMatches({ context, ...params }) &&
-    context.publishSessionFileSnapshot &&
-    context.canAdvanceSessionEntryCache?.(params.snapshot),
-  );
-}
-
-export function publishOwnedSessionFileSnapshot(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-  snapshot: OwnedSessionTranscriptCacheSnapshot;
-}): boolean | undefined {
-  const context = ownedTranscriptWriteContext.getStore();
-  if (!context || !contextMatches({ context, ...params }) || !context.publishSessionFileSnapshot) {
-    return undefined;
-  }
-  return context.publishSessionFileSnapshot(params.snapshot);
-}
-
 async function runWithOwnedSessionTranscriptWriteContext<T>(
   params: {
     sessionFile?: string;

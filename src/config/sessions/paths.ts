@@ -33,7 +33,7 @@ export function resolveDefaultSessionStorePath(agentId: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
-export type SessionFilePathOptions = {
+type SessionFilePathOptions = {
   agentId?: string;
   sessionsDir?: string;
 };

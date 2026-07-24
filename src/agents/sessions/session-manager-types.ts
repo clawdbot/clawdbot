@@ -153,8 +153,6 @@ export type PromptReleasedSessionMergeResult = {
   requiresReload?: true;
 };
 
-export type SessionFileSnapshot = OwnedSessionTranscriptCacheSnapshot;
-
 export type PreservedOpaqueFileEntry = {
   index: number;
   record: unknown;

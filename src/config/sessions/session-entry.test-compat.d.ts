@@ -3,7 +3,12 @@ import "./types.js";
 import "./session-accessor.types.js";
 
 declare module "./types.js" {
-  interface SessionEntryTestExtensions {
+  interface SessionEntry {
+    sessionFile?: string;
+    transcriptPath?: string;
+  }
+
+  interface InternalSessionEntry {
     sessionFile?: string;
     transcriptPath?: string;
   }

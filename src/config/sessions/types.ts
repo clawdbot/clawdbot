@@ -249,11 +249,7 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
-/** Empty in production; test-only declarations model retired fixture metadata. */
-// oxlint-disable-next-line typescript/no-empty-object-type -- declaration merging hook
-export interface SessionEntryTestExtensions {}
-
-export type SessionEntryCore = SessionRestartRecoveryState &
+type SessionEntryCore = SessionRestartRecoveryState &
   SessionEntryProvenance & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: SessionVisibility;
@@ -560,14 +556,14 @@ export type SessionEntryCore = SessionRestartRecoveryState &
     acp?: SessionAcpMeta;
   };
 
-export type SessionEntry = SessionEntryCore & SessionEntryTestExtensions;
+export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 
-export type InternalSessionEntry = InternalSessionEntryCore & SessionEntryTestExtensions;
+export interface InternalSessionEntry extends InternalSessionEntryCore {}
 
 export function isTerminalSessionStatus(
   status: unknown,

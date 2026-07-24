@@ -142,7 +142,7 @@ export function buildSessionContext(
   return buildCoreSessionContext(path as CoreSessionTreeEntry[]) as SessionContext;
 }
 
-export function parseJsonlEntries(content: string): FileEntry[] {
+function parseJsonlEntries(content: string): FileEntry[] {
   const entries: FileEntry[] = [];
   let skipped = 0;
   for (const line of content.trim().split("\n")) {
@@ -178,11 +178,6 @@ export function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
     message.content = [message.content];
   }
   return entry;
-}
-
-export function hasReadableSessionHeader(entries: FileEntry[]): boolean {
-  const header = entries[0];
-  return header?.type === "session" && typeof (header as { id?: unknown }).id === "string";
 }
 
 export function isJsonRecord(value: unknown): value is Record<string, unknown> {

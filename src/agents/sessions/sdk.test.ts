@@ -1,11 +1,10 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 // Agent session SDK tests cover default tool wiring, prompt preservation, and
 // session write-lock behavior.
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
@@ -20,6 +19,7 @@ const thinkingMocks = vi.hoisted(() => ({
 const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
+const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../auto-reply/thinking.js", () => ({
   resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
@@ -74,7 +74,7 @@ describe("createAgentSession runtime ownership", () => {
   });
 
   it("keeps the default SQLite session inside an explicit agent directory", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-session-"));
+    const root = sdkSessionTempDirs.make("openclaw-sdk-session-");
     const agentDir = path.join(root, "isolated-agent");
     const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
     try {
@@ -90,7 +90,6 @@ describe("createAgentSession runtime ownership", () => {
       session.dispose();
     } finally {
       disposeOpenClawAgentDatabaseByPath(databasePath);
-      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });
