@@ -22,7 +22,7 @@ async function loadWorkspaceTemplateResolvers() {
   return import("./workspace-templates.js");
 }
 
-describe("resolveWorkspaceTemplateDir", () => {
+describe("resolveWorkspaceTemplateSearchDirs", () => {
   afterEach(async () => {
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
@@ -30,7 +30,7 @@ describe("resolveWorkspaceTemplateDir", () => {
   });
 
   it("resolves templates from package root when module url is dist-rooted", async () => {
-    const { resolveWorkspaceTemplateDir } = await loadWorkspaceTemplateResolvers();
+    const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
     const root = await makeTempRoot();
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
@@ -42,12 +42,13 @@ describe("resolveWorkspaceTemplateDir", () => {
     await fs.mkdir(distDir, { recursive: true });
     const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
 
-    const resolved = await resolveWorkspaceTemplateDir({ cwd: distDir, moduleUrl });
+    // The primary template dir is the first search root of the public resolver.
+    const [resolved] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
     expect(resolved).toBe(templatesDir);
   });
 
   it("falls back to package-root runtime path when templates directory is missing", async () => {
-    const { resolveWorkspaceTemplateDir } = await loadWorkspaceTemplateResolvers();
+    const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
     const root = await makeTempRoot();
     await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 
@@ -55,7 +56,7 @@ describe("resolveWorkspaceTemplateDir", () => {
     await fs.mkdir(distDir, { recursive: true });
     const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
 
-    const resolved = await resolveWorkspaceTemplateDir({ cwd: distDir, moduleUrl });
+    const [resolved = ""] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
     expect(path.normalize(resolved)).toBe(path.resolve("src", "agents", "templates"));
   });
 

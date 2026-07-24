@@ -965,15 +965,6 @@ async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<voi
   await noteBootstrapFileSize(ctx.cfg);
 }
 
-async function runHeartbeatTemplateRepairHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairHeartbeatTemplate } =
-    await import("../commands/doctor-heartbeat-template-repair.js");
-  await maybeRepairHeartbeatTemplate({
-    cfg: ctx.cfg,
-    shouldRepair: ctx.prompter.shouldRepair,
-  });
-}
-
 async function runHeartbeatCadenceMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeMigrateHeartbeatCadenceToCron } =
     await import("../commands/doctor-heartbeat-cadence-migration.js");
@@ -2037,21 +2028,6 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Bootstrap size",
       healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:heartbeat-template-repair",
-      label: "Heartbeat template repair",
-      healthChecks: {
-        id: "core/doctor/heartbeat-template",
-        description: "Legacy HEARTBEAT.md documentation templates are findings.",
-        defaultEnabled: false,
-        async detect(ctx) {
-          const { collectHeartbeatTemplateHealthFindings } =
-            await import("../commands/doctor-heartbeat-template-repair.js");
-          return await collectHeartbeatTemplateHealthFindings(ctx.cfg);
-        },
-      },
-      run: runHeartbeatTemplateRepairHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:heartbeat-cadence-migration",

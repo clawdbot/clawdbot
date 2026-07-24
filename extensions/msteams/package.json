@@ -76,6 +76,7 @@
       "runtimeFormat": "cjs"
     },
     "release": {
+      "bundleRuntimeDependencies": false,
       "publishToClawHub": true,
       "publishToNpm": true
     }
