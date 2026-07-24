@@ -120,6 +120,13 @@ export function applyComposerTextareaHeight(
   el.style.height = "auto";
   const content = el.scrollHeight;
   el.style.height = previousHeight;
+  // Measuring at `auto` above forces a layout that would otherwise become the
+  // CSS transition's starting point (making an animated reset snap 40->40).
+  // When animating, force a reflow at the restored height so the transition
+  // baseline is the real starting height and the change glides.
+  if (el.classList.contains("composer-animate-height")) {
+    void el.offsetHeight;
+  }
   const target = clampComposerHeight(Math.min(content, COMPOSER_AUTO_HEIGHT_CAP), dynamicMax);
   el.style.height = `${target}px`;
   el.style.overflowY = el.scrollHeight > el.clientHeight ? "auto" : "hidden";
