@@ -1425,7 +1425,7 @@ describe("initSessionState RawBody", () => {
     if ("absent" in scenario && Array.isArray(scenario.absent)) {
       for (const field of scenario.absent) {
         expect(
-          (result.sessionEntry as Record<string, unknown>)[field],
+          (result.sessionEntry as unknown as Record<string, unknown>)[field],
           scenario.name,
         ).toBeUndefined();
       }
