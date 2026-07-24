@@ -4026,6 +4026,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: What the audit checks (high level)
   - H3: Priority order when triaging findings
   - H2: Hardened baseline in 60 seconds
+  - H3: Requester-scoped controls and prompt context
   - H2: Trust boundary matrix
   - H2: Not vulnerabilities by design
   - H2: Gateway and node trust
