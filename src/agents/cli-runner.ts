@@ -323,6 +323,17 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
   return persisted !== undefined || recorder.hasPersisted() || recorder.isBlocked();
 }
 
+/**
+ * Outcome of persisting a CLI run's assistant turn.
+ *
+ * `owned` keeps the existing "this run owns the visible reply" semantics;
+ * `messageId` is the stable transcript id when the append actually happened.
+ */
+type CliAssistantTranscriptPersistence = {
+  owned: boolean;
+  messageId?: string;
+};
+
 async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
@@ -334,13 +345,13 @@ async function persistCliAssistantTranscript(params: {
     cacheWrite?: number;
     total?: number;
   };
-}): Promise<boolean> {
+}): Promise<CliAssistantTranscriptPersistence> {
   const { runParams } = params;
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey || !params.text) {
-    return false;
+    return { owned: false };
   }
   if (runParams.currentInboundEventKind === "room_event") {
-    return true;
+    return { owned: true };
   }
   try {
     const result = await appendExactAssistantMessageToSessionTranscript({
@@ -370,12 +381,14 @@ async function persistCliAssistantTranscript(params: {
     });
     if (!result.ok) {
       log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`);
-      return result.code === "blocked" || result.code === "session-rebound";
+      return { owned: result.code === "blocked" || result.code === "session-rebound" };
     }
-    return true;
+    // Keep the persisted transcript id so the terminal lifecycle event can name
+    // the assistant message this run produced, the same way embedded runs do.
+    return { owned: true, messageId: result.messageId };
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
-    return false;
+    return { owned: false };
   }
 }
 
@@ -1002,6 +1015,8 @@ export async function runPreparedCliAgent(
     effectiveCliSessionId?: string;
     bindingFlushOk?: boolean;
     assistantTranscriptOwned?: boolean;
+    /** Transcript id of the assistant message this run persisted, when it wrote one. */
+    assistantMessageId?: string;
     usedHistoryPrompt: boolean;
   }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
@@ -1092,6 +1107,9 @@ export async function runPreparedCliAgent(
       payloads,
       meta: {
         durationMs: Date.now() - context.started,
+        // Surfaced on the terminal lifecycle event so Gateway clients can dedup
+        // CLI-backend runs on (sessionKey, messageId) like embedded runs.
+        ...(resultParams.assistantMessageId ? { messageId: resultParams.assistantMessageId } : {}),
         ...(resultParams.output.finalPromptText
           ? { finalPromptText: resultParams.output.finalPromptText }
           : {}),
@@ -1224,7 +1242,7 @@ export async function runPreparedCliAgent(
           assistantText,
           output,
         });
-        const assistantTranscriptOwned = await persistCliAssistantTranscript({
+        const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
@@ -1255,7 +1273,10 @@ export async function runPreparedCliAgent(
           output,
           effectiveCliSessionId,
           bindingFlushOk,
-          assistantTranscriptOwned,
+          assistantTranscriptOwned: assistantTranscript.owned,
+          ...(assistantTranscript.messageId
+            ? { assistantMessageId: assistantTranscript.messageId }
+            : {}),
           usedHistoryPrompt,
         });
       } catch (error) {

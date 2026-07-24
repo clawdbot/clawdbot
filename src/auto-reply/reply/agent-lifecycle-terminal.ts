@@ -14,6 +14,9 @@ export type AgentLifecycleTerminalBackstop = {
 };
 
 const DEFERRED_TERMINAL_METADATA_KEYS = [
+  // Stable transcript id of the assistant message the run produced. CLI-backend
+  // runs persist outside AgentSession, so they carry the id through run meta.
+  "messageId",
   "stopReason",
   "yielded",
   "timeoutPhase",
