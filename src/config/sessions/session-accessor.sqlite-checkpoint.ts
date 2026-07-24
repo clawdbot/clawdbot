@@ -48,6 +48,7 @@ type SqliteCompactionCheckpointSessionMutationResult =
   | { status: "missing-session" }
   | { status: "missing-checkpoint" }
   | { status: "missing-boundary" }
+  | { status: "model-selection-locked" }
   | { status: "failed" };
 
 /** Parameters for branching a SQLite session from a compaction checkpoint. */
