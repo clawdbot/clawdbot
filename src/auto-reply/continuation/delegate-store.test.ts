@@ -372,6 +372,29 @@ describe("delegate store — TaskFlow-backed", () => {
     ).toEqual([]);
   });
 
+  it("dead-letters widened recovered attachment state and scrubs raw bytes", () => {
+    const content = "RECOVERY_ATTACHMENT_CONTENT_MUST_NOT_RETAIN";
+    const secret = "RECOVERY_ATTACHMENT_UNKNOWN_MEMBER_MUST_NOT_RETAIN";
+    const flowId = queueRawPendingFlow("session-widened-attachment", {
+      kind: "continuation_delegate",
+      task: "reject widened attachment member",
+      attachments: [
+        {
+          name: "brief.md",
+          content,
+          extra: secret,
+        },
+      ],
+    });
+
+    expect(consumePendingDelegates("session-widened-attachment")).toEqual([]);
+    const flow = expectDefined(mockFlows.get(flowId), "failed widened attachment flow");
+    expect(flow.status).toBe("failed");
+    expect(flow.stateJson).not.toHaveProperty("attachments");
+    expect(JSON.stringify(flow.stateJson)).not.toContain(content);
+    expect(JSON.stringify(flow.stateJson)).not.toContain(secret);
+  });
+
   it("scrubs attachment bytes when a delegate reaches a terminal state", () => {
     enqueuePendingDelegate("session-terminal-success", {
       task: "successful attachment task",

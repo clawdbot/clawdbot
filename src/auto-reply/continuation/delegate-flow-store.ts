@@ -49,12 +49,14 @@ const TraceparentStateSchema = z
   )
   .optional();
 
-const InlineAttachmentStateSchema = z.object({
-  name: z.string(),
-  content: z.string(),
-  encoding: z.enum(["utf8", "base64"]).optional(),
-  mimeType: z.string().optional(),
-});
+const InlineAttachmentStateSchema = z
+  .object({
+    name: z.string(),
+    content: z.string(),
+    encoding: z.enum(["utf8", "base64"]).optional(),
+    mimeType: z.string().optional(),
+  })
+  .strict();
 
 const InlineAttachmentMountStateSchema = z
   .object({
