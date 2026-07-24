@@ -170,7 +170,7 @@ describe("chat pane pull request refresh", () => {
 
   it("keeps a session-specific assistant identity across ordinary gateway snapshots", () => {
     const client = {} as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client });
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const state = (pane as unknown as { state: ChatPageHost }).state;
     state.client = client;
     state.connected = true;
@@ -179,7 +179,6 @@ describe("chat pane pull request refresh", () => {
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
       client,
-      connected: true,
     });
 
     expect(state.assistantName).toBe("Session Agent");
@@ -188,13 +187,13 @@ describe("chat pane pull request refresh", () => {
   it("resets a session-specific identity when the logical connection changes", () => {
     const client = {} as GatewayBrowserClient;
     const nextClient = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client });
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
     state.assistantName = "Session Agent";
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
       client: nextClient,
-      connected: false,
+      phase: "reconnecting" as const,
     });
 
     expect(state.assistantName).toBe(pane.context.config.current.assistantIdentity.name);
