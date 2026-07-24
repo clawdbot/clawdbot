@@ -1,7 +1,7 @@
 // Public custom-element entrypoint for the Control UI chat pane.
 import { ChatPaneRender } from "./chat-pane-render.ts";
 
-export class ChatPane extends ChatPaneRender {}
+class ChatPane extends ChatPaneRender {}
 
 if (!customElements.get("openclaw-chat-pane")) {
   customElements.define("openclaw-chat-pane", ChatPane);
