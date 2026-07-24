@@ -600,6 +600,9 @@ function completeEmbeddedRun(
           input.contextRecoveryState.autoCompactionCount > 0
             ? { lastTurnCompactions: input.contextRecoveryState.autoCompactionCount }
             : undefined,
+        ...(input.attempt.nonDeliverableTerminalTurn
+          ? { nonDeliverableTerminalTurn: true as const }
+          : {}),
       },
       ...copyAttemptDeliveryState(input.attempt),
     },

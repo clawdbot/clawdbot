@@ -57,6 +57,7 @@ type EmbeddedAttemptResultState = Pick<
   | "promptCache"
   | "contextBudgetStatus"
   | "yieldDetected"
+  | "nonDeliverableTerminalTurn"
   | "didDeliverSourceReplyViaMessageTool"
 > & {
   diagnosticTrace: DiagnosticTraceContext;
@@ -404,6 +405,7 @@ export function completeEmbeddedAttemptResult(
     compactionTokensAfter: getLastCompactionTokensAfter(),
     clientToolCalls,
     yieldDetected: state.yieldDetected || undefined,
+    nonDeliverableTerminalTurn: state.nonDeliverableTerminalTurn || undefined,
   };
   return finalizeEmbeddedAttempt({
     result,
