@@ -53,7 +53,6 @@ export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
 export const ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS = 1_000_000;
 export const ANTHROPIC_OPUS_5_CONTEXT_TOKENS = 1_000_000;
 export const ANTHROPIC_SONNET_5_CONTEXT_TOKENS = 1_000_000;
-export const ANTHROPIC_OPUS_5_CONTEXT_TOKENS = 1_000_000;
 
 type ConfiguredContextTokens = {
   value: number;

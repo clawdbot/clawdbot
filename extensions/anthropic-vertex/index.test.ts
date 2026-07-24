@@ -81,7 +81,6 @@ describe("anthropic-vertex provider plugin", () => {
     expect(result.provider.models.map((model) => model.id)).toEqual([
       "claude-fable-5",
       "claude-mythos-5",
-      "claude-opus-5",
       "claude-opus-4-8",
       "claude-opus-4-6",
       "claude-sonnet-4-6",
@@ -99,9 +98,8 @@ describe("anthropic-vertex provider plugin", () => {
       max: "max",
     });
     expect(result.provider.models[2]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
-    expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max" });
+    expect(result.provider.models[3]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
     expect(result.provider.models[4]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
-    expect(result.provider.models[5]?.thinkingLevelMap).toEqual({ xhigh: null, max: "max" });
   });
 
   it.each(["global", "us", "eu"])("publishes Opus 5 for the %s endpoint", (region) => {
