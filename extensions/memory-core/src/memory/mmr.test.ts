@@ -122,9 +122,7 @@ describe("memory MMR", () => {
         content: r.snippet,
       }));
       const expected = referenceMmrRerank(refItems, lambda).map((item) => item.id);
-      const actual = applyMMRToHybridResults(results, { enabled: true, lambda }).map(
-        (r) => r.path,
-      );
+      const actual = applyMMRToHybridResults(results, { enabled: true, lambda }).map((r) => r.path);
       expect(actual, `lambda=${lambda}`).toEqual(expected);
     }
   });
