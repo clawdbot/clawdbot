@@ -312,9 +312,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
 
       this.overflowRecoveryAttempted = true;
       // Keep the failed response in history, but exclude it from the retry context.
-      const messages = this.agent.state.messages;
-      if (messages.at(-1)?.role === "assistant") {
-        this.agent.state.messages = messages.slice(0, -1);
+      const overflowMessages = this.agent.state.messages;
+      if (overflowMessages.at(-1)?.role === "assistant") {
+        this.agent.state.messages = overflowMessages.slice(0, -1);
       }
       return await this.runAutoCompaction("overflow", true);
     }
@@ -324,18 +324,20 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     // This ensures sessions that hit persistent API errors (e.g. 529) can still compact.
     let contextTokens: number;
     if (assistantMessage.stopReason === "error") {
-      const messages = stripStaleAssistantUsageBeforeLatestCompaction(this.agent.state.messages);
-      if (messages !== this.agent.state.messages) {
-        this.agent.state.messages = messages;
+      const estimatedMessages = stripStaleAssistantUsageBeforeLatestCompaction(
+        this.agent.state.messages,
+      );
+      if (estimatedMessages !== this.agent.state.messages) {
+        this.agent.state.messages = estimatedMessages;
       }
-      const estimate = estimateContextTokens(messages);
+      const estimate = estimateContextTokens(estimatedMessages);
       if (estimate.lastUsageIndex === null) {
         return false;
       } // No usage data at all
       // Verify the usage source is post-compaction. Kept pre-compaction messages
       // have stale usage reflecting the old (larger) context and would falsely
       // trigger compaction right after one just finished.
-      const usageMsg = messages.at(estimate.lastUsageIndex);
+      const usageMsg = estimatedMessages.at(estimate.lastUsageIndex);
       if (
         compactionTimestampMs !== null &&
         usageMsg?.role === "assistant" &&
