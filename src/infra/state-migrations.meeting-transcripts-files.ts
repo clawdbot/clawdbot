@@ -13,6 +13,7 @@ import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
 import { sha256File, sha256Hex } from "./crypto-digest.js";
 import { assertNoSymlinkParents } from "./fs-safe-advanced.js";
+import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 
 const TRANSCRIPT_EXPORT_FILE_NAMES = new Set([
   "metadata.json",
@@ -206,7 +207,7 @@ async function optionalRegularFile(filePath: string): Promise<boolean> {
 }
 
 export function openLegacyMeetingTranscriptStage(databasePath: string): DatabaseSync {
-  const database = new DatabaseSync(databasePath);
+  const database = new DatabaseSync(resolveNodeSqliteLocation(databasePath));
   database.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE staged_utterances (

@@ -18,7 +18,7 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connectio
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import {
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_META_TABLE,
@@ -56,7 +56,7 @@ function hasBuiltInMemoryState(databasePath: string): boolean {
   const { DatabaseSync } = requireNodeSqlite();
   let db: DatabaseSync | undefined;
   try {
-    db = new DatabaseSync(databasePath, { readOnly: true });
+    db = new DatabaseSync(resolveNodeSqliteLocation(databasePath), { readOnly: true });
     const builtInMemoryTableSets = [
       {
         meta: MEMORY_INDEX_META_TABLE,

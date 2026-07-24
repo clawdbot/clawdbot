@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
@@ -158,7 +158,7 @@ export function inspectOpenClawAgentDatabaseOwner(
   const sqlite = requireNodeSqlite();
   let db: DatabaseSync | undefined;
   try {
-    db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+    db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname), { readOnly: true });
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);
     const existing = readExistingAgentSchemaMeta(db);
@@ -275,7 +275,7 @@ export function openOpenClawAgentDatabase(
     // pressure the 65th open would otherwise fail before eviction could run.
     evictLruAgentDatabaseHandles();
     const sqlite = requireNodeSqlite();
-    const db = new sqlite.DatabaseSync(pathname);
+    const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname));
     openedDb = db;
     // Eviction churn must avoid schema/registry busy waits on the event loop while
     // reconcile workers hold write transactions on these same agent databases.
