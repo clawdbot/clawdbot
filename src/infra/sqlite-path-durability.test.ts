@@ -55,9 +55,13 @@ describe("SQLite path durability", () => {
     const rootPath = await fs.realpath(tempDirs.make("openclaw-sqlite-durable-failure-"));
     const directoryPath = path.join(rootPath, "one", "two");
     const originalOpen = fs.open.bind(fs);
+    let rootOpenCount = 0;
     vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
       if (flags === "r" && path.resolve(String(filePath)) === rootPath) {
-        throw Object.assign(new Error("parent sync failed"), { code: "EIO" });
+        rootOpenCount += 1;
+        if (rootOpenCount > 1) {
+          throw Object.assign(new Error("parent sync failed"), { code: "EIO" });
+        }
       }
       return await originalOpen(filePath, flags, mode);
     });
