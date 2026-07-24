@@ -67,7 +67,11 @@ describe("offerLiveModelVerification", () => {
   it("reports when a repair candidate persisted its verified config", async () => {
     const repairedConfig: OpenClawConfig = {
       agents: { entries: { main: { default: true } } },
-      models: { providers: { openai: { apiKey: "test-key", models: [] } } },
+      models: {
+        providers: {
+          openai: { apiKey: "test-key", baseUrl: "https://api.openai.com/v1", models: [] },
+        },
+      },
     };
     const persistAuthProfiles = vi.fn(async () => {});
     const writeConfig = vi.fn(async () => repairedConfig);

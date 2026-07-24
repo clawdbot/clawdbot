@@ -26,14 +26,14 @@ describe("cron caller scope ownership", () => {
     expect(
       cronJobMatchesCallerScope({
         job,
-        callerScope: { kind: "agentTool", agentId: "main" },
+        callerScope: { kind: "agentTool", agentId: "main", accountId: "default" },
         defaultAgentId: "main",
       }),
     ).toBe(false);
     expect(
       cronJobMatchesCallerScope({
         job,
-        callerScope: { kind: "agentTool", agentId: "ops" },
+        callerScope: { kind: "agentTool", agentId: "ops", accountId: "default" },
         defaultAgentId: "main",
       }),
     ).toBe(true);

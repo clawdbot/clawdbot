@@ -596,7 +596,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       error: "default model changed",
     },
   ])("rechecks the probed $name inside the final transform", async ({ runtimeConfig, error }) => {
-    mocks.state.commitSnapshot = snapshot("probe", runtimeConfig);
+    mocks.state.commitSnapshot = snapshot("probe", runtimeConfig as OpenClawConfig);
 
     await expect(
       applySystemAgentSetup(

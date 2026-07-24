@@ -151,7 +151,7 @@ export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
   opts: { agentId?: string; configuredAgentsOnly?: boolean; includeIncognito?: boolean } = {},
 ): {
-  diagnostics: string[];
+  diagnostics?: string[];
   durableStorePath?: string;
   storePath: string;
   store: Record<string, SessionEntry>;

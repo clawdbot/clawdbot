@@ -181,6 +181,7 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     raw: null as string | null,
     parsed: {},
     resolved: {},
+    sourceConfigBeforeMigrations: undefined as OpenClawConfig | undefined,
     valid: true,
     config: {},
     issues: [] as Array<{ path: string; message: string }>,
