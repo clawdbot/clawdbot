@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/anthropic-vertex-provider",
-  "version": "2026.7.2-beta.4",
+  "version": "2026.7.2-beta.5",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/anthropic-vertex-provider",
-      "version": "2026.7.2-beta.4",
+      "version": "2026.7.2-beta.5",
       "dependencies": {
         "@anthropic-ai/vertex-sdk": "0.19.0",
         "google-auth-library": "10.9.0",
