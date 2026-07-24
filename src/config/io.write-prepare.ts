@@ -1517,6 +1517,41 @@ function restoreAuthoredAgentRoster(value: unknown, rootAuthoredConfig: unknown)
     : next;
 }
 
+function projectAuthoredAgentRosterForCanonicalIncludes(params: {
+  rootAuthoredConfig: unknown;
+  sourceConfigBeforeMigrations?: unknown;
+}): unknown {
+  const authoredRoster = readAgentRosterProperty(params.rootAuthoredConfig);
+  if (authoredRoster?.kind !== "list" || !Array.isArray(authoredRoster.value)) {
+    return params.rootAuthoredConfig;
+  }
+  const preMigrationRoster = readAgentRosterProperty(params.sourceConfigBeforeMigrations);
+  const resolvedLegacyList =
+    preMigrationRoster?.kind === "list" && Array.isArray(preMigrationRoster.value)
+      ? preMigrationRoster.value
+      : undefined;
+  const entries = Object.fromEntries(
+    authoredRoster.value.flatMap((entry, index) => {
+      if (!isRecord(entry)) {
+        return [];
+      }
+      const resolvedEntry = resolvedLegacyList?.[index];
+      const resolvedId = isRecord(resolvedEntry) ? resolvedEntry.id : undefined;
+      const id = typeof resolvedId === "string" ? resolvedId : entry.id;
+      if (typeof id !== "string") {
+        return [];
+      }
+      const { id: _authoredId, ...config } = entry;
+      return [[normalizeAgentId(id), config]];
+    }),
+  );
+  const withoutLegacyRoster = deletePathValue(
+    deletePathValue(params.rootAuthoredConfig, ["agents", "list"]),
+    ["agents", "entries"],
+  );
+  return setPathValueCreatingParents(withoutLegacyRoster, ["agents", "entries"], entries);
+}
+
 export function resolvePersistCandidateForWrite(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
@@ -1547,14 +1582,20 @@ export function resolvePersistCandidateForWrite(params: {
       "Config write would flatten $include-owned config at agents; edit that include file directly or remove the $include first.",
     );
   }
+  const projectedAuthoredRoster = persistCanonicalRoster
+    ? projectAuthoredAgentRosterForCanonicalIncludes({
+        rootAuthoredConfig,
+        sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
+      })
+    : rootAuthoredConfig;
   const includeProjectionRootAuthoredConfig =
-    persistCanonicalRoster && !hasAgentRosterProperty(rootAuthoredConfig)
+    persistCanonicalRoster && !hasAgentRosterProperty(projectedAuthoredRoster)
       ? setPathValueCreatingParents(
-          rootAuthoredConfig,
+          projectedAuthoredRoster,
           ["agents", "entries"],
           toAgentEntriesRecord(listAgentEntries(params.sourceConfig as OpenClawConfig)),
         )
-      : rootAuthoredConfig;
+      : projectedAuthoredRoster;
   let persistedBase = preserveUntouchedIncludes({
     runtimeConfig: params.runtimeConfig,
     sourceConfig: params.sourceConfig,

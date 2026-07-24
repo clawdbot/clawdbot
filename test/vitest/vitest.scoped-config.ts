@@ -203,7 +203,6 @@ export function createScopedVitestConfig(
     environment?: string;
     exclude?: string[];
     argv?: string[];
-    includeAgentRosterSetup?: boolean;
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
     name?: string;
@@ -244,17 +243,9 @@ export function createScopedVitestConfig(
     : includeFromEnv;
   const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
   const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
-  // Scoped gateway projects still load setup-openclaw-runtime, which installs setup.shared.
-  // Excluding setup.ts removes only its module-mocking roster adapter.
-  const baseSetupFiles =
-    options?.includeAgentRosterSetup === false
-      ? (baseTest.setupFiles ?? []).filter(
-          (file) => path.resolve(file) !== resolveRepoRootPath("test/setup.ts"),
-        )
-      : (baseTest.setupFiles ?? []);
   const setupFiles = [
     ...new Set([
-      ...baseSetupFiles,
+      ...(baseTest.setupFiles ?? []),
       ...(options?.setupFiles ?? []),
       ...(options?.includeOpenClawRuntimeSetup === false ? [] : ["test/setup-openclaw-runtime.ts"]),
     ]),

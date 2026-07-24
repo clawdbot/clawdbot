@@ -1310,6 +1310,32 @@ describe("listSessionsFromStore subagent metadata", () => {
 });
 
 describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
+  test("fixed stores assign a colliding unsuffixed database to the basename owner", async () => {
+    await withStateDirEnv("openclaw-fixed-store-collision-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "ops.json");
+      const cfg = {
+        session: { mainKey: "main", store: storePath },
+        agents: {
+          entries: {
+            ops: { default: true },
+            worker: {},
+          },
+        },
+      } as OpenClawConfig;
+
+      await seedSessionEntry(
+        storePath,
+        "main",
+        { sessionId: "s-ops-unscoped", updatedAt: 100 },
+        "ops",
+      );
+
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:ops:main"]?.sessionId).toBe("s-ops-unscoped");
+      expect(store["agent:main:main"]).toBeUndefined();
+    });
+  });
+
   test("fixed stores merge every configured agent's partition", async () => {
     await withStateDirEnv("openclaw-fixed-store-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "shared-sessions.json");

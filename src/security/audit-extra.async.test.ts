@@ -349,7 +349,7 @@ Read the requested file and summarize it.
     }
   });
 
-  it("audits canonical auth profile SQLite store permissions", async () => {
+  it("does not treat the legacy main auth store as active for an explicit named roster", async () => {
     const stateDir = await makeTmpDir("audit-auth-sqlite-perms");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     await fs.mkdir(agentDir, { recursive: true });
@@ -366,6 +366,7 @@ Read the requested file and summarize it.
 
     const findings = await collectStateDeepFilesystemFindings({
       cfg: { agents: { list: [{ id: "ops", default: true }] } } as OpenClawConfig,
+      sourceConfig: { agents: { list: [{ id: "ops", default: true }] } } as OpenClawConfig,
       env: {},
       stateDir,
       platform: "linux",
@@ -374,13 +375,30 @@ Read the requested file and summarize it.
     const readableAuthTargets = findings
       .filter((finding) => finding.checkId === "fs.auth_profiles.perms_readable")
       .map((finding) => finding.detail);
-    expect(readableAuthTargets).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("openclaw-agent.sqlite"),
-        expect.stringContaining("openclaw-agent.sqlite-wal"),
-        expect.stringContaining("openclaw-agent.sqlite-shm"),
-        expect.stringContaining("openclaw-agent.sqlite-journal"),
-      ]),
+    expect(readableAuthTargets).toEqual([]);
+  });
+
+  it("audits the legacy main auth store for a rosterless compatibility config", async () => {
+    const stateDir = await makeTmpDir("audit-auth-sqlite-rosterless");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
+    await fs.writeFile(databasePath, "sqlite\n", "utf-8");
+    await fs.chmod(databasePath, 0o644);
+
+    const findings = await collectStateDeepFilesystemFindings({
+      cfg: { agents: { entries: { main: { default: true } } } },
+      sourceConfig: {},
+      env: {},
+      stateDir,
+      platform: "linux",
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "fs.auth_profiles.perms_readable",
+        detail: expect.stringContaining("openclaw-agent.sqlite"),
+      }),
     );
   });
 });

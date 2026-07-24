@@ -382,18 +382,13 @@ export async function applySystemAgentSetup(
     hasAuthoredRosterEntries: boolean,
   ) => {
     const roster = listAgentEntries(currentBaseConfig);
-    // Pre-roster configs materialize this minimal main entry in memory. Only an
-    // authored roster establishes fleet workspace ownership.
-    const isBootstrapMain =
-      !hasAuthoredRosterEntries &&
-      roster.length === 1 &&
-      normalizeAgentId(roster[0]?.id) === "main" &&
-      roster[0]?.default === true &&
-      Object.keys(roster[0] ?? {}).every((key) => key === "id" || key === "default");
-    const workspaceConflict = isBootstrapMain
+    // Load-time injection and migration may decorate the synthesized main entry.
+    // Authored roster provenance, never the resulting entry shape, establishes a fleet.
+    const isBootstrapRoster = !hasAuthoredRosterEntries;
+    const workspaceConflict = isBootstrapRoster
       ? undefined
       : resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
-    const currentHasRoster = hasAuthoredRosterEntries && roster.length > 0 && !isBootstrapMain;
+    const currentHasRoster = hasAuthoredRosterEntries && roster.length > 0;
     const allowWorkspaceWrite =
       params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
     let setupBaseConfig = currentBaseConfig;

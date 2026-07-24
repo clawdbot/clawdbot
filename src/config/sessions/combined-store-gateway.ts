@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
 import { listSessionEntries, listSessionEntriesReadOnly } from "./session-accessor.js";
 import {
+  dedupeSessionStoreTargetsBySqliteTarget,
   listConfiguredSessionStoreAgentIds,
   listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
@@ -183,8 +184,13 @@ export function loadCombinedSessionStoreForGateway(
     const combined: Record<string, SessionEntry> = {};
     // Runtime session access is SQLite-only: a fixed literal is a naming seed whose
     // resolved database is partitioned per owner. Legacy flat JSON is migration-only.
-    for (const agentId of ownerIds) {
-      const storePath = resolveStorePath(storeConfig, { agentId });
+    const ownerTargets = dedupeSessionStoreTargetsBySqliteTarget(
+      ownerIds.map((agentId) => ({
+        agentId,
+        storePath: resolveStorePath(storeConfig, { agentId }),
+      })),
+    );
+    for (const { agentId, storePath } of ownerTargets) {
       const store = loadGatewayStoreEntries({ agentId, storePath });
       for (const [key, entry] of Object.entries(store)) {
         const canonicalKey = resolveStoredSessionKeyForAgentStore({

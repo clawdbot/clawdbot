@@ -18,9 +18,7 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
       "src/gateway/server.startup-matrix-migration.integration.test.ts",
       "src/gateway/sessions-history-http.test.ts",
     ],
-    includeAgentRosterSetup: false,
     name: "gateway",
-    setupFiles: ["test/setup-agent-roster-config.ts"],
   });
 }
 

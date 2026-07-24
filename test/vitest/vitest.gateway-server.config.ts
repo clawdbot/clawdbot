@@ -22,12 +22,10 @@ export function createGatewayServerVitestConfig(env?: Record<string, string | un
         "src/gateway/sessions-history-http.test.ts",
       ],
       fileParallelism: false,
-      includeAgentRosterSetup: false,
       // Gateway child projects share one include file; preserve this project's ownership.
       intersectIncludeFile: true,
       isolate: false,
       name: "gateway-server",
-      setupFiles: ["test/setup-agent-roster-config.ts"],
     },
   );
 }

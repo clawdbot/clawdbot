@@ -595,6 +595,7 @@ export async function collectIncludeFilePermFindings(params: {
 
 export async function collectStateDeepFilesystemFindings(params: {
   cfg: OpenClawConfig;
+  sourceConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
   platform?: NodeJS.Platform;
@@ -644,6 +645,9 @@ export async function collectStateDeepFilesystemFindings(params: {
 
   const agentScope = await loadAgentScopeModule();
   const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
+  const sourceAgentIds = agentScope
+    .listAgentEntries(params.sourceConfig ?? params.cfg)
+    .map((agent) => agent.id);
   let defaultAgentId: string | undefined;
   if (agentIds.length > 0) {
     try {
@@ -654,7 +658,7 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
   const ids = uniqueStrings([
-    LEGACY_IMPLICIT_AGENT_ID,
+    ...(sourceAgentIds.length === 0 ? [LEGACY_IMPLICIT_AGENT_ID] : []),
     ...(defaultAgentId ? [defaultAgentId] : []),
     ...agentIds,
   ]).map((id) => normalizeAgentId(id));

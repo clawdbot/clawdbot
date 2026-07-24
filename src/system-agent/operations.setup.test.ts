@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -89,12 +89,6 @@ const mockConfig = vi.hoisted(() => {
       return cloneConfig();
     },
     setConfig(config: TestConfig) {
-      const agents = (config.agents ?? {}) as Record<string, unknown>;
-      const roster = listAgentEntries(config as OpenClawConfig);
-      config.agents = {
-        ...agents,
-        entries: roster.length > 0 ? toAgentEntriesRecord(roster) : { main: { default: true } },
-      };
       state.config = structuredClone(config);
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
@@ -191,7 +185,12 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
-    mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
+    mockConfig.setConfig({
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
+    });
     const applySetup = vi.fn(async () => ({
       configPath: path.join(tempDir, "openclaw.json"),
       configHashBefore: "mock-hash-0",
@@ -286,7 +285,12 @@ describe("parseSystemAgentOperation", () => {
   it("rejects setup when the current route fails its live inference check", async () => {
     const tempDir = opTempDirs.make("openclaw-failed-inference-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
+    mockConfig.setConfig({
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
+    });
     const { runtime, lines } = createSystemAgentTestRuntime();
     const applySetup = vi.fn();
 
@@ -312,7 +316,10 @@ describe("parseSystemAgentOperation", () => {
 
   it("rejects route drift during setup verification but preserves the concurrent edit", async () => {
     mockConfig.setConfig({
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
       auth: { order: { openai: ["openai:old"] } },
     });
     const { runtime } = createSystemAgentTestRuntime();
@@ -326,7 +333,10 @@ describe("parseSystemAgentOperation", () => {
           loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
           verifyInferenceConfig: async () => {
             mockConfig.setConfig({
-              agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+              agents: {
+                defaults: { model: { primary: "openai/gpt-5.5" } },
+                entries: { main: { default: true } },
+              },
               auth: { order: { openai: ["openai:new"] } },
             });
             return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 8 };
@@ -343,7 +353,10 @@ describe("parseSystemAgentOperation", () => {
 
   it("preserves unrelated concurrent edits after re-verifying the same setup route", async () => {
     mockConfig.setConfig({
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
       gateway: { port: 18789 },
     });
     const { runtime } = createSystemAgentTestRuntime();
@@ -365,7 +378,10 @@ describe("parseSystemAgentOperation", () => {
           loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
           verifyInferenceConfig: async () => {
             mockConfig.setConfig({
-              agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+              agents: {
+                defaults: { model: { primary: "openai/gpt-5.5" } },
+                entries: { main: { default: true } },
+              },
               gateway: { port: 19000 },
             });
             return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
@@ -409,7 +425,12 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-same-model-setup-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime } = createSystemAgentTestRuntime();
-    mockConfig.setConfig({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } });
+    mockConfig.setConfig({
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        entries: { main: { default: true } },
+      },
+    });
     const applySetup = vi.fn(async () => ({
       configPath: path.join(tempDir, "openclaw.json"),
       configHashBefore: "mock-hash-0",
@@ -618,7 +639,10 @@ describe("parseSystemAgentOperation", () => {
     {
       field: "auth profile order",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
         auth: { order: { anthropic: ["anthropic:one"] } },
       },
       change: (config: TestConfig) => ({
@@ -636,6 +660,7 @@ describe("parseSystemAgentOperation", () => {
               "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             },
           },
+          entries: { main: { default: true } },
         },
       },
       change: (config: TestConfig) => {
@@ -650,7 +675,10 @@ describe("parseSystemAgentOperation", () => {
     {
       field: "model",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
       },
       change: (config: TestConfig) => {
         const next = structuredClone(config);
@@ -662,7 +690,10 @@ describe("parseSystemAgentOperation", () => {
     {
       field: "config-backed environment",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
         env: { vars: { ANTHROPIC_API_KEY: "first" } },
       },
       change: (config: TestConfig) => ({
@@ -673,7 +704,10 @@ describe("parseSystemAgentOperation", () => {
     {
       field: "secret provider policy",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
         secrets: { defaults: { env: "first" } },
       },
       change: (config: TestConfig) => ({
@@ -684,7 +718,10 @@ describe("parseSystemAgentOperation", () => {
     {
       field: "plugin load policy",
       initial: {
-        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          entries: { main: { default: true } },
+        },
         plugins: { enabled: true },
       },
       change: (config: TestConfig) => ({
@@ -726,7 +763,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-rejected-model-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
       gateway: { port: 18789 },
     };
     mockConfig.setConfig(originalConfig);
@@ -757,7 +797,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-latest-route-rejected-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();
@@ -784,7 +827,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-mismatched-model-result-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();
@@ -813,7 +859,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-final-mismatched-model-result-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();
@@ -840,7 +889,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-model-binding-rotated-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();
@@ -879,7 +931,10 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-model-binding-final-probe-rotated-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const originalConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      agents: {
+        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: { default: true } },
+      },
     };
     mockConfig.setConfig(originalConfig);
     mockConfig.mutateConfigFile.mockClear();

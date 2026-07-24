@@ -49,13 +49,29 @@ function dedupeTargetsByStorePath(targets: SessionStoreTarget[]): SessionStoreTa
   return [...deduped.values()];
 }
 
-function dedupeTargetsBySqliteTarget(targets: SessionStoreTarget[]): SessionStoreTarget[] {
+function sqliteTargetOwnerPriority(target: SessionStoreTarget): number {
+  const normalizedAgentId = normalizeAgentId(target.agentId);
+  const storeBaseName = normalizeAgentId(
+    path.basename(target.storePath, path.extname(target.storePath)),
+  );
+  if (normalizedAgentId === storeBaseName) {
+    return 2;
+  }
+  return normalizedAgentId === LEGACY_IMPLICIT_AGENT_ID ? 1 : 0;
+}
+
+export function dedupeSessionStoreTargetsBySqliteTarget(
+  targets: SessionStoreTarget[],
+): SessionStoreTarget[] {
   const deduped = new Map<string, SessionStoreTarget>();
   for (const target of targets) {
     const sqlitePath =
       resolveSqliteTargetFromSessionStorePath(target.storePath, { agentId: target.agentId }).path ??
       target.storePath;
-    if (!deduped.has(sqlitePath)) {
+    const current = deduped.get(sqlitePath);
+    // A custom store basename and legacy main can intentionally resolve to the same
+    // unsuffixed SQLite file. The basename-matching owner is the resolver's stronger claim.
+    if (!current || sqliteTargetOwnerPriority(target) > sqliteTargetOwnerPriority(current)) {
       deduped.set(sqlitePath, target);
     }
   }
@@ -362,7 +378,10 @@ export function resolveAllAgentSessionStoreTargetsSync(
       throw err;
     }
   });
-  return dedupeTargetsBySqliteTarget([...validatedConfiguredTargets, ...discoveredTargets]);
+  return dedupeSessionStoreTargetsBySqliteTarget([
+    ...validatedConfiguredTargets,
+    ...discoveredTargets,
+  ]);
 }
 
 /** Resolves only already-existing stores for one configured, retired, or manual agent. */
@@ -417,7 +436,7 @@ export function resolveExistingAgentSessionStoreTargetsSync(
     },
   );
   const validatedRequestedTarget = resolveValidatedExistingSessionStoreTargetSync(requestedTarget);
-  return dedupeTargetsBySqliteTarget([
+  return dedupeSessionStoreTargetsBySqliteTarget([
     ...(validatedRequestedTarget ? [validatedRequestedTarget] : []),
     ...discoveredTargets,
   ]);
@@ -496,7 +515,10 @@ export function resolveAllAgentSessionStoreCandidateTargetsSync(
       throw err;
     }
   });
-  return dedupeTargetsBySqliteTarget([...validatedConfiguredTargets, ...discoveredTargets]);
+  return dedupeSessionStoreTargetsBySqliteTarget([
+    ...validatedConfiguredTargets,
+    ...discoveredTargets,
+  ]);
 }
 
 /** Resolves session store targets for one agent, including retired/manual stores. */
@@ -611,7 +633,7 @@ export function resolveSessionStoreTargets(
       agentId,
       storePath: resolveStorePath(cfg.session?.store, { agentId, env }),
     }));
-    return dedupeTargetsBySqliteTarget(targets);
+    return dedupeSessionStoreTargetsBySqliteTarget(targets);
   }
 
   if (hasAgent) {

@@ -401,6 +401,65 @@ describe("config io write prepare", () => {
     });
   });
 
+  it("preserves an entry-internal include authored in a legacy list while adding an agent", () => {
+    const resolvedMain = {
+      id: "main",
+      default: true,
+      identity: { name: "Main", emoji: "🦞" },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        agents: { entries: { main: { default: true, identity: resolvedMain.identity } } },
+      },
+      sourceConfig: {
+        agents: { entries: { main: { default: true, identity: resolvedMain.identity } } },
+      },
+      sourceConfigBeforeMigrations: { agents: { list: [resolvedMain] } },
+      rootAuthoredConfig: {
+        agents: {
+          list: [{ id: "main", default: true, identity: { $include: "./identity.json" } }],
+        },
+      },
+      nextConfig: {
+        agents: {
+          entries: {
+            main: { default: true, identity: resolvedMain.identity },
+            worker: { workspace: "/srv/worker" },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.list).toBeUndefined();
+    expect(persisted.agents?.entries).toEqual({
+      main: { default: true, identity: { $include: "./identity.json" } },
+      worker: { workspace: "/srv/worker" },
+    });
+  });
+
+  it("rejects a roster write when a legacy whole-entry include owns the agent id", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: { agents: { entries: { main: { default: true } } } },
+        sourceConfig: { agents: { entries: { main: { default: true } } } },
+        sourceConfigBeforeMigrations: {
+          agents: { list: [{ id: "main", default: true }] },
+        },
+        rootAuthoredConfig: {
+          agents: { list: [{ $include: "./main-agent.json" }] },
+        },
+        nextConfig: {
+          agents: {
+            entries: {
+              main: { default: true },
+              worker: { workspace: "/srv/worker" },
+            },
+          },
+        },
+      }),
+    ).toThrow("flatten $include-owned config at agents");
+  });
+
   it("rejects a roster write that changes an entry-internal included subtree", () => {
     const resolvedMain = {
       default: true,

@@ -87,6 +87,11 @@ export function collectConfiguredModelRefs(
       collectFromAgent(`agents.entries.${agentId}`, entry);
     }
   }
+  if (Array.isArray(agents.list)) {
+    for (const [index, entry] of agents.list.entries()) {
+      collectFromAgent(`agents.list.${index}`, entry);
+    }
+  }
   if (options.includeChannelModelOverrides !== false) {
     const channels = isRecord(root.channels) ? root.channels : {};
     const modelByChannel = isRecord(channels.modelByChannel) ? channels.modelByChannel : {};

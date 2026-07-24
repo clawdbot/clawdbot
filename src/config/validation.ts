@@ -2044,7 +2044,11 @@ function validateConfigObjectWithPluginsBase(
     if (
       normalizePluginId(pluginId) === "codex" &&
       pathLocal === "plugins.entries.codex" &&
-      shouldSuppressMissingCodexPluginDiagnostics(config, opts.env ?? process.env)
+      shouldSuppressMissingCodexPluginDiagnostics(
+        config,
+        opts.env ?? process.env,
+        isRecord(raw) ? (raw as OpenClawConfig) : undefined,
+      )
     ) {
       return;
     }

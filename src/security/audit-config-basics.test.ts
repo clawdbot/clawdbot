@@ -30,6 +30,19 @@ function captureSecurityEvents(): {
 }
 
 describe("security audit config basics", () => {
+  it("preserves malformed roster defaults through the shared audit helper", async () => {
+    const findings = await collectSecurityAuditFindings({
+      agents: { entries: { main: {}, ops: {} } },
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "config.agent_roster.invalid_default_count",
+        detail: expect.stringContaining("found 0"),
+      }),
+    );
+  });
+
   it("flags agent profile overrides when global tools.profile is minimal", () => {
     const findings = collectMinimalProfileOverrideFindings({
       tools: {
