@@ -19,6 +19,11 @@ type BuiltInReadinessConditionType =
   | "ReadinessEvaluationComplete"
   | "ConfigLoaded"
   | "WorkspaceWritable"
+  | "ContextEngineReady"
+  | "ToolCatalogReady"
+  | "McpRuntimeReady"
+  | "SandboxReady"
+  | "HarnessReady"
   | "GatewayResponding"
   | "PluginsLoaded";
 

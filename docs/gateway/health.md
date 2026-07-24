@@ -129,6 +129,26 @@ that condition should block new work. `PluginsLoaded` remains an always-present
 advisory and includes plugins quarantined before activation as well as plugin
 loader errors.
 
+OpenClaw also exposes opt-in criteria for the agent execution surfaces that a
+host may depend on:
+
+| Selector ID                     | Condition            | What it observes                                                               |
+| ------------------------------- | -------------------- | ------------------------------------------------------------------------------ |
+| `openclaw.context-engine-ready` | `ContextEngineReady` | The selected context engine has a runtime registration and is not quarantined. |
+| `openclaw.tool-catalog-ready`   | `ToolCatalogReady`   | The runtime health store has no active tool-schema quarantines.                |
+| `openclaw.mcp-runtime-ready`    | `McpRuntimeReady`    | Every configured agent's MCP definitions loaded without owner diagnostics.     |
+| `openclaw.sandbox-ready`        | `SandboxReady`       | Every sandbox-enabled agent references a registered sandbox backend.           |
+| `openclaw.harness-ready`        | `HarnessReady`       | Every configured native harness runtime is registered.                         |
+
+These checks are observational. They do not create a session, connect to an MCP
+server, start a sandbox, invoke a tool, instantiate a context engine, or call a
+model. MCP discovery is captured when the Gateway accepts the runtime
+configuration; readiness requests read that captured summary. The other checks
+read bounded owner registries, configuration, or capped runtime-health records.
+Select only the capabilities that the deployment promises, and promote one to
+`requiredCriteria` only when its absence means the Gateway must not receive
+work.
+
 - **DO use:** `GET /health` - instant response, no session created, no LLM call, returns `{"ok":true,"status":"live"}`
 - **DON'T use:** `/v1/chat/completions` for health checks - each request creates a full agent session with skill snapshot, context assembly, and LLM calls
 

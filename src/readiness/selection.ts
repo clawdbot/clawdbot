@@ -7,6 +7,10 @@ import {
   type ReadinessContribution,
   type ReadinessRequirement,
 } from "./conditions.js";
+import {
+  createExecutionCapabilityReadinessResolver,
+  type ExecutionCapabilityReadinessSnapshot,
+} from "./execution-capabilities.js";
 import { createPluginReadinessResolver } from "./plugin-readiness.js";
 import { CORE_READINESS_SUBJECT_REFS } from "./subjects.js";
 import {
@@ -63,10 +67,12 @@ export function createSelectedReadinessResolver() {
   const resolveWorkspace = createWorkspaceReadinessEvidenceResolver();
   const resolvePlugins = createPluginReadinessResolver();
   const resolveActivation = createActivationReadinessResolver();
+  const resolveExecutionCapabilities = createExecutionCapabilityReadinessResolver();
 
   return async (params: {
     config: OpenClawConfig;
     registry: Pick<PluginRegistry, "readinessCriteria">;
+    executionCapabilities?: ExecutionCapabilityReadinessSnapshot;
     env?: NodeJS.ProcessEnv;
   }): Promise<ReadinessContribution> => {
     const selected = resolveSelectedReadinessCriteria(params.config);
@@ -95,6 +101,13 @@ export function createSelectedReadinessResolver() {
     const conditions = new Map<string, ReadinessCondition>();
     for (const [id, condition] of activationConditions) {
       conditions.set(id, condition);
+    }
+    for (const [id, capabilityCondition] of resolveExecutionCapabilities({
+      config: params.config,
+      criterionIds: selectedIds,
+      snapshot: params.executionCapabilities,
+    })) {
+      conditions.set(id, capabilityCondition);
     }
     if (workspaceEvidence) {
       conditions.set(

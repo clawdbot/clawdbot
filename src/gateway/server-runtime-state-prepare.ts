@@ -14,6 +14,7 @@ import {
 } from "../plugins/runtime-degraded-state.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import { buildRuntimeReadiness, type PluginReadinessInput } from "../readiness/conditions.js";
+import { captureExecutionCapabilityReadinessSnapshot } from "../readiness/execution-capabilities.js";
 import { createSelectedReadinessResolver } from "../readiness/selection.js";
 import { createGatewayReadinessIdentity } from "../readiness/subjects.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -138,13 +139,19 @@ export async function prepareGatewayRuntimeState(params: {
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
   } = bootstrap;
+  const buildReadinessRuntimeSnapshot = (
+    config: OpenClawConfig,
+    registry: typeof pluginBootstrap.pluginRegistry,
+  ) => ({
+    config,
+    registry,
+    executionCapabilities: captureExecutionCapabilityReadinessSnapshot(config),
+  });
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
     baseGatewayMethods: pluginBootstrap.baseGatewayMethods,
-    readinessSnapshot: {
-      config: cfgAtStart,
-      registry: pluginBootstrap.pluginRegistry,
-    },
+    buildReadinessRuntimeSnapshot,
+    readinessSnapshot: buildReadinessRuntimeSnapshot(cfgAtStart, pluginBootstrap.pluginRegistry),
   };
   // Unconfigured clean installs get no service; durable rows still need list/status projection.
   const hasConfiguredWorkerProfiles =
@@ -394,6 +401,7 @@ export async function prepareGatewayRuntimeState(params: {
       const contribution = await resolveSelectedReadiness({
         config: snapshot.config,
         registry: snapshot.registry,
+        executionCapabilities: snapshot.executionCapabilities,
         env: process.env,
       });
       if (snapshot !== pluginRuntime.readinessSnapshot) {
