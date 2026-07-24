@@ -62,6 +62,7 @@ const InlineAttachmentMountStateSchema = z
   .object({
     mountPath: z.string().optional(),
   })
+  .strict()
   .transform((mount, ctx) => {
     const parsed = parseInlineAttachmentMountPath(mount.mountPath);
     if (parsed.status === "invalid") {

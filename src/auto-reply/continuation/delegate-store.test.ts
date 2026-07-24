@@ -395,6 +395,25 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(JSON.stringify(flow.stateJson)).not.toContain(secret);
   });
 
+  it("dead-letters widened recovered mount state and scrubs raw bytes", () => {
+    const secret = "RECOVERY_MOUNT_UNKNOWN_MEMBER_MUST_NOT_RETAIN";
+    const flowId = queueRawPendingFlow("session-widened-mount", {
+      kind: "continuation_delegate",
+      task: "reject widened mount member",
+      attachAs: {
+        mountPath: "receipts",
+        extra: secret,
+      },
+    });
+
+    expect(consumePendingDelegates("session-widened-mount")).toEqual([]);
+    const flow = expectDefined(mockFlows.get(flowId), "failed widened mount flow");
+    expect(flow.status).toBe("failed");
+    expect(flow.stateJson).not.toHaveProperty("attachAs");
+    expect(JSON.stringify(flow.stateJson)).not.toContain(secret);
+    expect(JSON.stringify(flow.stateJson)).not.toContain("receipts");
+  });
+
   it("scrubs attachment bytes when a delegate reaches a terminal state", () => {
     enqueuePendingDelegate("session-terminal-success", {
       task: "successful attachment task",
