@@ -319,13 +319,30 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
       }
       for (const sessionFile of sessionFiles) {
-        const sessionKeyMatch = entries.find(({ sessionKey }) => sessionKey === sessionFile);
-        if (sessionKeyMatch) {
-          assertSessionEntryOwned({
-            action: params.action,
-            entry: sessionKeyMatch.entry,
-            sessionKey: sessionKeyMatch.sessionKey,
-          });
+        const sessionKeyMatches = entries.filter(({ sessionKey }) => sessionKey === sessionFile);
+        if (sessionKeyMatches.length > 0) {
+          for (const match of sessionKeyMatches) {
+            assertSessionEntryOwned({
+              action: params.action,
+              entry: match.entry,
+              sessionKey: match.sessionKey,
+            });
+          }
+          const matchedSessionIds = new Set(
+            sessionKeyMatches
+              .map(({ entry }) => normalizeOptionalString(entry.sessionId))
+              .filter((sessionId): sessionId is string => Boolean(sessionId)),
+          );
+          for (const match of entries) {
+            const matchSessionId = normalizeOptionalString(match.entry.sessionId);
+            if (matchSessionId && matchedSessionIds.has(matchSessionId)) {
+              assertSessionEntryOwned({
+                action: params.action,
+                entry: match.entry,
+                sessionKey: match.sessionKey,
+              });
+            }
+          }
           continue;
         }
         const marker = parseSqliteSessionFileMarker(sessionFile);

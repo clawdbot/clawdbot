@@ -450,6 +450,8 @@ describe("plugin registry runtime config scope", () => {
     const reservedKey = "agent:main:harness:codex:thread-1";
     const ordinaryKey = "agent:main:ordinary";
     const ordinaryAliasKey = "agent:main:ordinary-alias";
+    const ordinaryNoIdKey = "agent:main:ordinary-no-id";
+    const lockedNoIdKey = "agent:main:locked-no-id";
     const lockedOrdinaryKey = "agent:main:ordinary-locked";
     const legacyPrefixedKey = "agent:main:harness:notes";
     const reservedEntry = {
@@ -465,6 +467,12 @@ describe("plugin registry runtime config scope", () => {
     };
     const ordinaryEntry = { sessionId: "ordinary-session", updatedAt: 1 };
     const ordinaryAliasEntry = { sessionId: reservedEntry.sessionId, updatedAt: 1 };
+    const ordinaryNoIdEntry = { updatedAt: 1 };
+    const lockedNoIdEntry = {
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true as const,
+    };
     const lockedOrdinaryEntry = {
       sessionId: "locked-ordinary-session",
       updatedAt: 1,
@@ -478,6 +486,8 @@ describe("plugin registry runtime config scope", () => {
     };
     const entries = {
       [ordinaryAliasKey]: ordinaryAliasEntry,
+      [ordinaryNoIdKey]: ordinaryNoIdEntry,
+      [lockedNoIdKey]: lockedNoIdEntry,
       [reservedKey]: reservedEntry,
       [ordinaryKey]: ordinaryEntry,
       [lockedOrdinaryKey]: lockedOrdinaryEntry,
@@ -655,6 +665,22 @@ describe("plugin registry runtime config scope", () => {
         }),
       }),
     ).rejects.toThrow('owned by plugin "codex-owner"');
+    await expect(
+      otherApi.runtime.agent.runEmbeddedAgent({
+        ...runParams,
+        sessionId: undefined,
+        sessionKey: undefined,
+        sessionFile: ordinaryAliasKey,
+      }),
+    ).rejects.toThrow('owned by plugin "codex-owner"');
+    await expect(
+      otherApi.runtime.agent.runEmbeddedAgent({
+        ...runParams,
+        sessionId: undefined,
+        sessionKey: undefined,
+        sessionFile: ordinaryNoIdKey,
+      }),
+    ).resolves.toEqual({ ok: true });
     await expect(
       otherApi.runtime.agent.runEmbeddedAgent({
         ...runParams,

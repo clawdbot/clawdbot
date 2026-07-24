@@ -184,6 +184,34 @@ describe("handlePluginCommand", () => {
     );
   });
 
+  it("keeps the current agent for unqualified global session keys", async () => {
+    matchPluginCommandMock.mockReturnValue({
+      command: { name: "card" },
+      args: "",
+    });
+    executePluginCommandMock.mockResolvedValue({ text: "from plugin" });
+
+    const params = buildPluginParams("/card", {
+      commands: { text: true },
+      session: { store: "/tmp/durable/{agentId}/sessions.json" },
+    } as OpenClawConfig);
+    params.agentId = "other";
+    params.sessionKey = "global";
+
+    await handlePluginCommand(params, true);
+
+    const [commandParams] = expectDefined(
+      executePluginCommandMock.mock.calls[0] as unknown as [
+        { sessionTarget?: { agentId?: string; storePath?: string } },
+      ],
+      "plugin command invocation",
+    );
+    expect(commandParams.sessionTarget).toMatchObject({
+      agentId: "other",
+      storePath: "/tmp/durable/other/sessions.json",
+    });
+  });
+
   it("continues the agent without leaking continueAgent into the reply payload", async () => {
     matchPluginCommandMock.mockReturnValue({
       command: { name: "card" },
