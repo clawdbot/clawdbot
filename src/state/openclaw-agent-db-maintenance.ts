@@ -4,7 +4,7 @@ import {
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteSchemaContains,
@@ -98,8 +98,7 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
   pathname: string;
 }): void {
   const agentId = normalizeAgentId(options.agentId);
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(resolveNodeSqliteLocation(options.pathname));
+  const database = openNodeSqliteDatabase(options.pathname);
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const metadata = readExistingAgentSchemaMeta(database);

@@ -5,7 +5,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -149,8 +149,7 @@ export function listOpenClawRegisteredAgentDatabases(
     );
   }
 
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname), {
+  const database = openNodeSqliteDatabase(pathname, {
     readOnly: true,
   });
   try {

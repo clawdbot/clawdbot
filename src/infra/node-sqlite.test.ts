@@ -3,7 +3,11 @@ import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveNodeSqliteLocation, resolveNodeSqliteReadOnlyLocation } from "./node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  resolveNodeSqliteLocation,
+  resolveNodeSqliteReadOnlyLocation,
+} from "./node-sqlite.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
@@ -73,6 +77,15 @@ describe("node SQLite locations", () => {
     expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe("relative/openclaw.sqlite");
   });
 
+  it("opens special locations through the shared connection boundary", () => {
+    const database = openNodeSqliteDatabase(":memory:");
+    try {
+      expect(database.prepare("SELECT 1 AS ok").get()).toEqual({ ok: 1 });
+    } finally {
+      database.close();
+    }
+  });
+
   it("normalizes ordinary filesystem paths through the Windows VFS boundary", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const resolveSpy = vi.spyOn(path, "resolve").mockReturnValue("resolved-openclaw.sqlite");
@@ -99,6 +112,8 @@ describe("node SQLite locations", () => {
     expect(resolveNodeSqliteReadOnlyLocation(pathname, true)).toBe(
       resolveNodeSqliteLocation(pathname),
     );
+    const immutableLocation = resolveNodeSqliteReadOnlyLocation(pathname, false);
+    expect(resolveNodeSqliteLocation(immutableLocation)).toBe(immutableLocation);
   });
 
   it("keeps UNC and namespaced Windows paths out of SQLite URI authority parsing", () => {
@@ -127,10 +142,12 @@ describe("node SQLite locations", () => {
       .mockImplementation((pathname) => pathname);
 
     for (const [pathname, resolvedPath] of resolvedPaths) {
-      expect(resolveNodeSqliteReadOnlyLocation(pathname, false)).toBe(resolvedPath);
+      const readOnlyLocation = resolveNodeSqliteReadOnlyLocation(pathname, false);
+      expect(readOnlyLocation).toBe(resolvedPath);
+      expect(resolveNodeSqliteLocation(readOnlyLocation)).toBe(resolvedPath);
     }
-    expect(resolveSpy).toHaveBeenCalledTimes(resolvedPaths.size);
-    expect(namespacedSpy).toHaveBeenCalledTimes(resolvedPaths.size);
+    expect(resolveSpy).toHaveBeenCalledTimes(resolvedPaths.size * 2);
+    expect(namespacedSpy).toHaveBeenCalledTimes(resolvedPaths.size * 2);
   });
 });
 

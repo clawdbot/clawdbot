@@ -1,9 +1,8 @@
 // Doctor detection for legacy meeting transcript files and interrupted imports.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolveNodeSqliteLocation } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   hasMatchingRecordedTranscriptArtifact,
   isRecordedCanonicalTranscriptExport,
@@ -193,7 +192,7 @@ export function readMeetingTranscriptMigrationDetectionState(params: {
       pendingImportCount: 0,
     };
   }
-  const database = new DatabaseSync(resolveNodeSqliteLocation(databasePath), { readOnly: true });
+  const database = openNodeSqliteDatabase(databasePath, { readOnly: true });
   try {
     const tables = new Set(
       database

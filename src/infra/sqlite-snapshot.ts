@@ -10,8 +10,8 @@ import { runExec } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
+  openNodeSqliteDatabase,
   requireNodeSqlite,
-  resolveNodeSqliteLocation,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
 import { resolveSystemBin } from "./resolve-system-bin.js";
@@ -821,7 +821,7 @@ export async function createVerifiedSqliteSnapshot(
   const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
-    const source = new sqlite.DatabaseSync(resolveNodeSqliteLocation(options.sourcePath), {
+    const source = openNodeSqliteDatabase(options.sourcePath, {
       allowExtension: true,
       readOnly: true,
     });
@@ -838,7 +838,7 @@ export async function createVerifiedSqliteSnapshot(
     }
 
     await fs.chmod(stagedPath, 0o600);
-    const snapshot = new sqlite.DatabaseSync(resolveNodeSqliteLocation(stagedPath), {
+    const snapshot = openNodeSqliteDatabase(stagedPath, {
       allowExtension: true,
     });
     try {
@@ -868,7 +868,7 @@ export async function createVerifiedSqliteSnapshot(
         beforePublish: options.beforePublish,
         afterPublish: options.afterPublish,
         validatePublished: async (publishedPath) => {
-          const published = new sqlite.DatabaseSync(resolveNodeSqliteLocation(publishedPath), {
+          const published = openNodeSqliteDatabase(publishedPath, {
             allowExtension: true,
             readOnly: true,
           });

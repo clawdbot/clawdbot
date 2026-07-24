@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 type SqliteIndexListRow = {
   name: string;
@@ -265,8 +265,7 @@ function getSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
 }
 
 function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
-  const sqlite = requireNodeSqlite();
-  const database = new sqlite.DatabaseSync(":memory:");
+  const database = openNodeSqliteDatabase(":memory:");
   try {
     database.exec(schemaSql);
     const rows = database

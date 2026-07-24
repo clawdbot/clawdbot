@@ -13,7 +13,7 @@ import {
   ensureAbsoluteDirectory,
   isPathInside,
 } from "../infra/fs-safe.js";
-import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -678,8 +678,7 @@ async function verifySnapshotDatabaseFile(
         validationPath,
       );
       assertArtifactMatchesManifest(validationPath, validationArtifact, manifest);
-      const sqlite = requireNodeSqlite();
-      const database = new sqlite.DatabaseSync(resolveNodeSqliteLocation(validationPath), {
+      const database = openNodeSqliteDatabase(validationPath, {
         allowExtension: true,
         readOnly: true,
       });

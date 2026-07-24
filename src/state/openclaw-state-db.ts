@@ -7,11 +7,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import {
-  requireNodeSqlite,
-  resolveNodeSqliteLocation,
-  resolveNodeSqliteReadOnlyLocation,
-} from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, resolveNodeSqliteReadOnlyLocation } from "../infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
@@ -129,8 +125,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     return { changes: [], warnings: [] };
   }
   ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname));
+  const db = openNodeSqliteDatabase(pathname);
   const rebuiltIndexNames = new Set<string>();
   try {
     assertSupportedSchemaVersion(db, pathname);
@@ -303,9 +298,8 @@ export function openExistingOpenClawStateDatabaseReadOnly(
   if (!existsSync(pathname)) {
     return undefined;
   }
-  const sqlite = requireNodeSqlite();
   const hasWalSidecars = existsSync(`${pathname}-wal`) || existsSync(`${pathname}-shm`);
-  const db = new sqlite.DatabaseSync(resolveNodeSqliteReadOnlyLocation(pathname, hasWalSidecars), {
+  const db = openNodeSqliteDatabase(resolveNodeSqliteReadOnlyLocation(pathname, hasWalSidecars), {
     readOnly: true,
   });
   try {
@@ -404,8 +398,7 @@ export function openOpenClawStateDatabase(
     throw quarantineFailure;
   }
   ensureOpenClawStatePermissions(pathname, env);
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname));
+  const db = openNodeSqliteDatabase(pathname);
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
