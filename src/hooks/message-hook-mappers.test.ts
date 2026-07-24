@@ -314,6 +314,60 @@ describe("message hook mappers", () => {
       "https://example.test/ramp.jpg",
     ]);
     expect(claimEvent.metadata?.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
+    expect(claimEvent.media).toEqual([
+      {
+        path: "/tmp/tree.jpg",
+        url: "https://example.test/tree.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+      },
+      {
+        path: "/tmp/ramp.jpg",
+        url: "https://example.test/ramp.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+      },
+    ]);
+  });
+
+  it("withholds pending remote media from every inbound hook event", () => {
+    const canonical = {
+      ...deriveInboundMessageHookContext(
+        makeInboundCtx({
+          media: [
+            {
+              path: "/remote-host/photo.jpg",
+              url: "media://remote/photo.jpg",
+              contentType: "image/jpeg",
+            },
+          ],
+        }),
+      ),
+      mediaStagingPending: true,
+    };
+    const expectedOriginalMedia = [
+      {
+        path: "/remote-host/photo.jpg",
+        url: "media://remote/photo.jpg",
+        contentType: "image/jpeg",
+        kind: "image",
+      },
+    ];
+
+    for (const event of [
+      toPluginInboundClaimEvent(canonical),
+      toPluginMessageReceivedEvent(canonical),
+      toInternalMessageReceivedContext(canonical),
+      toInternalMessageTranscribedContext(canonical, {}),
+      toInternalMessagePreprocessedContext(canonical, {}),
+    ]) {
+      expect(event.media).toBeUndefined();
+      expect(event.originalMedia).toEqual(expectedOriginalMedia);
+      expect(event.mediaStagingPending).toBe(true);
+    }
+    expect(toPluginInboundClaimEvent(canonical).metadata?.mediaPath).toBeUndefined();
+    expect(toPluginMessageReceivedEvent(canonical).metadata?.mediaPath).toBeUndefined();
+    expect(toInternalMessageReceivedContext(canonical).metadata?.mediaPath).toBeUndefined();
   });
 
   it("projects retained facts into hook media metadata", () => {
@@ -327,6 +381,10 @@ describe("message hook mappers", () => {
     );
 
     expect(canonical).toMatchObject({
+      media: [
+        { path: "/tmp/tree.jpg", contentType: "image/jpeg", kind: "image" },
+        { url: "https://example.test/ramp.jpg", kind: "image" },
+      ],
       mediaPath: "/tmp/tree.jpg",
       mediaUrl: "/tmp/tree.jpg",
       mediaType: "image/jpeg",
@@ -440,6 +498,20 @@ describe("message hook mappers", () => {
       senderId: "sender-1",
       sessionKey: "session-1",
       runId: "run-1",
+      media: [
+        {
+          path: "/tmp/audio.ogg",
+          url: "https://cdn.example.com/audio.ogg",
+          contentType: "audio/ogg",
+          kind: "audio",
+        },
+        {
+          path: "/tmp/photo.jpg",
+          url: "https://cdn.example.com/photo.jpg",
+          contentType: "image/jpeg",
+          kind: "image",
+        },
+      ],
       trace: receivedEvent.trace,
       traceId: "11111111111111111111111111111111",
       spanId: "2222222222222222",
@@ -468,6 +540,7 @@ describe("message hook mappers", () => {
       accountId: "acc-1",
       conversationId: "demo-chat:chat:456",
       messageId: "msg-1",
+      media: receivedEvent.media,
     });
     expect(internalMetadata?.senderUsername).toBe("userone");
     expect(internalMetadata?.senderE164).toBe("+15551234567");
@@ -624,12 +697,16 @@ describe("message hook mappers", () => {
     const transcribed = toInternalMessageTranscribedContext(canonical, cfg);
     expect(transcribed.transcript).toBe("");
     expect(transcribed.cfg).toBe(cfg);
+    expect(transcribed.media).toEqual([
+      expect.objectContaining({ path: "/tmp/audio.ogg", contentType: "audio/ogg" }),
+    ]);
 
     const preprocessed = toInternalMessagePreprocessedContext(canonical, cfg);
     expect(preprocessed.transcript).toBeUndefined();
     expect(preprocessed.isGroup).toBe(true);
     expect(preprocessed.groupId).toBe("demo-chat:chat:456");
     expect(preprocessed.cfg).toBe(cfg);
+    expect(preprocessed.media).toEqual(transcribed.media);
   });
 
   it("maps sent context consistently for plugin/internal hooks", () => {

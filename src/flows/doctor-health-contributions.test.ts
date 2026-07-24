@@ -103,8 +103,6 @@ const mocks = vi.hoisted(() => ({
   collectWorkspaceBackupTip: vi.fn((): string | undefined => undefined),
   shouldSuggestMemorySystem: vi.fn(async () => false),
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
-  collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
-  maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
   collectHeartbeatCadenceMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatScratchMigrationFindings: vi.fn(async () => [] as unknown[]),
@@ -403,11 +401,6 @@ vi.mock("../commands/doctor-disk-space.js", () => ({
   collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
 }));
 
-vi.mock("../commands/doctor-heartbeat-template-repair.js", () => ({
-  collectHeartbeatTemplateHealthFindings: mocks.collectHeartbeatTemplateHealthFindings,
-  maybeRepairHeartbeatTemplate: mocks.maybeRepairHeartbeatTemplate,
-}));
-
 vi.mock("../commands/doctor-heartbeat-cadence-migration.js", () => ({
   collectHeartbeatCadenceMigrationFindings: mocks.collectHeartbeatCadenceMigrationFindings,
   maybeMigrateHeartbeatCadenceToCron: mocks.maybeMigrateHeartbeatCadenceToCron,
@@ -684,10 +677,6 @@ describe("doctor health contributions", () => {
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
     mocks.collectDiskSpaceHealthFindings.mockReset();
     mocks.collectDiskSpaceHealthFindings.mockReturnValue([]);
-    mocks.collectHeartbeatTemplateHealthFindings.mockReset();
-    mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValue([]);
-    mocks.maybeRepairHeartbeatTemplate.mockReset();
-    mocks.maybeRepairHeartbeatTemplate.mockResolvedValue(undefined);
     mocks.collectHeartbeatCadenceMigrationFindings.mockReset();
     mocks.collectHeartbeatCadenceMigrationFindings.mockResolvedValue([]);
     mocks.maybeMigrateHeartbeatCadenceToCron.mockReset();
@@ -1337,15 +1326,6 @@ describe("doctor health contributions", () => {
     expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
   });
 
-  it("repairs heartbeat templates before final config writes", () => {
-    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
-
-    expect(ids.indexOf("doctor:heartbeat-template-repair")).toBeGreaterThan(-1);
-    expect(ids.indexOf("doctor:heartbeat-template-repair")).toBeLessThan(
-      ids.indexOf("doctor:write-config"),
-    );
-  });
-
   it("materializes heartbeat cadence before scratch migration and final config writes", async () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
     const cadenceIndex = ids.indexOf("doctor:heartbeat-cadence-migration");
@@ -1419,47 +1399,6 @@ describe("doctor health contributions", () => {
     });
 
     expect(mocks.collectHeartbeatTaskMigrationFindings).toHaveBeenCalledWith(cfg, env);
-  });
-
-  it("keeps heartbeat template lint opt-in for default lint selection", async () => {
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-    const heartbeatTemplateCheck = contributionChecks.find(
-      (check) => check.id === "core/doctor/heartbeat-template",
-    );
-    expect(heartbeatTemplateCheck).toMatchObject({ defaultEnabled: false });
-    expect(heartbeatTemplateCheck).toBeDefined();
-
-    const ctx = {
-      cfg: { agents: { defaults: { workspace: "/tmp/openclaw-workspace" } } },
-      mode: "lint",
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    } as const;
-    const checks = [heartbeatTemplateCheck!];
-
-    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
-      checksRun: 0,
-      checksSkipped: 1,
-    });
-    expect(mocks.collectHeartbeatTemplateHealthFindings).not.toHaveBeenCalled();
-
-    mocks.collectHeartbeatTemplateHealthFindings.mockResolvedValueOnce([
-      {
-        checkId: "core/doctor/heartbeat-template",
-        severity: "warning",
-        message: "HEARTBEAT.md contains an older heartbeat documentation template.",
-        path: "/tmp/openclaw-workspace/HEARTBEAT.md",
-        requirement: "legacy-template",
-      },
-    ]);
-
-    await expect(
-      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/heartbeat-template"] }),
-    ).resolves.toMatchObject({
-      checksRun: 1,
-      checksSkipped: 0,
-      findings: [expect.objectContaining({ checkId: "core/doctor/heartbeat-template" })],
-    });
-    expect(mocks.collectHeartbeatTemplateHealthFindings).toHaveBeenCalledWith(ctx.cfg);
   });
 
   it("exposes the Skill Workshop tool-policy check to doctor lint", async () => {
@@ -1859,7 +1798,6 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/legacy-plugin-dependencies");
     expect(contributionIds).toContain("core/doctor/stale-plugin-runtime-symlinks");
     expect(contributionIds).toContain("core/doctor/disk-space");
-    expect(contributionIds).toContain("core/doctor/heartbeat-template");
     expect(contributionIds).toContain("core/doctor/whatsapp-responsiveness");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");

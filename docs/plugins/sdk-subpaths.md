@@ -102,7 +102,7 @@ deprecated for new code; see the per-row notes below.
     | `plugin-sdk/outbound-media` | Private-local after July 2026; Shared outbound media loading and hosted-media state helpers |
     | `plugin-sdk/poll-runtime` | Private-local after July 2026; Narrow poll normalization helpers |
     | `plugin-sdk/thread-bindings-runtime` | Private-local after July 2026; Thread-binding lifecycle and adapter helpers |
-    | `plugin-sdk/agent-media-payload` | Deprecated compatibility facade for agent media payload roots and loaders. New channel plugins use typed outbound payload planning from `plugin-sdk/channel-outbound`; operator-supplied local-media loading still uses the retained facade until a focused public local-roots seam exists. |
+    | `plugin-sdk/agent-media-payload` | Deprecated compatibility facade for legacy `Media*` payload projection. Pass ordered facts through `MsgContext.media` / `toInboundMediaFacts(...)`; import local-root policy from `plugin-sdk/media-local-roots`. |
     | `plugin-sdk/conversation-runtime` | Deprecated broad barrel for conversation/thread binding, pairing, and configured-binding helpers; prefer focused binding subpaths such as `plugin-sdk/thread-bindings-runtime` and `plugin-sdk/session-binding-runtime` |
     | `plugin-sdk/runtime-group-policy` | Runtime group-policy resolution helpers |
     | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
@@ -318,6 +318,7 @@ usage endpoint failed or returned no usable usage data.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/media-runtime` | Deprecated broad media barrel including `saveRemoteMedia`, `saveResponseMedia`, `readRemoteMediaBuffer`, and deprecated `fetchRemoteMedia`; prefer `plugin-sdk/media-store`, `plugin-sdk/media-mime`, `plugin-sdk/outbound-media`, and capability runtime subpaths, and prefer store helpers before buffer reads when a URL should become OpenClaw media |
+    | `plugin-sdk/media-local-roots` | Focused `getAgentScopedMediaLocalRoots(...)` and policy-aware `getAgentScopedMediaLocalRootsForSources(...)` helpers for plugin-owned local media reads |
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
     | `plugin-sdk/media-generation-runtime` | Private-local after July 2026; Shared media-generation failover helpers, candidate selection, and missing-model messaging |

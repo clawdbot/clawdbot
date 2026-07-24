@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "../infra/node-sqlite.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import {
@@ -53,7 +53,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     return { found: false, reason: "database-missing" };
   }
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(pathname), { readOnly: true });
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);

@@ -10,7 +10,7 @@ import {
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { requireNodeSqlite, resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { fileExists, safeReadDir } from "./state-migrations.fs.js";
 import {
@@ -79,7 +79,7 @@ export function readLegacyPluginStateSidecarRows(
   sourcePath: string,
 ): LegacyPluginStateSidecarRow[] {
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(sourcePath), { readOnly: true });
   try {
     return db
       .prepare(
@@ -590,7 +590,7 @@ function legacyRowsMatch(
 
 function readLegacyFlowRows(sourcePath: string): SqliteBindRow[] {
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
+  const db = new sqlite.DatabaseSync(resolveNodeSqliteLocation(sourcePath), { readOnly: true });
   try {
     const columns = listSqliteColumns(db, "flow_runs");
     if (columns.size === 0) {

@@ -63,7 +63,6 @@ extensions/codex/src/app-server/side-question.ts
 extensions/codex/src/app-server/thread-lifecycle.binding.test.ts
 extensions/codex/src/app-server/thread-lifecycle.test.ts
 extensions/codex/src/app-server/transcript-mirror.test.ts
-extensions/codex/src/command-handlers.ts
 extensions/codex/src/commands.test.ts
 extensions/codex/src/conversation-binding.test.ts
 extensions/codex/src/conversation-binding.ts
@@ -1080,9 +1079,7 @@ ui/src/pages/chat/chat-state.ts
 ui/src/pages/chat/chat-thread.test.ts
 ui/src/pages/chat/chat-thread.ts
 ui/src/pages/chat/chat-view.test.ts
-ui/src/pages/chat/components/chat-composer.ts
 ui/src/pages/chat/components/chat-message.test.ts
-ui/src/pages/chat/components/chat-message.ts
 ui/src/pages/chat/components/chat-model-controls.ts
 ui/src/pages/chat/components/chat-session-workspace.ts
 ui/src/pages/chat/components/chat-sidebar.ts

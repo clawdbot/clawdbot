@@ -504,7 +504,10 @@ describe("user turn transcript persistence", () => {
         expect.objectContaining({
           content: "resolved subtitle",
           MediaPath: path.join(dir, "image.png"),
-          __openclaw: { lateMedia: true },
+          __openclaw: {
+            lateMedia: true,
+            media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
+          },
         }),
       ]);
     });

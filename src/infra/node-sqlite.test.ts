@@ -1,6 +1,9 @@
 // Covers the SQLite WAL-reset corruption safety floor.
+import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveNodeSqliteLocation, resolveNodeSqliteReadOnlyLocation } from "./node-sqlite.js";
 
 const originalPrepare = Reflect.get(DatabaseSync.prototype, "prepare") as DatabaseSync["prepare"];
 
@@ -51,6 +54,85 @@ function expectedUnsafeSqliteError(version: string, shared: boolean): string {
     `database corruption bug. ${remediation}`
   );
 }
+
+describe("node SQLite locations", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each(["", ":memory:", "file:///tmp/openclaw.sqlite?mode=ro&immutable=1"])(
+    "preserves special location %j",
+    (location) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      expect(resolveNodeSqliteLocation(location)).toBe(location);
+    },
+  );
+
+  it("keeps ordinary filesystem paths unchanged outside Windows", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe("relative/openclaw.sqlite");
+  });
+
+  it("normalizes ordinary filesystem paths through the Windows VFS boundary", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const resolveSpy = vi.spyOn(path, "resolve").mockReturnValue("resolved-openclaw.sqlite");
+    const namespacedSpy = vi
+      .spyOn(path, "toNamespacedPath")
+      .mockReturnValue(String.raw`\\?\C:\resolved-openclaw.sqlite`);
+
+    expect(resolveNodeSqliteLocation("relative/openclaw.sqlite")).toBe(
+      String.raw`\\?\C:\resolved-openclaw.sqlite`,
+    );
+    expect(resolveSpy).toHaveBeenCalledWith("relative/openclaw.sqlite");
+    expect(namespacedSpy).toHaveBeenCalledWith("resolved-openclaw.sqlite");
+  });
+
+  it("uses immutable URIs for local databases without WAL sidecars", () => {
+    const pathname =
+      process.platform === "win32"
+        ? String.raw`C:\Users\OpenClaw\.openclaw\state\openclaw.sqlite`
+        : "/var/lib/openclaw/state/openclaw.sqlite";
+
+    expect(resolveNodeSqliteReadOnlyLocation(pathname, false)).toBe(
+      `${pathToFileURL(pathname).href}?mode=ro&immutable=1`,
+    );
+    expect(resolveNodeSqliteReadOnlyLocation(pathname, true)).toBe(
+      resolveNodeSqliteLocation(pathname),
+    );
+  });
+
+  it("keeps UNC and namespaced Windows paths out of SQLite URI authority parsing", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const resolvedPaths = new Map([
+      [
+        String.raw`\\server\share\state\openclaw.sqlite`,
+        String.raw`\\server\share\state\openclaw.sqlite`,
+      ],
+      ["//server/share/state/openclaw.sqlite", String.raw`\\server\share\state\openclaw.sqlite`],
+      ["relative/openclaw.sqlite", String.raw`\\server\share\workdir\relative\openclaw.sqlite`],
+      [
+        String.raw`\\?\C:\deep\state\openclaw.sqlite`,
+        String.raw`\\?\C:\deep\state\openclaw.sqlite`,
+      ],
+      [
+        String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
+        String.raw`\\?\UNC\server\share\state\openclaw.sqlite`,
+      ],
+    ]);
+    const resolveSpy = vi.spyOn(path, "resolve").mockImplementation((pathname) => {
+      return resolvedPaths.get(pathname) ?? pathname;
+    });
+    const namespacedSpy = vi
+      .spyOn(path, "toNamespacedPath")
+      .mockImplementation((pathname) => pathname);
+
+    for (const [pathname, resolvedPath] of resolvedPaths) {
+      expect(resolveNodeSqliteReadOnlyLocation(pathname, false)).toBe(resolvedPath);
+    }
+    expect(resolveSpy).toHaveBeenCalledTimes(resolvedPaths.size);
+    expect(namespacedSpy).toHaveBeenCalledTimes(resolvedPaths.size);
+  });
+});
 
 describe("node SQLite safety", () => {
   beforeEach(() => {

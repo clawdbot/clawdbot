@@ -48,6 +48,16 @@ export function readRuntimePromptMediaFacts(message: object): MediaFact[] | unde
   return Array.isArray(media) ? (media as MediaFact[]) : undefined;
 }
 
+/** Reads the canonical persisted media envelope without consulting legacy top-level fields. */
+export function readPersistedMediaFacts(message: object): MediaFact[] | undefined {
+  const metadata = (message as Record<string, unknown>)["__openclaw"];
+  const media =
+    metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>).media
+      : undefined;
+  return Array.isArray(media) ? normalizeMediaFacts(media as MediaFactInput[]) : undefined;
+}
+
 export function readRuntimePromptImageOrder(message: object): PromptImageOrderEntry[] | undefined {
   const imageOrder = (
     readRuntimePromptMediaFacts(message) as
@@ -98,12 +108,19 @@ type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
 };
 
 export type MediaFactLegacyProjection = {
+  /** @deprecated Use `media[0]?.path`. */
   MediaPath?: string;
+  /** @deprecated Use `media[0]?.url`. */
   MediaUrl?: string;
+  /** @deprecated Use `media[0]?.contentType` or `.kind`. */
   MediaType?: string;
+  /** @deprecated Use `media.map((entry) => entry.path)`. */
   MediaPaths?: string[];
+  /** @deprecated Use `media.map((entry) => entry.url)`. */
   MediaUrls?: string[];
+  /** @deprecated Use `media.map((entry) => entry.contentType ?? entry.kind)`. */
   MediaTypes?: string[];
+  /** @deprecated Use each media fact's `transcribed` field. */
   MediaTranscribedIndexes?: number[];
 };
 
