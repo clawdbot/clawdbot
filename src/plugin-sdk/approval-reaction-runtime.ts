@@ -312,7 +312,12 @@ function buildApprovalReactionPromptText(params: {
     sections.push(header.join("\n"));
     const warningText = view.warningText?.trim();
     if (warningText) {
-      sections.push(warningText);
+      // The auto-review rationale is the reason for the interruption, so bold
+      // it. It is generated text; the reaction-runtime renderers (iMessage,
+      // Signal, WhatsApp) parse to an IR that tolerates stray markers, so a
+      // rationale containing a lone `*` degrades gracefully rather than
+      // breaking the span.
+      sections.push(`**${warningText}**`);
     }
     const warningLines = view.commandAnalysis?.warningLines
       ?.map((line) => line.trim())
