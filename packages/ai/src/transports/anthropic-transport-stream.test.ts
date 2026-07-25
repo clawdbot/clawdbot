@@ -1932,58 +1932,21 @@ describe("anthropic transport stream", () => {
     expect(parseCount).toBeLessThan(deltas.length / 10);
   });
 
-  it("fails the stream when a tool-call argument buffer exceeds the byte cap", async () => {
-    const oversizedJson = JSON.stringify({ blob: "x".repeat(300_000) });
-    guardedFetchMock.mockResolvedValueOnce(
-      createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_oversized", usage: { input_tokens: 4, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "tool_use", id: "tool_oversized", name: "write", input: {} },
-        },
-        ...chunkString(oversizedJson, 100_000).map((piece) => ({
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "input_json_delta", partial_json: piece },
-        })),
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "tool_use" },
-          usage: { input_tokens: 4, output_tokens: 6 },
-        },
-      ]),
-    );
-
-    const result = await runTransportStream(
-      makeAnthropicTransportModel(),
-      { messages: [{ role: "user", content: "write file" }] } as AnthropicStreamContext,
-      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
-    );
-
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe("Exceeded tool-call argument buffer limit");
-  });
-
-  it("keeps a large sub-cap tool-call argument byte-identical without tripping the cap", async () => {
+  it("streams a tool-call argument larger than 256KB without truncation or error", async () => {
     const largeArgumentsJson = JSON.stringify({
       path: "C:\\Users\\dev\\large.txt",
-      blob: "y".repeat(200_000),
+      blob: "y".repeat(300_000),
     });
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
         {
           type: "message_start",
-          message: { id: "msg_subcap", usage: { input_tokens: 4, output_tokens: 0 } },
+          message: { id: "msg_large", usage: { input_tokens: 4, output_tokens: 0 } },
         },
         {
           type: "content_block_start",
           index: 0,
-          content_block: { type: "tool_use", id: "tool_subcap", name: "write", input: {} },
+          content_block: { type: "tool_use", id: "tool_large", name: "write", input: {} },
         },
         ...chunkString(largeArgumentsJson, 4096).map((piece) => ({
           type: "content_block_delta",
@@ -2005,6 +1968,8 @@ describe("anthropic transport stream", () => {
       { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
     );
 
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.errorMessage).toBeUndefined();
     const toolCall = findRecord(
       result.content,
       (record) => record.type === "toolCall" && record.name === "write",
