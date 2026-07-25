@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
+import type { ReliabilityReport } from "../../scripts/lib/sqlite-reliability-contract.js";
 import { monitorSqliteWalDuring } from "../../scripts/lib/sqlite-reliability-wal-monitor.js";
 
 const tempDirs: string[] = [];
@@ -153,127 +154,15 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstResult.status, firstResult.stderr).toBe(0);
     expect(firstResult.stderr).toBe("");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_TARGET=global");
-    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=5");
+    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORES_VERIFIED=7");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_CRASH_RECOVERY=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=verified");
+    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORE_INTERRUPTION=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_VACUUM_INTERRUPTION=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
-    const firstReport = JSON.parse(fs.readFileSync(firstOutput, "utf8")) as {
-      concurrentRestoresVerified: number;
-      crashRecoveryProof: {
-        committedStatePreserved: boolean;
-        exit: {
-          code: number | null;
-          signal: string | null;
-        };
-        partialVisibleAfterRecovery: boolean;
-        sourceRecovered: boolean;
-        stateAfterRecovery: {
-          batches: number;
-          rows: number;
-          sha256: string;
-        };
-        stateBeforeKill: {
-          batches: number;
-          rows: number;
-          sha256: string;
-        };
-        writerRestarted: boolean;
-      };
-      maintenanceProof: {
-        bloatBytes: number;
-        compaction: {
-          autoVacuum: { after: number };
-          freelistPages: { after: number; before: number };
-          reclaimedBytes: number;
-          walBytes: { after: number };
-        };
-        vacuumInterruption: {
-          autoVacuumAfterRecovery: number;
-          autoVacuumBeforeKill: number;
-          exit: {
-            code: number | null;
-            signal: string | null;
-          };
-          journalBytesObserved: number;
-          payloadAfterRecovery: {
-            bytes: number;
-            idSum: number;
-            rows: number;
-          };
-          payloadBeforeKill: {
-            bytes: number;
-            idSum: number;
-            rows: number;
-          };
-          recoveryVerified: boolean;
-          stateAfterRecovery: {
-            batches: number;
-            rows: number;
-            sha256: string;
-          };
-          stateBeforeKill: {
-            batches: number;
-            rows: number;
-            sha256: string;
-          };
-          walBytesObserved: number;
-        };
-        postCompact: {
-          restoreVerified: boolean;
-          state: {
-            batches: number;
-            rows: number;
-            sha256: string;
-          };
-        };
-      };
-      paths: {
-        sourceDatabase: string;
-        syncedRepository: string;
-      };
-      publicationInterruptionProof: {
-        afterPublish: {
-          existingTargetPreserved: boolean;
-          exit: {
-            code: number | null;
-            signal: string | null;
-          };
-          recoveryVerified: boolean;
-          sourceStatePreserved: boolean;
-          stagingEntries: number;
-          targetVerifiedAfterCrash: boolean;
-          targetVisibleAfterCrash: boolean;
-        };
-        beforePublish: {
-          exit: {
-            code: number | null;
-            signal: string | null;
-          };
-          recoveryVerified: boolean;
-          retryPublished: boolean;
-          sourceStatePreserved: boolean;
-          stagingEntries: number;
-          targetVerifiedAfterCrash: boolean;
-          targetVisibleAfterCrash: boolean;
-        };
-      };
-      restoresVerified: number;
-      transactionProof: {
-        committedWalSentinel: boolean;
-        heldRows: number;
-        visibleAfterRestore: boolean;
-      };
-      walBytes: {
-        limit: number;
-        peak: number;
-      };
-      writer: {
-        rowsCommitted: number;
-      };
-    };
+    const firstReport = JSON.parse(fs.readFileSync(firstOutput, "utf8")) as ReliabilityReport;
     expect(firstReport.concurrentRestoresVerified).toBe(4);
-    expect(firstReport.restoresVerified).toBe(5);
+    expect(firstReport.restoresVerified).toBe(7);
     expect(firstReport.crashRecoveryProof.sourceRecovered).toBe(true);
     expect(firstReport.crashRecoveryProof.committedStatePreserved).toBe(true);
     expect(firstReport.crashRecoveryProof.partialVisibleAfterRecovery).toBe(false);
@@ -338,6 +227,51 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstReport.maintenanceProof.vacuumInterruption.stateAfterRecovery).toEqual(
       firstReport.maintenanceProof.vacuumInterruption.stateBeforeKill,
     );
+    expect(firstReport.maintenanceProof.restoreInterruption.snapshotBytes).toBeGreaterThan(
+      64 * 1024 * 1024,
+    );
+    expect(firstReport.maintenanceProof.restoreInterruption.beforePublish).toMatchObject({
+      existingTargetPreserved: false,
+      recoveryVerified: true,
+      repositoryVerified: true,
+      retryRestored: true,
+      targetVerifiedAfterCrash: false,
+      targetVisibleAfterCrash: false,
+    });
+    expect(
+      firstReport.maintenanceProof.restoreInterruption.beforePublish.stagingEntries,
+    ).toBeGreaterThan(0);
+    expect(
+      firstReport.maintenanceProof.restoreInterruption.beforePublish.exit.code !== null ||
+        firstReport.maintenanceProof.restoreInterruption.beforePublish.exit.signal !== null,
+    ).toBe(true);
+    expect(
+      firstReport.maintenanceProof.restoreInterruption.beforePublish.stateAfterRecovery,
+    ).toEqual(firstReport.maintenanceProof.postCompact.state);
+    expect(
+      firstReport.maintenanceProof.restoreInterruption.beforePublish.payloadAfterRecovery,
+    ).toEqual(firstReport.maintenanceProof.vacuumInterruption.payloadBeforeKill);
+    expect(firstReport.maintenanceProof.restoreInterruption.afterPublish).toMatchObject({
+      existingTargetPreserved: true,
+      recoveryVerified: true,
+      repositoryVerified: true,
+      retryRestored: false,
+      targetVerifiedAfterCrash: true,
+      targetVisibleAfterCrash: true,
+    });
+    expect(
+      firstReport.maintenanceProof.restoreInterruption.afterPublish.stagingEntries,
+    ).toBeGreaterThan(0);
+    expect(
+      firstReport.maintenanceProof.restoreInterruption.afterPublish.exit.code !== null ||
+        firstReport.maintenanceProof.restoreInterruption.afterPublish.exit.signal !== null,
+    ).toBe(true);
+    expect(
+      firstReport.maintenanceProof.restoreInterruption.afterPublish.stateAfterRecovery,
+    ).toEqual(firstReport.maintenanceProof.restoreInterruption.beforePublish.stateAfterRecovery);
+    expect(
+      firstReport.maintenanceProof.restoreInterruption.afterPublish.payloadAfterRecovery,
+    ).toEqual(firstReport.maintenanceProof.restoreInterruption.beforePublish.payloadAfterRecovery);
     expect(firstReport.maintenanceProof.postCompact.restoreVerified).toBe(true);
     expect(firstReport.maintenanceProof.postCompact.state.batches).toBeGreaterThan(0);
     expect(firstReport.maintenanceProof.postCompact.state.rows).toBeGreaterThan(0);
@@ -371,7 +305,7 @@ describe("scripts/bench-sqlite-reliability", () => {
       paths: { syncedRepository: string };
       restoresVerified: number;
     };
-    expect(secondReport.restoresVerified).toBe(5);
+    expect(secondReport.restoresVerified).toBe(7);
     expect(secondReport.paths.syncedRepository).not.toBe(firstReport.paths.syncedRepository);
   });
 
