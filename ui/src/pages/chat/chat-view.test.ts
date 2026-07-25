@@ -1818,7 +1818,8 @@ describe("chat composer workbench", () => {
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
-      onToggleTask: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
       onOpenSession: () => undefined,
     };
 
@@ -1864,7 +1865,8 @@ describe("chat composer workbench", () => {
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
-      onToggleTask: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
       onOpenSession: () => undefined,
     };
     const messages = [{ role: "assistant", content: "done", timestamp: 1 }];
