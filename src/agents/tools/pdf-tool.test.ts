@@ -335,7 +335,7 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("clamps pathological maxBytesMb while preserving operator defaults", async () => {
+  it("clamps pathological maxBytesMb to the cap", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const { loadSpy } = await stubPdfToolInfra(agentDir, {
         provider: "anthropic",
@@ -355,6 +355,54 @@ describe("createPdfTool", () => {
       const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       // Clamped to MAX_PDF_MB_CAP=100 → 100 * 1024 * 1024
       expectFields(loadOptions, { maxBytes: 100 * 1024 * 1024 });
+    });
+  });
+
+  it("uses configuredMaxBytesMb when maxBytesMb is omitted", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      // Set a non-default operator config value to prove the fallback path.
+      const cfg = {
+        ...withPdfModel(ANTHROPIC_PDF_MODEL),
+        agents: {
+          defaults: { pdfMaxBytesMb: 50, pdfModel: { primary: ANTHROPIC_PDF_MODEL } },
+        },
+      } as OpenClawConfig;
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      // No model-supplied maxBytesMb — must fall through to configuredMaxBytesMb.
+      await tool.execute("t1", { prompt: "ocr", pdf: "/tmp/doc.pdf" });
+
+      const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+      // configuredMaxBytesMb=50 → 50 * 1024 * 1024
+      expectFields(loadOptions, { maxBytes: 50 * 1024 * 1024 });
+    });
+  });
+
+  it("passes model-supplied maxBytesMb below the cap unchanged", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      // A below-cap value (50 < 100) must pass through unclamped.
+      await tool.execute("t1", {
+        prompt: "ocr",
+        pdf: "/tmp/doc.pdf",
+        maxBytesMb: "50",
+      });
+
+      const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+      // Passthrough — 50 * 1024 * 1024, not clamped to 100.
+      expectFields(loadOptions, { maxBytes: 50 * 1024 * 1024 });
     });
   });
 
