@@ -44,7 +44,7 @@ export type CodeModeConfig = {
   maxSearchLimit: number;
 };
 
-export type CodeModeBridgeMethod =
+type CodeModeBridgeMethod =
   | "search"
   | "describe"
   | "call"
