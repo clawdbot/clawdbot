@@ -72,6 +72,7 @@ describe("activation readiness", () => {
       ),
     ).toEqual({
       type: "ConfigCurrent",
+      subjectRef: "openclaw/config/active",
       status: "Unknown",
       requirement: "advisory",
       reason: "CriterionEvaluationFailed",

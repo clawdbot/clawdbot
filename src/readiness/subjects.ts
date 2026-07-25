@@ -9,6 +9,17 @@ export const CORE_READINESS_SUBJECT_REFS = {
   config: "openclaw/config/active",
   plugins: "openclaw/plugins/active",
   workspace: "openclaw/workspace/default",
+  modelRoute: "openclaw/model-route/default",
+  secrets: "openclaw/secrets/active",
+  contextEngine: "openclaw/context-engine/active",
+  toolCatalog: "openclaw/tool-catalog/active",
+  mcpRuntime: "openclaw/mcp-runtime/active",
+  sandbox: "openclaw/sandbox/active",
+  harness: "openclaw/harness/active",
+  stateDatabase: "openclaw/state-database/active",
+  deliveryRuntime: "openclaw/delivery-runtime/active",
+  scheduler: "openclaw/scheduler/active",
+  sessionStorage: "openclaw/session-storage/active",
 } as const;
 const OPENCLAW_INSTANCE_ID_ENV = "OPENCLAW_INSTANCE_ID";
 const OPENCLAW_HOST_INSTANCE_ID = process.env[OPENCLAW_INSTANCE_ID_ENV]?.trim();

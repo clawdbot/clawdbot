@@ -519,8 +519,8 @@ async function evaluateCanonicalGatewayReadiness(params: {
     return mergeReadinessResults(
       gateway ?? { ready: false, failing: [], uptimeMs: 0 },
       buildReadinessEvaluationFailure(error, params.identity),
-        params.identity,
-        { config: params.config, runtimeConditionsFirst: true },
+      params.identity,
+      { config: params.config, runtimeConditionsFirst: true },
     );
   }
 }

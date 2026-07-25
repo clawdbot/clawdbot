@@ -12,6 +12,7 @@ import {
 } from "../context-engine/registry.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import type { ReadinessCondition } from "./conditions.js";
+import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "./subjects.js";
 
 export const CONTEXT_ENGINE_READY_CRITERION_ID = "openclaw.context-engine-ready";
 export const TOOL_CATALOG_READY_CRITERION_ID = "openclaw.tool-catalog-ready";
@@ -61,7 +62,39 @@ function condition(
   reason: string,
   message: string,
 ): ReadinessCondition {
-  return { type, status, requirement: "advisory", reason, message };
+  return {
+    type,
+    subjectRef: executionSubjectRef(type),
+    status,
+    requirement: "advisory",
+    reason,
+    message,
+  };
+}
+
+function executionSubjectRef(type: string): string {
+  const refs: Record<string, string> = {
+    ContextEngineReady: CORE_READINESS_SUBJECT_REFS.contextEngine,
+    ToolCatalogReady: CORE_READINESS_SUBJECT_REFS.toolCatalog,
+    McpRuntimeReady: CORE_READINESS_SUBJECT_REFS.mcpRuntime,
+    SandboxReady: CORE_READINESS_SUBJECT_REFS.sandbox,
+    HarnessReady: CORE_READINESS_SUBJECT_REFS.harness,
+  };
+  const ref = refs[type];
+  if (!ref) {
+    throw new Error(`unknown execution readiness condition: ${type}`);
+  }
+  return ref;
+}
+
+export function listExecutionCapabilityReadinessSubjects(): ReadinessSubject[] {
+  return [
+    { ref: CORE_READINESS_SUBJECT_REFS.contextEngine, kind: "openclaw.context-engine" },
+    { ref: CORE_READINESS_SUBJECT_REFS.toolCatalog, kind: "openclaw.tool-catalog" },
+    { ref: CORE_READINESS_SUBJECT_REFS.mcpRuntime, kind: "openclaw.mcp-runtime" },
+    { ref: CORE_READINESS_SUBJECT_REFS.sandbox, kind: "openclaw.sandbox" },
+    { ref: CORE_READINESS_SUBJECT_REFS.harness, kind: "openclaw.harness" },
+  ];
 }
 
 function createDefaultDeps(): ExecutionCapabilityReadinessDeps {

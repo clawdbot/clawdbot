@@ -140,7 +140,7 @@ describe("createSelectedReadinessResolver", () => {
         },
         registry: { readinessCriteria: [] },
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ conditions: [], subjects: [] });
   });
 
   it("reports a selected canonical condition as unknown when its producer did not run", () => {
@@ -156,6 +156,7 @@ describe("createSelectedReadinessResolver", () => {
     ).toEqual([
       {
         type: "PluginsLoaded",
+        subjectRef: "openclaw/plugins/active",
         status: "Unknown",
         requirement: "required",
         reason: "CriterionEvaluationUnavailable",
@@ -172,14 +173,17 @@ describe("createSelectedReadinessResolver", () => {
         config: { gateway: { readiness: { requiredCriteria: ["openclaw.config-current"] } } },
         registry: { readinessCriteria: [] },
       }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        type: "ConfigCurrent",
-        status: "Unknown",
-        requirement: "required",
-        reason: "ConfigGenerationUnavailable",
-      }),
-    ]);
+    ).resolves.toMatchObject({
+      conditions: [
+        expect.objectContaining({
+          type: "ConfigCurrent",
+          subjectRef: "openclaw/config/active",
+          status: "Unknown",
+          requirement: "required",
+          reason: "ConfigGenerationUnavailable",
+        }),
+      ],
+    });
   });
 
   it("maps an execution capability selector to its canonical condition type", async () => {
@@ -192,13 +196,16 @@ describe("createSelectedReadinessResolver", () => {
         },
         registry: { readinessCriteria: [] },
       }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        type: "HarnessReady",
-        status: "True",
-        requirement: "required",
-      }),
-    ]);
+    ).resolves.toMatchObject({
+      conditions: [
+        expect.objectContaining({
+          type: "HarnessReady",
+          subjectRef: "openclaw/harness/active",
+          status: "True",
+          requirement: "required",
+        }),
+      ],
+    });
   });
 
   it("fails closed for an unregistered required criterion", async () => {
@@ -234,14 +241,17 @@ describe("createSelectedReadinessResolver", () => {
           scheduler: { enabled: true, phase: "starting", recoveryPending: false },
         },
       }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        type: "SchedulerReady",
-        status: "False",
-        requirement: "required",
-        reason: "SchedulerStarting",
-      }),
-    ]);
+    ).resolves.toMatchObject({
+      conditions: [
+        expect.objectContaining({
+          type: "SchedulerReady",
+          subjectRef: "openclaw/scheduler/active",
+          status: "False",
+          requirement: "required",
+          reason: "SchedulerStarting",
+        }),
+      ],
+    });
   });
 
   it("maps selected session storage evidence to its canonical condition", async () => {
@@ -259,13 +269,16 @@ describe("createSelectedReadinessResolver", () => {
           registry: { readinessCriteria: [] },
           env: { OPENCLAW_STATE_DIR: stateDir },
         }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          type: "SessionStorageReady",
-          status: "True",
-          requirement: "required",
-        }),
-      ]);
+      ).resolves.toMatchObject({
+        conditions: [
+          expect.objectContaining({
+            type: "SessionStorageReady",
+            subjectRef: "openclaw/session-storage/active",
+            status: "True",
+            requirement: "required",
+          }),
+        ],
+      });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

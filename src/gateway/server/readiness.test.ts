@@ -746,6 +746,7 @@ describe("canonical configured Gateway readiness", () => {
     expect(result.ready).toBe(false);
     expect(result.conditions.find((entry) => entry.type === "PluginsLoaded")).toEqual({
       type: "PluginsLoaded",
+      subjectRef: "openclaw/plugins/active",
       status: "Unknown",
       requirement: "required",
       reason: "CriterionEvaluationUnavailable",

@@ -6,8 +6,13 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ReadinessCondition } from "./conditions.js";
+import { CORE_READINESS_SUBJECT_REFS, type ReadinessSubject } from "./subjects.js";
 
 export const SESSION_STORAGE_READY_CRITERION_ID = "openclaw.session-storage-ready";
+
+export function listSessionStorageReadinessSubjects(): ReadinessSubject[] {
+  return [{ ref: CORE_READINESS_SUBJECT_REFS.sessionStorage, kind: "openclaw.session-storage" }];
+}
 
 export type SessionStorageReadinessEvidence = {
   writable: boolean | null;
@@ -173,6 +178,7 @@ export function buildSessionStorageReadinessCondition(
   if (!evidence) {
     return {
       type: "SessionStorageReady",
+      subjectRef: CORE_READINESS_SUBJECT_REFS.sessionStorage,
       status: "Unknown",
       requirement: "advisory",
       reason: "SessionStorageNotChecked",
@@ -181,6 +187,7 @@ export function buildSessionStorageReadinessCondition(
   }
   return {
     type: "SessionStorageReady",
+    subjectRef: CORE_READINESS_SUBJECT_REFS.sessionStorage,
     status: evidence.writable === null ? "Unknown" : evidence.writable ? "True" : "False",
     requirement: "advisory",
     reason: evidence.reason,
