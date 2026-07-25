@@ -661,7 +661,6 @@ src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-core-normalizers.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
-src/commands/doctor/shared/legacy-config-migrations.runtime.models.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/doctor/shared/missing-configured-plugin-install.ts
 src/commands/doctor/shared/preview-warnings.test.ts
