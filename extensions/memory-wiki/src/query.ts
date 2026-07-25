@@ -34,6 +34,7 @@ import {
   type WikiPageSummary,
 } from "./markdown.js";
 import { initializeMemoryWikiVault } from "./vault.js";
+import { walkMemoryWikiDirectory } from "./walk.js";
 
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
 const QUERY_PAGE_READ_CONCURRENCY = 16;
@@ -212,17 +213,13 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
     await Promise.all(
       QUERY_DIRS.map(async (relativeDir) => {
         const dirPath = path.join(rootDir, relativeDir);
-        const entries = await fs
-          .readdir(dirPath, { withFileTypes: true, recursive: true })
-          .catch(() => []);
+        const { entries } = await walkMemoryWikiDirectory(dirPath);
         return entries
           .filter(
-            (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",
+            (entry) =>
+              entry.kind === "file" && entry.name.endsWith(".md") && entry.name !== "index.md",
           )
-          .map((entry) => {
-            const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
-            return path.relative(rootDir, absPath).split(path.sep).join("/");
-          });
+          .map((entry) => path.posix.join(relativeDir, entry.relativePath));
       }),
     )
   ).flat();

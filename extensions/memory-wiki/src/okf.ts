@@ -22,6 +22,7 @@ import {
 import { resolveMemoryWikiTimestamp } from "./time.js";
 import { isRegularFileStat, writeGuardedVaultPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
+import { walkMemoryWikiDirectory } from "./walk.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
 const OKF_MARKDOWN_LINK_PATTERN = /(!?)\[([^\]]*)\]\(([^)]+)\)/g;
@@ -130,34 +131,21 @@ async function collectOkfMarkdownFiles(
   rootDir: string,
   warnings: ImportMemoryWikiOkfWarning[],
 ): Promise<string[]> {
-  async function walk(relativeDir: string): Promise<string[]> {
-    const absoluteDir = path.join(rootDir, relativeDir);
-    const entries = await fs.readdir(absoluteDir, { withFileTypes: true }).catch((err: unknown) => {
-      warnings.push({
-        code: "unreadable-entry",
-        path: toPosixPath(relativeDir) || ".",
-        message: err instanceof Error ? err.message : "Unable to read OKF directory.",
-      });
-      return [];
+  const scan = await walkMemoryWikiDirectory(rootDir, {
+    descend: (entry) => entry.name !== ".git" && entry.name !== "node_modules",
+    include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+  });
+  for (const failure of scan.failedDirs ?? []) {
+    warnings.push({
+      code: "unreadable-entry",
+      path: toPosixPath(failure.relativePath) || ".",
+      message:
+        failure.error instanceof Error ? failure.error.message : "Unable to read OKF directory.",
     });
-    const files: string[] = [];
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      if (entry.name === ".git" || entry.name === "node_modules") {
-        continue;
-      }
-      const relativePath = path.join(relativeDir, entry.name);
-      if (entry.isDirectory()) {
-        files.push(...(await walk(relativePath)));
-        continue;
-      }
-      if (entry.isFile() && entry.name.endsWith(".md")) {
-        files.push(relativePath);
-      }
-    }
-    return files;
   }
-
-  return (await walk("")).map(toPosixPath).toSorted((left, right) => left.localeCompare(right));
+  return scan.entries
+    .map((entry) => toPosixPath(entry.relativePath))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function parseOkfMarkdown(
@@ -483,10 +471,13 @@ async function removeStaleOkfConceptPages(params: {
 }): Promise<string[]> {
   const vault = await fsRoot(params.vaultRoot);
   const conceptsDir = path.join(params.vaultRoot, "concepts");
-  const entries = await fs.readdir(conceptsDir, { withFileTypes: true }).catch(() => []);
+  const { entries } = await walkMemoryWikiDirectory(conceptsDir, {
+    descend: () => false,
+    include: (entry) => entry.kind === "file",
+  });
   const removedPagePaths: string[] = [];
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "index.md") {
+    if (entry.kind !== "file" || !entry.name.endsWith(".md") || entry.name === "index.md") {
       continue;
     }
     const pagePath = `concepts/${entry.name}`;

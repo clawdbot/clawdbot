@@ -58,6 +58,7 @@ import {
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
+import { walkMemoryWikiDirectory } from "./walk.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
   { kind: "source", dir: "sources", heading: "Sources" },
@@ -376,15 +377,10 @@ export type RefreshMemoryWikiIndexesResult = {
 
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
   const dirPath = path.join(rootDir, relativeDir);
-  const entries = await fs
-    .readdir(dirPath, { withFileTypes: true, recursive: true })
-    .catch(() => []);
+  const { entries } = await walkMemoryWikiDirectory(dirPath);
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => {
-      const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
-      return path.relative(rootDir, absPath).split(path.sep).join("/");
-    })
+    .filter((entry) => entry.kind === "file" && entry.name.endsWith(".md"))
+    .map((entry) => path.posix.join(relativeDir, entry.relativePath))
     .filter((relativePath) => path.basename(relativePath) !== "index.md")
     .toSorted((left, right) => left.localeCompare(right));
 }
