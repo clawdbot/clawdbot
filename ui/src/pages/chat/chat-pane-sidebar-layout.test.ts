@@ -3,8 +3,17 @@
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import { renderSidebarRegion, resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
-import { openSlot } from "./sidebar-layout.ts";
+import {
+  renderSidebarRegion,
+  resolveSidebarLayoutForBoard,
+  restoreHiddenSidebarChat,
+} from "./chat-pane-sidebar-layout.ts";
+import {
+  closeSlot,
+  detachPanelToColumn,
+  mergePanelIntoColumn,
+  openSlot,
+} from "./sidebar-layout.ts";
 
 function board(dock: ResolvedBoardView["dock"], face: ResolvedBoardView["face"] = "dashboard") {
   return {
@@ -128,6 +137,63 @@ describe("chat pane sidebar layout", () => {
       paneWidth: 1_400,
     });
     expect(layout).toEqual({ columns: [] });
+  });
+
+  it("preserves stored chat placement when moving panels in a hidden-chat projection", () => {
+    const stored = openSlot(
+      openSlot(openSlot({ columns: [] }, "chat", "left"), "detail"),
+      "discussion",
+    );
+    const rendered = closeSlot(stored, "chat");
+    const detail = rendered.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "detail")!;
+    const discussionColumn = rendered.columns.find((column) =>
+      column.panels.some((panel) => panel.slot === "discussion"),
+    )!;
+    const movedProjection = mergePanelIntoColumn(rendered, detail.id, discussionColumn.id, 0);
+    const moved = restoreHiddenSidebarChat({
+      activatedPanelId: detail.id,
+      movedLayout: movedProjection,
+      renderedLayout: rendered,
+      storedLayout: stored,
+    });
+
+    expect(moved.columns.flatMap((column) => column.panels.map((panel) => panel.slot))).toEqual([
+      "chat",
+      "detail",
+      "discussion",
+    ]);
+  });
+
+  it("preserves the stored active chat tab across an unrelated projected move", () => {
+    let stored = openSlot(openSlot(openSlot({ columns: [] }, "chat"), "detail"), "discussion");
+    const chatColumn = stored.columns.find((column) =>
+      column.panels.some((panel) => panel.slot === "chat"),
+    )!;
+    const chatPanel = chatColumn.panels.find((panel) => panel.slot === "chat")!;
+    const detailPanel = stored.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "detail")!;
+    const discussionPanel = stored.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "discussion")!;
+    stored = mergePanelIntoColumn(stored, detailPanel.id, chatColumn.id, 1);
+    stored = mergePanelIntoColumn(stored, discussionPanel.id, chatColumn.id, 2);
+    stored.columns.find((column) => column.id === chatColumn.id)!.activePanelId = chatPanel.id;
+    const rendered = closeSlot(stored, "chat");
+    const movedProjection = detachPanelToColumn(rendered, detailPanel.id, "right", 0);
+
+    const moved = restoreHiddenSidebarChat({
+      activatedPanelId: detailPanel.id,
+      movedLayout: movedProjection,
+      renderedLayout: rendered,
+      storedLayout: stored,
+    });
+
+    expect(moved.columns.find((column) => column.id === chatColumn.id)?.activePanelId).toBe(
+      chatPanel.id,
+    );
   });
 
   it("refits ordinary chat columns to preserve the primary minimum", () => {

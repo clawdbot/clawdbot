@@ -238,6 +238,16 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       splitRatio: 0.5,
       minRatio: 0.05,
       maxRatio: 0.95,
+      measureRatio: () => {
+        const { previous, next } = this.dividerNeighbors(column, side);
+        const previousWidth = previous?.width ?? 0;
+        const total = previousWidth + (next?.width ?? 0);
+        return total > 0 ? previousWidth / total : 0.5;
+      },
+      measureSize: () => {
+        const { previous, next } = this.dividerNeighbors(column, side);
+        return (previous?.width ?? 0) + (next?.width ?? 0);
+      },
       onElement: (element) => {
         divider = element;
         if (!(element instanceof HTMLElement)) {

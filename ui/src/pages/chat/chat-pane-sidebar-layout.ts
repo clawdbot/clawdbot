@@ -15,7 +15,9 @@ import {
   fitSidebarLayout,
   isSidebarRegionCollapsed,
   openSlot,
+  type SidebarColumn,
   type SidebarLayout,
+  type SidebarPanel,
 } from "./sidebar-layout.ts";
 
 const DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
@@ -96,6 +98,95 @@ export function resolveSidebarLayoutForBoard(params: {
     (column) => !beforeOpen.columns.some((current) => current.id === column.id),
   );
   return fitSidebarLayout(layout, params.paneWidth, newColumn?.id) ?? layout;
+}
+
+function stableInsertionIndex(order: string[], current: string[], targetId: string): number {
+  const targetIndex = order.indexOf(targetId);
+  for (let index = targetIndex - 1; index >= 0; index -= 1) {
+    const currentIndex = current.indexOf(order[index]!);
+    if (currentIndex >= 0) {
+      return currentIndex + 1;
+    }
+  }
+  for (let index = targetIndex + 1; index < order.length; index += 1) {
+    const currentIndex = current.indexOf(order[index]!);
+    if (currentIndex >= 0) {
+      return currentIndex;
+    }
+  }
+  return Math.max(0, Math.min(targetIndex, current.length));
+}
+
+export function restoreHiddenSidebarChat(params: {
+  activatedPanelId: string;
+  movedLayout: SidebarLayout;
+  renderedLayout: SidebarLayout;
+  storedLayout: SidebarLayout;
+}): SidebarLayout {
+  const renderedHasChat = params.renderedLayout.columns.some((column) =>
+    column.panels.some((panel) => panel.slot === "chat"),
+  );
+  if (renderedHasChat) {
+    return params.movedLayout;
+  }
+  let storedColumn: SidebarColumn | undefined;
+  let storedPanel: SidebarPanel | undefined;
+  for (const column of params.storedLayout.columns) {
+    const chat = column.panels.find((panel) => panel.slot === "chat");
+    if (chat) {
+      storedColumn = column;
+      storedPanel = chat;
+      break;
+    }
+  }
+  if (!storedColumn || !storedPanel) {
+    return params.movedLayout;
+  }
+  if (
+    params.movedLayout.columns.some((column) =>
+      column.panels.some((panel) => panel.id === storedPanel.id),
+    )
+  ) {
+    return params.movedLayout;
+  }
+  const existingColumnIndex = params.movedLayout.columns.findIndex(
+    (column) => column.id === storedColumn.id,
+  );
+  if (existingColumnIndex >= 0) {
+    const columns = [...params.movedLayout.columns];
+    const column = columns[existingColumnIndex]!;
+    const panelIndex = stableInsertionIndex(
+      storedColumn.panels.map((panel) => panel.id),
+      column.panels.map((panel) => panel.id),
+      storedPanel.id,
+    );
+    const panels = [...column.panels];
+    panels.splice(panelIndex, 0, storedPanel);
+    const moveActivatedThisColumn = column.panels.some(
+      (panel) => panel.id === params.activatedPanelId,
+    );
+    columns[existingColumnIndex] = {
+      ...column,
+      panels,
+      activePanelId:
+        storedColumn.activePanelId === storedPanel.id && !moveActivatedThisColumn
+          ? storedPanel.id
+          : column.activePanelId,
+    };
+    return { columns };
+  }
+  const columns = [...params.movedLayout.columns];
+  const columnIndex = stableInsertionIndex(
+    params.storedLayout.columns.map((column) => column.id),
+    columns.map((column) => column.id),
+    storedColumn.id,
+  );
+  columns.splice(columnIndex, 0, {
+    ...storedColumn,
+    panels: [storedPanel],
+    activePanelId: storedPanel.id,
+  });
+  return { columns };
 }
 
 export function createSidebarFullMessageLoader(

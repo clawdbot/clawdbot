@@ -5,6 +5,8 @@ export function renderChatResizableDivider(props: {
   className?: string;
   label: string;
   maxRatio?: number;
+  measureRatio?: () => number;
+  measureSize?: () => number;
   minRatio?: number;
   onElement?: (element: Element | undefined) => void;
   onDragover?: (event: DragEvent) => void;
@@ -19,6 +21,8 @@ export function renderChatResizableDivider(props: {
     .splitRatio=${props.splitRatio}
     .minRatio=${props.minRatio ?? 0.4}
     .maxRatio=${props.maxRatio ?? 0.7}
+    .measureRatio=${props.measureRatio}
+    .measureSize=${props.measureSize}
     .label=${props.label}
     .orientation=${props.orientation}
     @dragover=${props.onDragover ?? (() => {})}

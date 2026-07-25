@@ -67,6 +67,7 @@ import {
   createSidebarFullMessageLoader,
   renderSidebarRegion,
   resolveSidebarLayoutForBoard,
+  restoreHiddenSidebarChat,
 } from "./chat-pane-sidebar-layout.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 
@@ -635,12 +636,22 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
         state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
       },
       detachPanel: (panelId: string, side: SidebarSide, columnIndex: number) => {
-        const moved = detachPanelToColumn(sidebarLayout, panelId, side, columnIndex);
+        const moved = restoreHiddenSidebarChat({
+          activatedPanelId: panelId,
+          movedLayout: detachPanelToColumn(sidebarLayout, panelId, side, columnIndex),
+          renderedLayout: sidebarLayout,
+          storedLayout: state.sidebarLayout,
+        });
         this.commitSidebarPanelMove(moved, panelId, side, board);
       },
       mergePanel: (panelId: string, targetColumnId: string, panelIndex: number) => {
         const target = sidebarLayout.columns.find((column) => column.id === targetColumnId);
-        const merged = mergePanelIntoColumn(sidebarLayout, panelId, targetColumnId, panelIndex);
+        const merged = restoreHiddenSidebarChat({
+          activatedPanelId: panelId,
+          movedLayout: mergePanelIntoColumn(sidebarLayout, panelId, targetColumnId, panelIndex),
+          renderedLayout: sidebarLayout,
+          storedLayout: state.sidebarLayout,
+        });
         if (target) {
           this.commitSidebarPanelMove(merged, panelId, target.side, board);
         }

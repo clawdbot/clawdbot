@@ -2,6 +2,7 @@
 
 import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../../../components/resizable-divider.ts";
 import { mergePanelIntoColumn, openSlot } from "../sidebar-layout.ts";
 import "./chat-sidebar-region.runtime.ts";
 
@@ -187,12 +188,27 @@ describe("chat sidebar region", () => {
     regionRoot(region).querySelector<HTMLElement>(
       `[data-column-id="${column!.id}"]`,
     )!.getBoundingClientRect = () => ({ width: 320 }) as DOMRect;
+    divider!.setPointerCapture = vi.fn();
+    divider!.releasePointerCapture = vi.fn();
+    divider!.hasPointerCapture = vi.fn(() => true);
+    const pointerDown = new MouseEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      clientX: 500,
+    });
+    Object.defineProperty(pointerDown, "pointerId", { value: 7 });
+    divider!.dispatchEvent(pointerDown);
+    document.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientX: 612 }));
+    document.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, clientX: 612 }));
 
-    divider!.dispatchEvent(
-      new CustomEvent("resize", { bubbles: true, detail: { splitRatio: 0.25 } }),
-    );
+    const resizedWidth = vi.mocked(region.callbacks!.resizeColumn).mock.lastCall?.[1];
+    expect(region.callbacks?.resizeColumn).toHaveBeenCalledWith(column!.id, expect.any(Number));
+    expect(resizedWidth).toBeCloseTo(208);
 
-    expect(region.callbacks?.resizeColumn).toHaveBeenCalledWith(column!.id, 840);
+    vi.mocked(region.callbacks!.resizeColumn).mockClear();
+    divider!.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+    const keyboardWidth = vi.mocked(region.callbacks!.resizeColumn).mock.lastCall?.[1];
+    expect(keyboardWidth).toBeCloseTo(297.6);
   });
 
   it("ignores a drag payload started by another sidebar region", async () => {
