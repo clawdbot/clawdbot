@@ -573,7 +573,7 @@ describe("TwilioProvider", () => {
     expect(clearTtsQueue).toHaveBeenCalledWith("MZ-dtmf-stream", "dtmf");
     expect(apiRequest).toHaveBeenCalledOnce();
     expect(clearTtsQueue.mock.invocationCallOrder[0]).toBeLessThan(
-      apiRequest.mock.invocationCallOrder[0],
+      apiRequest.mock.invocationCallOrder[0]!,
     );
   });
 
