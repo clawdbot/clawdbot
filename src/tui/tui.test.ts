@@ -204,6 +204,10 @@ describe("resolveTuiSessionKey", () => {
       expected: "agent:main:signal:group:AbC123=",
     },
     {
+      raw: "Agent:Ops:Signal:Group:AbC123=",
+      expected: "agent:ops:signal:group:AbC123=",
+    },
+    {
       raw: "Signal:Group:AbC123=",
       expected: "agent:main:signal:group:AbC123=",
     },
