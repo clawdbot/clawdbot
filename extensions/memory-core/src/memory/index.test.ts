@@ -43,6 +43,7 @@ let providerRuntimeActiveBatchCalls = 0;
 let providerRuntimeMaxActiveBatchCalls = 0;
 let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
+let providerCreationFailure: string | null = null;
 let providerCloseGate: Promise<void> | null = null;
 let providerInitGate: Promise<void> | null = null;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
@@ -132,6 +133,9 @@ vi.mock("./embeddings.js", () => {
         outputDimensionality: options.outputDimensionality,
       });
       await providerInitGate;
+      if (options.provider === providerCreationFailure) {
+        throw new Error(`provider creation failed: ${options.provider}`);
+      }
       if (forceNoProvider) {
         return {
           provider: null,
@@ -312,6 +316,7 @@ describe("memory index", () => {
     providerRuntimeMaxActiveBatchCalls = 0;
     providerCloseCalls = 0;
     providerCloseFailuresRemaining = 0;
+    providerCreationFailure = null;
     providerCloseGate = null;
     providerInitGate = null;
     providerCalls = [];
@@ -2208,6 +2213,35 @@ describe("memory index", () => {
       "fallback-provider",
     ]);
     await expect(concurrentSearch).resolves.toBeDefined();
+  });
+
+  it("fails closed when fallback initialization fails for an explicit provider", async () => {
+    const cfg = createCfg({
+      provider: "openai",
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.embedQuery = async () => {
+      throw new Error("embedding provider failed");
+    };
+    providerCreationFailure = "fallback-provider";
+
+    await expect(manager.search("alpha")).rejects.toThrow(
+      /Memory search unavailable: embedding provider "openai" is configured but unavailable\./,
+    );
+
+    providerCreationFailure = null;
+    await expect(manager.search("alpha")).resolves.toBeDefined();
   });
 
   it("does not activate fallback during search when index identity is already mismatched", async () => {

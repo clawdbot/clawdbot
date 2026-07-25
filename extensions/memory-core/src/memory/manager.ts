@@ -798,6 +798,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         log.warn(`memory sync failed (search): ${String(err)}`);
       },
     });
+    if (
+      preflight.shouldInitializeProvider &&
+      !this.provider &&
+      this.providerLifecycle.mode === "degraded" &&
+      this.providerLifecycle.providerId !== this.settings.provider
+    ) {
+      // A failed fallback must yield ownership back to the configured primary.
+      // Retrying the degraded fallback here can strand a valid existing index.
+      this.resetProviderInitializationForRetry();
+    }
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
       this.assertRequiredProviderAvailable("search");
@@ -918,6 +928,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         keywordResults = await loadKeywordResults();
         queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal);
       } else if (!this.provider && this.fts.enabled && this.fts.available) {
+        this.assertRequiredProviderAvailable("search");
         log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
         return await this.finalizeKeywordOnlyResults({
           results: keywordResults,
