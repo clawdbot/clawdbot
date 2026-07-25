@@ -4,8 +4,12 @@ import {
   property,
   litState,
   createQuestionPromptState,
+  ChatSessionCompanionThreads,
   listQuestionPrompts,
-  requestSessionObserverAnswer,
+  parseCatalogSessionKey,
+  requestSessionCompanionAnswer,
+  requestSessionCompanionState,
+  resetSessionCompanion,
   sendSessionObserverVisibility,
   PollController,
   SubscriptionsController,
@@ -34,6 +38,7 @@ import {
   type SessionCatalogHost,
   type SessionCatalogSession,
   type SessionDiscussionState,
+  type SessionRailMode,
   type SessionSharingRole,
   type SessionSuggestion,
   type SwarmRosterHydrator,
@@ -109,21 +114,95 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   } | null = null;
   @litState() protected boardChatDockSize: BoardChatDockSize = boardChatDockLayout.load();
   @litState() protected resetConfirmationOpen = false;
-  @litState() protected observerHudReady = customElements.get("openclaw-chat-observer-hud") != null;
-  protected observerHudLoad: Promise<void> | null = null;
-  protected readonly askSessionObserver = (sessionKey: string, question: string) => {
-    const state = this.state;
-    if (!state?.connected || !state.client) {
-      return Promise.reject(new Error("Gateway is disconnected"));
-    }
-    return requestSessionObserverAnswer(state.client, sessionKey, question);
-  };
+  @litState() protected sessionRailReady = customElements.get("openclaw-chat-session-rail") != null;
+  @litState() protected sessionRailMode: SessionRailMode = "hidden";
+  protected sessionRailModeSessionKey = "";
+  protected sessionRailLoad: Promise<void> | null = null;
+  protected sessionRailOpenRequest = 0;
+  protected sessionRailOpenSessionKey = "";
+  protected sessionCompanionHydrationKey = "";
+  protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
+    this.requestUpdate();
+  });
   protected readonly setSessionObserverVisibility = (visible: boolean) => {
     const state = this.state;
     if (state?.connected && state.client) {
       void sendSessionObserverVisibility(state.client, visible).catch(() => undefined);
     }
     this.requestUpdate();
+  };
+
+  protected ensureSessionRail() {
+    if (this.sessionRailReady || this.sessionRailLoad) {
+      return;
+    }
+    this.sessionRailLoad = import("./components/chat-session-rail.ts")
+      .then(() => {
+        if (this.isConnected) {
+          this.sessionRailReady = true;
+        }
+      })
+      .finally(() => {
+        this.sessionRailLoad = null;
+      });
+  }
+
+  protected openSessionRail(): void {
+    this.sessionRailOpenSessionKey = this.state?.sessionKey ?? "";
+    this.ensureSessionRail();
+    this.sessionRailOpenRequest += 1;
+    this.requestUpdate();
+  }
+
+  protected readonly submitSessionCompanionQuestion = async (question: string) => {
+    const state = this.state;
+    if (!state || !state.sessionKey) {
+      return;
+    }
+    const sessionKey = state.sessionKey;
+    this.openSessionRail();
+    if (!state.connected || !state.client) {
+      this.sessionCompanionThreads.setDraft(sessionKey, question);
+      return;
+    }
+    await this.sessionCompanionThreads.submit(sessionKey, question, (key, value) =>
+      requestSessionCompanionAnswer(state.client!, key, value),
+    );
+  };
+
+  protected readonly prefillSessionCompanionQuestion = (question: string) => {
+    const sessionKey = this.state?.sessionKey;
+    if (!sessionKey) {
+      return;
+    }
+    this.sessionCompanionThreads.setDraft(sessionKey, question);
+    this.openSessionRail();
+  };
+
+  protected hydrateSessionCompanion(sessionKey: string): void {
+    const state = this.state;
+    if (!state?.connected || !state.client || !sessionKey || parseCatalogSessionKey(sessionKey)) {
+      return;
+    }
+    const hydrationKey = `${this.connectionGeneration}\0${sessionKey}`;
+    if (this.sessionCompanionHydrationKey === hydrationKey) {
+      return;
+    }
+    this.sessionCompanionHydrationKey = hydrationKey;
+    this.ensureSessionRail();
+    void this.sessionCompanionThreads.hydrate(sessionKey, (key) =>
+      requestSessionCompanionState(state.client!, key),
+    );
+  }
+
+  protected readonly clearSessionCompanion = async () => {
+    const state = this.state;
+    if (!state?.connected || !state.client || !state.sessionKey) {
+      return;
+    }
+    await this.sessionCompanionThreads
+      .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key))
+      .catch(() => undefined);
   };
   protected resetConfirmation:
     | {

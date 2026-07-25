@@ -107,7 +107,6 @@ export {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
-export { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 export { copyToClipboard } from "../../lib/clipboard.ts";
 export { clampText } from "../../lib/format.ts";
 export {
@@ -168,7 +167,7 @@ export {
   switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
-export { requestSessionObserverAnswer, sendSessionObserverVisibility } from "./chat-observer.ts";
+export { sendSessionObserverVisibility } from "./chat-observer.ts";
 export {
   applySelectedSessionProjection,
   dismissChatError,
@@ -179,6 +178,12 @@ export { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 export { dismissRealtimeTalkError } from "./chat-realtime.ts";
 export { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 export { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+export {
+  ChatSessionCompanionThreads,
+  requestSessionCompanionAnswer,
+  requestSessionCompanionState,
+  resetSessionCompanion,
+} from "./chat-session-companion.ts";
 export {
   flushChatQueueAfterIdleSessionReconciliation,
   switchChatFastMode,
@@ -227,6 +232,7 @@ export {
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
 export { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
+export type { SessionRailMode } from "./components/chat-session-rail.ts";
 export {
   renderChatSessionSharing,
   type ChatSessionSharingState,

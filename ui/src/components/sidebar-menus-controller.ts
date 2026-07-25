@@ -41,7 +41,7 @@ interface SidebarMenusControllerState {
   sessionMenuWork: SessionMenuWork | null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null;
   sessionSortMenuPosition: { x: number; y: number } | null;
-  agentMenuPosition: { x: number; bottom: number } | null;
+  agentMenuPosition: { x: number; top: number } | null;
   agentMenuFilter: string;
   identityMenuPosition: { x: number; bottom: number; width: number } | null;
 }
@@ -118,7 +118,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   sessionMenuWork: SessionMenuWork | null = null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
   sessionSortMenuPosition: { x: number; y: number } | null = null;
-  agentMenuPosition: { x: number; bottom: number } | null = null;
+  agentMenuPosition: { x: number; top: number } | null = null;
   agentMenuFilter = "";
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
@@ -415,9 +415,11 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.closeIdentityMenu();
     this.agentMenuTrigger = trigger;
     this.updateState("agentMenuFilter", "");
+    // The agent card sits at the top of the sidebar, so the menu drops below it
+    // and shares its left edge; anchoring above would cover the card you clicked.
     this.updateState("agentMenuPosition", {
-      x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
-      bottom: Math.max(8, window.innerHeight - rect.top + 4),
+      x: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
+      top: Math.min(rect.bottom + 4, window.innerHeight - 8),
     });
   }
 

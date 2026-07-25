@@ -38,7 +38,6 @@ import {
   resolveControlUiServerQueueMode,
   resolveCurrentSelfUser,
   resolveChatPaneObserverRunId,
-  retirePendingChatSideQuestion,
   revealSessionWorkspaceFile,
   scopedAgentParamsForSession,
   submitQuestionPrompt,
@@ -56,6 +55,7 @@ import {
 import { ChatPaneHeaderRender } from "./chat-pane-header-render.ts";
 import {
   DETAIL_SIDEBAR_SIDE_MIN_WIDTH,
+  SESSION_RAIL_DOCK_MIN_WIDTH,
   WORKSPACE_RAIL_MAX_WIDTH,
   WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
 } from "./chat-pane-shared.ts";
@@ -198,6 +198,11 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
     // split; bottom strips do not.
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const detailSplitWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
+    const sidebarStacked = detailSplitWidth < DETAIL_SIDEBAR_SIDE_MIN_WIDTH;
+    const chatMainWidth =
+      state.sidebarOpen && !sidebarStacked ? detailSplitWidth * state.splitRatio : detailSplitWidth;
+    const selectedSessionRailMode =
+      this.sessionRailModeSessionKey === state.sessionKey ? this.sessionRailMode : "hidden";
     const gatewaySnapshot = this.context.gateway.snapshot;
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
@@ -232,12 +237,28 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       fallbackStatus: state.fallbackStatus,
       planStatus: state.planStatus,
       observerDigest: catalogKey ? null : observerDigest,
-      observerHudReady: !catalogKey && this.observerHudReady,
+      sessionRailReady: !catalogKey && this.sessionRailReady,
       observerRunId: catalogKey ? null : observerRunId,
       observerStartedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       observerLastReadAt: selectedSession?.lastReadAt,
-      onObserverAsk: catalogKey ? undefined : this.askSessionObserver,
-      // Unconditional: catalog chats never render the HUD (observerHudReady is
+      sessionRailCompanion: catalogKey
+        ? undefined
+        : this.sessionCompanionThreads.view(state.sessionKey),
+      sessionRailOpenRequest:
+        this.sessionRailOpenSessionKey === state.sessionKey ? this.sessionRailOpenRequest : 0,
+      sessionRailMode: selectedSessionRailMode,
+      sessionRailDocked: !catalogKey && chatMainWidth >= SESSION_RAIL_DOCK_MIN_WIDTH,
+      onSessionRailSubmit: (question) => void this.submitSessionCompanionQuestion(question),
+      onSessionRailDraftChange: (draft) =>
+        this.sessionCompanionThreads.setDraft(state.sessionKey, draft),
+      onSessionRailClear: () => void this.clearSessionCompanion(),
+      onSessionRailModeChange: (mode) => {
+        if (state.sessionKey !== this.sessionRailModeSessionKey || mode !== this.sessionRailMode) {
+          this.sessionRailModeSessionKey = state.sessionKey;
+          this.sessionRailMode = mode;
+        }
+      },
+      // Unconditional: catalog chats never render the rail (sessionRailReady is
       // forced false), and a hide/show from any surface must reach the gateway.
       onObserverVisibilityChange: this.setSessionObserverVisibility,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
@@ -255,9 +276,6 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
               loading: this.loadingOlder,
             }
           : undefined,
-      sideChatTurns: catalogKey ? [] : state.chatSideChatTurns,
-      sideChatPending: catalogKey ? null : state.chatSideResultPending,
-      sideChatHidden: catalogKey ? true : state.chatSideChatHidden,
       toolMessages: catalogKey ? [] : state.chatToolMessages,
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
@@ -412,9 +430,6 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
           void this.loadCatalogSession(catalogKey, false);
           return;
         }
-        state.chatSideChatTurns = [];
-        state.chatSideChatHidden = false;
-        retirePendingChatSideQuestion(state);
         state.resetToolStream();
         this.reconcileWaitingApprovalSnapshot();
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
@@ -473,38 +488,8 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
         ? undefined
         : (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
-      onSideQuestion: (command, displayQuestion, onSendRejected) =>
-        void state.handleSendChat(command, {
-          ...(displayQuestion ? { sideQuestionDisplayText: displayQuestion } : {}),
-          ...(onSendRejected ? { onSideQuestionSendRejected: onSendRejected } : {}),
-        }),
-      onSideChatClose: () => {
-        // Hide only: a pending run keeps going and its arriving answer (or a
-        // new question) reopens the panel with the conversation intact.
-        state.chatSideChatHidden = true;
-        state.requestUpdate?.();
-      },
-      onSideChatClear: () => {
-        const pendingRunId = state.chatSideResultPending?.runId;
-        state.chatSideChatTurns = [];
-        state.chatSideChatHidden = false;
-        // Retire (not just clear) so a discarded question's still-running
-        // detached run cannot leak its late reply into the transcript.
-        retirePendingChatSideQuestion(state);
-        // Best-effort targeted abort: trash means "stop the pending side
-        // question", not just hide it. The retire above already suppresses
-        // the run's late events, so a failed abort needs no fallback.
-        if (pendingRunId && state.client && state.connected) {
-          state.client
-            .request("chat.abort", {
-              sessionKey: state.sessionKey,
-              ...scopedAgentParamsForSession(state, state.sessionKey),
-              runId: pendingRunId,
-            })
-            .catch(() => {});
-        }
-        state.requestUpdate?.();
-      },
+      onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
+      onCompanionPrefill: this.prefillSessionCompanionQuestion,
       replyTarget: state.chatReplyTarget ?? null,
       onClearReply: () => {
         state.chatReplyTarget = null;
@@ -543,7 +528,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
           },
       sidebarOpen: state.sidebarOpen,
       sidebarContent: state.sidebarContent,
-      sidebarStacked: detailSplitWidth < DETAIL_SIDEBAR_SIDE_MIN_WIDTH,
+      sidebarStacked,
       splitRatio: state.splitRatio,
       canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
       boardProvider: board.provider,
