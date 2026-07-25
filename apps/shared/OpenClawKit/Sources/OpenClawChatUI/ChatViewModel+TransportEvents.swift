@@ -192,15 +192,21 @@ extension OpenClawChatViewModel {
         }
         if chat.state == "final" || chat.state == "aborted" || chat.state == "error" {
             self.invalidateHistorySnapshots()
-            self.updateActiveSessionRunWithoutChatSnapshot(false)
+            if isOurRun || self.pendingRuns.isEmpty {
+                self.updateActiveSessionRunWithoutChatSnapshot(false)
+            }
         }
         self.invalidateRunSnapshots()
         if !isOurRun {
             // Keep multiple clients in sync: if another client finishes a run for our session, refresh history.
             switch chat.state {
             case "final", "aborted", "error":
-                self.updateStreamingAssistantText(nil)
-                self.pendingToolCallsById = [:]
+                // An older external turn must not erase the stream or tools
+                // owned by the run this client is still actively following.
+                if self.pendingRuns.isEmpty {
+                    self.updateStreamingAssistantText(nil)
+                    self.pendingToolCallsById = [:]
+                }
                 if let runId = chat.runId {
                     self.clearPlan(for: runId)
                 }

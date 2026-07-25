@@ -4055,6 +4055,61 @@ struct ChatViewModelTests {
         ])
     }
 
+    @Test(arguments: ["final", "aborted", "error"])
+    func `terminal event for another run preserves active streaming and tools`(state: String) async throws {
+        let activeRunId = "active-run"
+        let initialHistory = historyPayload()
+        let activeHistory = historyPayload(
+            inFlightRun: OpenClawChatInFlightRun(
+                runId: activeRunId,
+                text: "Still working",
+                plan: OpenClawChatPlanSnapshot(
+                    steps: [OpenClawChatPlanStep(step: "Keep working", status: .inProgress)])))
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [initialHistory, activeHistory, activeHistory],
+            sendMessageHook: { _ in
+                OpenClawChatSendResponse(runId: activeRunId, status: "pending")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await sendUserMessage(vm, text: "keep active stream")
+        try await waitUntil("remote run is adopted") {
+            await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending }
+        }
+        emitAssistantText(transport: transport, runId: activeRunId, text: "Still working")
+        emitToolStart(transport: transport, runId: activeRunId)
+        emitPlan(
+            transport: transport,
+            runId: activeRunId,
+            steps: [planStep("Keep working", status: "in_progress")])
+        try await waitUntil("active run owns streaming, tools, and plan") {
+            await MainActor.run {
+                vm.streamingAssistantText == "Still working" &&
+                    vm.pendingToolCalls.count == 1 &&
+                    vm.planSteps.first?.step == "Keep working"
+            }
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: "older-run",
+                    sessionKey: "main",
+                    state: state,
+                    message: nil,
+                    errorMessage: state == "error" ? "Other run failed" : nil)))
+
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(await MainActor.run { vm.pendingRunCount } == 1)
+        #expect(await MainActor.run { vm.streamingAssistantText } == "Still working")
+        #expect(await MainActor.run { vm.pendingToolCalls.count } == 1)
+        #expect(await MainActor.run { vm.planSteps } == [
+            OpenClawChatPlanStep(step: "Keep working", status: .inProgress),
+        ])
+        #expect(await MainActor.run { vm.errorText } == nil)
+    }
+
     @Test func `pending run blocks second main send`() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId, messages: [])
