@@ -23,7 +23,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | Profile     | Includes                                                                                                                                                                                                                                                |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `minimal`   | `session_status` only                                                                                                                                                                                                                                   |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate`                |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `get_goal`, `create_goal`, `update_goal`, `ask_user`, `skill_workshop`, `image`, `image_generate`, `music_generate`, `video_generate`                               |
 | `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `ask_user` |
 | `full`      | No restriction (same as unset)                                                                                                                                                                                                                          |
 
@@ -421,7 +421,9 @@ Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto
 
 - `planTool`: enables the structured `update_plan` tool for non-trivial multi-step work tracking.
 - Default: `false` unless `agents.defaults.embeddedAgent.executionContract` (or a per-agent override) is set to `"strict-agentic"` for an `openai` provider run against a GPT-5-family model id (this covers OpenAI Codex CLI runs too, since Codex auth/model routing lives under the `openai` provider). Set `true` to force the tool on outside that scope, or `false` to keep it off even for strict-agentic GPT-5 runs.
+- The `coding` profile does **not** include `update_plan`. Profile allowlists must not bypass this gate — enable via `planTool`, strict-agentic GPT-5 auto-enable, or an explicit `tools.allow` / `alsoAllow` / runtime allowlist entry (for example `update_plan` or `group:agents`).
 - When enabled, the system prompt also adds usage guidance so the model only uses it for substantial work and keeps at most one step `in_progress`.
+- With `tools.loopDetection.enabled: true`, repeated `update_plan` calls that only tweak step wording (same status pattern) count as no-progress and trip the circuit breaker.
 
 ### `agents.defaults.subagents`
 

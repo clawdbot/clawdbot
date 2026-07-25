@@ -91,8 +91,14 @@ export function createUpdatePlanTool(): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const explanation = readStringParam(params, "explanation");
       const plan = readPlanSteps(params);
+      const inProgress = plan.find((step) => step.status === "in_progress");
+      // Keep details structured for UI, but return a one-line ack so models do not see
+      // "[empty content omitted]" and re-call update_plan instead of executing work.
+      const ack = inProgress
+        ? `Plan updated (${plan.length} steps). Continue with: ${inProgress.step}`
+        : `Plan updated (${plan.length} steps).`;
       return {
-        content: [],
+        content: [{ type: "text" as const, text: ack }],
         details: {
           status: "updated" as const,
           ...(explanation ? { explanation } : {}),

@@ -94,11 +94,45 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
 }
 
 /**
+ * Collapse update_plan wording churn into a status-pattern fingerprint.
+ * Step text / explanation tweaks must not look like progress to the loop breaker.
+ */
+function normalizeUpdatePlanShape(value: unknown): unknown {
+  if (!isPlainObject(value)) {
+    return value;
+  }
+
+  const rawPlan = Array.isArray(value.plan) ? value.plan : [];
+  const normalizedPlan = rawPlan.map((entry) => {
+    if (!isPlainObject(entry)) {
+      return { status: null, hasStep: false };
+    }
+    const status = typeof entry.status === "string" ? entry.status : null;
+    const hasStep = typeof entry.step === "string" && entry.step.trim().length > 0;
+    return { status, hasStep };
+  });
+
+  return {
+    planLength: normalizedPlan.length,
+    statuses: normalizedPlan.map((entry) => entry.status),
+    stepPresence: normalizedPlan.map((entry) => entry.hasStep),
+    hasExplanation: typeof value.explanation === "string" && value.explanation.trim().length > 0,
+  };
+}
+
+function normalizeLoopDetectionParams(toolName: string, params: unknown): unknown {
+  if (toolName !== "update_plan") {
+    return params;
+  }
+  return normalizeUpdatePlanShape(params);
+}
+
+/**
  * Hash a tool call for pattern matching.
  * Uses tool name + deterministic JSON serialization digest of params.
  */
 function hashToolCall(toolName: string, params: unknown): string {
-  return `${toolName}:${digestStable(params)}`;
+  return `${toolName}:${digestStable(normalizeLoopDetectionParams(toolName, params))}`;
 }
 
 function digestStable(value: unknown): string {
@@ -350,8 +384,9 @@ function hashToolOutcome(
 
   return {
     resultHash: digestStable({
-      details,
-      text,
+      details: toolName === "update_plan" ? normalizeUpdatePlanShape(details) : details,
+      // Ignore ack text for update_plan so one-line content does not reset the streak.
+      text: toolName === "update_plan" ? "" : text,
     }),
   };
 }

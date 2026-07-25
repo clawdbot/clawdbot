@@ -6,6 +6,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
+import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -22,7 +23,12 @@ export function collectPresentOpenClawTools(
   return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
 }
 
-/** Resolves the default-on update_plan switch with an explicit kill switch. */
+/**
+ * Resolves whether update_plan is enabled by experimental flag or GPT-5 strict-agentic auto-enable.
+ *
+ * Matches docs/gateway/config-tools.md: default off unless planTool is true or a supported
+ * strict-agentic GPT-5 OpenAI/Codex run is active. Explicit `planTool: false` is a kill switch.
+ */
 function isUpdatePlanToolEnabledForOpenClawTools(params: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
@@ -30,7 +36,36 @@ function isUpdatePlanToolEnabledForOpenClawTools(params: {
   modelProvider?: string;
   modelId?: string;
 }): boolean {
-  return params.config?.tools?.experimental?.planTool !== false;
+  const configured = params.config?.tools?.experimental?.planTool;
+  if (configured === false) {
+    return false;
+  }
+  if (configured === true) {
+    return true;
+  }
+  return isStrictAgenticExecutionContractActive({
+    config: params.config,
+    sessionKey: params.agentSessionKey,
+    agentId: params.agentId,
+    provider: params.modelProvider,
+    modelId: params.modelId,
+  });
+}
+
+/** True when an operator/runtime allowlist explicitly requests update_plan (or a group that expands to it). */
+function isUpdatePlanExplicitlyAllowedForOpenClawTools(params: {
+  config?: OpenClawConfig;
+  pluginToolAllowlist?: string[];
+}): boolean {
+  const allowlist = uniqueStrings([
+    ...(params.config?.tools?.allow ?? []),
+    ...(params.config?.tools?.alsoAllow ?? []),
+    ...(params.pluginToolAllowlist ?? []),
+  ]);
+  if (!allowlist.some((entry) => typeof entry === "string" && entry.trim().length > 0)) {
+    return false;
+  }
+  return isToolAllowedByPolicyName("update_plan", { allow: allowlist });
 }
 
 /** Decides whether update_plan should be included in the assembled OpenClaw tool set. */
@@ -47,9 +82,16 @@ export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
     ...(params.config?.tools?.deny ?? []),
     ...(params.pluginToolDenylist ?? []),
   ]);
+  if (!isToolAllowedByPolicyName("update_plan", { deny })) {
+    return false;
+  }
+  // Kill switch wins over allowlists and strict-agentic auto-enable.
+  if (params.config?.tools?.experimental?.planTool === false) {
+    return false;
+  }
   return (
-    isUpdatePlanToolEnabledForOpenClawTools(params) &&
-    isToolAllowedByPolicyName("update_plan", { deny })
+    isUpdatePlanToolEnabledForOpenClawTools(params) ||
+    isUpdatePlanExplicitlyAllowedForOpenClawTools(params)
   );
 }
 

@@ -86,11 +86,11 @@ describe("openclaw-tools update_plan gating", () => {
     ).toEqual([]);
   });
 
-  it("enables update_plan by default", () => {
-    expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, true);
+  it("keeps update_plan off by default for non-GPT-5 providers", () => {
+    expectUpdatePlanEnabled({ config: {} as OpenClawConfig }, false);
   });
 
-  it("exposes update_plan from default tool construction for every embedded model", () => {
+  it("does not expose update_plan from default tool construction for Claude/Cursor-class models", () => {
     const defaultTools = createFastToolNames({
       config: {} as OpenClawConfig,
       modelProvider: "anthropic",
@@ -103,9 +103,27 @@ describe("openclaw-tools update_plan gating", () => {
       modelId: "claude-sonnet-4-6",
     };
 
-    expect(defaultTools).toContain("update_plan");
+    expect(defaultTools).not.toContain("update_plan");
     expect(defaultTools).not.toContain("ask_user");
-    expect(shouldIncludeUpdatePlanToolForOpenClawTools(emptyAllowlistParams)).toBe(true);
+    expect(shouldIncludeUpdatePlanToolForOpenClawTools(emptyAllowlistParams)).toBe(false);
+  });
+
+  it("auto-enables update_plan for strict-agentic GPT-5 OpenAI runs", () => {
+    expectUpdatePlanEnabled(
+      {
+        config: {} as OpenClawConfig,
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+      },
+      true,
+    );
+    expect(
+      createFastToolNames({
+        config: {} as OpenClawConfig,
+        modelProvider: "openai",
+        modelId: "gpt-5.4",
+      }),
+    ).toContain("update_plan");
   });
 
   it("keeps ask_user on primary sessions and excludes spawned worker sessions", () => {

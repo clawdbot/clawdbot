@@ -30,7 +30,7 @@ describe("tool-catalog", () => {
     expect(ids({ swarmEnabled: true })).toContain("agents_wait");
   });
 
-  it("includes code_execution, web_search, x_search, web_fetch, and update_plan in the coding profile policy", () => {
+  it("includes code_execution, web_search, x_search, and web_fetch in the coding profile policy", () => {
     const policy = requireCoreToolProfilePolicy("coding");
     expect(policy.allow).toEqual([
       "read",
@@ -67,7 +67,6 @@ describe("tool-catalog", () => {
       "get_goal",
       "create_goal",
       "update_goal",
-      "update_plan",
       "ask_user",
       "skill_workshop",
       "image",
@@ -76,6 +75,7 @@ describe("tool-catalog", () => {
       "video_generate",
       "bundle-mcp",
     ]);
+    expect(policy.allow).not.toContain("update_plan");
   });
 
   it("includes bundle MCP tools in coding and messaging profile policies", () => {

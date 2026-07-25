@@ -14,7 +14,12 @@ describe("update_plan tool", () => {
       ],
     });
 
-    expect(result.content).toStrictEqual([]);
+    expect(result.content).toStrictEqual([
+      {
+        type: "text",
+        text: "Plan updated (3 steps). Continue with: Add tool",
+      },
+    ]);
     expect(result.details).toEqual({
       status: "updated",
       explanation: "Started work",
@@ -50,7 +55,12 @@ describe("update_plan tool", () => {
       ],
     });
 
-    expect(result.content).toStrictEqual([]);
+    expect(result.content).toStrictEqual([
+      {
+        type: "text",
+        text: "Plan updated (2 steps).",
+      },
+    ]);
     expect(result.details).toEqual({
       status: "updated",
       plan: [

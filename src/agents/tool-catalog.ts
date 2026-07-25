@@ -417,7 +417,9 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "update_plan",
     description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
-    profiles: ["coding"],
+    // Opt-in via tools.experimental.planTool / strict-agentic GPT-5 / explicit allow — not coding profile.
+    // Profile membership previously bypassed the planTool gate and caused plan-only loops on Cursor/Claude.
+    profiles: [],
     includeInOpenClawGroup: true,
   },
   {
