@@ -60,7 +60,7 @@ OpenClaw is best understood as a **plugin-centric gateway OS**, not a monolithic
 | `packages/`       | Workspace packages: `plugin-sdk`, `sdk` (external client), `memory-host-sdk`                           |
 | `ui/`             | Control UI — Vite + Lit SPA (`openclaw-control-ui`)                                                    |
 | `apps/`           | Native clients: macOS, iOS, Android, shared `OpenClawKit`, voice (`swabble`)                           |
-| `docs/`           | Mintlify documentation (published to https://docs.openclaw.ai)                                         |
+| `docs/`           | Mintlify documentation (published to [docs.openclaw.ai](https://docs.openclaw.ai))                     |
 | `scripts/`        | Build, test wrappers, protocol codegen, Crabbox, release, lint gates                                   |
 | `skills/`         | Bundled agent skills shipped with npm package                                                          |
 | `dist/`           | Built JS output (core + internal bundled plugins)                                                      |
@@ -499,7 +499,7 @@ No first-party Prometheus/Grafana stack in core; observability is CLI + diagnost
 
 Ollama is a **bundled provider plugin** at `extensions/ollama/` (40 source files). It provides local and remote open-model inference via the Ollama HTTP API.
 
-### Plugin Registration
+### Ollama Plugin Registration
 
 | File                                      | Role                                                        |
 | ----------------------------------------- | ----------------------------------------------------------- |

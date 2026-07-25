@@ -179,7 +179,7 @@ The maintained documentation library is located under `docs/`.
 - `docs/foundation/RESTORE_MANIFEST.md`
 - `docs/foundation/OPERATIONS_RUNBOOK.md`
 
-## Architecture
+## Architecture Documents
 
 - `docs/architecture/RANCHBOT_ARCHITECTURE.md`
 - `docs/architecture/DASHBOARD_REPORT.md`
