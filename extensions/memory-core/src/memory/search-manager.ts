@@ -191,6 +191,7 @@ async function drainRetainedQmdManagers(scopeKey: string): Promise<void> {
 async function runMemorySearchManagerScopeOperation<T>(
   scopeKey: string,
   operation: () => Promise<T>,
+  options: { drainRetained?: boolean } = {},
 ): Promise<T> {
   while (MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise) {
     const globalClose = MEMORY_SEARCH_MANAGER_CACHE_STORE.globalClosePromise;
@@ -205,7 +206,9 @@ async function runMemorySearchManagerScopeOperation<T>(
   const previous =
     MEMORY_SEARCH_MANAGER_CACHE_STORE.scopeLifecycleTails.get(scopeKey) ?? Promise.resolve();
   const run = async () => {
-    await drainRetainedQmdManagers(scopeKey);
+    if (options.drainRetained !== false) {
+      await drainRetainedQmdManagers(scopeKey);
+    }
     return await operation();
   };
   const result = previous.then(run, run);
@@ -727,6 +730,7 @@ export async function closeMemorySearchManager(params: {
   await runMemorySearchManagerScopeOperation(
     scopeKey,
     async () => await closeMemorySearchManagerWithinLifecycle(params),
+    { drainRetained: false },
   );
 }
 
@@ -736,13 +740,19 @@ async function closeMemorySearchManagerWithinLifecycle(params: {
 }): Promise<void> {
   const normalizedAgentId = normalizeAgentId(params.agentId);
   const scopeKey = buildQmdManagerScopeKey(normalizedAgentId);
+  let closeError: unknown;
+  let closeFailed = false;
+  try {
+    await drainRetainedQmdManagers(scopeKey);
+  } catch (err) {
+    closeError = err;
+    closeFailed = true;
+  }
   const pending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
   if (pending) {
     await Promise.allSettled([pending.promise]);
   }
   const cached = QMD_MANAGER_CACHE.get(scopeKey);
-  let closeError: unknown;
-  let closeFailed = false;
   if (cached) {
     try {
       await cached.manager.close?.();

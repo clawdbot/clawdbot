@@ -848,6 +848,37 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock).toHaveBeenCalledTimes(3);
   });
 
+  it("continues scoped teardown when retained candidate cleanup still fails", async () => {
+    const agentId = "cached-qmd-persistent-close-failure";
+    const firstCfg = createQmdCfg(agentId, "/tmp/workspace-a");
+    const secondCfg = createQmdCfg(agentId, "/tmp/workspace-b");
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    firstPrimary.close.mockRejectedValueOnce(new Error("old close failed"));
+    secondPrimary.close.mockRejectedValue(new Error("candidate close failed"));
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary)
+      .mockImplementationOnce(async () => secondPrimary);
+
+    await getMemorySearchManager({ cfg: firstCfg, agentId });
+    await expect(getMemorySearchManager({ cfg: secondCfg, agentId })).rejects.toThrow(
+      "old close failed",
+    );
+
+    await expect(closeMemorySearchManager({ cfg: firstCfg, agentId })).rejects.toThrow(
+      "candidate close failed",
+    );
+    expect(secondPrimary.close).toHaveBeenCalledTimes(2);
+    expect(firstPrimary.close).toHaveBeenCalledTimes(2);
+    expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledWith({
+      cfg: firstCfg,
+      agentId,
+    });
+
+    secondPrimary.close.mockResolvedValue(undefined);
+    await closeMemorySearchManager({ cfg: firstCfg, agentId });
+  });
+
   it("dedupes concurrent full qmd manager creation for the same agent", async () => {
     const agentId = "pending-qmd";
     const cfg = createQmdCfg(agentId);
