@@ -19,6 +19,7 @@ describe("fs-safe defaults", () => {
     configureFsSafeNative.mockReset();
     delete process.env.FS_SAFE_NATIVE_MODE;
     delete process.env.OPENCLAW_FS_SAFE_NATIVE_MODE;
+    delete process.env.openclaw_fs_safe_native_mode;
     delete process.env.FS_SAFE_PYTHON_MODE;
     delete process.env.OPENCLAW_FS_SAFE_PYTHON_MODE;
     delete process.env.FS_SAFE_PYTHON;
@@ -43,6 +44,15 @@ describe("fs-safe defaults", () => {
 
   it("honors the OpenClaw-specific env mode override", async () => {
     process.env.OPENCLAW_FS_SAFE_NATIVE_MODE = "auto";
+
+    await importDefaults();
+
+    expect(configureFsSafeNative).not.toHaveBeenCalled();
+  });
+
+  it("honors case-insensitive mode overrides on Windows", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    process.env.openclaw_fs_safe_native_mode = "require";
 
     await importDefaults();
 
