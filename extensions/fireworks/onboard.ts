@@ -19,7 +19,7 @@ const fireworksPresetAppliers = createDefaultModelsPresetAppliers({
       baseUrl: defaultProvider.baseUrl,
       defaultModels: buildFireworksCatalogModels(),
       defaultModelId: FIREWORKS_DEFAULT_MODEL_ID,
-      aliases: [{ modelRef: FIREWORKS_DEFAULT_MODEL_REF, alias: "Kimi K2.6 Turbo" }],
+      aliases: [{ modelRef: FIREWORKS_DEFAULT_MODEL_REF, alias: "GLM 5.2 Fast" }],
     };
   },
 });

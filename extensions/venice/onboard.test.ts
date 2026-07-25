@@ -15,7 +15,7 @@ describe("Venice onboarding", () => {
       VENICE_DEFAULT_MODEL_REF,
     );
     expect(config.agents?.defaults?.models).toEqual({
-      [VENICE_DEFAULT_MODEL_REF]: { alias: "Kimi K2.5" },
+      [VENICE_DEFAULT_MODEL_REF]: { alias: "Kimi K2.6" },
     });
   });
 });

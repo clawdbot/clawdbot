@@ -95,7 +95,7 @@ You can also run `openclaw configure` and pick **Model/auth provider > Venice AI
     | Model ID                               | Name                        | Context | Notes                       |
     | -------------------------------------- | --------------------------- | ------- | --------------------------- |
     | `zai-org-glm-5-2`                      | GLM 5.2                     | 1M      | Recommended, coding         |
-    | `zai-org-glm-4.7`                      | GLM 4.7                     | 198k    | Venice default              |
+    | `zai-org-glm-4.7`                      | GLM 4.7                     | 198k    | Private reasoning           |
     | `venice-uncensored-1-2`                | Venice Uncensored 1.2       | 128k    | Most uncensored, vision     |
     | `google-gemma-4-31b-it`                | Google Gemma 4 31B Instruct | 256k    | Recommended, vision         |
     | `kimi-k2-6`                            | Kimi K2.6                   | 256k    | Recommended, coding, vision |
