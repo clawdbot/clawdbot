@@ -55,7 +55,7 @@ async function writeRawAuthStore(agentDir: string, store: unknown): Promise<void
 }
 
 describe("stale OAuth profile shadow doctor repair", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_HOME"]);
+  const envSnapshot = captureEnv(["OPENCLAW_AGENT_DIR", "OPENCLAW_STATE_DIR", "OPENCLAW_HOME"]);
   let tempRoot = "";
   let stateDir = "";
 
@@ -217,6 +217,52 @@ describe("stale OAuth profile shadow doctor repair", () => {
         profileId,
       }),
     ]);
+  });
+
+  it("repairs shadows against the OPENCLAW_AGENT_DIR shared-main store", async () => {
+    const profileId = "anthropic:default";
+    const now = Date.now();
+    const relocatedMainAgentDir = path.join(tempRoot, "relocated-main-agent");
+    const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
+    const env = {
+      ...process.env,
+      OPENCLAW_AGENT_DIR: relocatedMainAgentDir,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    await writeRawAuthStore(
+      relocatedMainAgentDir,
+      storeWith(
+        profileId,
+        oauthCredential({
+          access: "main-access",
+          refresh: "main-refresh",
+          expires: now + 60 * 60 * 1000,
+          accountId: "acct-shared",
+        }),
+      ),
+    );
+    await writeRawAuthStore(
+      childAgentDir,
+      storeWith(
+        profileId,
+        oauthCredential({
+          access: "child-access",
+          refresh: "child-refresh",
+          expires: now - 60_000,
+          accountId: "acct-shared",
+        }),
+      ),
+    );
+
+    const result = await repairStaleOAuthProfileShadows({
+      cfg: { agents: { entries: { telegram: { default: true } } } } satisfies OpenClawConfig,
+      env,
+      now,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(1);
+    expect(loadPersistedAuthProfileStore(childAgentDir)?.profiles[profileId]).toBeUndefined();
   });
 
   it("leaves legacy sidecar-backed OAuth profiles for the sidecar migration repair", async () => {
