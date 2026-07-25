@@ -3,7 +3,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import { isMissingRestoredFolderError } from "./folder-validation.ts";
 
 describe("restored new-session folder validation", () => {
-  it.each(["ENOENT: no such file or directory", "ENOTDIR: not a directory"])(
+  it.each(["ENOENT: no such file or directory", "Error: ENOTDIR: not a directory"])(
     "recognizes a definitive stale path from %s",
     (message) => {
       expect(
@@ -21,6 +21,14 @@ describe("restored new-session folder validation", () => {
     expect(
       isMissingRestoredFolderError(
         new GatewayRequestError({ code: "INVALID_REQUEST", message: "EACCES: permission denied" }),
+      ),
+    ).toBe(false);
+    expect(
+      isMissingRestoredFolderError(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Error: EACCES: permission denied, scandir '/work/ENOENT/project'",
+        }),
       ),
     ).toBe(false);
   });
