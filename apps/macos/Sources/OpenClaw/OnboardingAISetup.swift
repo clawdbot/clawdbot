@@ -1344,6 +1344,11 @@ extension OnboardingAISetupModel {
         self.authSelection = max(0, options.firstIndex {
             anyCodableEqual($0.value, step?.initialvalue)
         } ?? 0)
+        // Gateway-executed progress steps have no user input to advance them.
+        // Reuse the existing guarded long-poll until the wizard reaches a terminal result.
+        if anyCodableString(step?.executor) == "gateway" {
+            self.advanceProviderAuth(stepID: nil, value: nil)
+        }
     }
 
     private func reconcileProviderAuthAfterUnknownOutcome(

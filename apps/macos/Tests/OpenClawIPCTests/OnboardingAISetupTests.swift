@@ -372,12 +372,26 @@ private func wizardStartResponse(id: String, sessionID: String) -> Data {
         """.utf8)
 }
 
-private func wizardProgressResponse(id: String, sessionID: String) -> Data {
+private func wizardProgressResponse(id: String, sessionID: String, message: String) -> Data {
     Data(
         """
         {"type":"res","id":"\(id)","ok":true,"payload":{
           "sessionId":"\(sessionID)","done":false,"status":"running",
-          "step":{"id":"download","type":"progress","message":"Downloading model: 25%"}
+          "step":{
+            "id":"download",
+            "type":"progress",
+            "message":"\(message)",
+            "executor":"gateway"
+          }
+        }}
+        """.utf8)
+}
+
+private func wizardDoneResponse(id: String, sessionID: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "sessionId":"\(sessionID)","done":true,"status":"done"
         }}
         """.utf8)
 }
@@ -637,7 +651,7 @@ struct OnboardingAISetupTests {
             "openclaw.setup.prepare.start")
     }
 
-    @Test func `prepare action starts shared wizard with the local auth choice`() async throws {
+    @Test func `prepare action polls gateway progress through completion`() async throws {
         let recorder = AISetupRequestRecorder()
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(
@@ -657,9 +671,18 @@ struct OnboardingAISetupTests {
                             sessionID: sessionID)))
                     case "wizard.next":
                         let sessionID = request.params["sessionId"] as? String ?? "prepare-session"
-                        task.emitReceiveSuccess(.data(wizardProgressResponse(
-                            id: request.id,
-                            sessionID: sessionID)))
+                        let snapshot = await recorder.snapshot()
+                        let progressIndex = snapshot.methods.count { $0 == "wizard.next" }
+                        if progressIndex < 4 {
+                            task.emitReceiveSuccess(.data(wizardProgressResponse(
+                                id: request.id,
+                                sessionID: sessionID,
+                                message: "Downloading model: \(progressIndex * 25)%")))
+                        } else {
+                            task.emitReceiveSuccess(.data(wizardDoneResponse(
+                                id: request.id,
+                                sessionID: sessionID)))
+                        }
                     default:
                         break
                     }
@@ -685,19 +708,22 @@ struct OnboardingAISetupTests {
         await model.detectAndAutoConnect()
         let option = try #require(model.prepareOptions.first { $0.id == "llama-cpp" })
         model.startProviderPrepare(option)
-        let requests = await waitForAISetupRequests(recorder, count: 3)
+        let requests = await waitForAISetupRequests(recorder, count: 6)
+        for _ in 0..<200 where model.isPreparingModel {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
 
-        #expect(requests.methods == [
+        #expect(Array(requests.methods.prefix(6)) == [
             "openclaw.setup.detect",
             "openclaw.setup.prepare.start",
             "wizard.next",
+            "wizard.next",
+            "wizard.next",
+            "wizard.next",
         ])
         #expect(requests.authChoices == ["llama-cpp"])
-        #expect(model.isPreparingModel)
-        for _ in 0..<200 where model.authStep.map(wizardStepType) != "progress" {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
-        #expect(model.authStep.map(wizardStepType) == "progress")
+        #expect(!model.isPreparingModel)
+        #expect(model.authStep == nil)
     }
 
     @Test func `provider auth opens only safe external links`() {
