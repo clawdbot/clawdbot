@@ -195,7 +195,8 @@ function isKeylessHostProxiedWebSearchSurface(
   const plugins = config.plugins;
   if (
     plugins &&
-    ((Array.isArray(plugins.allow) && plugins.allow.some((pluginId) => pluginId !== providerId)) ||
+    (plugins.enabled === false ||
+      (Array.isArray(plugins.allow) && plugins.allow.some((pluginId) => pluginId !== providerId)) ||
       (Array.isArray(plugins.deny) && plugins.deny.length > 0) ||
       (isRecord(plugins.load) &&
         Array.isArray(plugins.load.paths) &&

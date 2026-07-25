@@ -283,6 +283,30 @@ describe("secrets runtime fast path", () => {
       },
     },
     {
+      name: "globally disabled plugins",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          enabled: false,
+          entries: {
+            "host-proxy-search": {
+              config: {
+                webSearch: {
+                  omitAuth: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
       name: "legacy x_search surface",
       config: {
         tools: {
