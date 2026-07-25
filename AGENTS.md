@@ -21,8 +21,6 @@ Skills own workflows; root owns hard policy and routing.
 - Product/docs/UI/changelog wording: "plugin/plugins"; `extensions/` is internal.
 - New channel/plugin/app/doc surface: update `.github/labeler.yml` + GH labels.
 - New `AGENTS.md`: add sibling `CLAUDE.md` symlink; edit `AGENTS.md` only.
-- External PR body contract: PR descriptions must include H2 headers `## What Problem This Solves` and `## Evidence` to pass `real-behavior-proof-check.mjs`.
-- Provider test config invariant: mock provider entries under `models.providers.<id>` in test options must include `models: []` to satisfy `ModelProviderConfig` and prevent TS2352 errors during `pnpm check:test-types`.
 
 ## ClawSweeper Review Policy
 
