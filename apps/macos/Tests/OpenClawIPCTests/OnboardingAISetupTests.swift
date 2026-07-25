@@ -694,6 +694,9 @@ struct OnboardingAISetupTests {
         ])
         #expect(requests.authChoices == ["llama-cpp"])
         #expect(model.isPreparingModel)
+        for _ in 0..<200 where model.authStep.map(wizardStepType) != "progress" {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
         #expect(model.authStep.map(wizardStepType) == "progress")
     }
 
