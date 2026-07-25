@@ -99,13 +99,13 @@
             "input": ["text"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 1000000,
-            "maxTokens": 65536
+            "maxTokens": 131072
           },
           {
             "id": "qwen3.7-plus",
             "name": "qwen3.7-plus",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text", "image", "video"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 1000000,
             "maxTokens": 65536
@@ -114,7 +114,7 @@
             "id": "qwen3.6-plus",
             "name": "qwen3.6-plus",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text", "image", "video"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 1000000,
             "maxTokens": 65536
@@ -123,7 +123,7 @@
             "id": "qwen3.6-flash",
             "name": "qwen3.6-flash",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text", "image", "video"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 1000000,
             "maxTokens": 65536
@@ -159,25 +159,25 @@
             "id": "kimi-k2.7-code",
             "name": "kimi-k2.7-code",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text", "image", "video"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 262144,
-            "maxTokens": 98304
+            "maxTokens": 262144
           },
           {
             "id": "kimi-k2.6",
             "name": "kimi-k2.6",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text", "image", "video"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 262144,
-            "maxTokens": 98304
+            "maxTokens": 262144
           },
           {
             "id": "kimi-k2.5",
             "name": "kimi-k2.5",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": ["text", "image", "video"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 262144,
             "maxTokens": 98304
