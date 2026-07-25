@@ -82,7 +82,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   private assertFtsOnlySyncAllowed(): void {
-    if (this.provider) {
+    if (this.syncProviderGeneration?.provider ?? this.provider) {
       return;
     }
     this.assertRequiredProviderAvailable("sync");
@@ -131,12 +131,16 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
+    const syncProvider = this.syncProviderGeneration?.provider ?? this.provider;
+    const syncProviderKey = this.syncProviderGeneration?.providerKey ?? this.providerKey;
+    const syncProviderIdentities =
+      this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
     const indexIdentity = resolveMemoryIndexIdentityState({
       meta,
       // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
-      provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
-      providerKey: this.providerKey ?? undefined,
-      providerAliases: this.resolveProviderIndexIdentities().slice(1),
+      provider: syncProvider ? { id: syncProvider.id, model: syncProvider.model } : null,
+      providerKey: syncProviderKey ?? undefined,
+      providerAliases: syncProviderIdentities.slice(1),
       configuredSources: resolveConfiguredSourcesForMeta(this.sources),
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
@@ -165,12 +169,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const needsFtsOnlyClassification =
       indexIdentity.status === "missing" &&
       hasIndexedChunks &&
-      this.provider === null &&
+      syncProvider === null &&
       Boolean(this.settings.provider) &&
       this.settings.provider !== "none";
     const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
     const canRebuildMissingIdentity =
-      this.provider !== null ||
+      syncProvider !== null ||
       !this.settings.provider ||
       this.settings.provider === "none" ||
       hasOnlyFtsChunks;
@@ -211,7 +215,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           await this.syncArchiveFiles(targetedParams);
         },
         shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
-        activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
+        activateFallbackProvider: async (reason) => {
+          this.endSyncProviderGeneration();
+          return await this.activateFallbackProvider(reason);
+        },
       });
       if (targetedSessionSync.handled) {
         this.sessionsDirty = targetedSessionSync.sessionsDirty;
@@ -269,10 +276,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       }
     } catch (err) {
       const reason = formatErrorMessage(err);
-      const activated =
-        this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
+      const shouldFallback = this.shouldFallbackOnError(err);
+      if (shouldFallback) {
+        // A failed generation cannot wait on its own sync lease while activating fallback.
+        this.endSyncProviderGeneration();
+      }
+      const activated = shouldFallback && (await this.activateFallbackProvider(reason));
       if (activated) {
         if (needsFullReindex && !hasTargetArchiveFiles) {
+          this.beginSyncProviderGeneration();
           await this.runInPlaceReindex({
             reason: params?.reason ?? "fallback",
             force: true,
@@ -503,10 +515,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         this.clearMemoryRetryState();
       }
       const vectorIndexComplete = this.vector.available === true;
+      const syncProvider = this.syncProviderGeneration?.provider ?? this.provider;
       const nextMeta: MemoryIndexMeta = {
-        model: this.provider?.model ?? "fts-only",
-        provider: this.provider?.id ?? "none",
-        providerKey: this.providerKey!,
+        model: syncProvider?.model ?? "fts-only",
+        provider: syncProvider?.id ?? "none",
+        providerKey: this.syncProviderGeneration?.providerKey ?? this.providerKey!,
         sources: resolveConfiguredSourcesForMeta(this.sources),
         scopeHash: resolveConfiguredScopeHash({
           workspaceDir: this.workspaceDir,

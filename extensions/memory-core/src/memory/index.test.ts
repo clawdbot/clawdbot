@@ -2369,6 +2369,7 @@ describe("memory index", () => {
       } | null;
       markLocalEmbeddingProviderDegraded: (err: unknown) => void;
       activateFallbackProvider: (reason: string) => Promise<boolean>;
+      withTimeout: <T>(promise: Promise<T>, timeoutMs: number, message: string) => Promise<T>;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
@@ -2495,6 +2496,182 @@ describe("memory index", () => {
       "fallback-provider",
     ]);
     await expect(concurrentSearch).resolves.toBeDefined();
+  });
+
+  it("leases the indexing provider generation through chunk publication", async () => {
+    const manager = await getFreshManager(
+      createCfg({
+        provider: "openai",
+        fallback: "fallback-provider",
+        cacheEnabled: true,
+        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+      }),
+      "cli",
+    );
+    managersForCleanup.add(manager);
+    const fields = manager as unknown as {
+      provider: {
+        id: string;
+        model: string;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+      } | null;
+      providerKey: string;
+      computeProviderKey: () => string;
+      ensureProviderInitialized: () => Promise<void>;
+      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+      withTimeout: <T>(promise: Promise<T>, timeoutMs: number, message: string) => Promise<T>;
+      indexFile: (
+        entry: {
+          path: string;
+          absPath: string;
+          mtimeMs: number;
+          size: number;
+          hash: string;
+          content: string;
+        },
+        options: { source: "memory"; content: string },
+      ) => Promise<void>;
+      ensureVectorReady: (dimensions?: number) => Promise<boolean>;
+      db: {
+        prepare: (sql: string) => {
+          get: (
+            ...params: unknown[]
+          ) => { model?: string; provider?: string; provider_key?: string } | undefined;
+        };
+      };
+    };
+    await fields.ensureProviderInitialized();
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    const indexedProvider = fields.provider;
+    indexedProvider.id = "local";
+    fields.providerKey = fields.computeProviderKey();
+    const indexedProviderKey = fields.providerKey;
+    const firstContent = "# Log\nFirst memory line indexed during provider fallback.";
+    const secondContent = "# Log\nSecond memory line indexed during provider fallback.";
+
+    let releaseFirstEmbedding: () => void = () => {};
+    let releaseSecondEmbedding: () => void = () => {};
+    let markFirstEmbeddingStarted: () => void = () => {};
+    let markSecondEmbeddingStarted: () => void = () => {};
+    const firstEmbeddingGate = new Promise<void>((resolve) => {
+      releaseFirstEmbedding = resolve;
+    });
+    const secondEmbeddingGate = new Promise<void>((resolve) => {
+      releaseSecondEmbedding = resolve;
+    });
+    const firstEmbeddingStarted = new Promise<void>((resolve) => {
+      markFirstEmbeddingStarted = resolve;
+    });
+    const secondEmbeddingStarted = new Promise<void>((resolve) => {
+      markSecondEmbeddingStarted = resolve;
+    });
+    indexedProvider.embedBatch = async (texts) => {
+      if (texts.some((text) => text.includes("First"))) {
+        markFirstEmbeddingStarted();
+        await firstEmbeddingGate;
+      } else {
+        markSecondEmbeddingStarted();
+        await secondEmbeddingGate;
+      }
+      return texts.map(() => [1, 0, 0, 0]);
+    };
+    let releasePublication: () => void = () => {};
+    let markPublicationStarted: () => void = () => {};
+    const publicationGate = new Promise<void>((resolve) => {
+      releasePublication = resolve;
+    });
+    const publicationStarted = new Promise<void>((resolve) => {
+      markPublicationStarted = resolve;
+    });
+    const ensureVectorReady = fields.ensureVectorReady.bind(manager);
+    let publicationCalls = 0;
+    fields.ensureVectorReady = async (dimensions) => {
+      publicationCalls += 1;
+      if (publicationCalls === 1) {
+        return await ensureVectorReady(dimensions);
+      }
+      markPublicationStarted();
+      await publicationGate;
+      return await ensureVectorReady(dimensions);
+    };
+
+    const callsBeforeFallback = providerCalls.length;
+    const firstIndexPromise = fields.indexFile(
+      {
+        path: "memory/generation-race-first.md",
+        absPath: path.join(memoryDir, "generation-race-first.md"),
+        mtimeMs: Date.now(),
+        size: Buffer.byteLength(firstContent),
+        hash: hashText(firstContent),
+        content: firstContent,
+      },
+      { source: "memory", content: firstContent },
+    );
+    const secondIndexPromise = fields.indexFile(
+      {
+        path: "memory/generation-race-second.md",
+        absPath: path.join(memoryDir, "generation-race-second.md"),
+        mtimeMs: Date.now(),
+        size: Buffer.byteLength(secondContent),
+        hash: hashText(secondContent),
+        content: secondContent,
+      },
+      { source: "memory", content: secondContent },
+    );
+    let fallbackPromise: Promise<boolean> | null = null;
+    try {
+      await fields.withTimeout(
+        Promise.all([firstEmbeddingStarted, secondEmbeddingStarted]),
+        5_000,
+        "concurrent embeddings did not start",
+      );
+      fields.markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
+      await vi.waitFor(() => expect(fields.provider).toBeNull());
+      fallbackPromise = fields.activateFallbackProvider("local worker exited");
+      releaseFirstEmbedding();
+      await firstIndexPromise;
+      expect(providerCloseCalls).toBe(0);
+      expect(providerCalls).toHaveLength(callsBeforeFallback);
+
+      releaseSecondEmbedding();
+      await fields.withTimeout(publicationStarted, 5_000, "publication did not start");
+      expect(providerCloseCalls).toBe(0);
+      expect(providerCalls).toHaveLength(callsBeforeFallback);
+
+      releasePublication();
+      await secondIndexPromise;
+      await expect(fallbackPromise).resolves.toBe(true);
+    } finally {
+      releaseFirstEmbedding();
+      releaseSecondEmbedding();
+      releasePublication();
+      await Promise.allSettled([
+        firstIndexPromise,
+        secondIndexPromise,
+        ...(fallbackPromise ? [fallbackPromise] : []),
+      ]);
+    }
+
+    expect(providerCalls.slice(callsBeforeFallback).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+    ]);
+    expect(
+      fields.db
+        .prepare("SELECT model FROM memory_index_chunks WHERE path = ?")
+        .get("memory/generation-race-second.md")?.model,
+    ).toBe(indexedProvider.model);
+    expect(
+      fields.db
+        .prepare("SELECT provider, model, provider_key FROM memory_embedding_cache LIMIT 1")
+        .get(),
+    ).toEqual({
+      provider: indexedProvider.id,
+      model: indexedProvider.model,
+      provider_key: indexedProviderKey,
+    });
   });
 
   it("waits for admitted provider users before retirement", async () => {

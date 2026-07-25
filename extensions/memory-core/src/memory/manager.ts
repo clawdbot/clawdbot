@@ -1571,7 +1571,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     this.syncing = (async () => {
       await this.ensureProviderInitialized();
-      await this.runSyncWithReadonlyRecovery(params);
+      this.beginSyncProviderGeneration();
+      try {
+        await this.runSyncWithReadonlyRecovery(params);
+      } finally {
+        this.endSyncProviderGeneration();
+      }
     })().finally(() => {
       this.syncing = null;
     });
