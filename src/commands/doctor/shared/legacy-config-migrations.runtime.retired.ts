@@ -363,27 +363,35 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
             ? identityEmoji
             : "👀";
     }
-    if (messages.ackReactionScope === undefined) {
-      const direct = ack.direct !== false;
-      const group = ack.group ?? "mentions";
-      const scope =
-        direct && group === "always"
-          ? "all"
-          : direct && group === "never"
-            ? "direct"
-            : !direct && group === "always"
-              ? "group-all"
-              : !direct && group === "mentions"
-                ? "group-mentions"
-                : !direct && group === "never"
-                  ? "off"
-                  : undefined;
-      if (scope) {
-        messages.ackReactionScope = scope;
-      }
+    const direct = ack.direct !== false;
+    const group = ack.group ?? "mentions";
+    const scope =
+      direct && group === "always"
+        ? "all"
+        : direct && group === "never"
+          ? "direct"
+          : !direct && group === "always"
+            ? "group-all"
+            : !direct && group === "mentions"
+              ? "group-mentions"
+              : !direct && group === "never"
+                ? "off"
+                : undefined;
+    const keptScope = messages.ackReactionScope;
+    if (keptScope === undefined && scope) {
+      messages.ackReactionScope = scope;
     }
     delete entry.ackReaction;
     changes.push(`Moved translatable ${path}.ackReaction settings to messages ack settings.`);
+    if (!scope && direct && group === "mentions") {
+      const applied =
+        keptScope === undefined
+          ? `The default "group-mentions" scope now applies and stops acknowledging direct messages.`
+          : `The existing messages.ackReactionScope value ${JSON.stringify(keptScope)} was kept, so it decides WhatsApp acknowledgements instead of the deleted legacy pair.`;
+      changes.push(
+        `${path}.ackReaction acknowledged direct messages plus mentioned groups, and messages.ackReactionScope has no value for that combination. ${applied} No scope keeps both: "direct" acknowledges direct messages but stops acknowledging mentioned groups, and "all" acknowledges direct messages but also acknowledges every group message. messages.ackReactionScope is the global fallback, so changing it also changes acknowledgements on every other channel that has no acknowledgement scope of its own.`,
+      );
+    }
   });
 
   visitChannelEntries(raw, "slack", (entry, path) => {
