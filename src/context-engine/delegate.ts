@@ -12,6 +12,7 @@ import {
   type PreparedMemoryPromptSection,
 } from "../plugins/memory-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type {
   ContextEngine,
@@ -60,14 +61,16 @@ function buildCompactionResultSessionTarget(params: {
           storePath: marker.storePath,
         }).filter(({ entry }) => entry.sessionId === marker.sessionId)
       : [];
+  const preferredMarkerSessionKey = marker
+    ? resolvePreferredSessionKeyForSessionIdMatches(
+        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        marker.sessionId,
+      )
+    : undefined;
   const markerSessionKey = marker
     ? candidateEntry?.sessionId === marker.sessionId
       ? candidateSessionKey
-      : markerMatches.length === 1
-        ? markerMatches[0]?.sessionKey
-        : markerMatches.length === 0
-          ? candidateSessionKey
-          : undefined
+      : (preferredMarkerSessionKey ?? (candidateEntry ? undefined : candidateSessionKey))
     : undefined;
   if (!completeTarget && sessionFile && !marker) {
     throw new Error("Legacy context-engine file successors are unsupported");
