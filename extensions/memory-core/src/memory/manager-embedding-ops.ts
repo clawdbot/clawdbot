@@ -25,6 +25,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { EmbeddingProvider } from "./embeddings.js";
 import {
   MEMORY_BATCH_FAILURE_LIMIT,
   recordMemoryBatchFailure,
@@ -215,6 +216,41 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureLastProvider?: string;
   protected abstract batchFailureLock: Promise<void>;
   protected abstract markLocalEmbeddingProviderDegraded(err: unknown): void;
+  private activeProviderUses = new Map<EmbeddingProvider, number>();
+  private providerIdleWaiters = new Map<EmbeddingProvider, Set<() => void>>();
+
+  protected async withProviderUse<T>(
+    provider: EmbeddingProvider,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    this.activeProviderUses.set(provider, (this.activeProviderUses.get(provider) ?? 0) + 1);
+    try {
+      return await run();
+    } finally {
+      const remaining = (this.activeProviderUses.get(provider) ?? 1) - 1;
+      if (remaining > 0) {
+        this.activeProviderUses.set(provider, remaining);
+      } else {
+        this.activeProviderUses.delete(provider);
+        const waiters = this.providerIdleWaiters.get(provider);
+        this.providerIdleWaiters.delete(provider);
+        for (const resolve of waiters ?? []) {
+          resolve();
+        }
+      }
+    }
+  }
+
+  protected async awaitProviderIdle(provider: EmbeddingProvider): Promise<void> {
+    if (!this.activeProviderUses.has(provider)) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const waiters = this.providerIdleWaiters.get(provider) ?? new Set();
+      waiters.add(resolve);
+      this.providerIdleWaiters.set(provider, waiters);
+    });
+  }
 
   protected pruneEmbeddingCacheIfNeeded(): void {
     if (!this.cache.enabled) {
@@ -410,39 +446,43 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
     }
     try {
-      return await runMemoryEmbeddingBatchRetryWithSplit({
-        items: texts,
-        run: async (batchTexts) => {
-          const timeoutMs = this.resolveEmbeddingTimeout("batch");
-          log.debug("memory embeddings: batch start", {
-            provider: provider.id,
-            items: batchTexts.length,
-            timeoutMs,
-          });
-          const result = await runEmbeddingOperationWithTimeout({
-            timeoutMs,
-            message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-            run: async (signal) => await provider.embedBatch(batchTexts, { signal }),
-          });
-          log.debug("memory embeddings: batch completed", {
-            provider: provider.id,
-            items: batchTexts.length,
-          });
-          return result;
-        },
-        isRetryable: isRetryableMemoryEmbeddingError,
-        isSplittable: isSplittableMemoryEmbeddingTransportError,
-        waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying");
-        },
-        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
-        onSplit: ({ itemCount, splitAt }) => {
-          log.warn(
-            `memory embeddings transport failed after retries; splitting batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
-          );
-        },
-      });
+      return await this.withProviderUse(
+        provider,
+        async () =>
+          await runMemoryEmbeddingBatchRetryWithSplit({
+            items: texts,
+            run: async (batchTexts) => {
+              const timeoutMs = this.resolveEmbeddingTimeout("batch");
+              log.debug("memory embeddings: batch start", {
+                provider: provider.id,
+                items: batchTexts.length,
+                timeoutMs,
+              });
+              const result = await runEmbeddingOperationWithTimeout({
+                timeoutMs,
+                message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+                run: async (signal) => await provider.embedBatch(batchTexts, { signal }),
+              });
+              log.debug("memory embeddings: batch completed", {
+                provider: provider.id,
+                items: batchTexts.length,
+              });
+              return result;
+            },
+            isRetryable: isRetryableMemoryEmbeddingError,
+            isSplittable: isSplittableMemoryEmbeddingTransportError,
+            waitForRetry: async (delayMs) => {
+              await this.waitForEmbeddingRetry(delayMs, "retrying");
+            },
+            maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+            baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+            onSplit: ({ itemCount, splitAt }) => {
+              log.warn(
+                `memory embeddings transport failed after retries; splitting batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+              );
+            },
+          }),
+      );
     } catch (err) {
       log.debug("memory embeddings: batch failed", {
         provider: provider.id,
@@ -467,34 +507,38 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return await this.embedBatchWithRetry(inputs.map((input) => input.text));
     }
     try {
-      return await runMemoryEmbeddingBatchRetryWithSplit({
-        items: inputs,
-        run: async (batchInputs) => {
-          const timeoutMs = this.resolveEmbeddingTimeout("batch");
-          log.debug("memory embeddings: structured batch start", {
-            provider: provider.id,
-            items: batchInputs.length,
-            timeoutMs,
-          });
-          return await runEmbeddingOperationWithTimeout({
-            timeoutMs,
-            message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
-            run: async (signal) => await embedBatchInputs(batchInputs, { signal }),
-          });
-        },
-        isRetryable: isRetryableMemoryEmbeddingError,
-        isSplittable: isSplittableMemoryEmbeddingTransportError,
-        waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
-        },
-        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
-        onSplit: ({ itemCount, splitAt }) => {
-          log.warn(
-            `memory embeddings transport failed after retries; splitting structured batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
-          );
-        },
-      });
+      return await this.withProviderUse(
+        provider,
+        async () =>
+          await runMemoryEmbeddingBatchRetryWithSplit({
+            items: inputs,
+            run: async (batchInputs) => {
+              const timeoutMs = this.resolveEmbeddingTimeout("batch");
+              log.debug("memory embeddings: structured batch start", {
+                provider: provider.id,
+                items: batchInputs.length,
+                timeoutMs,
+              });
+              return await runEmbeddingOperationWithTimeout({
+                timeoutMs,
+                message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
+                run: async (signal) => await embedBatchInputs(batchInputs, { signal }),
+              });
+            },
+            isRetryable: isRetryableMemoryEmbeddingError,
+            isSplittable: isSplittableMemoryEmbeddingTransportError,
+            waitForRetry: async (delayMs) => {
+              await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
+            },
+            maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+            baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+            onSplit: ({ itemCount, splitAt }) => {
+              log.warn(
+                `memory embeddings transport failed after retries; splitting structured batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+              );
+            },
+          }),
+      );
     } catch (err) {
       this.markLocalEmbeddingProviderDegraded(err);
       throw createMemoryEmbeddingOperationError({
@@ -532,26 +576,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
     try {
-      return await runMemoryEmbeddingRetryLoop({
-        run: async () => {
-          signal?.throwIfAborted();
-          const timeoutMs = this.resolveEmbeddingTimeout("query");
-          log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
-          return await runEmbeddingOperationWithTimeout({
-            timeoutMs,
-            message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
+      return await this.withProviderUse(
+        provider,
+        async () =>
+          await runMemoryEmbeddingRetryLoop({
+            run: async () => {
+              signal?.throwIfAborted();
+              const timeoutMs = this.resolveEmbeddingTimeout("query");
+              log.debug("memory embeddings: query start", { provider: provider.id, timeoutMs });
+              return await runEmbeddingOperationWithTimeout({
+                timeoutMs,
+                message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
+                signal,
+                run: async (opSignal) => await provider.embedQuery(text, { signal: opSignal }),
+              });
+            },
             signal,
-            run: async (opSignal) => await provider.embedQuery(text, { signal: opSignal }),
-          });
-        },
-        signal,
-        isRetryable: isRetryableMemoryEmbeddingError,
-        waitForRetry: async (delayMs) => {
-          await this.waitForEmbeddingRetry(delayMs, "retrying query");
-        },
-        maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
-        baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
-      });
+            isRetryable: isRetryableMemoryEmbeddingError,
+            waitForRetry: async (delayMs) => {
+              await this.waitForEmbeddingRetry(delayMs, "retrying query");
+            },
+            maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
+            baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+          }),
+      );
     } catch (err) {
       this.markLocalEmbeddingProviderDegraded(err);
       throw createMemoryEmbeddingOperationError({

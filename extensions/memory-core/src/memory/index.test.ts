@@ -2497,6 +2497,59 @@ describe("memory index", () => {
     await expect(concurrentSearch).resolves.toBeDefined();
   });
 
+  it("waits for admitted provider users before retirement", async () => {
+    const cfg = createCfg({ provider: "openai" });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      provider: {
+        embedQuery: (text: string) => Promise<number[]>;
+      } | null;
+      embedQueryWithRetry: (text: string) => Promise<number[]>;
+      retireCurrentProvider: () => Promise<void>;
+    };
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    let releaseFirstQuery: () => void = () => {};
+    let markFirstQueryStarted: () => void = () => {};
+    const firstQueryGate = new Promise<void>((resolve) => {
+      releaseFirstQuery = resolve;
+    });
+    const firstQueryStarted = new Promise<void>((resolve) => {
+      markFirstQueryStarted = resolve;
+    });
+    fields.provider.embedQuery = async () => {
+      markFirstQueryStarted();
+      await firstQueryGate;
+      return [1, 0, 0, 0];
+    };
+
+    const queryPromise = fields.embedQueryWithRetry("alpha");
+    await firstQueryStarted;
+    const retirementPromise = fields.retireCurrentProvider();
+    let retirementSettled = false;
+    void retirementPromise.then(
+      () => {
+        retirementSettled = true;
+      },
+      () => {
+        retirementSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(retirementSettled).toBe(false);
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseFirstQuery();
+    }
+
+    await expect(queryPromise).resolves.toEqual([1, 0, 0, 0]);
+    await retirementPromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
   it("fails closed when fallback initialization fails for an explicit provider", async () => {
     const cfg = createCfg({
       provider: "openai",

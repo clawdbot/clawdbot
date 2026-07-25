@@ -800,6 +800,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         let closeFailed = false;
         for (const pendingProvider of this.providersPendingRetirement) {
           try {
+            await this.awaitProviderIdle(pendingProvider);
             await pendingProvider.close?.();
             this.providersPendingRetirement.delete(pendingProvider);
           } catch (err) {
