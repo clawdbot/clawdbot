@@ -8,11 +8,6 @@ import { stableStringify } from "../stable-stringify.js";
 import { payloadTextResult } from "../tools/common.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
-import {
-  nativeHookRelayParamsWereRewritten,
-  normalizeNativeHookToolName,
-  readNativeHookRelayApprovalMode,
-} from "./native-hook-relay-provider.js";
 import type {
   NativeHookRelayInvocation,
   NativeHookRelayPermissionApprovalRequest,
@@ -20,7 +15,12 @@ import type {
   NativeHookRelayProcessResponse,
   NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
-} from "./native-hook-relay.js";
+} from "./native-hook-relay-contracts.js";
+import {
+  nativeHookRelayParamsWereRewritten,
+  normalizeNativeHookToolName,
+  readNativeHookRelayApprovalMode,
+} from "./native-hook-relay-provider.js";
 import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.js";
 
 export function createNativeHookRelayEventRuntime(context: {

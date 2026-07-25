@@ -12,7 +12,7 @@ import type {
   NativeHookRelayProvider,
   NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
-} from "./native-hook-relay.js";
+} from "./native-hook-relay-contracts.js";
 
 const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",

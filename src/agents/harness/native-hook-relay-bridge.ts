@@ -7,6 +7,14 @@ import {
 } from "node:http";
 import { toErrorObject } from "../../infra/errors.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type {
+  ActiveNativeHookRelayRegistration,
+  InvokeNativeHookRelayBridgeParams,
+  InvokeNativeHookRelayParams,
+  NativeHookRelayBridgeRegistration,
+  NativeHookRelayBridgeRequestAuth,
+  NativeHookRelayProcessResponse,
+} from "./native-hook-relay-contracts.js";
 import {
   getNativeHookRelayProviderAdapter,
   isJsonObject,
@@ -22,14 +30,6 @@ import {
   writeNativeHookRelayBridgeRecord,
   type NativeHookRelayBridgeRecord,
 } from "./native-hook-relay-store.js";
-import type {
-  ActiveNativeHookRelayRegistration,
-  InvokeNativeHookRelayBridgeParams,
-  InvokeNativeHookRelayParams,
-  NativeHookRelayBridgeRegistration,
-  NativeHookRelayBridgeRequestAuth,
-  NativeHookRelayProcessResponse,
-} from "./native-hook-relay.js";
 
 const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;

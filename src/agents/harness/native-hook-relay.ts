@@ -34,7 +34,7 @@ export type NativeHookRelayProcessResponse = {
   failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
-export type NativeHookRelayRegistration = {
+type NativeHookRelayRegistration = {
   relayId: string;
   provider: NativeHookRelayProvider;
   generationMismatchGraceExpiresAtMs?: number;
@@ -79,11 +79,11 @@ export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   unregister: () => void;
 };
 
-export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
+type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
   generation: string;
 };
 
-export type RegisterNativeHookRelayParams = {
+type RegisterNativeHookRelayParams = {
   provider: NativeHookRelayProvider;
   relayId?: string;
   generation?: string;
@@ -104,7 +104,7 @@ export type RegisterNativeHookRelayParams = {
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 
-export type InvokeNativeHookRelayParams = {
+type InvokeNativeHookRelayParams = {
   provider: unknown;
   relayId: unknown;
   generation?: unknown;
@@ -113,13 +113,13 @@ export type InvokeNativeHookRelayParams = {
   requireGeneration?: boolean;
 };
 
-export type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
+type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
   registrationTimeoutMs?: number;
   stateDbPath?: string;
   timeoutMs?: number;
 };
 
-export type NativeHookRelayDeferredApprovalOutcome =
+type NativeHookRelayDeferredApprovalOutcome =
   | { handled: true; outcome: "approved-once" }
   | {
       handled: true;
@@ -128,15 +128,9 @@ export type NativeHookRelayDeferredApprovalOutcome =
       failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     };
 
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-export type NativeHookRelayInvocation = {
+type NativeHookRelayInvocation = {
   provider: NativeHookRelayProvider;
   relayId: string;
   event: NativeHookRelayEvent;
@@ -158,53 +152,20 @@ export type NativeHookRelayInvocation = {
   receivedAt: string;
 };
 
-export type NativeHookRelayInvocationMetadata = Partial<
-  Pick<
-    NativeHookRelayInvocation,
-    | "nativeEventName"
-    | "cwd"
-    | "model"
-    | "turnId"
-    | "transcriptPath"
-    | "permissionMode"
-    | "stopHookActive"
-    | "lastAssistantMessage"
-    | "toolName"
-    | "toolUseId"
-  >
->;
-
 type NativeHookRelayPermissionDecision = "allow" | "deny";
 
-export type NativeHookRelayProviderAdapter = {
-  normalizeMetadata: (rawPayload: JsonValue) => NativeHookRelayInvocationMetadata;
-  readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
-  readToolResponse: (rawPayload: JsonValue) => unknown;
-  renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
-  renderPreToolUseBlockResponse: (
-    reason: string,
-    failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">,
-  ) => NativeHookRelayProcessResponse;
-  renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
-  renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
-  renderPermissionDecisionResponse: (
-    decision: NativeHookRelayPermissionDecision,
-    message?: string,
-  ) => NativeHookRelayProcessResponse;
-};
-
-export type NativeHookRelayPermissionApprovalResult =
+type NativeHookRelayPermissionApprovalResult =
   | NativeHookRelayPermissionDecision
   | "allow-always"
   | "defer";
 
-export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
+type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
   preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
 };
 
-export type NativeHookRelayPermissionApprovalRequest = {
+type NativeHookRelayPermissionApprovalRequest = {
   provider: NativeHookRelayProvider;
   agentId?: string;
   sessionId: string;
@@ -218,31 +179,23 @@ export type NativeHookRelayPermissionApprovalRequest = {
   signal?: AbortSignal;
 };
 
-export type NativeHookRelayPermissionApprovalRequester = (
+type NativeHookRelayPermissionApprovalRequester = (
   request: NativeHookRelayPermissionApprovalRequest,
 ) => Promise<NativeHookRelayPermissionApprovalResult>;
 
-export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
+type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
-export type NativeHookRelayPreToolUseApproval = {
+type NativeHookRelayPreToolUseApproval = {
   deferredApproval: DeferredPluginToolApproval;
   originalParamsFingerprint: string;
   resolutionPromise?: Promise<NativeHookRelayDeferredApprovalOutcome>;
 };
 
-export type NativeHookRelayBridgeRegistration = {
+type NativeHookRelayBridgeRegistration = {
   relayId: string;
   stateDbPath: string;
   token: string;
   server: Server;
-};
-
-export type NativeHookRelayBridgeRequestAuth = {
-  provider: NativeHookRelayProvider;
-  relayId: string;
-  token: string;
-  registration: ActiveNativeHookRelayRegistration;
-  bridge: NativeHookRelayBridgeRegistration;
 };
 
 type NativeHookRelaySharedState = {
