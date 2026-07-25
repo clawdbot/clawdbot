@@ -246,14 +246,14 @@ describe("scripts/bench-sqlite-reliability", () => {
         firstReport.maintenanceProof.repositoryInterruption.beforePending.exit.signal !== null,
     ).toBe(true);
     expect(firstReport.maintenanceProof.repositoryInterruption.pending).toMatchObject({
-      crashSnapshotVerifiedAfterCrash: false,
-      crashSnapshotVisibleAfterCrash: false,
-      incompleteEntries: 1,
+      crashSnapshotVerifiedAfterCrash: true,
+      crashSnapshotVisibleAfterCrash: true,
+      incompleteEntries: 0,
       repositoryVerified: true,
       retryCreated: true,
       sourcePayloadPreserved: true,
       sourceStatePreserved: true,
-      visibleSnapshotsAfterCrash: 2,
+      visibleSnapshotsAfterCrash: 3,
     });
     expect(
       firstReport.maintenanceProof.repositoryInterruption.pending.stagingEntries,
@@ -270,7 +270,7 @@ describe("scripts/bench-sqlite-reliability", () => {
       retryCreated: true,
       sourcePayloadPreserved: true,
       sourceStatePreserved: true,
-      visibleSnapshotsAfterCrash: 4,
+      visibleSnapshotsAfterCrash: 5,
     });
     expect(
       firstReport.maintenanceProof.repositoryInterruption.afterCommit.stagingEntries,

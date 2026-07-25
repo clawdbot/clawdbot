@@ -2530,7 +2530,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const rmSync = fs.rmSync.bind(fs);
     let failRemoval = true;
     vi.spyOn(fs, "rmSync").mockImplementation(((pathname, options) => {
-      if (pathname === privateDirectory && failRemoval) {
+      if (
+        fs.realpathSync.native(String(pathname)) === fs.realpathSync.native(privateDirectory) &&
+        failRemoval
+      ) {
         failRemoval = false;
         const error = new Error("busy");
         (error as NodeJS.ErrnoException).code = "EBUSY";
@@ -3951,6 +3954,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     expect(readSqliteNumberPragma(database.db, "auto_vacuum")).toBe(2);
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(readSqliteNumberPragma(database.db, "wal_autocheckpoint")).toBe(1000);
+    expect(readSqliteNumberPragma(database.db, "journal_size_limit")).toBe(64 * 1024 * 1024);
     const journalMode = database.db.prepare("PRAGMA journal_mode").get() as
       | { journal_mode?: string }
       | undefined;

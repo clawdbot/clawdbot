@@ -266,7 +266,6 @@ extensions/slack/src/monitor/events/interactions.block-actions.ts
 extensions/slack/src/monitor/events/interactions.test.ts
 extensions/slack/src/monitor/media.test.ts
 extensions/slack/src/monitor/message-handler/dispatch.preview-fallback.test.ts
-extensions/slack/src/monitor/message-handler/dispatch.ts
 extensions/slack/src/monitor/message-handler/prepare.test.ts
 extensions/slack/src/monitor/message-handler/prepare.ts
 extensions/slack/src/monitor/provider.ts

@@ -235,7 +235,7 @@ async function runCrashPoint(params: {
     const crashSnapshots = visibleAfter.filter(
       (snapshot) => !visiblePathsBefore.has(path.resolve(snapshot.ref.path)),
     );
-    const expectedVisibleCrashSnapshots = params.crashPoint === "after-commit" ? 1 : 0;
+    const expectedVisibleCrashSnapshots = params.crashPoint === "before-pending" ? 0 : 1;
     if (crashSnapshots.length !== expectedVisibleCrashSnapshots) {
       throw new Error(
         `SQLite repository exposed ${crashSnapshots.length} snapshot(s) at ${params.crashPoint}; expected ${expectedVisibleCrashSnapshots}.`,
@@ -259,7 +259,7 @@ async function runCrashPoint(params: {
     if (stagingEntries === 0) {
       throw new Error(`SQLite repository worker left no staging at ${params.crashPoint}.`);
     }
-    const expectedIncompleteEntries = params.crashPoint === "after-commit" ? 0 : 1;
+    const expectedIncompleteEntries = params.crashPoint === "before-pending" ? 1 : 0;
     if (incompleteEntries !== expectedIncompleteEntries) {
       throw new Error(
         `SQLite repository left ${incompleteEntries} incomplete final entries at ${params.crashPoint}; expected ${expectedIncompleteEntries}.`,
@@ -366,9 +366,9 @@ export async function runRepositoryInterruptionProof(params: {
     },
     pending: {
       ...pending,
-      crashSnapshotVerifiedAfterCrash: false,
-      crashSnapshotVisibleAfterCrash: false,
-      incompleteEntries: 1,
+      crashSnapshotVerifiedAfterCrash: true,
+      crashSnapshotVisibleAfterCrash: true,
+      incompleteEntries: 0,
       repositoryVerified: true,
       retryCreated: true,
       sourcePayloadPreserved: true,

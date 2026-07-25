@@ -201,6 +201,51 @@ describe("sqlite WAL maintenance", () => {
     }
   });
 
+  it("reclaims an inflated WAL on the first commit after a completed checkpoint", () => {
+    const sqlite = requireNodeSqlite();
+    const dir = tempDirs.make("openclaw-sqlite-wal-size-");
+    const dbPath = path.join(dir, "openclaw.sqlite");
+    const walPath = `${dbPath}-wal`;
+    const db = new sqlite.DatabaseSync(dbPath);
+    let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
+    try {
+      maintenance = configureSqliteWalMaintenance(db, {
+        autoCheckpointPages: 0,
+        checkpointIntervalMs: 0,
+        databaseLabel: "wal-size-default",
+        databasePath: dbPath,
+      });
+      db.exec("CREATE TABLE payload (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+      db.prepare("INSERT INTO payload (value) VALUES (?)").run("before-checkpoint");
+
+      const checkpoint = db.prepare("PRAGMA wal_checkpoint(PASSIVE);").get() as {
+        busy: number;
+        checkpointed: number;
+        log: number;
+      };
+      expect(checkpoint.busy).toBe(0);
+      expect(checkpoint.checkpointed).toBe(checkpoint.log);
+
+      const sizeLimit = Number(
+        (
+          db.prepare("PRAGMA journal_size_limit;").get() as {
+            journal_size_limit: number | bigint;
+          }
+        ).journal_size_limit,
+      );
+      expect(sizeLimit).toBe(64 * 1024 * 1024);
+      // A sparse extension models a retained high-water WAL without writing a 65 MiB fixture.
+      fs.truncateSync(walPath, sizeLimit + 1024 * 1024);
+
+      db.prepare("INSERT INTO payload (value) VALUES (?)").run("after-checkpoint");
+
+      expect(fs.statSync(walPath).size).toBe(sizeLimit);
+    } finally {
+      maintenance?.close();
+      db.close();
+    }
+  });
+
   it("rejects a memory journal for a file-backed database", () => {
     const db = createMockDb();
     vi.mocked(db["prepare"]).mockImplementation(
@@ -503,19 +548,20 @@ describe("sqlite WAL maintenance", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
     const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 100 });
-    expect(db["exec"]).toHaveBeenCalledTimes(2);
+    // journal_mode=WAL, wal_autocheckpoint, journal_size_limit.
+    expect(db["exec"]).toHaveBeenCalledTimes(3);
 
     vi.advanceTimersByTime(100);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
-    expect(db["exec"]).toHaveBeenNthCalledWith(3, "PRAGMA incremental_vacuum(512);");
-    expect(db["exec"]).toHaveBeenCalledTimes(3);
+    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
+    expect(db["exec"]).toHaveBeenCalledTimes(4);
 
     expect(maintenance.close()).toBe(true);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
-    expect(db["exec"]).toHaveBeenCalledTimes(3);
+    expect(db["exec"]).toHaveBeenCalledTimes(4);
 
     vi.advanceTimersByTime(200);
-    expect(db["exec"]).toHaveBeenCalledTimes(3);
+    expect(db["exec"]).toHaveBeenCalledTimes(4);
   });
 
   it("clamps oversized checkpoint intervals before arming timers", () => {
@@ -544,7 +590,7 @@ describe("sqlite WAL maintenance", () => {
 
     vi.advanceTimersByTime(100);
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(FULL);");
-    expect(db["exec"]).toHaveBeenNthCalledWith(3, "PRAGMA incremental_vacuum(512);");
+    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
 
     expect(maintenance.close()).toBe(true);
     expect(db["prepare"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(FULL);");
