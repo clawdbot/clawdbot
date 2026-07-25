@@ -7,10 +7,66 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { listSessionEntries } from "./session-accessor.js";
+import { listSessionEntries, listSessionEntriesReadOnly } from "./session-accessor.js";
 import { invalidateSessionStoreCache } from "./store-cache.js";
 
 const SESSION_COUNT = 5_000;
+
+type SeedSessionOptions = {
+  count: number;
+  dbPath: string;
+  env: NodeJS.ProcessEnv;
+  keyPrefix?: string;
+  includeHeavyFields?: boolean;
+};
+
+function seedSessions(params: SeedSessionOptions): void {
+  const database = openOpenClawAgentDatabase({
+    agentId: "main",
+    env: params.env,
+    path: params.dbPath,
+  });
+  const db = database.db;
+  const insertSession = db.prepare(
+    `INSERT OR IGNORE INTO sessions
+      (session_id, session_key, session_scope, created_at, updated_at, status, chat_type)
+     VALUES (?, ?, 'conversation', ?, ?, 'running', 'direct')`,
+  );
+  const insertEntry = db.prepare(
+    `INSERT OR IGNORE INTO session_entries
+      (session_key, session_id, entry_json, updated_at)
+     VALUES (?, ?, ?, ?)`,
+  );
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (let i = 0; i < params.count; i += 1) {
+      const prefix = params.keyPrefix ?? "session";
+      const sessionKey = i === 0 ? "agent:main:main" : `agent:main:${prefix}-${i}`;
+      const sessionId = i === 0 ? "main-session" : `${prefix}-${String(i).padStart(5, "0")}`;
+      const updatedAt = Date.now() - (params.count - i) * 60_000;
+      const createdAt = updatedAt;
+      const entryJson = JSON.stringify({
+        sessionId,
+        updatedAt,
+        model: "gpt-5.5",
+        ...(params.includeHeavyFields
+          ? {
+              skillsSnapshot: { activeSkills: ["skill-alpha"], prompt: "heavy-prompt" },
+              systemPromptReport: { id: `cmpl-${i}`, usage: { total_tokens: 100 + i } },
+            }
+          : {}),
+      });
+
+      insertSession.run(sessionId, sessionKey, createdAt, updatedAt);
+      insertEntry.run(sessionKey, sessionId, entryJson, updatedAt);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
 
 describe("session list benchmark (5k sessions)", () => {
   let tempDir: string;
@@ -31,65 +87,8 @@ describe("session list benchmark (5k sessions)", () => {
   });
 
   it("seeds 5k sessions and benchmarks list performance", () => {
-    // 1. Open the agent database (creates schema + all tables)
     const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: dbPath });
-
-    // 2. Bulk-insert 5,000 sessions + session_entries via raw SQL
-    const db = database.db;
-
-    const insertSession = db.prepare(
-      `INSERT OR IGNORE INTO sessions
-        (session_id, session_key, session_scope, created_at, updated_at, status, chat_type)
-       VALUES (?, ?, 'conversation', ?, ?, 'running', 'direct')`,
-    );
-    const insertEntry = db.prepare(
-      `INSERT OR IGNORE INTO session_entries
-        (session_key, session_id, entry_json, updated_at)
-       VALUES (?, ?, ?, ?)`,
-    );
-
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      for (let i = 0; i < SESSION_COUNT; i++) {
-        const sessionKey = i === 0 ? "agent:main:main" : `agent:main:session-${i}`;
-        const sessionId = i === 0 ? "main-session" : `session-${String(i).padStart(5, "0")}`;
-        const updatedAt = Date.now() - (SESSION_COUNT - i) * 60_000;
-        const createdAt = updatedAt;
-
-        const entryJson = JSON.stringify({
-          sessionId,
-          updatedAt,
-          model: "gpt-5.5",
-          ...(i % 10 === 0
-            ? {
-                systemPromptReport: {
-                  id: `cmpl-${sessionKey.slice(-8)}`,
-                  model: "gpt-5.5",
-                  usage: {
-                    prompt_tokens: 1200 + (i % 300),
-                    completion_tokens: 400 + (i % 150),
-                    total_tokens: 1600 + (i % 450),
-                  },
-                },
-                skillsSnapshot: {
-                  activeSkills: ["skill-alpha", "skill-beta", "skill-gamma", "skill-delta"],
-                  updatedAt,
-                },
-              }
-            : {
-                skillsSnapshot: { activeSkills: ["skill-alpha"], updatedAt },
-              }),
-        });
-
-        insertSession.run(sessionId, sessionKey, createdAt, updatedAt);
-        insertEntry.run(sessionKey, sessionId, entryJson, updatedAt);
-      }
-      db.exec("COMMIT");
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
-    }
+    seedSessions({ count: SESSION_COUNT, dbPath, env, includeHeavyFields: true });
 
     // Close everything to clear internal state
     closeOpenClawAgentDatabasesForTest();
@@ -165,5 +164,43 @@ describe("session list benchmark (5k sessions)", () => {
     // Warm should be faster than cold
     expect(warmTime).toBeLessThan(coldTime);
     expect(lightTime).toBeLessThan(coldTime);
+  });
+
+  it("returns the same ordered page from cached and uncached lists", () => {
+    const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    seedSessions({ count: 12, dbPath, env, keyPrefix: "page" });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const scope = { agentId: "main", env, limit: 4, offset: 3 };
+    const uncachedPage = listSessionEntries(scope);
+
+    const fullScope = { agentId: "main", env };
+    expect(listSessionEntries(fullScope)).toHaveLength(12);
+    const cachedPage = listSessionEntries(scope);
+
+    expect(cachedPage).toEqual(uncachedPage);
+    expect(cachedPage.map((entry) => entry.sessionKey)).toEqual([
+      "agent:main:page-11",
+      "agent:main:page-2",
+      "agent:main:page-3",
+      "agent:main:page-4",
+    ]);
+  });
+
+  it("strips heavy fields from read-only light listings", () => {
+    const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    seedSessions({ count: 3, dbPath, env, includeHeavyFields: true, keyPrefix: "light" });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const fullEntries = listSessionEntriesReadOnly({ agentId: "main", env });
+    expect(fullEntries.some((entry) => entry.entry.systemPromptReport !== undefined)).toBe(true);
+    expect(fullEntries.some((entry) => entry.entry.skillsSnapshot !== undefined)).toBe(true);
+
+    const lightEntries = listSessionEntriesReadOnly({ agentId: "main", env, light: true });
+    expect(lightEntries).toHaveLength(fullEntries.length);
+    expect(lightEntries.every((entry) => entry.entry.systemPromptReport === undefined)).toBe(true);
+    expect(lightEntries.every((entry) => entry.entry.skillsSnapshot === undefined)).toBe(true);
   });
 });
