@@ -609,4 +609,50 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
   });
+
+  it("retains failed cleanup and blocks replacement until retirement succeeds", async () => {
+    const createsBefore = createEmbeddingProviderMock.mock.calls.length;
+    closeEmbeddingProviderMock
+      .mockRejectedValueOnce(new Error("first close failed"))
+      .mockRejectedValueOnce(new Error("retry close failed"));
+
+    const first = await postEmbeddings({ model: "openclaw/default", input: "first" });
+    expect(first.status).toBe(200);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
+
+    const blocked = await postEmbeddings({ model: "openclaw/default", input: "blocked" });
+    expect(blocked.status).toBe(500);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
+
+    const recovered = await postEmbeddings({ model: "openclaw/default", input: "recovered" });
+    expect(recovered.status).toBe(200);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
+  });
+
+  it("does not admit a replacement while provider cleanup is pending", async () => {
+    let releaseClose: () => void = () => {};
+    const closeGate = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    closeEmbeddingProviderMock.mockImplementationOnce(async () => {
+      await closeGate;
+      throw new Error("close failed");
+    });
+    const createsBefore = createEmbeddingProviderMock.mock.calls.length;
+    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+
+    const firstPromise = postEmbeddings({ model: "openclaw/default", input: "first" });
+    await vi.waitFor(() =>
+      expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1),
+    );
+    const secondPromise = postEmbeddings({ model: "openclaw/default", input: "second" });
+    await Promise.resolve();
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 1);
+
+    releaseClose();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(createsBefore + 2);
+  });
 });
