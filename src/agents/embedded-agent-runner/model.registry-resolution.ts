@@ -29,7 +29,7 @@ import {
   type ManifestModelCatalogProviderAliasMetadata,
 } from "./model.static-catalog.js";
 
-export type ExplicitModelResolution =
+type ExplicitModelResolution =
   | { kind: "resolved"; model: Model; source: "configured" }
   | { kind: "resolved"; dropOnRuntimeMiss: boolean; model: Model; source: "registry" }
   | { kind: "suppressed" };

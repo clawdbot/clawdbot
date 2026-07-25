@@ -224,14 +224,14 @@ export function hasConfiguredFallbackSurface(params: {
   return Boolean(params.providerConfig?.baseUrl?.trim());
 }
 
-export function readModelParams(value: unknown): Record<string, unknown> | undefined {
+function readModelParams(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
   return value as Record<string, unknown>;
 }
 
-export function mergeModelParams(
+function mergeModelParams(
   ...entries: Array<Record<string, unknown> | undefined>
 ): Record<string, unknown> | undefined {
   const merged = Object.assign({}, ...entries.filter(Boolean));
