@@ -43,8 +43,8 @@ import type { MemoryWatchSettleQueue } from "./watch-settle.js";
 
 export const qmdManagerLog = createSubsystemLogger("memory");
 
-export type QmdManagerMode = "full" | "status" | "cli";
-export type QmdManagerRuntimeConfig = {
+type QmdManagerMode = "full" | "status" | "cli";
+type QmdManagerRuntimeConfig = {
   workspaceDir: string;
   syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   contextLimits: ReturnType<typeof resolveAgentContextLimits>;
