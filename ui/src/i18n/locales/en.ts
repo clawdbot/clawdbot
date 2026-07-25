@@ -700,6 +700,7 @@ export const en: TranslationMap = {
     runErrorTimedOut: "Timed out",
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
+    openSession: "Open thread",
     model: "Model",
     provider: "Provider",
     runtime: "Runtime",

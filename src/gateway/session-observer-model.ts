@@ -250,7 +250,7 @@ const ModelDigestSchema = z
   })
   .strict();
 
-export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
+function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }

@@ -54,6 +54,7 @@
       "moonshot": {
         "baseUrl": "https://api.moonshot.ai/v1",
         "api": "openai-completions",
+        "defaultModel": "kimi-k3",
         "models": [
           {
             "id": "kimi-k3",

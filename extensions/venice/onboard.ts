@@ -17,7 +17,7 @@ const venicePresetAppliers = createModelCatalogPresetAppliers({
     api: "openai-completions",
     baseUrl: VENICE_BASE_URL,
     catalogModels: VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition),
-    aliases: [{ modelRef: VENICE_DEFAULT_MODEL_REF, alias: "Kimi K2.5" }],
+    aliases: [{ modelRef: VENICE_DEFAULT_MODEL_REF, alias: "Kimi K2.6" }],
   }),
 });
 

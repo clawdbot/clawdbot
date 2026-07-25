@@ -55,18 +55,6 @@ export const SessionObserverDigestSchema = closedObject({
   planProgress: Type.Optional(SessionObserverPlanProgressSchema),
 });
 
-/** Asks the observer about one session using its sanitized observation context. */
-export const SessionsObserverAskParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  question: Type.String({ minLength: 1, maxLength: 400 }),
-});
-
-/** Ephemeral observer answer returned only to the requesting operator. */
-export const SessionsObserverAskResultSchema = closedObject({
-  answer: Type.String({ minLength: 1, maxLength: 600 }),
-  digestRevision: Type.Optional(Type.Integer({ minimum: 1 })),
-});
-
 /** Declares whether this connection currently renders session observer output. */
 export const SessionsObserverVisibilityParamsSchema = closedObject({
   visible: Type.Boolean(),
@@ -805,8 +793,6 @@ export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
 export type SessionObserverHealth = Static<typeof SessionObserverHealthSchema>;
 export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgressSchema>;
 export type SessionObserverDigest = Static<typeof SessionObserverDigestSchema>;
-export type SessionsObserverAskParams = Static<typeof SessionsObserverAskParamsSchema>;
-export type SessionsObserverAskResult = Static<typeof SessionsObserverAskResultSchema>;
 export type SessionsObserverVisibilityParams = Static<
   typeof SessionsObserverVisibilityParamsSchema
 >;

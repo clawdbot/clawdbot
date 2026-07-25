@@ -22,7 +22,7 @@ const cerebrasPresetAppliers = createModelCatalogPresetAppliers({
     api: "openai-completions",
     baseUrl: CEREBRAS_BASE_URL,
     catalogModels: CEREBRAS_MODEL_CATALOG.map(buildCerebrasModelDefinition),
-    aliases: [{ modelRef: CEREBRAS_DEFAULT_MODEL_REF, alias: "Cerebras GLM 4.7" }],
+    aliases: [{ modelRef: CEREBRAS_DEFAULT_MODEL_REF, alias: "Cerebras GPT OSS 120B" }],
   }),
 });
 

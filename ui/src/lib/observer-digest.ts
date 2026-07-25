@@ -13,6 +13,10 @@ type ProjectedObserverDigest = Pick<
   "runId" | "headline" | "health" | "updatedAt" | "revision"
 >;
 
+export function isCriticalObserverHealth(health: unknown): health is "stuck" | "waiting-on-user" {
+  return health === "stuck" || health === "waiting-on-user";
+}
+
 /** Local live run id wins; otherwise the row's server-reported active runs
  * identify the run, preferring the one the digest belongs to. */
 export function resolveChatPaneObserverRunId(params: {
