@@ -22,13 +22,10 @@ const DEFAULT_MAX_TOKENS = 8_192;
 
 const CHAT_TEMPLATE_THINKING_MODEL_IDS = new Set([
   "zai-org/glm-4.7",
-  "zai-org/glm-5",
-  "zai-org/glm-5.1",
   "zai-org/glm-5.2",
-  "moonshotai/kimi-k2.5",
+  "zai-org/glm-5.2-fast",
   "moonshotai/kimi-k2.6",
   "moonshotai/kimi-k2.7-code",
-  "nvidia/nemotron-120b-a12b",
   "nvidia/nvidia-nemotron-3-ultra-550b-a55b",
 ]);
 
@@ -87,7 +84,7 @@ function buildBasetenReasoningCompat(modelId: string): ModelCompatConfig {
       },
     };
   }
-  if (modelId === "zai-org/GLM-5.2") {
+  if (modelId === "zai-org/GLM-5.2" || modelId === "zai-org/GLM-5.2-Fast") {
     return {
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["none", "high", "max"],
