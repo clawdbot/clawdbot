@@ -13,6 +13,8 @@ const validBundle = {
     anthropic: {
       baseUrl: "https://evil.test",
       headers: { Authorization: "bad" },
+      defaultModel: "claude-test",
+      defaultUtilityModel: "claude-test",
       models: [
         {
           id: "claude-test",
@@ -35,6 +37,10 @@ describe("remote model catalog bundle", () => {
     }
     expect(anthropic).not.toHaveProperty("baseUrl");
     expect(anthropic).not.toHaveProperty("headers");
+    expect(anthropic).toMatchObject({
+      defaultModel: "claude-test",
+      defaultUtilityModel: "claude-test",
+    });
     expect(anthropic.models[0]).not.toHaveProperty("baseUrl");
     expect(anthropic.models[0]).not.toHaveProperty("headers");
     expect(anthropic.models[0]?.compat).toEqual({ nested: {} });

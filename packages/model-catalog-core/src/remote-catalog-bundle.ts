@@ -57,6 +57,7 @@ export const remoteModelCatalogProviderSchema = z
     baseUrl: z.string().optional(),
     api: z.enum(MODEL_CATALOG_APIS).optional(),
     headers: stringMapSchema.optional(),
+    defaultModel: z.string().optional(),
     defaultUtilityModel: z.string().optional(),
     models: z.array(modelSchema).min(1),
   })
