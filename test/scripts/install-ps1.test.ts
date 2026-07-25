@@ -657,6 +657,17 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
   });
 
+  it("rejects a git checkout without a commit before updating it", () => {
+    const guardBody = extractFunctionBody(source, "Assert-GitCheckoutHasCommit");
+    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+
+    expect(guardBody).toContain("rev-parse --verify --quiet HEAD");
+    expect(guardBody).toContain("Git checkout has no commit");
+    expect(guardBody).not.toContain("Remove-Item");
+    expect(guardBody).not.toContain("Move-Item");
+    expect(gitInstallBody).toContain("Assert-GitCheckoutHasCommit -RepoDir $RepoDir");
+  });
+
   it("runs Windows command shims from a Windows-local cwd", () => {
     const commandSafeBody = extractFunctionBody(source, "Invoke-CommandFromWindowsSafeDirectory");
     const npmCommandBody = extractFunctionBody(source, "Invoke-NpmCommand");

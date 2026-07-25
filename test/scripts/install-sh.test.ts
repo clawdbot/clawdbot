@@ -344,6 +344,29 @@ NODE
     expect(result.stdout).toContain("/repo/dist/entry.js --version");
   });
 
+  it("rejects a git checkout without a commit without modifying it", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      repo="$tmp/repo"
+      mkdir -p "$repo/.git"
+      printf 'keep\\n' > "$repo/local.txt"
+      ui_info() { :; }
+      ui_error() { :; }
+
+      set +e
+      validate_git_checkout_head "$repo"
+      status="$?"
+      set -e
+      [[ "$status" -eq 1 ]]
+      [[ -f "$repo/local.txt" ]]
+      [[ -d "$repo/.git" ]]
+    `);
+
+    expect(result.status).toBe(0);
+  });
+
   it("accepts GNU and musl Linux shells in OS detection", () => {
     expect(script).toContain('[[ "$OSTYPE" == "linux"* ]]');
     expect(script).not.toContain('[[ "$OSTYPE" == "linux-gnu"* ]]');
