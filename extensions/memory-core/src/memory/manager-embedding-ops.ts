@@ -267,7 +267,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  protected beginSyncProviderGeneration(): void {
+  protected override beginSyncProviderGeneration(): void {
     if (this.syncProviderGeneration) {
       this.syncProviderGenerationOwners += 1;
       return;
@@ -292,7 +292,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.syncProviderGenerationOwners = 1;
   }
 
-  protected endSyncProviderGeneration(): void {
+  protected override endSyncProviderGeneration(): void {
     if (this.syncProviderGenerationOwners > 1) {
       this.syncProviderGenerationOwners -= 1;
       return;

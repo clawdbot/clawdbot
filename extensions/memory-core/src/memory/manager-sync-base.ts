@@ -186,8 +186,8 @@ export abstract class MemoryManagerSyncBase {
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
-  protected abstract beginSyncProviderGeneration(): void;
-  protected abstract endSyncProviderGeneration(): void;
+  protected beginSyncProviderGeneration(): void {}
+  protected endSyncProviderGeneration(): void {}
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(
