@@ -52,6 +52,7 @@ export type WorkboardLinkedCreateInput = WorkboardCardInput & {
 };
 export type WorkboardProofInput = {
   status?: unknown;
+  verification?: unknown;
   label?: unknown;
   command?: unknown;
   url?: unknown;
@@ -82,6 +83,7 @@ export type WorkboardProtocolViolationInput = {
 };
 export type WorkboardClaimInput = {
   ownerId?: unknown;
+  sessionKey?: unknown;
   token?: unknown;
   ttlSeconds?: unknown;
 };
@@ -108,6 +110,7 @@ export type WorkboardBulkInput = {
 export type WorkboardCompleteInput = {
   ownerId?: unknown;
   token?: unknown;
+  status?: unknown;
   summary?: unknown;
   proof?: unknown;
   proofId?: unknown;

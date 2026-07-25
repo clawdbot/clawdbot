@@ -11,6 +11,7 @@ import {
   WORKBOARD_NOTIFICATION_KINDS,
   WORKBOARD_PRIORITIES,
   WORKBOARD_PROOF_STATUSES,
+  WORKBOARD_PROOF_VERIFICATIONS,
   WORKBOARD_STATUSES,
   WORKBOARD_TEMPLATE_IDS,
   type WorkboardArtifact,
@@ -39,6 +40,7 @@ import {
   type WorkboardPriority,
   type WorkboardProof,
   type WorkboardProofStatus,
+  type WorkboardProofVerification,
   type WorkboardRunAttempt,
   type WorkboardStatus,
   type WorkboardTemplateId,
@@ -543,6 +545,19 @@ function normalizeProofStatus(
   return fallback;
 }
 
+function normalizeProofVerification(
+  value: unknown,
+  fallback: WorkboardProofVerification,
+): WorkboardProofVerification {
+  if (
+    typeof value === "string" &&
+    WORKBOARD_PROOF_VERIFICATIONS.includes(value as WorkboardProofVerification)
+  ) {
+    return value as WorkboardProofVerification;
+  }
+  return fallback;
+}
+
 export function normalizeTemplateId(value: unknown): WorkboardTemplateId | undefined {
   return typeof value === "string" && WORKBOARD_TEMPLATE_IDS.includes(value as WorkboardTemplateId)
     ? (value as WorkboardTemplateId)
@@ -696,6 +711,7 @@ function normalizeProof(value: unknown): WorkboardProof | null {
   return {
     id,
     status: normalizeProofStatus(record.status, "unknown"),
+    verification: normalizeProofVerification(record.verification, "worker_reported"),
     createdAt,
     ...(label ? { label } : {}),
     ...(command ? { command } : {}),
@@ -863,6 +879,7 @@ function normalizeClaim(value: unknown, fallback?: WorkboardClaim): WorkboardCla
   }
   const record = value as Record<string, unknown>;
   const ownerId = normalizeBoundedString(record.ownerId, fallback?.ownerId, 120, "claim owner");
+  const sessionKey = normalizeOptionalString(record.sessionKey) ?? fallback?.sessionKey;
   const token = normalizeBoundedString(record.token, fallback?.token, 160, "claim token");
   const claimedAt = normalizeTimestamp(record.claimedAt, fallback?.claimedAt ?? Date.now());
   const lastHeartbeatAt = normalizeTimestamp(
@@ -875,6 +892,7 @@ function normalizeClaim(value: unknown, fallback?: WorkboardClaim): WorkboardCla
   }
   return {
     ownerId,
+    ...(sessionKey ? { sessionKey } : {}),
     token,
     claimedAt,
     lastHeartbeatAt,
@@ -890,6 +908,8 @@ function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAction | 
   const kind =
     record.kind === "claim" ||
     record.kind === "unblock" ||
+    record.kind === "promote" ||
+    record.kind === "reclaim" ||
     record.kind === "reassign" ||
     record.kind === "add_proof" ||
     record.kind === "open_session"
@@ -975,6 +995,7 @@ export function normalizeProofInput(input: WorkboardProofInput, now: number): Wo
   return {
     id: randomUUID(),
     status: normalizeProofStatus(input.status, "unknown"),
+    verification: normalizeProofVerification(input.verification, "worker_reported"),
     createdAt: now,
     ...(label ? { label } : {}),
     ...(command ? { command } : {}),
@@ -984,7 +1005,7 @@ export function normalizeProofInput(input: WorkboardProofInput, now: number): Wo
 }
 
 function completionProofConflicts(existing: WorkboardProof, completion: WorkboardProof): boolean {
-  return (["label", "command", "url", "note"] as const).some(
+  return (["verification", "label", "command", "url", "note"] as const).some(
     (field) => completion[field] !== undefined && completion[field] !== existing[field],
   );
 }

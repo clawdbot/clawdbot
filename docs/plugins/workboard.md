@@ -137,6 +137,29 @@ task keeps the card's lifecycle active; a finished, failed, timed-out, or
 cancelled task moves the card toward `review` or `blocked` using the same sync
 rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 
+## Claim and session discipline
+
+Manual claims are leases, not a substitute for a worker session. When an agent
+tool has a session context, `workboard_claim` records that session on the claim
+so the dashboard and recovery flows can identify where work started. A manual
+worker must keep the lease alive with `workboard_heartbeat` and end it with
+exactly one of `workboard_complete`, `workboard_block`, or `workboard_release`,
+including an intentional handoff. If work moves to another session, release or
+reclaim the old lease before continuing.
+
+Use `status=review` when completing work that is awaiting acceptance, and use
+`blocked` for approval, dependency, or execution blockers. Use `done` only after
+acceptance and attach formal proof, an artifact, or an attachment. Keep
+long-horizon commitments in the system's durable planning record, and keep
+inactive Workboard cards unassigned in `backlog`/`todo` rather than claiming them
+early.
+
+An operator may coordinate while independent child cards run in separate worker
+lanes. The dispatcher gives each card its own deterministic session but starts at
+most one card per owner/agent lane per pass, so safe parallelism comes from
+independent compatible lanes and isolated workspaces—not multiple claims in one
+session or duplicated owner identities.
+
 ## Agent tools
 
 | Tool                                                                                                                                             | Purpose                                                                                                                                                                                   |
@@ -163,8 +186,10 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
 
-Proof statuses are worker-reported outcomes, not independent verification. A `passed`
-entry means the worker reports that its command or check succeeded; consumers that need
+Proof statuses are caller-reported outcomes, not automatic independent verification. Each
+proof has `verification=worker_reported` by default; `independently_verified` is a
+caller-declared provenance label and is not a system attestation. A `passed` entry means
+the worker or verifier reports that its command or check succeeded; consumers that need
 an independent quality gate should inspect the attached command, URL, or artifact and
 run their own verifier. `workboard_proof` returns the new record's `proofId`. When
 `workboard_complete` reports that same proof's terminal status, pass `proofId` so the
@@ -172,6 +197,12 @@ pending record is resolved in place without losing its identity or timestamp. A 
 already has the same terminal status is reused unchanged. Completion proof without
 `proofId` remains append-only, so a later retry cannot rewrite older history merely because
 its command or note is identical.
+
+`done` means manual operator acceptance by default; it does not mean that proof was
+independently validated. Workboard surfaces `missing_proof` when a `review` or `done` card
+has no evidence, `stale_proof` when the latest proof predates the current attempt, and
+`contradictory_proof` when a `done` card's latest proof is marked `failed`. These are
+diagnostics, not fail-closed lifecycle gates.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an

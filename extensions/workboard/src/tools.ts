@@ -19,6 +19,13 @@ function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
   );
 }
 
+function contextSessionKey(ctx: OpenClawPluginToolContext | undefined): string | undefined {
+  const record = (ctx ?? {}) as Record<string, unknown>;
+  return typeof record.sessionKey === "string" && record.sessionKey.trim()
+    ? record.sessionKey
+    : undefined;
+}
+
 function canMutateCard(card: WorkboardCard, ownerId: string, token?: string): boolean {
   const claim = card.metadata?.claim;
   return !claim || claim.ownerId === ownerId || safeEqualSecret(token, claim.token);
@@ -83,10 +90,17 @@ async function requireClaimedCard(
 }
 
 function summarizeCard(card: WorkboardCard) {
+  const latestProof = card.metadata?.proof?.at(-1);
   return {
     id: card.id,
     title: card.title,
     status: card.status,
+    acceptance:
+      card.status === "done"
+        ? "manual_operator_acceptance"
+        : card.status === "review"
+          ? "awaiting_manual_operator_acceptance"
+          : undefined,
     priority: card.priority,
     agentId: card.agentId,
     tenant: card.metadata?.automation?.tenant,
@@ -100,12 +114,21 @@ function summarizeCard(card: WorkboardCard) {
     claim: card.metadata?.claim
       ? {
           ownerId: card.metadata.claim.ownerId,
+          sessionKey: card.metadata.claim.sessionKey,
           claimedAt: card.metadata.claim.claimedAt,
           lastHeartbeatAt: card.metadata.claim.lastHeartbeatAt,
           expiresAt: card.metadata.claim.expiresAt,
         }
       : undefined,
     diagnostics: card.metadata?.diagnostics,
+    latestProof: latestProof
+      ? {
+          id: latestProof.id,
+          status: latestProof.status,
+          verification: latestProof.verification,
+        }
+      : undefined,
+    attachmentCount: card.metadata?.attachments?.length,
     archivedAt: card.metadata?.archivedAt,
     updatedAt: card.updatedAt,
   };
@@ -145,11 +168,11 @@ function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolC
 }
 
 function redactedCardResult(card: WorkboardCard) {
-  return jsonResult({ card: redactClaimToken(card) });
+  return jsonResult({ card: summarizeCard(card) });
 }
 
 function redactedRawCardResult(card: WorkboardCard) {
-  return jsonResult(redactClaimToken(card));
+  return jsonResult(summarizeCard(card));
 }
 
 function redactedProofResult(card: WorkboardCard) {
@@ -158,8 +181,15 @@ function redactedProofResult(card: WorkboardCard) {
     throw new Error("proof was not retained in card metadata.");
   }
   return jsonResult({
-    card: redactClaimToken(card),
+    card: summarizeCard(card),
     proofId,
+  });
+}
+
+function redactedAttachmentResult(card: WorkboardCard) {
+  return jsonResult({
+    card: summarizeCard(card),
+    attachmentId: card.metadata?.attachments?.at(-1)?.id,
   });
 }
 
@@ -178,6 +208,7 @@ export function createWorkboardTools(params: {
 }): AnyAgentTool[] {
   const store = params.store ?? WorkboardStore.openSqlite();
   const ownerId = contextOwner(params.context);
+  const sessionKey = contextSessionKey(params.context);
   const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
     const input = readCardToolParams(rawParams, ownerId);
     await requireScopedCard(store, input.id, ownerId, input.token);
@@ -293,7 +324,7 @@ export function createWorkboardTools(params: {
         const record = rawParams as Record<string, unknown>;
         readParentIds(record.parents);
         return jsonResult({
-          card: redactClaimToken(
+          card: summarizeCard(
             await store.create(record, { ownerId, token: record.token as string | undefined }),
           ),
         });
@@ -320,7 +351,7 @@ export function createWorkboardTools(params: {
         const childId = readStringParam(record, "childId", { required: true });
         const token = record.token as string | undefined;
         return jsonResult({
-          card: redactClaimToken(await store.linkCards(parentId, childId, { ownerId, token })),
+          card: summarizeCard(await store.linkCards(parentId, childId, { ownerId, token })),
         });
       },
     },
@@ -360,9 +391,10 @@ export function createWorkboardTools(params: {
         const id = readStringParam(record, "id", { required: true });
         const claimed = await store.claim(id, {
           ownerId,
+          sessionKey,
           ttlSeconds: record.ttlSeconds,
         });
-        return jsonResult({ ...claimed, card: redactClaimToken(claimed.card) });
+        return jsonResult({ ...claimed, card: summarizeCard(claimed.card) });
       },
     },
     {
@@ -434,12 +466,18 @@ export function createWorkboardTools(params: {
       name: "workboard_proof",
       label: "Workboard Proof",
       description:
-        "Attach proof or artifact metadata to a Workboard card after running tests, checks, or producing screenshots/logs. Returns proofId; pass it to workboard_complete when that call reports the terminal status for this proof.",
+        "Attach caller-reported proof or artifact metadata to a Workboard card. Set verification=independently_verified only when a separate verifier has checked the evidence; the field is not a system attestation. Returns proofId; pass it to workboard_complete when that call reports the terminal status for this proof.",
       parameters: Type.Object(
         {
           id: cardIdField(),
           status: Type.Optional(
             Type.String({ description: "passed, failed, skipped, or unknown." }),
+          ),
+          verification: Type.Optional(
+            Type.Union([Type.Literal("worker_reported"), Type.Literal("independently_verified")], {
+              description:
+                "Proof provenance; defaults to worker_reported and is caller-reported, not an attestation.",
+            }),
           ),
           label: Type.Optional(Type.String({ description: "Proof label." })),
           command: Type.Optional(Type.String({ description: "Command or exact step run." })),
@@ -476,11 +514,16 @@ export function createWorkboardTools(params: {
       name: "workboard_complete",
       label: "Workboard Complete",
       description:
-        "Complete a claimed Workboard card with a structured summary, proof, artifacts, and created-card manifest.",
+        "Complete a claimed Workboard card with a structured summary, proof, artifacts, and created-card manifest. done means manual operator acceptance, not independent validation; use status=review when acceptance is still pending.",
       parameters: Type.Object(
         {
           id: cardIdField(),
           token: claimTokenField(),
+          status: Type.Optional(
+            Type.Union([Type.Literal("review"), Type.Literal("done")], {
+              description: "Use review when acceptance is still pending; defaults to done.",
+            }),
+          ),
           summary: Type.Optional(Type.String({ description: "Completion summary." })),
           proofId: Type.Optional(
             Type.String({
@@ -493,6 +536,15 @@ export function createWorkboardTools(params: {
               {
                 status: Type.Optional(
                   Type.String({ description: "passed, failed, skipped, or unknown." }),
+                ),
+                verification: Type.Optional(
+                  Type.Union(
+                    [Type.Literal("worker_reported"), Type.Literal("independently_verified")],
+                    {
+                      description:
+                        "Proof provenance; defaults to worker_reported and is caller-reported, not an attestation.",
+                    },
+                  ),
                 ),
                 label: Type.Optional(Type.String({ description: "Proof label." })),
                 command: Type.Optional(Type.String({ description: "Command or step run." })),
@@ -545,7 +597,7 @@ export function createWorkboardTools(params: {
       ),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(await store.addAttachment(id, record, scope));
+        return redactedAttachmentResult(await store.addAttachment(id, record, scope));
       },
     },
     {
@@ -717,7 +769,7 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const id = readStringParam(rawParams as Record<string, unknown>, "id", { required: true });
         const result = await store.runs(id);
-        return jsonResult({ ...result, card: redactClaimToken(result.card) });
+        return jsonResult({ ...result, card: summarizeCard(result.card) });
       },
     },
     {
@@ -760,7 +812,7 @@ export function createWorkboardTools(params: {
         const id = readStringParam(record, "id", { required: true });
         await requireScopedCard(store, id, ownerId, record.token as string | undefined);
         return jsonResult({
-          card: redactClaimToken(await store.specify(id, record, { ownerId, token: record.token })),
+          card: summarizeCard(await store.specify(id, record, { ownerId, token: record.token })),
         });
       },
     },
@@ -820,8 +872,8 @@ export function createWorkboardTools(params: {
         await requireScopedCard(store, id, ownerId, record.token as string | undefined);
         const result = await store.decompose(id, record, { ownerId, token: record.token });
         return jsonResult({
-          parent: redactClaimToken(result.parent),
-          children: result.children.map(redactClaimToken),
+          parent: summarizeCard(result.parent),
+          children: result.children.map(summarizeCard),
         });
       },
     },
@@ -986,10 +1038,10 @@ export function createWorkboardTools(params: {
         const result = await store.dispatch({ boardId: record.boardId });
         return jsonResult({
           ...result,
-          promoted: result.promoted.map(redactClaimToken),
-          reclaimed: result.reclaimed.map(redactClaimToken),
-          blocked: result.blocked.map(redactClaimToken),
-          orchestrated: result.orchestrated.map(redactClaimToken),
+          promoted: result.promoted.map(summarizeCard),
+          reclaimed: result.reclaimed.map(summarizeCard),
+          blocked: result.blocked.map(summarizeCard),
+          orchestrated: result.orchestrated.map(summarizeCard),
         });
       },
     },

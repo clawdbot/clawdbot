@@ -128,7 +128,9 @@ export function workboardCardMatchesHealthKey(
     case "readyUnassigned":
       return card.status === "ready" && !card.agentId?.trim() && !card.metadata?.claim;
     case "missingProof":
-      return card.status === "done" && !hasWorkboardProofEvidence(card);
+      return (
+        (card.status === "done" || card.status === "review") && !hasWorkboardProofEvidence(card)
+      );
     case "failedAttempts":
       return countCardFailedAttempts(card) > 0 || taskFailedTerminal(task);
   }
@@ -164,7 +166,9 @@ export function filterWorkboardCardsForPreset(params: {
       case "stale":
         return Boolean(card.metadata?.stale) || lifecycle.state === "stale";
       case "missing_proof":
-        return card.status === "done" && !hasWorkboardProofEvidence(card);
+        return (
+          (card.status === "done" || card.status === "review") && !hasWorkboardProofEvidence(card)
+        );
       case "recently_done":
         return cardRecentlyDone(card);
     }

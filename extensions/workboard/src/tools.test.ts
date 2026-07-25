@@ -200,8 +200,9 @@ describe("workboard tools", () => {
     );
     expect(claimed.card).toMatchObject({
       status: "running",
-      metadata: { claim: { ownerId: "main", token: "[redacted]" } },
+      claim: { ownerId: "main" },
     });
+    expect(claimed.card).not.toHaveProperty("metadata");
     const token = (claimed.token as string | undefined) ?? "";
 
     const heartbeat = readPayload(
@@ -210,13 +211,15 @@ describe("workboard tools", () => {
         ?.execute("call-2", { id: "card-1", token, note: "alive" }),
     );
     expect(heartbeat).toMatchObject({
-      metadata: { comments: [expect.objectContaining({ body: "alive" })] },
+      status: "running",
+      claim: { ownerId: "main" },
     });
 
     const read = readPayload(
       await byName.get("workboard_read")?.execute("call-3", { id: "card-1" }),
     );
     expect(read.workerContext).toContain("Ship coordination");
+    expect(read.workerContext).toContain("alive");
     expect(read.card).toMatchObject({ metadata: { claim: { token: "[redacted]" } } });
 
     const released = readPayload(
@@ -225,7 +228,7 @@ describe("workboard tools", () => {
         ?.execute("call-4", { id: "card-1", token, status: "review" }),
     );
     expect(released).toMatchObject({ status: "review" });
-    expect((released.metadata as { claim?: unknown } | undefined)?.claim).toBeUndefined();
+    expect(released.claim).toBeUndefined();
 
     const list = readPayload(await byName.get("workboard_list")?.execute("call-5", {}));
     expect(list.cards).toEqual([expect.objectContaining({ id: "card-1" })]);
@@ -251,7 +254,7 @@ describe("workboard tools", () => {
       createWorkboardTools({
         api,
         store,
-        context: { agentId: "main" } as never,
+        context: { agentId: "main", sessionKey: "agent:main:session:parent" } as never,
       }).map((tool) => [tool.name, tool]),
     );
     const otherTools = new Map(
@@ -268,6 +271,28 @@ describe("workboard tools", () => {
     await expect(
       otherTools.get("workboard_claim")?.execute("call-2", { id: card.id }),
     ).rejects.toThrow(/already claimed/);
+  });
+
+  it("returns compact mutation envelopes instead of replaying card history", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const tools = new Map(
+      createWorkboardTools({ api, store, context: { agentId: "main" } as never }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+
+    const result = readPayload(
+      await tools.get("workboard_create")?.execute("compact-create", {
+        title: "Compact response",
+        notes: "n".repeat(4_000),
+      }),
+    );
+
+    expect(result.card).toMatchObject({ title: "Compact response", status: "todo" });
+    expect(result.card).not.toHaveProperty("notes");
+    expect(JSON.stringify(result).length).toBeLessThan(3_000);
   });
 
   it("requires claim scope before creating or linking dependencies against claimed cards", async () => {
@@ -364,7 +389,7 @@ describe("workboard tools", () => {
       createWorkboardTools({
         api,
         store,
-        context: { agentId: "main" } as never,
+        context: { agentId: "main", sessionKey: "agent:main:session:parent" } as never,
       }).map((tool) => [tool.name, tool]),
     );
 
@@ -409,11 +434,15 @@ describe("workboard tools", () => {
       await tools.get("workboard_claim")?.execute("call-3", { id: parent.id }),
     );
     const token = claimed.token as string;
+    expect(claimed.card).toMatchObject({
+      claim: { sessionKey: "agent:main:session:parent" },
+    });
     const pendingProof = readPayload(
       await tools.get("workboard_proof")?.execute("call-proof", {
         id: parent.id,
         token,
         command: "pnpm test extensions/workboard",
+        verification: "independently_verified",
       }),
     );
     expect(pendingProof.proofId).toEqual(expect.any(String));
@@ -424,13 +453,23 @@ describe("workboard tools", () => {
         summary: "Done.",
         createdCardIds: [child.id],
         proofId: pendingProof.proofId,
-        proof: { status: "passed", command: "pnpm test extensions/workboard" },
+        proof: {
+          status: "passed",
+          command: "pnpm test extensions/workboard",
+          verification: "independently_verified",
+        },
       }),
     );
     expect(completed.card).toMatchObject({
       status: "done",
-      metadata: { proof: [{ id: pendingProof.proofId, status: "passed" }] },
+      acceptance: "manual_operator_acceptance",
+      latestProof: {
+        id: pendingProof.proofId,
+        status: "passed",
+        verification: "independently_verified",
+      },
     });
+    expect(completed.card).not.toHaveProperty("metadata");
 
     const dispatch = readPayload(await tools.get("workboard_dispatch")?.execute("call-5", {}));
     expect(dispatch.promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
@@ -474,10 +513,11 @@ describe("workboard tools", () => {
     const dispatch = readPayload(await tools.get("workboard_dispatch")?.execute("call-1", {}));
 
     const promoted = dispatch.promoted as Array<{
-      metadata?: { claim?: { token?: string } };
+      claim?: { ownerId?: string; token?: string };
     }>;
     expect(promoted).toEqual([expect.objectContaining({ id: card.id })]);
-    expect(promoted[0]?.metadata?.claim?.token).toBe("[redacted]");
+    expect(promoted[0]?.claim?.ownerId).toBe("main");
+    expect(promoted[0]?.claim).not.toHaveProperty("token");
   });
 
   it("exposes board lifecycle, decomposition, runs, and notification tools", async () => {
@@ -590,12 +630,9 @@ describe("workboard tools", () => {
         contentBase64: Buffer.from("done").toString("base64"),
       }),
     );
-    expect(attached.card).toMatchObject({
-      metadata: { attachments: [expect.objectContaining({ fileName: "result.txt" })] },
-    });
-    const attachments = (attached.card as { metadata: { attachments: Array<{ id: string }> } })
-      .metadata.attachments;
-    const attachmentId = expectDefined(attachments[0], "workboard attachment").id;
+    expect(attached.card).toMatchObject({ id: parent.id });
+    expect(attached.card).not.toHaveProperty("metadata");
+    const attachmentId = expectDefined(attached.attachmentId, "workboard attachment");
     const attachment = readPayload(
       await tools.get("workboard_attachment_read")?.execute("call-attachment-read", {
         id: attachmentId,

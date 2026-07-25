@@ -13,6 +13,7 @@ import {
   WORKBOARD_LINK_TYPES,
   WORKBOARD_NOTIFICATION_KINDS,
   WORKBOARD_PROOF_STATUSES,
+  WORKBOARD_PROOF_VERIFICATIONS,
   WORKBOARD_STATUSES,
   WORKBOARD_TEMPLATE_IDS,
   type WorkboardArtifact,
@@ -36,6 +37,7 @@ import {
   type WorkboardNotificationKind,
   type WorkboardProof,
   type WorkboardProofStatus,
+  type WorkboardProofVerification,
   type WorkboardRunAttempt,
   type WorkboardStatus,
   type WorkboardTemplateId,
@@ -215,6 +217,11 @@ export function normalizeMetadata(value: unknown): WorkboardMetadata | undefined
             status: WORKBOARD_PROOF_STATUSES.includes(entry.status as WorkboardProofStatus)
               ? (entry.status as WorkboardProofStatus)
               : "unknown",
+            verification: WORKBOARD_PROOF_VERIFICATIONS.includes(
+              entry.verification as WorkboardProofVerification,
+            )
+              ? (entry.verification as WorkboardProofVerification)
+              : "worker_reported",
             createdAt: entry.createdAt,
             ...(typeof entry.label === "string" ? { label: entry.label } : {}),
             ...(typeof entry.command === "string" ? { command: entry.command } : {}),

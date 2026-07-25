@@ -303,7 +303,7 @@ describe("WorkboardStore", () => {
         );
         INSERT INTO workboard_boards SELECT * FROM workboard_boards_strict;
         DROP TABLE workboard_boards_strict;
-        DELETE FROM workboard_schema_migrations WHERE id = 'schema-3';
+        DELETE FROM workboard_schema_migrations WHERE id = 'schema-4';
         INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
         VALUES ('schema-2', 1);
       `);
@@ -329,7 +329,7 @@ describe("WorkboardStore", () => {
         ).toEqual({ strict: 1 });
         expect(
           migrated
-            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+            .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
             .get(),
         ).toEqual({ found: 1 });
       } finally {
@@ -1144,6 +1144,7 @@ describe("WorkboardStore", () => {
     const proof = {
       id: "proof-passed",
       status: "passed" as const,
+      verification: "worker_reported" as const,
       createdAt: 1_000,
       command: "pnpm test extensions/workboard",
     };
@@ -1438,12 +1439,19 @@ describe("WorkboardStore", () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Coordinate worker", status: "todo" });
 
-    const claimed = await store.claim(card.id, { ownerId: "main", ttlSeconds: 60 });
+    const claimed = await store.claim(card.id, {
+      ownerId: "main",
+      sessionKey: "agent:main:session:coordinate-worker",
+      ttlSeconds: 60,
+    });
 
     expect(claimed.token).toBeTruthy();
     expect(claimed.card.status).toBe("running");
     expect(claimed.card.agentId).toBe("main");
-    expect(claimed.card.metadata?.claim).toMatchObject({ ownerId: "main" });
+    expect(claimed.card.metadata?.claim).toMatchObject({
+      ownerId: "main",
+      sessionKey: "agent:main:session:coordinate-worker",
+    });
 
     await expect(store.claim(card.id, { ownerId: "other" })).rejects.toThrow(/already claimed/);
 
@@ -2415,6 +2423,84 @@ describe("WorkboardStore", () => {
     expect(updated.metadata?.diagnostics).toBeUndefined();
   });
 
+  it("does not clear a missing-proof diagnostic when completion adds no evidence", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Complete without evidence",
+      status: "running",
+      metadata: {
+        diagnostics: [
+          {
+            kind: "missing_proof",
+            severity: "warning",
+            title: "Done card has no proof",
+            detail: "The card is marked done without proof or an attached artifact.",
+            firstSeenAt: 1,
+            lastSeenAt: 1,
+            count: 1,
+            actions: [{ kind: "add_proof", label: "Add proof" }],
+          },
+        ],
+      },
+    });
+
+    const completed = await store.complete(card.id, { summary: "No test evidence supplied." });
+
+    expect(completed.status).toBe("done");
+    expect(completed.metadata?.diagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "missing_proof" })]),
+    );
+  });
+
+  it("can complete work into review while acceptance is pending", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Awaiting acceptance", status: "running" });
+
+    const reviewed = await store.complete(card.id, {
+      status: "review",
+      summary: "Implementation is ready for acceptance.",
+    });
+
+    expect(reviewed.status).toBe("review");
+    expect(reviewed.metadata?.claim).toBeUndefined();
+  });
+
+  it("surfaces stale and contradictory proof without blocking manual acceptance", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const stale = await store.create({
+      title: "Stale proof",
+      status: "done",
+      startedAt: 2_000,
+      metadata: {
+        proof: [{ id: "stale-proof", status: "passed", createdAt: 1_000 }],
+      },
+    });
+    const contradictory = await store.create({
+      title: "Failed proof accepted",
+      status: "done",
+      metadata: {
+        proof: [{ id: "failed-proof", status: "failed", createdAt: 2_000 }],
+      },
+    });
+
+    await store.refreshDiagnostics(3_000);
+
+    await expect(store.get(stale.id)).resolves.toMatchObject({
+      status: "done",
+      metadata: {
+        diagnostics: expect.arrayContaining([expect.objectContaining({ kind: "stale_proof" })]),
+      },
+    });
+    await expect(store.get(contradictory.id)).resolves.toMatchObject({
+      status: "done",
+      metadata: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ kind: "contradictory_proof" }),
+        ]),
+      },
+    });
+  });
+
   it("clears resolved proof diagnostics when adding an artifact", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
@@ -2497,7 +2583,10 @@ describe("WorkboardStore", () => {
     await expect(store.get(running.id)).resolves.toMatchObject({
       metadata: {
         diagnostics: expect.arrayContaining([
-          expect.objectContaining({ kind: "running_without_heartbeat" }),
+          expect.objectContaining({
+            kind: "running_without_heartbeat",
+            actions: expect.arrayContaining([expect.objectContaining({ kind: "reclaim" })]),
+          }),
           expect.objectContaining({ kind: "orphaned_session" }),
         ]),
       },
@@ -2513,6 +2602,43 @@ describe("WorkboardStore", () => {
     await expect(store.get(doneWithAttachment.id)).resolves.not.toMatchObject({
       metadata: {
         diagnostics: expect.arrayContaining([expect.objectContaining({ kind: "missing_proof" })]),
+      },
+    });
+  });
+
+  it("preserves promote and reclaim diagnostic actions through store normalization", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Diagnostic actions",
+      metadata: {
+        diagnostics: [
+          {
+            kind: "running_without_heartbeat",
+            severity: "error",
+            title: "Stale worker",
+            detail: "The worker needs recovery.",
+            firstSeenAt: 1,
+            lastSeenAt: 2,
+            count: 1,
+            actions: [
+              { kind: "promote", label: "Promote card" },
+              { kind: "reclaim", label: "Reclaim stale work" },
+            ],
+          },
+        ],
+      },
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: {
+        diagnostics: [
+          {
+            actions: [
+              { kind: "promote", label: "Promote card" },
+              { kind: "reclaim", label: "Reclaim stale work" },
+            ],
+          },
+        ],
       },
     });
   });
@@ -2715,6 +2841,30 @@ describe("WorkboardStore", () => {
     expect(stopped.execution).toBeUndefined();
     expect(stopped.metadata?.attempts).toEqual([expect.objectContaining({ status: "stopped" })]);
     expect(stopped.metadata?.failureCount).toBeUndefined();
+
+    const stale = await store.create({
+      title: "Stale diagnostic recovery",
+      status: "running",
+      sessionKey: "agent:main:stale-session",
+    });
+    await store.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);
+    await expect(store.get(stale.id)).resolves.toMatchObject({
+      metadata: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ kind: "running_without_heartbeat" }),
+          expect.objectContaining({ kind: "orphaned_session" }),
+        ]),
+      },
+    });
+
+    const reclaimedStale = await store.reclaim(stale.id, { reason: "replace stale worker" }, null);
+    expect(reclaimedStale.status).toBe("ready");
+    expect(reclaimedStale.metadata?.diagnostics ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "running_without_heartbeat" })]),
+    );
+    expect(reclaimedStale.metadata?.diagnostics ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "orphaned_session" })]),
+    );
   });
 
   it("includes parent results and recent assignee work in worker context", async () => {

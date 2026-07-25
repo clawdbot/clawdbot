@@ -2463,7 +2463,7 @@ describe("workboard controller", () => {
         tasksByCardId: new Map(),
         sessions: [],
       }).map((card) => card.id),
-    ).toEqual(["done", "old-done"]);
+    ).toEqual(["review", "done", "old-done"]);
     expect(
       filterWorkboardCardsForPreset({
         cards,

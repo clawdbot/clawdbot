@@ -24,7 +24,7 @@ export function claimTokenField(description = "Claim token returned by workboard
 export function createWorkboardMoveTool(params: {
   store: WorkboardStore;
   readScopedCardToolParams: (rawParams: unknown) => Promise<ScopedMoveParams>;
-  redactedCardResult: (card: WorkboardCard) => AgentToolResult<{ card: WorkboardCard }>;
+  redactedCardResult: (card: WorkboardCard) => AgentToolResult<unknown>;
 }): AnyAgentTool {
   return {
     name: "workboard_move",

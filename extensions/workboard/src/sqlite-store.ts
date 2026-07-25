@@ -30,7 +30,7 @@ import type {
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
@@ -254,6 +254,7 @@ const WORKBOARD_SCHEMA_SQL = `
       card_id TEXT NOT NULL REFERENCES workboard_cards(id) ON DELETE CASCADE,
       ordinal INTEGER NOT NULL,
       status TEXT NOT NULL,
+      verification TEXT NOT NULL DEFAULT 'worker_reported',
       label TEXT,
       command TEXT,
       url TEXT,
@@ -358,6 +359,12 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
     "workboard_cards",
     "lifecycle_status_source_updated_at",
     "lifecycle_status_source_updated_at INTEGER",
+  );
+  ensureColumn(
+    db,
+    "workboard_card_proof",
+    "verification",
+    "verification TEXT NOT NULL DEFAULT 'worker_reported'",
   );
   const migrationId = `schema-${SCHEMA_VERSION}`;
   const current = db
@@ -564,6 +571,8 @@ function readMetadata(db: DatabaseSync, row: Row): WorkboardMetadata | undefined
     const entry: WorkboardProof = {
       id: requiredString(child, "id"),
       status: requiredString(child, "status") as WorkboardProof["status"],
+      verification: (stringValue(child, "verification") ??
+        "worker_reported") as WorkboardProof["verification"],
       createdAt: requiredNumber(child, "created_at"),
     };
     const label = stringValue(child, "label");
@@ -946,14 +955,15 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
     db.prepare(
       `
         INSERT INTO workboard_card_proof
-          (id, card_id, ordinal, status, label, command, url, note, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, card_id, ordinal, status, verification, label, command, url, note, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     ).run(
       entry.id,
       card.id,
       ordinal,
       entry.status,
+      entry.verification,
       bindNull(entry.label),
       bindNull(entry.command),
       bindNull(entry.url),

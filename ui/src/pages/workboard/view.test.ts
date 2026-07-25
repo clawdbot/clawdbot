@@ -2555,6 +2555,7 @@ describe("renderWorkboard", () => {
           proof: Array.from({ length: 7 }, (_, index) => ({
             id: `proof-${index + 1}`,
             status: "passed",
+            verification: "worker_reported",
             command: `pnpm test ${index + 1}`,
             url: `https://example.com/proof-${index + 1}`,
             createdAt: 5 + index,
