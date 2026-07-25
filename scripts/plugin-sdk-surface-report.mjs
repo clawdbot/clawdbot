@@ -148,7 +148,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // +1: session-discussion binds one external discussion provider to sessions.
       // +1: focused media-local-roots replacement for the legacy agent-media facade.
-      141,
+      // +1: account-aware channel DM policy setup descriptors.
+      142,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -173,7 +174,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: canonical session delivery normalization, access, and projection helpers.
       // +5: focused media-local-roots helpers and typed hook media contracts.
       // +1: model-independent agent-harness preflight failure contract.
-      4717,
+      // +3: channel DM policy factory and its account/patch callback contracts.
+      4720,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -195,7 +197,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: canonical unknown-value to Error coercion.
       // +6: canonical session delivery normalization, access, and projection helpers.
       // +2: focused media-local-roots helpers.
-      2857,
+      // +3: channel DM policy factory and its account/patch callbacks.
+      2860,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

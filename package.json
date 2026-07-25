@@ -816,6 +816,10 @@
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
     },
+    "./plugin-sdk/channel-dm-policy": {
+      "types": "./dist/plugin-sdk/channel-dm-policy.d.ts",
+      "default": "./dist/plugin-sdk/channel-dm-policy.js"
+    },
     "./plugin-sdk/dangerous-name-runtime": {
       "default": "./dist/plugin-sdk/dangerous-name-runtime.js"
     },
