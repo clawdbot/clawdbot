@@ -5148,7 +5148,11 @@ class ChatController internal constructor(
 
   private fun handleSessionsChangedEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-    if (observeSwarmEvent(payload)) return
+    val swarmEvent = observeSwarmEvent(payload)
+    val swarmSource = payload["session"].asObjectOrNull()
+    val swarmKindElement = if ("kind" in payload) payload["kind"] else swarmSource?.get("kind")
+    val swarmKind = swarmKindElement.asStringOrNull()?.trim()
+    if (swarmEvent && (swarmKind == "phase" || swarmKind == "log")) return
     val reason = payload["reason"].asStringOrNull()
     if (reason == "rewind" || reason == "branch-switch") {
       // Mutation events do not contain a session preview. Refresh the drawer even for a

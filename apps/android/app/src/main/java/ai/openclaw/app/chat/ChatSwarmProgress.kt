@@ -118,8 +118,8 @@ internal class ChatSwarmActivityTracker {
   fun observe(payload: JsonObject): Boolean {
     val source = payload["session"].asObjectOrNull() ?: payload
     val groupId = normalized(payload["swarmGroupId"].asStringOrNull()) ?: normalized(source["swarmGroupId"].asStringOrNull()) ?: return false
-    val kind = normalized(payload["kind"].asStringOrNull())
-    val text = normalized(payload["text"].asStringOrNull())
+    val kind = normalized((if ("kind" in payload) payload["kind"] else source["kind"]).asStringOrNull())
+    val text = normalized((if ("text" in payload) payload["text"] else source["text"]).asStringOrNull())
     if ((kind == "phase" || kind == "log") && text != null) {
       if (kind == "phase") {
         val rankKey = phaseRankKey(groupId, text)

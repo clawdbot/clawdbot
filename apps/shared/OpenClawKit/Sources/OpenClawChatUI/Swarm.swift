@@ -249,6 +249,11 @@ enum SelfContainedSwarmHelpers {
         return self.generatedGroupBelongsToParent(groupID, matchesParent: matchesParent)
     }
 
+    static func isActivityNote(_ event: OpenClawChatSessionsChangedEvent) -> Bool {
+        let kind = self.normalized(event.kind)
+        return kind == "phase" || kind == "log"
+    }
+
     static func eventBelongsToParent(
         _ event: OpenClawChatSessionsChangedEvent,
         matchesParent: (String) -> Bool) -> Bool
@@ -303,17 +308,58 @@ extension OpenClawChatViewModel {
         return true
     }
 
-    func refreshSwarmCapability(sessionSnapshot: SessionSnapshot? = nil) async {
+    func refreshSwarmCapability(
+        sessionSnapshot: SessionSnapshot? = nil,
+        retryAttempt: Int = 0) async
+    {
         let requestedKey = sessionSnapshot?.key ?? sessionKey
         guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
-        let enabled = await (try? transport.isSwarmEnabled(sessionKey: requestedKey)) == true
-        guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
-        swarmEnabled = enabled
-        guard enabled else {
-            self.resetSwarmProgress()
+        guard let routeLease = await transport.acquireSwarmRouteLease() else {
+            self.scheduleSwarmCapabilityRetry(
+                sessionKey: requestedKey,
+                sessionSnapshot: sessionSnapshot,
+                retryAttempt: retryAttempt)
             return
         }
-        await self.refreshSwarmSessions(sessionKey: requestedKey, sessionSnapshot: sessionSnapshot)
+        do {
+            let enabled = try await routeLease.isEnabled(sessionKey: requestedKey)
+            guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
+            swarmEnabled = enabled
+            guard enabled else {
+                self.resetSwarmProgress()
+                return
+            }
+            await self.refreshSwarmSessions(
+                sessionKey: requestedKey,
+                sessionSnapshot: sessionSnapshot,
+                routeLease: routeLease)
+        } catch {
+            guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
+            chatUILogger.debug("swarm capability refresh failed: \(error.localizedDescription, privacy: .public)")
+            self.scheduleSwarmCapabilityRetry(
+                sessionKey: requestedKey,
+                sessionSnapshot: sessionSnapshot,
+                retryAttempt: retryAttempt)
+        }
+    }
+
+    private func scheduleSwarmCapabilityRetry(
+        sessionKey requestedKey: String,
+        sessionSnapshot: SessionSnapshot?,
+        retryAttempt: Int)
+    {
+        guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey),
+              swarmRefreshRetryDelays.indices.contains(retryAttempt)
+        else { return }
+        let delay = swarmRefreshRetryDelays[retryAttempt]
+        swarmRefreshTask?.cancel()
+        swarmRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            await self?.refreshSwarmCapability(
+                sessionSnapshot: sessionSnapshot,
+                retryAttempt: retryAttempt + 1)
+        }
     }
 
     func scheduleSwarmRefresh() {
@@ -330,11 +376,56 @@ extension OpenClawChatViewModel {
     func refreshSwarmSessions(
         sessionKey requestedSessionKey: String? = nil,
         sessionSnapshot: SessionSnapshot? = nil,
+        routeLease: OpenClawChatSwarmRouteLease? = nil,
         retryAttempt: Int = 0) async
     {
         guard swarmEnabled else { return }
         let requestedKey = requestedSessionKey ?? sessionSnapshot?.key ?? sessionKey
         guard matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey) else { return }
+        let activeRouteLease: OpenClawChatSwarmRouteLease
+        if let routeLease {
+            activeRouteLease = routeLease
+        } else if let capturedRouteLease = await transport.acquireSwarmRouteLease() {
+            guard swarmEnabled,
+                  matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
+            else { return }
+            do {
+                let enabled = try await capturedRouteLease.isEnabled(sessionKey: requestedKey)
+                guard swarmEnabled,
+                      matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
+                else { return }
+                guard enabled else {
+                    swarmEnabled = false
+                    self.resetSwarmProgress()
+                    return
+                }
+            } catch {
+                guard swarmEnabled,
+                      matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
+                else { return }
+                self.scheduleSwarmSessionRetry(
+                    sessionKey: requestedKey,
+                    sessionSnapshot: sessionSnapshot,
+                    retryAttempt: retryAttempt)
+                return
+            }
+            guard swarmEnabled,
+                  matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
+            else { return }
+            activeRouteLease = capturedRouteLease
+        } else {
+            guard swarmEnabled,
+                  matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
+            else { return }
+            self.scheduleSwarmSessionRetry(
+                sessionKey: requestedKey,
+                sessionSnapshot: sessionSnapshot,
+                retryAttempt: retryAttempt)
+            return
+        }
+        guard swarmEnabled,
+              matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
+        else { return }
         if swarmSessionKey != sessionKey {
             swarmSessionKey = sessionKey
             swarmActivityState.clear()
@@ -343,7 +434,7 @@ extension OpenClawChatViewModel {
         swarmRefreshGeneration &+= 1
         let generation = swarmRefreshGeneration
         do {
-            let rows = try await transport.listChildSessions(parentKey: requestedKey)
+            let rows = try await activeRouteLease.listChildSessions(parentKey: requestedKey)
             guard generation == swarmRefreshGeneration,
                   swarmEnabled,
                   matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
@@ -355,17 +446,31 @@ extension OpenClawChatViewModel {
                   matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey)
             else { return }
             chatUILogger.debug("swarm child refresh failed: \(error.localizedDescription, privacy: .public)")
-            guard swarmRefreshRetryDelays.indices.contains(retryAttempt) else { return }
-            let delay = swarmRefreshRetryDelays[retryAttempt]
-            swarmRefreshTask?.cancel()
-            swarmRefreshTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(delay))
-                guard !Task.isCancelled else { return }
-                await self?.refreshSwarmSessions(
-                    sessionKey: requestedKey,
-                    sessionSnapshot: sessionSnapshot,
-                    retryAttempt: retryAttempt + 1)
-            }
+            self.scheduleSwarmSessionRetry(
+                sessionKey: requestedKey,
+                sessionSnapshot: sessionSnapshot,
+                retryAttempt: retryAttempt)
+        }
+    }
+
+    private func scheduleSwarmSessionRetry(
+        sessionKey requestedKey: String,
+        sessionSnapshot: SessionSnapshot?,
+        retryAttempt: Int)
+    {
+        guard swarmEnabled,
+              matchesCurrentSessionKey(incoming: requestedKey, current: sessionKey),
+              swarmRefreshRetryDelays.indices.contains(retryAttempt)
+        else { return }
+        let delay = swarmRefreshRetryDelays[retryAttempt]
+        swarmRefreshTask?.cancel()
+        swarmRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            await self?.refreshSwarmSessions(
+                sessionKey: requestedKey,
+                sessionSnapshot: sessionSnapshot,
+                retryAttempt: retryAttempt + 1)
         }
     }
 
@@ -409,7 +514,7 @@ private struct OpenClawChatSwarmGroupView: View {
                     .font(OpenClawChatTypography.captionSemiBold)
                     .lineLimit(1)
                 Text(verbatim: String(
-                    format: String(localized: "%lld Running · %lld Done · %lld Failed"),
+                    format: String(localized: "%1$lld Running · %2$lld Done · %3$lld Failed"),
                     Int64(self.group.running),
                     Int64(self.group.done),
                     Int64(self.group.failed)))
@@ -443,9 +548,12 @@ private struct OpenClawChatSwarmGroupView: View {
                             Text(verbatim: "+\(phase.hidden)")
                                 .font(OpenClawChatTypography.caption2)
                                 .foregroundStyle(.secondary)
-                                .accessibilityLabel(Text(verbatim: String(
-                                    format: String(localized: "%lld more workers"),
-                                    Int64(phase.hidden))))
+                                .accessibilityLabel(Text(
+                                    verbatim: phase.hidden == 1
+                                        ? String(localized: "1 more worker")
+                                        : String(
+                                            format: String(localized: "%1$lld more workers"),
+                                            Int64(phase.hidden))))
                         }
                     }
                 }

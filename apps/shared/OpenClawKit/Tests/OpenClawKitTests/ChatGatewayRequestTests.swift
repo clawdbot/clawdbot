@@ -521,6 +521,36 @@ struct ChatGatewayPayloadCodecTests {
         #expect(cleared?.lastRunErrorPresent == true)
     }
 
+    @Test func `session change decodes nested fallback with outer null precedence and no reason`() throws {
+        let data = Data("""
+        {
+          "sessionKey": null,
+          "status": null,
+          "session": {
+            "key": "agent:main:child",
+            "agentId": "main",
+            "parentSessionKey": "agent:main:parent",
+            "status": "running",
+            "lastRunError": null,
+            "hasActiveRun": true,
+            "swarmGroupId": "swarm:agent:main:parent:turn-1"
+          }
+        }
+        """.utf8)
+
+        let event = try JSONDecoder().decode(OpenClawChatSessionsChangedEvent.self, from: data)
+        #expect(event.reason.isEmpty)
+        #expect(event.sessionKey == nil)
+        #expect(event.agentId == "main")
+        #expect(event.parentSessionKey == "agent:main:parent")
+        #expect(event.status == nil)
+        #expect(event.statusPresent)
+        #expect(event.lastRunError == nil)
+        #expect(event.lastRunErrorPresent)
+        #expect(event.hasActiveRun == true)
+        #expect(event.swarmGroupId == "swarm:agent:main:parent:turn-1")
+    }
+
     @Test func `session change remains codable without exposing presence flags`() throws {
         let event = OpenClawChatSessionsChangedEvent(
             sessionKey: "agent:main:work",

@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -80,11 +81,12 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
         )
         Text(
           text =
-            verbatimText(
-              "${group.running} ${nativeString("Running")} · " +
-                "${group.done} ${nativeString("Done")} · " +
-                "${group.failed} ${nativeString("Failed")}",
-            ).resolveNativeTextResource(),
+            nativeString(
+              "\$running Running · \$done Done · \$failed Failed",
+              group.running,
+              group.done,
+              group.failed,
+            ),
           color = ClawTheme.colors.textMuted,
           style = ClawTheme.type.caption,
           maxLines = 1,
@@ -104,7 +106,7 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           Text(
             text = phase.title ?: nativeString("Unphased"),
-            modifier = Modifier.size(width = 64.dp, height = 18.dp),
+            modifier = Modifier.width(64.dp),
             color = ClawTheme.colors.textMuted,
             style = ClawTheme.type.caption,
             maxLines = 1,
@@ -118,7 +120,11 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
             phase.dots.forEach { dot -> ChatSwarmDotView(dot) }
             if (phase.hidden > 0) {
               val moreDescription =
-                verbatimText("${phase.hidden} ${nativeString("more workers")}").resolveNativeTextResource()
+                if (phase.hidden == 1) {
+                  nativeString("1 more worker")
+                } else {
+                  nativeString("\$count more workers", phase.hidden)
+                }
               Text(
                 text = verbatimText("+${phase.hidden}").resolveNativeTextResource(),
                 modifier = Modifier.semantics { contentDescription = moreDescription },

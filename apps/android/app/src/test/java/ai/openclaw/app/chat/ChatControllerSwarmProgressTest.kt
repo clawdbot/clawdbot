@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,6 +37,68 @@ class ChatControllerSwarmProgressTest {
 
       assertTrue("sessions.list" !in methods)
       assertTrue(controller.swarmGroups.value.isEmpty())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun swarmChildLifecycleStillUpdatesCanonicalSessionProjection() =
+    runTest {
+      val child =
+        """
+        {
+          "key":"agent:main:child",
+          "parentSessionKey":"main",
+          "swarmGroupId":"swarm:main:turn-1",
+          "status":"running"
+        }
+        """.trimIndent()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "sessions.list" -> """{"sessions":[$child],"totalCount":1,"hasMore":false}"""
+              else -> "{}"
+            }
+          },
+          cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
+          currentDefaultAgentId = { "main" },
+        )
+
+      controller.refreshSessions()
+      controller.refreshCommands()
+      advanceUntilIdle()
+      assertEquals(
+        "running",
+        controller.sessions.value
+          .single()
+          .status,
+      )
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """
+        {
+          "reason":"run-progress",
+          "session":{
+            "key":"agent:main:child",
+            "parentSessionKey":"main",
+            "swarmGroupId":"swarm:main:turn-1",
+            "status":"done"
+          }
+        }
+        """.trimIndent(),
+      )
+      runCurrent()
+
+      assertEquals(
+        "done",
+        controller.sessions.value
+          .single()
+          .status,
+      )
     }
 
   @Test

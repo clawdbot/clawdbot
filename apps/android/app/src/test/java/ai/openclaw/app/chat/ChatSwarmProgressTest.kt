@@ -51,6 +51,45 @@ class ChatSwarmProgressTest {
   }
 
   @Test
+  fun nestedActivityNotesDecorateChildren() {
+    val groupId = "swarm:agent:main:parent:turn-1"
+    val tracker = ChatSwarmActivityTracker()
+
+    assertTrue(
+      tracker.observe(
+        buildJsonObject {
+          put(
+            "session",
+            buildJsonObject {
+              put("sessionKey", JsonPrimitive("agent:main:parent"))
+              put("swarmGroupId", JsonPrimitive(groupId))
+              put("kind", JsonPrimitive("phase"))
+              put("text", JsonPrimitive("Research"))
+            },
+          )
+        },
+      ),
+    )
+    assertTrue(
+      tracker.observe(
+        buildJsonObject {
+          put("reason", JsonPrimitive("create"))
+          put(
+            "session",
+            buildJsonObject {
+              put("key", JsonPrimitive("agent:main:child"))
+              put("swarmGroupId", JsonPrimitive(groupId))
+            },
+          )
+        },
+      ),
+    )
+
+    val row = tracker.decorate(listOf(session("agent:main:child", "running", groupId))).single()
+    assertEquals("Research", row.swarmPhase)
+  }
+
+  @Test
   fun projectionMapsStatesAndHidesTerminalGroups() {
     val active = "swarm:agent:main:parent:active"
     val finished = "swarm:agent:main:parent:finished"

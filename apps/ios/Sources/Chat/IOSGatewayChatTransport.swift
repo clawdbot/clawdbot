@@ -68,6 +68,18 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
             sessionRoutingContract: routingContract))
     }
 
+    func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease? {
+        guard let route = await self.currentSessionMutationRoute() else { return nil }
+        let transport = self
+        return OpenClawChatSwarmRouteLease(
+            isEnabled: { sessionKey in
+                try await transport.isSwarmEnabled(sessionKey: sessionKey, ifCurrentRoute: route)
+            },
+            listChildSessions: { parentKey in
+                try await transport.listChildSessions(parentKey: parentKey, ifCurrentRoute: route)
+            })
+    }
+
     func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
         let route = await currentSessionMutationRoute()
         guard let route else { return nil }
@@ -307,6 +319,13 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+        try await self.listChildSessions(parentKey: parentKey, ifCurrentRoute: nil)
+    }
+
+    private func listChildSessions(
+        parentKey: String,
+        ifCurrentRoute route: GatewayNodeSessionRoute?) async throws -> [OpenClawChatSessionEntry]
+    {
         try await OpenClawChatChildSessionPager.collect { offset in
             let request = OpenClawChatGatewayRequests.sessionsList(
                 limit: 10000,
@@ -316,7 +335,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
                 spawnedBy: parentKey,
                 offset: offset,
                 configuredAgentsOnly: true)
-            let data = try await gateway.request(request)
+            let data = try await gateway.request(request, ifCurrentRoute: route)
             return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
         }
     }
@@ -327,10 +346,17 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func isSwarmEnabled(sessionKey: String) async throws -> Bool {
+        try await self.isSwarmEnabled(sessionKey: sessionKey, ifCurrentRoute: nil)
+    }
+
+    private func isSwarmEnabled(
+        sessionKey: String,
+        ifCurrentRoute route: GatewayNodeSessionRoute?) async throws -> Bool
+    {
         let request = OpenClawChatGatewayRequests.chatMetadata(
             sessionKey: sessionKey,
             fallbackAgentID: self.globalAgentId)
-        let response = try await gateway.request(request)
+        let response = try await gateway.request(request, ifCurrentRoute: route)
         return try JSONDecoder().decode(OpenClawChatMetadataCapabilities.self, from: response).swarmEnabled
     }
 
