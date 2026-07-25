@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -86,6 +87,30 @@ struct DashboardGatewaysBridgeTests {
         #expect(!script.contains("token"))
         #expect(!script.contains("password"))
     }
+
+    @Test func `dashboard controller retains profile TLS policy`() throws {
+        let url = try #require(URL(string: "https://gateway.example/control/"))
+        let params = GatewayTLSParams(
+            required: true,
+            expectedFingerprint: String(repeating: "a", count: 64),
+            allowTOFU: false,
+            storeKey: "profile:studio")
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            tlsParams: params,
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+
+        #expect(controller._testTLSParams == params)
+        #expect(DashboardWindowController.isExpectedTLSAuthority(
+            host: "gateway.example",
+            port: 443,
+            dashboardURL: url))
+        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+            host: "other.example",
+            port: 443,
+            dashboardURL: url))
+    }
 }
 
 @Suite(.serialized)
@@ -140,7 +165,7 @@ struct DashboardManagerGatewayTargetTests {
         #expect(!DashboardManager._testTargetIsAvailable(.profile("removed"), in: [primary]))
     }
 
-    @Test func `opening primary retargets profile main window without moving it`() async throws {
+    @Test func `opening primary creates isolated auxiliary window`() async throws {
         let state = AppStateStore.shared
         let originalMode = state.connectionMode
         state.connectionMode = .local
@@ -157,17 +182,34 @@ struct DashboardManagerGatewayTargetTests {
         controller.window?.setFrame(frame, display: false)
         controller.show()
         let manager = DashboardManager._testMake()
+        manager.configure(updater: DashboardGatewayTestUpdater())
         manager._testSetController(controller)
         manager._testSetMainTarget(.profile("studio"))
-        defer { manager._testController()?.closeDashboard() }
+        defer { manager.close() }
 
         await manager._testOpenWindow(for: .primary)
 
-        let replacement = try #require(manager._testController())
-        #expect(replacement !== controller)
-        #expect(manager._testMainTarget() == .primary)
-        #expect(replacement.window?.frame == frame)
+        #expect(manager._testController() === controller)
+        #expect(manager._testMainTarget() == .profile("studio"))
+        #expect(controller.window?.frame == frame)
+        let auxiliaryWindows = manager._testAuxiliaryWindows()
+        #expect(auxiliaryWindows.count == 1)
+        let auxiliary = try #require(auxiliaryWindows.first)
+        #expect(auxiliary.target == .primary)
+        #expect(auxiliary.controller !== controller)
+        #expect(auxiliary.controller.window?.frameAutosaveName != controller.window?.frameAutosaveName)
+        #expect(!auxiliary.controller._testUpdateBridgeAvailable)
     }
+}
+
+@MainActor
+private final class DashboardGatewayTestUpdater: UpdaterProviding {
+    var automaticallyChecksForUpdates = false
+    var automaticallyDownloadsUpdates = false
+    let isAvailable = true
+    let updateStatus = UpdateStatus()
+
+    func checkForUpdates(_: Any?) {}
 }
 
 @MainActor

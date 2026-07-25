@@ -9,7 +9,7 @@ private let dashboardManagerLogger = Logger(subsystem: "ai.openclaw", category: 
 final class DashboardManager {
     static let shared = DashboardManager()
 
-    private struct ProfileWindowInstance {
+    private struct AuxiliaryWindowInstance {
         var target: DashboardGatewayTarget
         var controller: DashboardWindowController
     }
@@ -17,14 +17,15 @@ final class DashboardManager {
     private struct WindowConfiguration {
         let url: URL
         let auth: DashboardWindowAuth
+        let tlsParams: GatewayTLSParams?
         let mode: AppState.ConnectionMode
         let displayName: String
     }
 
     private var controller: DashboardWindowController?
     private var mainTarget = DashboardGatewayTarget.primary
-    private var profileWindows: [UUID: ProfileWindowInstance] = [:]
-    private var profileWindowOrder: [UUID] = []
+    private var auxiliaryWindows: [UUID: AuxiliaryWindowInstance] = [:]
+    private var auxiliaryWindowOrder: [UUID] = []
     private var endpointTask: Task<Void, Never>?
     private var pendingOpenCommands: [DashboardNativeCommand] = []
     private var openForCommandTask: Task<Void, Never>?
@@ -312,9 +313,9 @@ final class DashboardManager {
 
     func close() {
         self.controller?.closeDashboard()
-        let controllers = self.profileWindows.values.map(\.controller)
-        self.profileWindows.removeAll()
-        self.profileWindowOrder.removeAll()
+        let controllers = self.auxiliaryWindows.values.map(\.controller)
+        self.auxiliaryWindows.removeAll()
+        self.auxiliaryWindowOrder.removeAll()
         for controller in controllers {
             controller.closeDashboard()
         }
@@ -390,7 +391,7 @@ final class DashboardManager {
             await self.switchTarget(.primary, in: controller)
             return
         }
-        if let invalid = self.profileWindows.values.first(where: {
+        if let invalid = self.auxiliaryWindows.values.first(where: {
             !Self.targetIsAvailable($0.target, in: entries)
         }) {
             await self.switchTarget(.primary, in: invalid.controller)
@@ -399,7 +400,7 @@ final class DashboardManager {
         if let controller, let snapshot = self.snapshot(for: self.mainTarget) {
             controller.updateGatewaySnapshot(snapshot)
         }
-        for instance in self.profileWindows.values {
+        for instance in self.auxiliaryWindows.values {
             if let snapshot = self.snapshot(for: instance.target) {
                 instance.controller.updateGatewaySnapshot(snapshot)
             }
@@ -408,7 +409,7 @@ final class DashboardManager {
 
     private func target(for source: DashboardWindowController) -> DashboardGatewayTarget? {
         if self.controller === source { return self.mainTarget }
-        return self.profileWindows.values.first { $0.controller === source }?.target
+        return self.auxiliaryWindows.values.first { $0.controller === source }?.target
     }
 
     private static func targetIsAvailable(
@@ -441,7 +442,8 @@ final class DashboardManager {
                 let replacement = self.makeController(
                     configuration: configuration,
                     target: target,
-                    windowAutosaveName: self.availableAutosaveName(for: target, replacing: source))
+                    windowAutosaveName: self.availableAutosaveName(for: target, replacing: source),
+                    auxiliary: false)
                 // In-place switches preserve the frame the user is viewing;
                 // target autosaves seed only newly opened windows.
                 if let frame { replacement.window?.setFrame(frame, display: false) }
@@ -451,7 +453,7 @@ final class DashboardManager {
                 } else {
                     replacement.loadInBackground(url: configuration.url, auth: configuration.auth)
                 }
-            } else if let windowID = self.profileWindows.first(where: { $0.value.controller === source })?.key {
+            } else if let windowID = self.auxiliaryWindows.first(where: { $0.value.controller === source })?.key {
                 let frame = source.window?.frame
                 let autosaveName = self.availableAutosaveName(for: target, replacing: source)
                 source.onClosed = nil
@@ -460,10 +462,11 @@ final class DashboardManager {
                 let replacement = self.makeController(
                     configuration: configuration,
                     target: target,
-                    windowAutosaveName: autosaveName)
+                    windowAutosaveName: autosaveName,
+                    auxiliary: true)
                 if let frame { replacement.window?.setFrame(frame, display: false) }
-                self.installProfileWindowCloseHandler(replacement, windowID: windowID)
-                self.profileWindows[windowID] = ProfileWindowInstance(target: target, controller: replacement)
+                self.installAuxiliaryWindowCloseHandler(replacement, windowID: windowID)
+                self.auxiliaryWindows[windowID] = AuxiliaryWindowInstance(target: target, controller: replacement)
                 if shouldPresent {
                     replacement.show(url: configuration.url, auth: configuration.auth)
                 } else {
@@ -477,35 +480,21 @@ final class DashboardManager {
     }
 
     private func openWindow(for target: DashboardGatewayTarget) async {
-        if target == .primary {
-            if let controller {
-                if self.mainTarget != .primary {
-                    await self.switchTarget(.primary, in: controller, present: true)
-                }
-                self.controller?.show()
-                return
-            }
-            do {
-                try await self.show()
-            } catch {
-                self.showFailure(error)
-            }
-            return
-        }
         do {
             let configuration = try await self.windowConfiguration(for: target)
             let windowID = UUID()
-            let previous = self.profileWindowOrder.reversed().lazy
-                .compactMap { self.profileWindows[$0] }
+            let previous = self.auxiliaryWindowOrder.reversed().lazy
+                .compactMap { self.auxiliaryWindows[$0] }
                 .first { $0.target == target }?
                 .controller
             let controller = self.makeController(
                 configuration: configuration,
                 target: target,
-                windowAutosaveName: self.availableAutosaveName(for: target))
-            self.installProfileWindowCloseHandler(controller, windowID: windowID)
-            self.profileWindows[windowID] = ProfileWindowInstance(target: target, controller: controller)
-            self.profileWindowOrder.append(windowID)
+                windowAutosaveName: self.availableAutosaveName(for: target),
+                auxiliary: true)
+            self.installAuxiliaryWindowCloseHandler(controller, windowID: windowID)
+            self.auxiliaryWindows[windowID] = AuxiliaryWindowInstance(target: target, controller: controller)
+            self.auxiliaryWindowOrder.append(windowID)
             if let previous {
                 let origin = previous.window?.frame.origin ?? .zero
                 controller.window?.setFrameOrigin(NSPoint(x: origin.x + 24, y: origin.y - 24))
@@ -555,7 +544,12 @@ final class DashboardManager {
                 gatewayUrl: Self.websocketURLString(for: url),
                 token: token,
                 password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
-            return WindowConfiguration(url: url, auth: auth, mode: mode, displayName: "OpenClaw")
+            return WindowConfiguration(
+                url: url,
+                auth: auth,
+                tlsParams: nil,
+                mode: mode,
+                displayName: "OpenClaw")
         case let .profile(profileID):
             let endpoint = try await MacGatewayProfileStore.shared.endpoint(profileID: profileID)
             let url = try GatewayEndpointStore.dashboardURL(
@@ -566,25 +560,30 @@ final class DashboardManager {
                 gatewayUrl: Self.websocketURLString(for: url),
                 token: endpoint.config.token,
                 password: endpoint.config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
-            // Saved-profile TOFU/pinning is owned by GatewayConnection; the default
-            // WKWebView cannot currently install that private TLS route.
             let name = self.gatewayEntries.first { $0.id == target.bridgeID }?.name ?? url.host ?? "Gateway"
-            return WindowConfiguration(url: url, auth: auth, mode: .remote, displayName: name)
+            return WindowConfiguration(
+                url: url,
+                auth: auth,
+                tlsParams: endpoint.tls?.params,
+                mode: .remote,
+                displayName: name)
         }
     }
 
     private func makeController(
         configuration: WindowConfiguration,
         target: DashboardGatewayTarget,
-        windowAutosaveName: String) -> DashboardWindowController
+        windowAutosaveName: String,
+        auxiliary: Bool) -> DashboardWindowController
     {
-        let primaryLocal = target == .primary && configuration.mode == .local
+        let primaryLocal = !auxiliary && target == .primary && configuration.mode == .local
         if primaryLocal {
             return DashboardWindowController(
                 url: configuration.url,
                 auth: configuration.auth,
                 updater: self.updater,
                 updateBridgeEnabled: Self.updateBridgeEnabled(mode: configuration.mode),
+                tlsParams: configuration.tlsParams,
                 gatewaySnapshot: self.snapshot(for: target),
                 windowTitle: configuration.displayName,
                 windowAutosaveName: windowAutosaveName)
@@ -594,21 +593,22 @@ final class DashboardManager {
             auth: configuration.auth,
             updater: self.updater,
             updateBridgeEnabled: false,
+            tlsParams: configuration.tlsParams,
             gatewaySnapshot: self.snapshot(for: target),
             windowTitle: configuration.displayName,
             windowAutosaveName: windowAutosaveName,
             requestBrowserProfileImportOffer: { _ in false })
     }
 
-    private func installProfileWindowCloseHandler(_ controller: DashboardWindowController, windowID: UUID) {
+    private func installAuxiliaryWindowCloseHandler(_ controller: DashboardWindowController, windowID: UUID) {
         controller.onClosed = { [weak self, weak controller] in
             guard let self, let controller,
-                  self.profileWindows[windowID]?.controller === controller
+                  self.auxiliaryWindows[windowID]?.controller === controller
             else {
                 return
             }
-            self.profileWindows.removeValue(forKey: windowID)
-            self.profileWindowOrder.removeAll { $0 == windowID }
+            self.auxiliaryWindows.removeValue(forKey: windowID)
+            self.auxiliaryWindowOrder.removeAll { $0 == windowID }
         }
     }
 
@@ -627,10 +627,10 @@ final class DashboardManager {
     {
         let base = self.autosaveName(for: target)
         let mainOwnsTarget = self.controller !== source && self.mainTarget == target
-        let profileOwnsTarget = self.profileWindows.values.contains {
+        let auxiliaryOwnsTarget = self.auxiliaryWindows.values.contains {
             $0.controller !== source && $0.target == target
         }
-        return mainOwnsTarget || profileOwnsTarget ? "\(base)-\(UUID().uuidString)" : base
+        return mainOwnsTarget || auxiliaryOwnsTarget ? "\(base)-\(UUID().uuidString)" : base
     }
 
     private static func showGatewayError(_ error: Error, message: String) {
@@ -733,6 +733,10 @@ extension DashboardManager {
 
     func _testOpenWindow(for target: DashboardGatewayTarget) async {
         await self.openWindow(for: target)
+    }
+
+    func _testAuxiliaryWindows() -> [(target: DashboardGatewayTarget, controller: DashboardWindowController)] {
+        self.auxiliaryWindows.values.map { ($0.target, $0.controller) }
     }
 
     func _testSetMainTarget(_ target: DashboardGatewayTarget) {

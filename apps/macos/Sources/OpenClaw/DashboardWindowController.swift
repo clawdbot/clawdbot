@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawKit
 import WebKit
 
 private final class DashboardWindowContentView: NSView {
@@ -96,6 +97,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private(set) var currentURL: URL
     private var auth: DashboardWindowAuth
     private var gatewaySnapshot: DashboardGatewaySnapshot?
+    private let tlsParams: GatewayTLSParams?
     private let dashboardFrameAutosaveName: String
     private let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
@@ -117,6 +119,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         auth: DashboardWindowAuth,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
+        tlsParams: GatewayTLSParams? = nil,
         gatewaySnapshot: DashboardGatewaySnapshot? = nil,
         windowTitle: String = "OpenClaw",
         windowAutosaveName: String = DashboardWindowLayout.windowFrameAutosaveName,
@@ -129,6 +132,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.currentURL = url
         self.auth = auth
         self.gatewaySnapshot = gatewaySnapshot
+        self.tlsParams = tlsParams
         self.dashboardFrameAutosaveName = windowAutosaveName
         self.updater = updater
         self.updateBridgeEnabled = shouldEnableUpdateBridge
@@ -248,6 +252,55 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     // MARK: - WKUIDelegate
+
+    func webView(
+        _ webView: WKWebView,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @MainActor @Sendable (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?) -> Void)
+    {
+        guard webView === self.webView,
+              challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
+        else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard let params = self.tlsParams else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard Self.isExpectedTLSAuthority(
+            host: challenge.protectionSpace.host,
+            port: challenge.protectionSpace.port,
+            dashboardURL: self.currentURL)
+        else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        guard let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        switch GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: challenge.protectionSpace.host,
+            port: challenge.protectionSpace.port,
+            params: params)
+        {
+        case .accept:
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        case .reject:
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        }
+    }
+
+    static func isExpectedTLSAuthority(host: String, port: Int, dashboardURL: URL) -> Bool {
+        let expectedHost = dashboardURL.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let challengedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let expectedPort = dashboardURL.port ?? (dashboardURL.scheme?.lowercased() == "https" ? 443 : 80)
+        return expectedHost?.isEmpty == false && challengedHost == expectedHost && port == expectedPort
+    }
 
     /// Bridges JavaScript `window.confirm` calls in the embedded Control UI to a
     /// native confirmation sheet; without this callback, WebKit treats every
@@ -1285,6 +1338,10 @@ extension DashboardWindowController {
 
     var _testUpdateBridgeAvailable: Bool {
         self.updateBridgeEnabled
+    }
+
+    var _testTLSParams: GatewayTLSParams? {
+        self.tlsParams
     }
 
     var _testLinkBrowserIsCollapsed: Bool {

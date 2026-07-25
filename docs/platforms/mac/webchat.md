@@ -23,6 +23,7 @@ profile contains a private-network `ws://` or secure `wss://` endpoint and its
 optional token or password; credentials are stored in the macOS Keychain.
 Secure profiles maintain their own system-trust-gated first-use certificate pin
 and do not inherit `gateway.remote.tlsFingerprint` from the primary Gateway.
+Dashboard windows enforce that same saved-profile pinning policy.
 Removing a profile also closes its open windows and shuts down its secondary
 connection.
 
