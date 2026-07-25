@@ -179,14 +179,40 @@ export function assertSqliteSchemaContains(
   }
 
   if (mismatches.length > 0) {
-    const shown = mismatches.slice(0, 8);
-    if (mismatches.length > shown.length) {
-      shown.push(`${mismatches.length - shown.length} additional mismatch(es)`);
-    }
-    throw new Error(
-      `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}`,
-    );
+    throwSqliteSchemaMismatches(databaseLabel, mismatches);
   }
+}
+
+/** Require stable canonical tables before a version-specific additive migration. */
+export function assertSqliteSchemaTablesPresent(
+  database: DatabaseSync,
+  databaseLabel: string,
+  schemaSql: string,
+  options: { allowedMissingTables?: readonly string[] } = {},
+): void {
+  const allowedMissingTables = new Set(options.allowedMissingTables ?? []);
+  const missingTables = getCanonicalSqliteTableNames(schemaSql)
+    .filter((tableName) => !allowedMissingTables.has(tableName))
+    .filter(
+      (tableName) =>
+        !database
+          .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ? LIMIT 1")
+          .get(tableName),
+    )
+    .map((tableName) => `missing table ${tableName}`);
+  if (missingTables.length > 0) {
+    throwSqliteSchemaMismatches(databaseLabel, missingTables);
+  }
+}
+
+function throwSqliteSchemaMismatches(databaseLabel: string, mismatches: string[]): never {
+  const shown = mismatches.slice(0, 8);
+  if (mismatches.length > shown.length) {
+    shown.push(`${mismatches.length - shown.length} additional mismatch(es)`);
+  }
+  throw new Error(
+    `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}`,
+  );
 }
 
 /** Return every explicit named index owned by one committed schema. */
