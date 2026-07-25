@@ -55,6 +55,7 @@ import {
 import {
   MemoryManagerSyncOps,
   type MemoryIndexWorkItem,
+  type MemorySemanticProviderGeneration,
   type MemorySyncProviderGeneration,
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
@@ -276,22 +277,26 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       return;
     }
     const provider = this.provider;
-    if (!provider) {
-      return;
-    }
     const runtime = this.providerRuntime;
     const identities = resolveMemoryIndexProviderIdentities({
       provider,
       cacheKeyData: runtime?.cacheKeyData,
       aliases: runtime?.indexIdentityAliases,
     });
-    this.syncProviderGeneration = {
-      provider,
-      ...(runtime ? { runtime } : {}),
-      providerKey: expectDefined(identities.at(0), "primary memory provider identity").providerKey,
-      identities,
-    };
-    this.syncProviderGenerationRelease = this.acquireProviderUse(provider);
+    const providerKey = expectDefined(
+      identities.at(0),
+      "primary memory provider identity",
+    ).providerKey;
+    this.syncProviderGeneration = provider
+      ? {
+          kind: "semantic",
+          provider,
+          ...(runtime ? { runtime } : {}),
+          providerKey,
+          identities,
+        }
+      : { kind: "fts-only", provider: null, providerKey, identities };
+    this.syncProviderGenerationRelease = provider ? this.acquireProviderUse(provider) : null;
     this.syncProviderGenerationOwners = 1;
   }
 
@@ -336,7 +341,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private upsertEmbeddingCacheEntries(
     entries: Array<{ hash: string; embedding: number[] }>,
-    generation: MemorySyncProviderGeneration,
+    generation: MemorySemanticProviderGeneration,
   ): void {
     upsertMemoryEmbeddingCache({
       db: this.db,
@@ -350,7 +355,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private async embedChunksInBatches(
     chunks: MemoryChunk[],
-    generation: MemorySyncProviderGeneration,
+    generation: MemorySemanticProviderGeneration,
   ): Promise<number[][]> {
     if (chunks.length === 0) {
       return [];
@@ -431,7 +436,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     chunks: MemoryChunk[],
     _entry: MemoryIndexEntry,
     source: string,
-    generation: MemorySyncProviderGeneration,
+    generation: MemorySemanticProviderGeneration,
     debugContext: Record<string, unknown> = {},
   ): Promise<number[][]> {
     const provider = generation.provider;
@@ -481,7 +486,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private collectCachedEmbeddings(
     chunks: MemoryChunk[],
-    generation: MemorySyncProviderGeneration,
+    generation: MemorySemanticProviderGeneration,
   ): {
     embeddings: number[][];
     missing: Array<{ index: number; chunk: MemoryChunk }>;
@@ -500,7 +505,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   protected async embedBatchWithRetry(
     texts: string[],
-    generation?: MemorySyncProviderGeneration,
+    generation?: MemorySemanticProviderGeneration,
   ): Promise<number[][]> {
     if (texts.length === 0) {
       return [];
@@ -567,7 +572,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   protected async embedBatchInputsWithRetry(
     inputs: EmbeddingInput[],
-    generation?: MemorySyncProviderGeneration,
+    generation?: MemorySemanticProviderGeneration,
   ): Promise<number[][]> {
     if (inputs.length === 0) {
       return [];
@@ -838,7 +843,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     return resolveMemoryIndexConcurrency({
       batch: this.batch,
       configuredNonBatchConcurrency: this.settings.remote?.nonBatchConcurrency,
-      providerId: this.syncProviderGeneration?.provider.id ?? this.provider?.id,
+      providerId: this.syncProviderGeneration
+        ? this.syncProviderGeneration.provider?.id
+        : this.provider?.id,
     });
   }
 
@@ -983,9 +990,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         `read memory markdown for indexing ${entry.absPath}`,
       ));
     const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
-    const chunks = generation
-      ? enforceEmbeddingMaxInputTokens(generation.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)
-      : baseChunks;
+    const chunks =
+      generation?.kind === "semantic"
+        ? enforceEmbeddingMaxInputTokens(
+            generation.provider,
+            baseChunks,
+            EMBEDDING_BATCH_MAX_TOKENS,
+          )
+        : baseChunks;
     if (options.source === "sessions" && "lineMap" in entry) {
       remapChunkLines(chunks, entry.lineMap);
     }
@@ -1008,9 +1020,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     items: MemoryIndexWorkItem[],
     generation: MemorySyncProviderGeneration | null,
   ): Promise<void> {
-    const batchEmbed = generation?.runtime?.batchEmbed;
+    const batchEmbed = generation?.kind === "semantic" ? generation.runtime?.batchEmbed : undefined;
     if (
-      !generation ||
+      generation?.kind !== "semantic" ||
       !this.batch.enabled ||
       !batchEmbed ||
       generation.runtime?.sourceWideBatchEmbed !== true
@@ -1151,7 +1163,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     generation: MemorySyncProviderGeneration | null,
   ): Promise<void> {
     // FTS-only mode: no embedding provider, but we can still build a FTS index
-    if (!generation) {
+    if (generation?.kind !== "semantic") {
       // Multimodal files require an embedding provider; skip in FTS-only mode.
       if ("kind" in entry && entry.kind === "multimodal") {
         return;

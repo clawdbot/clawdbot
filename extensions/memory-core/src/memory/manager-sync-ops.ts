@@ -49,12 +49,23 @@ import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 export type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 
-export type MemorySyncProviderGeneration = {
-  provider: EmbeddingProvider;
-  runtime?: EmbeddingProviderRuntime;
+type MemorySyncProviderGenerationBase = {
   providerKey: string;
   identities: MemoryIndexProviderIdentity[];
 };
+
+export type MemorySyncProviderGeneration =
+  | (MemorySyncProviderGenerationBase & { kind: "fts-only"; provider: null })
+  | (MemorySyncProviderGenerationBase & {
+      kind: "semantic";
+      provider: EmbeddingProvider;
+      runtime?: EmbeddingProviderRuntime;
+    });
+
+export type MemorySemanticProviderGeneration = Extract<
+  MemorySyncProviderGeneration,
+  { kind: "semantic" }
+>;
 
 const log = createSubsystemLogger("memory");
 
@@ -66,8 +77,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   protected endSyncProviderGeneration(): void {}
 
   protected override shouldDeferSourceWideBatch(): boolean {
-    const provider = this.syncProviderGeneration?.provider ?? this.provider;
-    const providerRuntime = this.syncProviderGeneration?.runtime ?? this.providerRuntime;
+    const generation = this.syncProviderGeneration;
+    const provider = generation ? generation.provider : this.provider;
+    const providerRuntime = generation
+      ? generation.kind === "semantic"
+        ? generation.runtime
+        : undefined
+      : this.providerRuntime;
     return Boolean(
       this.batch.enabled &&
       provider &&
@@ -109,7 +125,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   private assertFtsOnlySyncAllowed(): void {
-    if (this.syncProviderGeneration?.provider ?? this.provider) {
+    const provider = this.syncProviderGeneration
+      ? this.syncProviderGeneration.provider
+      : this.provider;
+    if (provider) {
       return;
     }
     this.assertRequiredProviderAvailable("sync");
@@ -158,8 +177,12 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
-    const syncProvider = this.syncProviderGeneration?.provider ?? this.provider;
-    const syncProviderKey = this.syncProviderGeneration?.providerKey ?? this.providerKey;
+    const syncProvider = this.syncProviderGeneration
+      ? this.syncProviderGeneration.provider
+      : this.provider;
+    const syncProviderKey = this.syncProviderGeneration
+      ? this.syncProviderGeneration.providerKey
+      : this.providerKey;
     const syncProviderIdentities =
       this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
     const indexIdentity = resolveMemoryIndexIdentityState({
@@ -542,11 +565,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         this.clearMemoryRetryState();
       }
       const vectorIndexComplete = this.vector.available === true;
-      const syncProvider = this.syncProviderGeneration?.provider ?? this.provider;
+      const syncProvider = this.syncProviderGeneration
+        ? this.syncProviderGeneration.provider
+        : this.provider;
       const nextMeta: MemoryIndexMeta = {
         model: syncProvider?.model ?? "fts-only",
         provider: syncProvider?.id ?? "none",
-        providerKey: this.syncProviderGeneration?.providerKey ?? this.providerKey!,
+        providerKey: this.syncProviderGeneration
+          ? this.syncProviderGeneration.providerKey
+          : this.providerKey!,
         sources: resolveConfiguredSourcesForMeta(this.sources),
         scopeHash: resolveConfiguredScopeHash({
           workspaceDir: this.workspaceDir,

@@ -2674,6 +2674,84 @@ describe("memory index", () => {
     });
   });
 
+  it("keeps an active FTS-only generation stable while fallback activates", async () => {
+    const manager = await getFreshManager(
+      createCfg({ provider: "openai", fallback: "fallback-provider" }),
+      "cli",
+    );
+    managersForCleanup.add(manager);
+    type IndexEntry = {
+      path: string;
+      absPath: string;
+      mtimeMs: number;
+      size: number;
+      hash: string;
+      content: string;
+    };
+    const fields = manager as unknown as {
+      provider: { id: string } | null;
+      providerKey: string;
+      computeProviderKey: () => string;
+      ensureProviderInitialized: () => Promise<void>;
+      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+      beginSyncProviderGeneration: () => void;
+      endSyncProviderGeneration: () => void;
+      indexFile: (
+        entry: IndexEntry,
+        options: { source: "memory"; content: string },
+      ) => Promise<void>;
+      db: {
+        prepare: (sql: string) => {
+          get: (...params: unknown[]) => { model?: string } | undefined;
+        };
+      };
+    };
+    await fields.ensureProviderInitialized();
+    if (!fields.provider) {
+      throw new Error("Expected a test embedding provider");
+    }
+    fields.provider.id = "local";
+    fields.providerKey = fields.computeProviderKey();
+    fields.markLocalEmbeddingProviderDegraded(createLocalWorkerExitError());
+    await vi.waitFor(() => {
+      expect(fields.provider).toBeNull();
+      expect(providerCloseCalls).toBe(1);
+    });
+
+    const createEntry = (name: string): IndexEntry => {
+      const content = `# Log\n${name} FTS-only generation.`;
+      return {
+        path: `memory/${name}.md`,
+        absPath: path.join(memoryDir, `${name}.md`),
+        mtimeMs: Date.now(),
+        size: Buffer.byteLength(content),
+        hash: hashText(content),
+        content,
+      };
+    };
+    const first = createEntry("fts-first");
+    const second = createEntry("fts-second");
+
+    fields.beginSyncProviderGeneration();
+    try {
+      await fields.indexFile(first, { source: "memory", content: first.content });
+      await expect(fields.activateFallbackProvider("local worker exited")).resolves.toBe(true);
+      await fields.indexFile(second, { source: "memory", content: second.content });
+    } finally {
+      fields.endSyncProviderGeneration();
+    }
+
+    expect(
+      fields.db.prepare("SELECT model FROM memory_index_chunks WHERE path = ?").get(first.path)
+        ?.model,
+    ).toBe("fts-only");
+    expect(
+      fields.db.prepare("SELECT model FROM memory_index_chunks WHERE path = ?").get(second.path)
+        ?.model,
+    ).toBe("fts-only");
+  });
+
   it("waits for admitted provider users before retirement", async () => {
     const cfg = createCfg({ provider: "openai" });
     const manager = await getPersistentManager(cfg);
