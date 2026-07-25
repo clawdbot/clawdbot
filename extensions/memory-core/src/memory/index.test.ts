@@ -2550,6 +2550,51 @@ describe("memory index", () => {
     expect(providerCloseCalls).toBe(1);
   });
 
+  it("waits for an admitted search before manager teardown", async () => {
+    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      searchVector: () => Promise<unknown[]>;
+    };
+    let releaseVectorSearch: () => void = () => {};
+    let markVectorSearchStarted: () => void = () => {};
+    const vectorSearchGate = new Promise<void>((resolve) => {
+      releaseVectorSearch = resolve;
+    });
+    const vectorSearchStarted = new Promise<void>((resolve) => {
+      markVectorSearchStarted = resolve;
+    });
+    fields.searchVector = async () => {
+      markVectorSearchStarted();
+      await vectorSearchGate;
+      return [];
+    };
+
+    const searchPromise = manager.search("alpha");
+    await vectorSearchStarted;
+    const closePromise = manager.close();
+    let closeSettled = false;
+    void closePromise.then(
+      () => {
+        closeSettled = true;
+      },
+      () => {
+        closeSettled = true;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(closeSettled).toBe(false);
+      expect(providerCloseCalls).toBe(0);
+    } finally {
+      releaseVectorSearch();
+    }
+
+    await expect(searchPromise).resolves.toBeDefined();
+    await closePromise;
+    expect(providerCloseCalls).toBe(1);
+  });
+
   it("fails closed when fallback initialization fails for an explicit provider", async () => {
     const cfg = createCfg({
       provider: "openai",
