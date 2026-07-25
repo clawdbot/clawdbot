@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { DEFAULT_SECRET_FILE_MAX_BYTES } from "openclaw/plugin-sdk/secret-file-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
@@ -18,6 +18,11 @@ const sourceStaticAssetPaths = [
 ];
 const manifestPath = fileURLToPath(new URL("../openclaw.plugin.json", import.meta.url));
 const packagePath = fileURLToPath(new URL("../package.json", import.meta.url));
+const tsxCliPath = fileURLToPath(import.meta.resolve("tsx/cli"));
+const rootTsconfigPath = path.resolve("tsconfig.json");
+const secretRefRuntimeSourceUrl = pathToFileURL(
+  path.resolve("src/plugin-sdk/secret-ref-runtime.ts"),
+).href;
 const tempDirs: string[] = [];
 let resolverPath = sourceResolverPath;
 let stagedResolverRoot: string | undefined;
@@ -27,10 +32,23 @@ beforeAll(() => {
   fs.mkdirSync(tempRoot, { recursive: true });
   stagedResolverRoot = fs.mkdtempSync(path.join(tempRoot, "onepassword-resolver-"));
   for (const sourcePath of sourceStaticAssetPaths) {
-    fs.copyFileSync(sourcePath, path.join(stagedResolverRoot, path.basename(sourcePath)));
+    const stagedPath = path.join(stagedResolverRoot, path.basename(sourcePath));
+    if (sourcePath.endsWith("onepassword-op-path.js")) {
+      fs.writeFileSync(
+        stagedPath,
+        fs
+          .readFileSync(sourcePath, "utf8")
+          .replace(
+            '"openclaw/plugin-sdk/secret-ref-runtime"',
+            JSON.stringify(secretRefRuntimeSourceUrl),
+          ),
+      );
+      continue;
+    }
+    fs.copyFileSync(sourcePath, stagedPath);
   }
-  // Shipped bundled assets live in the root `openclaw` package scope. Stage them there so
-  // plain-Node child resolution matches the package instead of this source extension package.
+  // Keep the relative static assets together, but resolve the real SDK from source so this
+  // focused test does not depend on a parallel build producing dist/plugin-sdk first.
   resolverPath = path.join(stagedResolverRoot, path.basename(sourceResolverPath));
 });
 
@@ -75,17 +93,21 @@ function runResolver(params: {
     );
   }
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [resolverPath], {
-      ...(params.cwd ? { cwd: params.cwd } : {}),
-      stdio: ["pipe", "pipe", "pipe"],
-      env: {
-        ...process.env,
-        OP_SERVICE_ACCOUNT_TOKEN: "",
-        CLAW_1PASSWORD_OP: "",
-        OPENCLAW_STATE_DIR: stateDir,
-        ...params.env,
+    const child = spawn(
+      process.execPath,
+      [tsxCliPath, "--tsconfig", rootTsconfigPath, resolverPath],
+      {
+        ...(params.cwd ? { cwd: params.cwd } : {}),
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          OP_SERVICE_ACCOUNT_TOKEN: "",
+          CLAW_1PASSWORD_OP: "",
+          OPENCLAW_STATE_DIR: stateDir,
+          ...params.env,
+        },
       },
-    });
+    );
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
