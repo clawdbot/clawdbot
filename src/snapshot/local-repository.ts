@@ -26,6 +26,8 @@ import {
 import {
   createPrivateSqliteDirectory,
   createPrivateSqliteTempDirectory,
+} from "../infra/sqlite-private-directory.js";
+import {
   createVerifiedSqliteSnapshot,
   publishVerifiedSqliteFile,
   syncDirectoryBestEffort,
