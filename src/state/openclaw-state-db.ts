@@ -550,6 +550,19 @@ export function runOpenClawStateWriteTransaction<T>(
   return result;
 }
 
+/**
+ * Return a shared state handle this process already holds open, if any.
+ *
+ * Read-only callers use this to avoid opening a connection per call; it never
+ * creates, repairs, or registers a handle.
+ */
+export function getOpenClawStateDatabaseIfOpen(
+  options: OpenClawStateDatabaseOptions = {},
+): OpenClawStateDatabase | undefined {
+  const cached = cachedDatabases.get(resolveDatabasePath(options));
+  return cached?.db.isOpen ? cached : undefined;
+}
+
 /** Close one cached shared state database handle by exact pathname. */
 export function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
   const resolvedPath = path.resolve(pathname);

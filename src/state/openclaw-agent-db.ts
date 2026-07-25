@@ -182,6 +182,14 @@ export function inspectOpenClawAgentDatabaseOwner(
 ): OpenClawAgentDatabaseOwnerInspection {
   let db: DatabaseSync | undefined;
   try {
+    // A handle this process holds was owner-validated when it was opened, and
+    // ownership never changes afterwards. Answering from it keeps store
+    // resolution off a fresh connection for every row it inspects.
+    const opened = cachedDatabases.get(path.resolve(pathname));
+    if (opened?.db.isOpen) {
+      assertSupportedAgentSchemaVersion(opened.db, pathname);
+      return { status: "owned", agentId: opened.agentId };
+    }
     db = openNodeSqliteDatabase(pathname, { readOnly: true });
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedAgentSchemaVersion(db, pathname);
