@@ -227,6 +227,44 @@ describe("mattermost websocket monitor", () => {
     expect(countMatching(patches, (patch) => patch.connected === false)).toBe(2);
   });
 
+  it("reports non-Error websocket errors with object details", async () => {
+    const socket = new FakeWebSocket();
+    const runtime = testRuntime();
+    const runtimeError = expectDefined(
+      runtime.error,
+      "Mattermost runtime error mock",
+    ) as ReturnType<typeof vi.fn>;
+    const patches: Array<Record<string, unknown>> = [];
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime,
+      nextSeq: () => 1,
+      onPosted: async () => {},
+      statusSink: (patch) => {
+        patches.push(patch as Record<string, unknown>);
+      },
+      webSocketFactory: () => socket,
+    });
+
+    queueMicrotask(() => {
+      socket.emitError({ code: "MATTERMOST_WS_REJECTED", retryAfterMs: 250 });
+      socket.emitClose(1006, "connection refused");
+    });
+
+    await expect(connectOnce()).rejects.toMatchObject({ name: "WebSocketClosedBeforeOpenError" });
+
+    const runtimeMessage = String(runtimeError.mock.calls.at(0)?.[0] ?? "");
+    expect(runtimeMessage).toContain("mattermost websocket error:");
+    expect(runtimeMessage).toContain("MATTERMOST_WS_REJECTED");
+    expect(runtimeMessage).toContain("retryAfterMs");
+    expect(runtimeMessage).not.toContain("[object Object]");
+    const lastError = patches.findLast((patch) => typeof patch.lastError === "string")?.lastError;
+    expect(lastError).toContain("MATTERMOST_WS_REJECTED");
+    expect(lastError).toContain("retryAfterMs");
+    expect(lastError).not.toContain("[object Object]");
+  });
+
   it("accepts large valid post envelopes and rejects oversized websocket payloads", async () => {
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await once(server, "listening");

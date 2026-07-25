@@ -1,5 +1,6 @@
 // Mattermost plugin module implements monitor websocket behavior.
 import { randomUUID } from "node:crypto";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   captureWsEvent,
@@ -401,17 +402,18 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("error", (err) => {
+          const message = formatErrorMessage(err);
           captureWsEvent({
             url: opts.wsUrl,
             direction: "local",
             kind: "error",
             flowId,
-            errorText: String(err),
+            errorText: message,
             meta: { subsystem: "mattermost-websocket" },
           });
-          opts.runtime.error?.(`mattermost websocket error: ${String(err)}`);
+          opts.runtime.error?.(`mattermost websocket error: ${message}`);
           opts.statusSink?.({
-            lastError: String(err),
+            lastError: message,
           });
           try {
             ws.close();
