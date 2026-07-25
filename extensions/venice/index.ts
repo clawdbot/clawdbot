@@ -5,9 +5,9 @@ import {
   type ModelCompatConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { VENICE_DEFAULT_MODEL_REF } from "./models.js";
+import { VENICE_DEFAULT_MODEL_REF, VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import { applyVeniceConfig } from "./onboard.js";
-import { buildVeniceProvider } from "./provider-catalog.js";
+import { buildStaticVeniceProvider } from "./provider-catalog.js";
 import { createVeniceDeepSeekV4Wrapper } from "./stream.js";
 import { fetchVeniceUsage } from "./usage.js";
 
@@ -63,7 +63,8 @@ export default defineSingleProviderPluginEntry({
       },
     ],
     catalog: {
-      buildProvider: buildVeniceProvider,
+      buildProvider: buildStaticVeniceProvider,
+      liveModelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
     },
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,

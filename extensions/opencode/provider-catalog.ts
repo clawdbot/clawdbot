@@ -2,7 +2,7 @@
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  getCachedLiveProviderModelRows,
+  buildLiveModelProviderConfig,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
@@ -463,20 +463,13 @@ const OPENCODE_ZEN_MODELS = [
   "north-mini-code-free",
 ].map(buildOpencodeZenModel);
 
-function buildOpencodeZenProviderConfig(
-  models: OpencodeZenModelDefinition[],
-  apiKey?: string,
-): ModelProviderConfig {
+export function buildStaticOpencodeZenProviderConfig(apiKey?: string): ModelProviderConfig {
   return {
     api: "openai-completions",
     baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
     ...(apiKey ? { apiKey } : {}),
-    models,
+    models: OPENCODE_ZEN_MODELS,
   };
-}
-
-export function buildStaticOpencodeZenProviderConfig(apiKey?: string): ModelProviderConfig {
-  return buildOpencodeZenProviderConfig(OPENCODE_ZEN_MODELS, apiKey);
 }
 
 function readLiveModelId(row: unknown): string | undefined {
@@ -494,12 +487,35 @@ function readLiveModelId(row: unknown): string | undefined {
   return modelId || undefined;
 }
 
-async function fetchOpencodeZenLiveModelIds(
+function projectOpencodeZenLiveModels(rows: readonly unknown[]): OpencodeZenModelDefinition[] {
+  const staticModels = new Map(OPENCODE_ZEN_MODELS.map((model) => [model.id, model]));
+  const seen = new Set<string>();
+  const models: OpencodeZenModelDefinition[] = [];
+  for (const row of rows) {
+    const modelId = readLiveModelId(row);
+    if (!modelId || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    const model = staticModels.get(modelId);
+    if (model) {
+      models.push(model);
+    }
+  }
+  return models;
+}
+
+export async function buildOpencodeZenLiveProviderConfig(
   params: FetchOpencodeZenLiveModelIdsParams = {},
-): Promise<string[]> {
-  const rows = await getCachedLiveProviderModelRows({
+): Promise<ModelProviderConfig> {
+  return await buildLiveModelProviderConfig({
     providerId: PROVIDER_ID,
     endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
+    providerConfig: {
+      api: "openai-completions",
+      baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+    },
+    models: OPENCODE_ZEN_MODELS,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
@@ -507,43 +523,8 @@ async function fetchOpencodeZenLiveModelIds(
     timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
     ttlMs: OPENCODE_ZEN_MODELS_CACHE_TTL_MS,
     auditContext: "opencode-zen-model-discovery",
+    projectRows: projectOpencodeZenLiveModels,
   });
-  const seen = new Set<string>();
-  const modelIds: string[] = [];
-  for (const row of rows) {
-    const modelId = readLiveModelId(row);
-    if (!modelId || seen.has(modelId)) {
-      continue;
-    }
-    seen.add(modelId);
-    modelIds.push(modelId);
-  }
-  return modelIds;
-}
-
-function buildDiscoveredOpencodeZenModels(modelIds: string[]): OpencodeZenModelDefinition[] {
-  const staticModels = new Map(OPENCODE_ZEN_MODELS.map((model) => [model.id, model]));
-  return modelIds.flatMap((modelId) => {
-    const model = staticModels.get(modelId);
-    return model ? [model] : [];
-  });
-}
-
-export async function buildOpencodeZenLiveProviderConfig(
-  params: FetchOpencodeZenLiveModelIdsParams = {},
-): Promise<ModelProviderConfig> {
-  try {
-    const liveModelIds = await fetchOpencodeZenLiveModelIds(params);
-    if (liveModelIds.length > 0) {
-      const liveModels = buildDiscoveredOpencodeZenModels(liveModelIds);
-      if (liveModels.length > 0) {
-        return buildOpencodeZenProviderConfig(liveModels, params.apiKey);
-      }
-    }
-  } catch {
-    // Live discovery is advisory; keep the provider-owned static seed visible.
-  }
-  return buildStaticOpencodeZenProviderConfig(params.apiKey);
 }
 
 export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {
