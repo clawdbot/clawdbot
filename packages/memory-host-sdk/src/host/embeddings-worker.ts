@@ -179,6 +179,7 @@ function resolveWorkerExecArgv(): string[] {
 /** IPC client that serializes local embedding calls through one child process. */
 class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
+  private closed = false;
   private shutdownPromise: Promise<void> | null = null;
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
@@ -217,6 +218,11 @@ class LocalEmbeddingWorkerClient {
 
   /** Ask the child to close gracefully, then force shutdown after a short grace period. */
   async close(): Promise<void> {
+    if (this.closed) {
+      await this.shutdownPromise;
+      return;
+    }
+    this.closed = true;
     if (this.shutdownPromise) {
       await this.shutdownPromise;
       return;
@@ -226,7 +232,9 @@ class LocalEmbeddingWorkerClient {
       return;
     }
     let timeout: NodeJS.Timeout | undefined;
-    const closeRequest = this.send({ type: "close" }).then(() => "closed" as const);
+    const closeRequest = this.send({ type: "close" }, undefined, true).then(
+      () => "closed" as const,
+    );
     const closeTimeout = new Promise<"timeout">((resolve) => {
       timeout = setTimeout(() => resolve("timeout"), WORKER_CLOSE_GRACE_MS);
       timeout.unref?.();
@@ -283,8 +291,12 @@ class LocalEmbeddingWorkerClient {
   private async send(
     request: LocalEmbeddingWorkerRequestPayload,
     options?: EmbeddingProviderCallOptions,
+    allowClosed = false,
   ): Promise<number[] | number[][] | undefined> {
     await this.shutdownPromise;
+    if (this.closed && !allowClosed) {
+      throw new Error("Local embedding worker client has been closed");
+    }
     options?.signal?.throwIfAborted();
     const child = this.ensureChild();
     const id = this.nextRequestId++;

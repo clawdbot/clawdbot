@@ -708,8 +708,13 @@ process.on("message", (message) => {
       .toBe("started");
 
     controller.abort(new Error("cancelled"));
+    const queuedEmbedError = provider.embedQuery("queued after cancel").catch((err: unknown) => err);
+    const closePromise = provider.close?.() ?? Promise.resolve();
     await expect(embedPromise).rejects.toThrow("cancelled");
-    await expect(provider.close?.()).resolves.toBeUndefined();
+    await expect(closePromise).resolves.toBeUndefined();
+    await expect(queuedEmbedError).resolves.toMatchObject({
+      message: "Local embedding worker client has been closed",
+    });
 
     await expect(fs.readFile(exitMarker, "utf8")).resolves.toBe("exited");
   });
