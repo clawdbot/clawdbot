@@ -451,7 +451,7 @@ describe("handleControlUiHttpRequest", () => {
           "Permissions-Policy",
           "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
         );
-        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="true"');
       },
     });
   });
@@ -1059,7 +1059,7 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(end).toHaveBeenCalledWith(
-          html.replace("<html", '<html data-openclaw-terminal-enabled="false"'),
+          html.replace("<html", '<html data-openclaw-terminal-enabled="true"'),
         );
       },
     });
@@ -1118,7 +1118,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAgentId).toBe("main");
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("auto");
-        expect(parsed.terminalEnabled).toBe(false);
+        expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
@@ -2462,7 +2462,7 @@ describe("handleControlUiHttpRequest", () => {
           expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
           expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
           expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
-            '<html data-openclaw-terminal-enabled="false">',
+            '<html data-openclaw-terminal-enabled="true">',
           );
           expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
             end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
