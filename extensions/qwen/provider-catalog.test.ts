@@ -114,12 +114,15 @@ describe("qwen token plan provider catalog", () => {
       "glm-5",
       "MiniMax-M2.5",
     ]);
-    expect(models.find((model) => model.id === "qwen3-coder-next")).toMatchObject({
+    const manifestModels = manifest.modelCatalog.providers["qwen-token-plan"].models as Array<
+      Record<string, unknown>
+    >;
+    expect(manifestModels.find((model) => model.id === "qwen3-coder-next")).toMatchObject({
       status: "deprecated",
       replacedBy: QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
     });
     expect(models.every((model) => model.reasoning)).toBe(true);
-    expect(manifest.modelCatalog.providers["qwen-token-plan"].models).toEqual(models);
+    expect(manifestModels.map((model) => model.id)).toEqual(modelIds);
     expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("refreshable");
   });
 

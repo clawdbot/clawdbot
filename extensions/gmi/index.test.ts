@@ -24,7 +24,7 @@ describe("gmi provider plugin", () => {
     expect(provider.aliases).toEqual(["gmi-cloud", "gmicloud"]);
     expect(provider.envVars).toEqual(["GMI_API_KEY"]);
     expect(provider.auth?.map((method) => method.id)).toEqual(["api-key"]);
-    expect(provider.auth?.[0]?.defaultModel).toBe("gmi/openai/gpt-5.6-sol");
+    expect(provider.auth?.[0]?.starterModel).toBe("gmi/openai/gpt-5.6-sol");
 
     const result = await provider.staticCatalog?.run({
       config: {},

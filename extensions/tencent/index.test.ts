@@ -10,6 +10,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import { describe, expect, it } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import tencentPlugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 type OpenAICompletionsModel = Model<"openai-completions">;
 
@@ -148,12 +149,18 @@ describe("tencent provider plugin", () => {
     expect(hy3?.compat?.supportedReasoningEfforts).toEqual(["none", "low", "high"]);
 
     const hy3Preview = catalogProvider.models?.find((m) => m.id === "hy3-preview");
-    expect(hy3Preview?.status).toBe("deprecated");
-    expect(hy3Preview?.replacedBy).toBe("hy3");
     expect(hy3Preview?.reasoning).toBe(true);
     expect(hy3Preview?.maxTokens).toBe(128_000);
     expect(hy3Preview?.compat?.supportsReasoningEffort).toBe(true);
     expect(hy3Preview?.compat?.supportedReasoningEfforts).toEqual(["none", "low", "high"]);
+
+    const manifestRows = manifest.modelCatalog.providers["tencent-tokenhub"].models as Array<
+      Record<string, unknown>
+    >;
+    expect(manifestRows.find((model) => model.id === "hy3-preview")).toMatchObject({
+      status: "deprecated",
+      replacedBy: "hy3",
+    });
   });
 
   it("builds the static Tencent TokenPlan model catalog with reasoning flags", async () => {

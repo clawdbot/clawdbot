@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import qianfanPlugin from "./index.js";
 import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 function expectRecord<T>(value: T | null | undefined, label: string): NonNullable<T> {
   if (!value) {
@@ -157,8 +158,6 @@ describe("qianfan provider plugin", () => {
             },
           ],
         },
-        status: "deprecated",
-        replacedBy: "deepseek-v4-pro",
       },
       {
         id: "ernie-5.0-thinking-preview",
@@ -189,8 +188,6 @@ describe("qianfan provider plugin", () => {
             },
           ],
         },
-        status: "deprecated",
-        replacedBy: "ernie-5.0",
       },
     ] satisfies Array<Partial<(typeof models)[number]>>;
     for (const expected of expectedModels) {
@@ -200,6 +197,19 @@ describe("qianfan provider plugin", () => {
           `${expected.id} model`,
         ),
       ).toMatchObject(expected);
+    }
+
+    const manifestRows = manifest.modelCatalog.providers.qianfan.models as Array<
+      Record<string, unknown>
+    >;
+    for (const [id, replacedBy] of [
+      ["deepseek-v3.2", "deepseek-v4-pro"],
+      ["ernie-5.0-thinking-preview", "ernie-5.0"],
+    ]) {
+      expect(manifestRows.find((model) => model.id === id)).toMatchObject({
+        status: "deprecated",
+        replacedBy,
+      });
     }
   });
 

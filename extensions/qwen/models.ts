@@ -97,8 +97,6 @@ export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig>
     cost: QWEN_DEFAULT_COST,
     contextWindow: 262_144,
     maxTokens: 65_536,
-    status: "deprecated",
-    replacedBy: QWEN_37_PLUS_MODEL_ID,
   },
   {
     id: "kimi-k2.5",

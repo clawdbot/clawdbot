@@ -1,6 +1,7 @@
 // Mistral tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildMistralModelDefinition, MISTRAL_DEFAULT_MODEL_ID } from "./model-definitions.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildMistralProvider } from "./provider-catalog.js";
 
 function buildCatalogModels() {
@@ -55,13 +56,21 @@ describe("mistral model definitions", () => {
     expect(codestral.maxTokens).toBe(4096);
 
     const devstral = catalogModelById(models, "devstral-medium-latest");
-    expect(devstral.status).toBe("deprecated");
-    expect(devstral.replacedBy).toBe("mistral-medium-3-5");
+    expect(devstral.contextWindow).toBe(262144);
+    expect(devstral.maxTokens).toBe(32768);
 
     const medium31 = catalogModelById(models, "mistral-medium-2508");
-    expect(medium31.status).toBe("deprecated");
-    expect(medium31.replacedBy).toBe("mistral-medium-3-5");
     expect(medium31.contextWindow).toBe(128000);
+
+    const manifestRows = manifest.modelCatalog.providers.mistral.models as Array<
+      Record<string, unknown>
+    >;
+    for (const id of ["devstral-medium-latest", "mistral-medium-2508"]) {
+      expect(manifestRows.find((model) => model.id === id)).toMatchObject({
+        status: "deprecated",
+        replacedBy: "mistral-medium-3-5",
+      });
+    }
 
     const medium = catalogModelById(models, "mistral-medium-3-5");
     expect(medium.reasoning).toBe(true);
