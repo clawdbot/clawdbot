@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   formatCompletionReloadCommand,
@@ -15,20 +16,17 @@ import {
   usesSlowDynamicCompletion,
 } from "./completion-runtime.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 async function withBashCompletionHome(
   run: (paths: { homeDir: string; stateDir: string }) => Promise<void>,
 ): Promise<void> {
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bash-completion-home-"));
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bash-completion-state-"));
+  const homeDir = tempDirs.make("openclaw-bash-completion-home-");
+  const stateDir = tempDirs.make("openclaw-bash-completion-state-");
 
-  try {
-    await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await run({ homeDir, stateDir });
-    });
-  } finally {
-    await fs.rm(homeDir, { recursive: true, force: true });
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+  await withEnvAsync({ HOME: homeDir, OPENCLAW_STATE_DIR: stateDir }, async () => {
+    await run({ homeDir, stateDir });
+  });
 }
 
 describe("completion-runtime", () => {
