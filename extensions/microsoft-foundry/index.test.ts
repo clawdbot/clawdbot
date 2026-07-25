@@ -2107,7 +2107,7 @@ describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
     expect(stderrWriteSpy).toHaveBeenCalledWith("😊");
   });
 
-  it("requests process-tree termination after the 15-minute device-code lifetime", async () => {
+  it("allows post-auth work after the 15-minute device-code lifetime", async () => {
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       stdout: "",
       stderr: "",
@@ -2120,13 +2120,13 @@ describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
 
     const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toBe("az login timed out after 16 minutes");
+    expect((err as Error).message).toBe("az login timed out after 20 minutes");
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
       ["az", "login", "--use-device-code"],
       expect.objectContaining({
         killProcessTree: true,
         outputCapture: "discard",
-        timeoutMs: 16 * 60 * 1000,
+        timeoutMs: 20 * 60 * 1000,
       }),
     );
   });
