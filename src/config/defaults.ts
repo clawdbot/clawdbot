@@ -32,7 +32,7 @@ const defaultWarnState: WarnState = { warned: false };
 
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-8",
+  opus: "anthropic/claude-opus-5",
   sonnet: "anthropic/claude-sonnet-5",
 
   // OpenAI

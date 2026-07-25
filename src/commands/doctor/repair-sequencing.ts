@@ -21,6 +21,7 @@ import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-m
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
 import {
+  collectChannelDoctorCompatibilityMutations,
   createChannelDoctorEmptyAllowlistPolicyHooks,
   collectChannelDoctorRepairMutations,
 } from "./shared/channel-doctor.js";
@@ -144,6 +145,19 @@ export async function runDoctorRepairSequence(params: {
           })),
         }),
       );
+      // Missing external plugins cannot expose their doctor contracts until
+      // installation completes. Normalize legacy shapes before channel repair
+      // so later validation and gateway restart consume canonical config.
+      for (const mutation of collectChannelDoctorCompatibilityMutations(state.candidate, { env })) {
+        applyMutation(mutation);
+      }
+      for (const mutation of await collectChannelDoctorRepairMutations({
+        cfg: state.candidate,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      })) {
+        applyMutation(mutation);
+      }
     }
   }
   if (missingConfiguredPluginInstallRepair.warnings.length > 0) {

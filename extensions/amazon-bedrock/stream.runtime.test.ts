@@ -360,6 +360,34 @@ describe("Bedrock stop reasons", () => {
 
 describe("Bedrock thinking effort mapping", () => {
   it.each([
+    { reasoning: undefined, expected: "high", maxTokens: 128_000, fields: true },
+    { reasoning: "off" as const, expected: "off", maxTokens: undefined, fields: false },
+  ])(
+    "uses the Opus 5 default for reasoning=$reasoning",
+    ({ reasoning, expected, maxTokens, fields }) => {
+      const model = bedrockModel({
+        id: "global.anthropic.claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      });
+      const options = testing.resolveSimpleBedrockOptions(model, { reasoning });
+
+      expect(options).toMatchObject({ maxTokens, reasoning: expected });
+      expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual(
+        fields
+          ? {
+              thinking: { type: "adaptive", display: "summarized" },
+              output_config: { effort: "high" },
+            }
+          : undefined,
+      );
+    },
+  );
+
+  it.each([
     { reasoning: undefined, expected: "high" },
     { reasoning: "off" as const, expected: "low" },
   ])("keeps Sonnet 5 adaptive for reasoning=$reasoning", ({ reasoning, expected }) => {

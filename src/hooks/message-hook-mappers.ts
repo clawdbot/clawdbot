@@ -29,6 +29,7 @@ import type {
   MessageSentHookContext,
   MessageTranscribedHookContext,
 } from "./internal-hooks.js";
+import { projectMessageHookMediaFacts, type MessageHookMediaFact } from "./message-hook-media.js";
 
 type CanonicalInboundMessageHookContext = {
   from: string;
@@ -58,6 +59,8 @@ type CanonicalInboundMessageHookContext = {
   surface?: string;
   threadId?: string | number;
   threadParentId?: string | number;
+  media?: MessageHookMediaFact[];
+  originalMedia?: MessageHookMediaFact[];
   // `mediaPath(s)` are files OpenClaw has already staged locally. `mediaUrl(s)`
   // are provider/media-server references that may not exist on this host.
   mediaPath?: string;
@@ -127,6 +130,19 @@ function assignRemoteMediaStagingMetadata(
   }
 }
 
+function projectHookMediaState(canonical: CanonicalInboundMessageHookContext) {
+  const stagingPending = canonical.mediaStagingPending === true;
+  const media = stagingPending ? undefined : canonical.media;
+  const originalMedia = canonical.originalMedia ?? (stagingPending ? canonical.media : undefined);
+  return {
+    ...(media?.length ? { media: media.map((entry) => Object.assign({}, entry)) } : {}),
+    ...(originalMedia?.length
+      ? { originalMedia: originalMedia.map((entry) => Object.assign({}, entry)) }
+      : {}),
+    ...(stagingPending ? { mediaStagingPending: true as const } : {}),
+  };
+}
+
 export function deriveInboundMessageHookContext(
   ctx: FinalizedMsgContext,
   overrides?: {
@@ -152,6 +168,7 @@ export function deriveInboundMessageHookContext(
   const media = hasStagedMediaProjection(ctx)
     ? resolveStagedMediaFacts(ctx)
     : resolveMediaFacts(ctx);
+  const hookMedia = projectMessageHookMediaFacts(media);
   const compact = (values: Array<string | undefined>) => {
     const entries = values.filter((value): value is string => Boolean(value));
     return entries.length > 0 ? entries : undefined;
@@ -195,6 +212,7 @@ export function deriveInboundMessageHookContext(
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
     threadParentId: ctx.ThreadParentId,
+    ...(hookMedia.length > 0 ? { media: hookMedia } : {}),
     mediaPath: firstMedia?.path ?? mediaPaths?.[0],
     mediaUrl: firstMedia?.url ?? firstMedia?.path ?? mediaUrls?.[0],
     mediaType: firstMedia?.contentType ?? firstMedia?.kind ?? mediaTypes?.[0],
@@ -424,6 +442,7 @@ export function toPluginInboundClaimEvent(
     isGroup: canonical.isGroup,
     commandAuthorized: extras?.commandAuthorized,
     wasMentioned: extras?.wasMentioned,
+    ...projectHookMediaState(canonical),
     metadata: {
       from: canonical.from,
       to: canonical.to,
@@ -437,12 +456,12 @@ export function toPluginInboundClaimEvent(
       replyToBody: canonical.replyToBody,
       replyToSender: canonical.replyToSender,
       replyToIsQuote: canonical.replyToIsQuote,
-      mediaPath: canonical.mediaPath,
-      mediaUrl: canonical.mediaUrl,
-      mediaType: canonical.mediaType,
-      mediaPaths: canonical.mediaPaths,
-      mediaUrls: canonical.mediaUrls,
-      mediaTypes: canonical.mediaTypes,
+      mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
+      mediaUrl: canonical.mediaStagingPending ? undefined : canonical.mediaUrl,
+      mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
+      mediaPaths: canonical.mediaStagingPending ? undefined : canonical.mediaPaths,
+      mediaUrls: canonical.mediaStagingPending ? undefined : canonical.mediaUrls,
+      mediaTypes: canonical.mediaStagingPending ? undefined : canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       groupId: canonical.groupId,
@@ -473,6 +492,7 @@ export function toPluginMessageReceivedEvent(
     ...(canonical.replyToIsQuote !== undefined ? { replyToIsQuote: canonical.replyToIsQuote } : {}),
     sessionKey: canonical.sessionKey,
     runId: canonical.runId,
+    ...projectHookMediaState(canonical),
     metadata: {
       to: canonical.to,
       provider: canonical.provider,
@@ -490,12 +510,12 @@ export function toPluginMessageReceivedEvent(
       replyToBody: canonical.replyToBody,
       replyToSender: canonical.replyToSender,
       replyToIsQuote: canonical.replyToIsQuote,
-      mediaPath: canonical.mediaPath,
-      mediaUrl: canonical.mediaUrl,
-      mediaType: canonical.mediaType,
-      mediaPaths: canonical.mediaPaths,
-      mediaUrls: canonical.mediaUrls,
-      mediaTypes: canonical.mediaTypes,
+      mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
+      mediaUrl: canonical.mediaStagingPending ? undefined : canonical.mediaUrl,
+      mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
+      mediaPaths: canonical.mediaStagingPending ? undefined : canonical.mediaPaths,
+      mediaUrls: canonical.mediaStagingPending ? undefined : canonical.mediaUrls,
+      mediaTypes: canonical.mediaStagingPending ? undefined : canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -535,6 +555,7 @@ export function toInternalMessageReceivedContext(
     accountId: canonical.accountId,
     conversationId: canonical.conversationId,
     messageId: canonical.messageId,
+    ...projectHookMediaState(canonical),
     metadata: {
       to: canonical.to,
       provider: canonical.provider,
@@ -544,12 +565,12 @@ export function toInternalMessageReceivedContext(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
-      mediaPath: canonical.mediaPath,
-      mediaUrl: canonical.mediaUrl,
-      mediaType: canonical.mediaType,
-      mediaPaths: canonical.mediaPaths,
-      mediaUrls: canonical.mediaUrls,
-      mediaTypes: canonical.mediaTypes,
+      mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
+      mediaUrl: canonical.mediaStagingPending ? undefined : canonical.mediaUrl,
+      mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
+      mediaPaths: canonical.mediaStagingPending ? undefined : canonical.mediaPaths,
+      mediaUrls: canonical.mediaStagingPending ? undefined : canonical.mediaUrls,
+      mediaTypes: canonical.mediaStagingPending ? undefined : canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,
@@ -602,8 +623,9 @@ function toInternalInboundMessageHookContextBase(canonical: CanonicalInboundMess
     senderUsername: canonical.senderUsername,
     provider: canonical.provider,
     surface: canonical.surface,
-    mediaPath: canonical.mediaPath,
-    mediaType: canonical.mediaType,
+    ...projectHookMediaState(canonical),
+    mediaPath: canonical.mediaStagingPending ? undefined : canonical.mediaPath,
+    mediaType: canonical.mediaStagingPending ? undefined : canonical.mediaType,
   };
 }
 

@@ -2,6 +2,7 @@
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
+  UPDATE_POST_CORE_CONVERGENCE_ENV,
 } from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
@@ -25,9 +26,11 @@ export function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> 
     process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
   const previousParentSupportsDoctorConfigWrite =
     process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
+  const previousPostCoreConvergence = process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
   process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
   process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] = "1";
   process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
+  process.env[UPDATE_POST_CORE_CONVERGENCE_ENV] = "1";
   return run().finally(() => {
     if (previousUpdateInProgress === undefined) {
       delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
@@ -45,6 +48,11 @@ export function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> 
     } else {
       process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] =
         previousParentSupportsDoctorConfigWrite;
+    }
+    if (previousPostCoreConvergence === undefined) {
+      delete process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
+    } else {
+      process.env[UPDATE_POST_CORE_CONVERGENCE_ENV] = previousPostCoreConvergence;
     }
   });
 }
@@ -112,6 +120,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
       [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+      [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
     },
   });
   if (!params.json) {
