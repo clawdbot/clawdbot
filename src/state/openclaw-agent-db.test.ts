@@ -932,7 +932,7 @@ describe("openclaw agent database", () => {
   });
 
   it("opens a v13 database that already contains additive board storage", () => {
-    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(14);
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(15);
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -1164,7 +1164,7 @@ describe("openclaw agent database", () => {
   });
 
   it("keeps additive heartbeat repair while upgrading schema version 12", () => {
-    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(14);
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(15);
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -2431,6 +2431,170 @@ describe("openclaw agent database", () => {
         )
         .all(),
     ).toEqual([{ key: "key-a" }]);
+  });
+
+  it("rejects a missing current-schema table instead of recreating it empty", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    drifted.exec("DROP TABLE auth_profile_store;");
+    drifted.close();
+
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      /missing table auth_profile_store/iu,
+    );
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_store'",
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      after.close();
+    }
+  });
+
+  it("rejects a missing stable v14 table before the v15 migration", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const damaged = new DatabaseSync(databasePath);
+    damaged.exec(`
+      DROP TABLE auth_profile_store;
+      PRAGMA user_version = 14;
+      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
+    `);
+    damaged.close();
+
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      /missing table auth_profile_store/iu,
+    );
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'auth_profile_store'",
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      after.close();
+    }
+  });
+
+  it("adds post-v14 suggestion tables during the v15 migration", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      DROP TABLE session_suggestions;
+      PRAGMA user_version = 14;
+      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const migrated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'session_suggestions'",
+        )
+        .get(),
+    ).toEqual({ name: "session_suggestions" });
+  });
+
+  it("rejects an inline unique constraint hidden behind a SQLite autoindex", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    drifted.exec(`
+      DROP TABLE cache_entries;
+      CREATE TABLE cache_entries (
+        scope TEXT NOT NULL UNIQUE,
+        key TEXT NOT NULL,
+        value_json TEXT,
+        blob BLOB,
+        expires_at INTEGER,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, key)
+      ) STRICT;
+      CREATE INDEX idx_agent_cache_expiry
+        ON cache_entries(scope, expires_at, key)
+        WHERE expires_at IS NOT NULL;
+      CREATE INDEX idx_agent_cache_updated
+        ON cache_entries(scope, updated_at DESC, key);
+    `);
+    drifted.close();
+
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      /unexpected unique index on cache_entries/iu,
+    );
+  });
+
+  it("rejects primary-key collation drift in a current-schema table", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    drifted.exec(`
+      DROP TABLE auth_profile_store;
+      CREATE TABLE auth_profile_store (
+        store_key TEXT COLLATE NOCASE NOT NULL PRIMARY KEY,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+    `);
+    drifted.close();
+
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      /column definitions differ for auth_profile_store/iu,
+    );
+  });
+
+  it("rejects a partially missing lazy board schema", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    drifted.exec("DROP TABLE board_widgets;");
+    drifted.close();
+
+    expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
+      /missing table board_widgets/iu,
+    );
   });
 
   it("rejects same-name transcript index drift when duplicate rows block repair", () => {
