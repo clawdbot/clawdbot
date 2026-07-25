@@ -256,7 +256,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         directPolicy: "allow", // allow (default) | block
         to: "+15555550123",
         prompt: "HEARTBEAT",
-        ackMaxChars: 300,
       },
       sandbox: {
         mode: "non-main",

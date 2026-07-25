@@ -92,6 +92,7 @@ export default definePluginEntry({
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     if (api.registrationMode === "full") {
       const realtimeBrowserSession = createCodexRealtimeBrowserSessionBroker({
+        getConfig: resolveCurrentConfig,
         getPluginConfig: resolveCurrentPluginConfig,
       });
       const unregisterRealtimeBrowserSession = registerRealtimeVoiceBrowserSessionBroker(
@@ -102,6 +103,18 @@ export default definePluginEntry({
         auth: "plugin",
         match: "exact",
         handler: realtimeBrowserSession.handler,
+      });
+      api.registerService({
+        id: "codex-oauth-realtime-browser-session-warmup",
+        start: () => {
+          void realtimeBrowserSession.warmup().catch((error: unknown) => {
+            api.logger.debug?.(
+              `Codex OAuth realtime warmup unavailable: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
+        },
       });
       api.lifecycle.registerRuntimeLifecycle({
         id: "codex-oauth-realtime-browser-session",

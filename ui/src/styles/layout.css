@@ -1849,7 +1849,7 @@ html.openclaw-native-macos
 }
 
 .sidebar-child-session-toggle--running {
-  color: var(--accent);
+  color: var(--run);
 }
 
 .sidebar-child-session-toggle--failed {

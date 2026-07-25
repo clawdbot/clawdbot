@@ -57,6 +57,9 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       overflow: hidden;
       border: 1px solid color-mix(in srgb, var(--border-strong) 80%, transparent);
       border-radius: var(--radius-lg);
+      /* Deliberately darker than any theme surface: the lightbox is a
+         photo-viewer chrome that stays near-black in light mode too, so the
+         white text and white-alpha borders below assume this literal. */
       background: #07090f;
       box-shadow: 0 28px 90px rgba(0, 0, 0, 0.6);
     }

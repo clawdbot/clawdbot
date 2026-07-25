@@ -12,11 +12,13 @@ import {
 
 const sharedClientMocks = vi.hoisted(() => ({
   getClient: vi.fn(),
+  getSharedClient: vi.fn(),
   releaseClient: vi.fn(),
 }));
 
 vi.mock("./app-server/shared-client.js", () => ({
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getClient,
+  getSharedCodexAppServerClient: sharedClientMocks.getSharedClient,
   releaseLeasedSharedCodexAppServerClient: sharedClientMocks.releaseClient,
 }));
 
@@ -67,8 +69,11 @@ function createFakeClient(
 ): {
   client: CodexAppServerClient;
   methods: string[];
+  emitClose: () => void;
+  emitNotification: (notification: CodexServerNotification) => void;
   readRealtimeStartSignal: () => AbortSignal | undefined;
 } {
+  let closeHandler: ((client: CodexAppServerClient) => void) | undefined;
   let notificationHandler: ((notification: CodexServerNotification) => void) | undefined;
   let realtimeStartSignal: AbortSignal | undefined;
   const methods: string[] = [];
@@ -144,24 +149,124 @@ function createFakeClient(
         notificationHandler = undefined;
       };
     }),
+    addCloseHandler: vi.fn((handler: (client: CodexAppServerClient) => void) => {
+      closeHandler = handler;
+    }),
   } as unknown as CodexAppServerClient;
   return {
     client,
     methods,
+    emitClose: () => closeHandler?.(client),
+    emitNotification: (notification) => notificationHandler?.(notification),
     readRealtimeStartSignal: () => realtimeStartSignal,
   };
+}
+
+function useFakeClient(fake: ReturnType<typeof createFakeClient>): void {
+  sharedClientMocks.getClient.mockResolvedValue(fake.client);
+  sharedClientMocks.getSharedClient.mockResolvedValue(fake.client);
 }
 
 describe("Codex OAuth realtime browser session", () => {
   beforeEach(() => {
     sharedClientMocks.getClient.mockReset();
+    sharedClientMocks.getSharedClient.mockReset();
     sharedClientMocks.releaseClient.mockReset();
+  });
+
+  it("advertises the broker only after subscription warmup succeeds", async () => {
+    const fake = createFakeClient();
+    useFakeClient(fake);
+    const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
+      getPluginConfig: () => ({}),
+    });
+
+    expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(false);
+    await realtime.warmup();
+    expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(true);
+    expect(sharedClientMocks.getSharedClient).toHaveBeenCalledWith(
+      expect.objectContaining({ authRequirement: "subscription" }),
+    );
+
+    await realtime.cleanup();
+  });
+
+  it("probes again after failed warmup without advertising or reserving the failure", async () => {
+    const fake = createFakeClient();
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    sharedClientMocks.getSharedClient.mockRejectedValueOnce(new Error("ChatGPT login required"));
+    const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
+      getPluginConfig: () => ({}),
+    });
+
+    await expect(realtime.warmup()).rejects.toThrow("ChatGPT login required");
+    expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(false);
+    sharedClientMocks.getSharedClient.mockRejectedValueOnce(new Error("ChatGPT login required"));
+    await expect(realtime.broker.createBrowserSession({ providerConfig: {} })).rejects.toThrow(
+      "ChatGPT login required",
+    );
+
+    useFakeClient(fake);
+    now.mockReturnValue(11_000);
+    expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(false);
+    await vi.waitFor(() => {
+      expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(true);
+    });
+    await Promise.all(
+      Array.from({ length: 8 }, () => realtime.broker.createBrowserSession({ providerConfig: {} })),
+    );
+
+    await realtime.cleanup();
+    now.mockRestore();
+  });
+
+  it("revalidates after the warmed Codex client closes", async () => {
+    const first = createFakeClient();
+    const replacement = createFakeClient();
+    useFakeClient(first);
+    const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
+      getPluginConfig: () => ({}),
+    });
+    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
+
+    try {
+      await realtime.warmup();
+      const session = await realtime.broker.createBrowserSession({ providerConfig: {} });
+      if (session.transport !== "webrtc") {
+        throw new Error("Expected Codex browser sessions to use WebRTC");
+      }
+      await realtime.handler(createSdpRequest(session.clientSecret), createResponseHarness().res);
+
+      sharedClientMocks.getSharedClient.mockResolvedValue(replacement.client);
+      first.emitClose();
+
+      await vi.waitFor(() => {
+        expect(realtime.broker.isConfigured({ providerConfig: {} })).toBe(true);
+        expect(sharedClientMocks.releaseClient).toHaveBeenCalledWith(first.client);
+      });
+      await expect(
+        realtime.broker.createBrowserSession({ providerConfig: {} }),
+      ).resolves.toMatchObject({
+        provider: "openai",
+        transport: "webrtc",
+      });
+      expect(sharedClientMocks.getSharedClient).toHaveBeenLastCalledWith(
+        expect.objectContaining({ authRequirement: "subscription" }),
+      );
+    } finally {
+      unregister();
+      await realtime.cleanup();
+    }
   });
 
   it("redeems browser reservations once and invalidates pending ones on cleanup", async () => {
     const fake = createFakeClient();
-    sharedClientMocks.getClient.mockResolvedValue(fake.client);
+    useFakeClient(fake);
     const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
     const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
@@ -272,8 +377,9 @@ describe("Codex OAuth realtime browser session", () => {
 
   it("aborts and closes backend startup when the browser offer disconnects", async () => {
     const fake = createFakeClient({ stallRealtimeStart: true });
-    sharedClientMocks.getClient.mockResolvedValue(fake.client);
+    useFakeClient(fake);
     const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
     const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
@@ -314,8 +420,9 @@ describe("Codex OAuth realtime browser session", () => {
         },
       ],
     });
-    sharedClientMocks.getClient.mockResolvedValue(fake.client);
+    useFakeClient(fake);
     const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
     const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
@@ -354,8 +461,9 @@ describe("Codex OAuth realtime browser session", () => {
         },
       ],
     });
-    sharedClientMocks.getClient.mockResolvedValue(fake.client);
+    useFakeClient(fake);
     const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
     const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
@@ -382,10 +490,46 @@ describe("Codex OAuth realtime browser session", () => {
     }
   });
 
+  it("releases the backend when Codex reports an error after startup", async () => {
+    const fake = createFakeClient();
+    useFakeClient(fake);
+    const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
+      getPluginConfig: () => ({}),
+    });
+    const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
+    const reservation = await realtime.broker.createBrowserSession({ providerConfig: {} });
+    if (reservation.transport !== "webrtc") {
+      throw new Error("Expected Codex browser session to use WebRTC");
+    }
+    const response = createResponseHarness();
+
+    try {
+      await expect(
+        realtime.handler(createSdpRequest(reservation.clientSecret), response.res),
+      ).resolves.toBe(true);
+
+      fake.emitNotification({
+        method: "thread/realtime/error",
+        params: { threadId: "thread-1", message: "backend failed" },
+      });
+
+      await vi.waitFor(() => {
+        expect(sharedClientMocks.releaseClient).toHaveBeenCalledWith(fake.client);
+      });
+      expect(fake.methods).toContain("thread/realtime/stop");
+      expect(fake.methods).toContain("thread/unsubscribe");
+    } finally {
+      unregister();
+      await realtime.cleanup();
+    }
+  });
+
   it("closes the backend when the browser disconnects while the SDP answer is flushing", async () => {
     const fake = createFakeClient();
-    sharedClientMocks.getClient.mockResolvedValue(fake.client);
+    useFakeClient(fake);
     const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
     const unregister = registerRealtimeVoiceBrowserSessionBroker(realtime.broker);
@@ -414,7 +558,10 @@ describe("Codex OAuth realtime browser session", () => {
   });
 
   it("caps concurrent pending and active browser sessions", async () => {
+    const fake = createFakeClient();
+    useFakeClient(fake);
     const realtime = createCodexRealtimeBrowserSessionBroker({
+      getConfig: () => ({}),
       getPluginConfig: () => ({}),
     });
     await Promise.all(

@@ -4,8 +4,15 @@ import type { PluginHookToolRequesterContext } from "../../plugins/hook-types.js
 import type {
   BeforeToolCallFailureDisposition,
   DeferredPluginToolApproval,
-  requestDeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
+
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
@@ -15,14 +22,6 @@ const NATIVE_HOOK_RELAY_EVENTS = [
 ] as const;
 
 const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
-
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
 
 export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
 export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
@@ -118,7 +117,7 @@ type NativeHookRelayCommandOptions = {
   timeoutMs?: number;
 };
 
-type NativeHookRelayCommandForEventOptions = {
+export type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 
@@ -153,6 +152,8 @@ export type NativeHookRelayInvocationMetadata = Partial<
   >
 >;
 
+type NativeHookRelayPermissionDecision = "allow" | "deny";
+
 export type NativeHookRelayProviderAdapter = {
   normalizeMetadata: (rawPayload: JsonValue) => NativeHookRelayInvocationMetadata;
   readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
@@ -169,8 +170,6 @@ export type NativeHookRelayProviderAdapter = {
     message?: string,
   ) => NativeHookRelayProcessResponse;
 };
-
-type NativeHookRelayPermissionDecision = "allow" | "deny";
 
 export type NativeHookRelayPermissionApprovalResult =
   | NativeHookRelayPermissionDecision
@@ -205,8 +204,6 @@ export type NativeHookRelayPermissionApprovalRequester = (
   request: NativeHookRelayPermissionApprovalRequest,
 ) => Promise<NativeHookRelayPermissionApprovalResult>;
 
-export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
-
 export type NativeHookRelayPreToolUseApproval = {
   deferredApproval: DeferredPluginToolApproval;
   originalParamsFingerprint: string;
@@ -232,10 +229,12 @@ export type NativeHookRelayBridgeRegistration = {
   server: Server;
 };
 
-export type NativeHookRelayBridgeRequestAuth = {
-  provider: NativeHookRelayProvider;
-  relayId: string;
-  token: string;
-  registration: ActiveNativeHookRelayRegistration;
-  bridge: NativeHookRelayBridgeRegistration;
+export type NativeHookRelaySharedState = {
+  relays: Map<string, ActiveNativeHookRelayRegistration>;
+  relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
+  invocations: NativeHookRelayInvocation[];
+  pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
+  pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
+  permissionApprovalWindows: Map<string, number[]>;
+  permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;
 };

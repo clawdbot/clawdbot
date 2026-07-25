@@ -47,7 +47,7 @@ class ResizableDivider extends OpenClawLitElement {
       left: 50%;
       width: 1px;
       transform: translateX(-50%);
-      background: var(--border, #333);
+      background: var(--border, #1e2028);
       transition:
         background 150ms ease-out,
         width 150ms ease-out;
@@ -56,10 +56,10 @@ class ResizableDivider extends OpenClawLitElement {
     :host(.dragging)::after,
     :host(:focus-visible)::after {
       width: 2px;
-      background: var(--accent, #007bff);
+      background: var(--accent, #ff5c5c);
     }
     :host(:focus-visible) {
-      outline: 2px solid var(--accent, #007bff);
+      outline: 2px solid var(--accent, #ff5c5c);
       outline-offset: 2px;
     }
     :host([orientation="horizontal"]) {

@@ -1,7 +1,8 @@
 // Experimental ChatGPT OAuth browser session broker for Control UI realtime Talk.
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   RealtimeVoiceBrowserSessionBroker,
   RealtimeVoiceBrowserSessionCreateRequest,
@@ -18,6 +19,7 @@ import { assertCodexThreadStartResponse } from "./app-server/protocol-validators
 import type { CodexThreadStartParams } from "./app-server/protocol.js";
 import {
   getLeasedSharedCodexAppServerClient,
+  getSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
 
@@ -27,6 +29,7 @@ const CODEX_REALTIME_SESSION_TTL_MS = 30 * 60_000;
 const CODEX_REALTIME_MAX_SESSIONS = 8;
 const CODEX_REALTIME_MAX_SDP_BYTES = 256 * 1024;
 const CODEX_REALTIME_START_TIMEOUT_MS = 60_000;
+const CODEX_REALTIME_PROBE_COOLDOWN_MS = 1_000;
 const CODEX_REALTIME_OFFER_HANDLER = Symbol.for("openclaw.codexRealtimeOfferHandler");
 
 type PendingOffer = {
@@ -178,28 +181,23 @@ function waitForRealtimeSdpAnswer(
 }
 
 export function createCodexRealtimeBrowserSessionBroker(params: {
+  getConfig: () => OpenClawConfig | undefined;
   getPluginConfig: () => unknown;
 }): {
   broker: RealtimeVoiceBrowserSessionBroker;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  warmup: () => Promise<void>;
   cleanup: () => Promise<void>;
 } {
   const pendingOffers = new Map<string, PendingOffer>();
   const reservations = new Set<string>();
   const activeSessions = new Set<ActiveSession>();
   const inFlightHandlers = new Set<Promise<boolean>>();
+  const readyClients = new Set<CodexAppServerClient>();
   const shutdownController = new AbortController();
   let cleanedUp = false;
-
-  const prunePendingOffers = () => {
-    const now = Date.now();
-    for (const [token, offer] of pendingOffers) {
-      if (offer.expiresAt <= now) {
-        pendingOffers.delete(token);
-        reservations.delete(token);
-      }
-    }
-  };
+  let probePromise: Promise<void> | undefined;
+  let nextProbeAt = 0;
 
   const closeSession = async (session: ActiveSession) => {
     if (!activeSessions.delete(session)) {
@@ -224,6 +222,94 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
     releaseLeasedSharedCodexAppServerClient(session.client);
   };
 
+  const resolveSubscriptionClientOptions = (request: {
+    cfg?: OpenClawConfig;
+    agentId?: string;
+  }) => {
+    const pluginConfig = readCodexPluginConfig(params.getPluginConfig());
+    const agentDir =
+      request.agentId && request.cfg ? resolveAgentDir(request.cfg, request.agentId) : undefined;
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig,
+      config: request.cfg,
+      agentDir,
+    });
+    return {
+      startOptions: runtime.start,
+      pluginConfig,
+      config: request.cfg,
+      agentDir,
+      authRequirement: "subscription" as const,
+      timeoutMs: CODEX_REALTIME_START_TIMEOUT_MS,
+    };
+  };
+
+  const ensureSubscriptionRuntime = async (request: { cfg?: OpenClawConfig; agentId?: string }) => {
+    const client = await getSharedCodexAppServerClient({
+      ...resolveSubscriptionClientOptions(request),
+      abandonSignal: shutdownController.signal,
+    });
+    if (!readyClients.has(client)) {
+      readyClients.add(client);
+      client.addCloseHandler((closedClient) => {
+        readyClients.delete(closedClient);
+        void Promise.allSettled(
+          [...activeSessions]
+            .filter((session) => session.client === closedClient)
+            .map((session) => closeSession(session)),
+        );
+        nextProbeAt = 0;
+        requestProbe();
+      });
+    }
+  };
+
+  const runProbe = () => {
+    if (probePromise) {
+      return probePromise;
+    }
+    const cfg = params.getConfig();
+    nextProbeAt = Date.now() + CODEX_REALTIME_PROBE_COOLDOWN_MS;
+    const running = ensureSubscriptionRuntime({
+      cfg,
+      ...(cfg ? { agentId: resolveDefaultAgentId(cfg) } : {}),
+    }).finally(() => {
+      if (probePromise === running) {
+        probePromise = undefined;
+      }
+    });
+    probePromise = running;
+    return running;
+  };
+
+  function requestProbe(): void {
+    if (
+      cleanedUp ||
+      shutdownController.signal.aborted ||
+      probePromise ||
+      Date.now() < nextProbeAt
+    ) {
+      return;
+    }
+    // Readiness stays false while the async Codex probe runs. This lets auth or
+    // process recovery become visible without shadowing another healthy provider.
+    void runProbe().catch(() => undefined);
+  }
+
+  const warmup = async () => {
+    await runProbe();
+  };
+
+  const prunePendingOffers = () => {
+    const now = Date.now();
+    for (const [token, offer] of pendingOffers) {
+      if (offer.expiresAt <= now) {
+        pendingOffers.delete(token);
+        reservations.delete(token);
+      }
+    }
+  };
+
   const broker: RealtimeVoiceBrowserSessionBroker = {
     id: "codex-oauth",
     providerId: "openai",
@@ -233,11 +319,23 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
       supportsToolCalls: false,
       supportsVideoFrames: false,
     },
-    // Native ChatGPT login state belongs to Codex and is verified by app-server.
-    // Synchronous provider discovery must not start app-server; the subscription
-    // auth requirement below gates thread creation without exposing its OAuth token.
-    isConfigured: () => true,
+    isConfigured: () => {
+      if (cleanedUp || shutdownController.signal.aborted) {
+        return false;
+      }
+      if (readyClients.size > 0) {
+        return true;
+      }
+      requestProbe();
+      return false;
+    },
     createBrowserSession: async (request: RealtimeVoiceBrowserSessionCreateRequest) => {
+      if (cleanedUp || shutdownController.signal.aborted) {
+        throw new Error("Codex OAuth realtime is stopping; restart Gateway and try again");
+      }
+      // Revalidate the request's exact agent/runtime before the Gateway persists a
+      // client voice session. The warmed shared process makes this path cheap.
+      await ensureSubscriptionRuntime(request);
       if (cleanedUp || shutdownController.signal.aborted) {
         throw new Error("Codex OAuth realtime is stopping; restart Gateway and try again");
       }
@@ -316,25 +414,10 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
         throw new Error("Codex realtime session stopped during startup");
       }
 
-      const pluginConfig = readCodexPluginConfig(params.getPluginConfig());
-      const agentDir =
-        offer.request.agentId && offer.request.cfg
-          ? resolveAgentDir(offer.request.cfg, offer.request.agentId)
-          : undefined;
-      const runtime = resolveCodexAppServerRuntimeOptions({
-        pluginConfig,
-        config: offer.request.cfg,
-        agentDir,
-      });
       // Share the agent's normal Codex app-server process. A fresh ephemeral thread
       // keeps realtime from replacing a live normal turn on the bound Codex thread.
       client = await getLeasedSharedCodexAppServerClient({
-        startOptions: runtime.start,
-        pluginConfig,
-        config: offer.request.cfg,
-        agentDir,
-        authRequirement: "subscription",
-        timeoutMs: CODEX_REALTIME_START_TIMEOUT_MS,
+        ...resolveSubscriptionClientOptions(offer.request),
         abandonSignal: lifecycleSignal,
       });
 
@@ -366,6 +449,13 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
           startupController.abort(error);
         }
       };
+      const closeAfterStartup = () => {
+        // During startup the request handler owns ordered cleanup. Once the SDP
+        // response is ready, terminal notifications must release the live session.
+        if (startupComplete && session) {
+          void closeSession(session);
+        }
+      };
       const disposeNotificationHandler = client.addNotificationHandler((notification) => {
         const notificationParams = readNotificationParams(notification.params);
         if (notificationParams.threadId !== threadId) {
@@ -387,17 +477,14 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
           );
           rejectSdp(error);
           stopStartup(error);
+          closeAfterStartup();
           return;
         }
         if (notification.method === "thread/realtime/closed") {
           const error = new Error("Codex realtime session closed before returning an SDP answer");
           rejectSdp(error);
           stopStartup(error);
-          // During startup the request handler owns ordered cleanup. Once the SDP
-          // response is ready, terminal notifications must release the live session.
-          if (startupComplete && session) {
-            void closeSession(session);
-          }
+          closeAfterStartup();
         }
       });
       const timer = setTimeout(() => {
@@ -536,7 +623,7 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
     reservations.clear();
   };
 
-  return { broker, handler, cleanup };
+  return { broker, handler, warmup, cleanup };
 }
 
 export { CODEX_REALTIME_OFFER_PATH };

@@ -139,7 +139,6 @@ extensions/line/src/bot-handlers.test.ts
 extensions/lmstudio/src/setup.test.ts
 extensions/lmstudio/src/setup.ts
 extensions/matrix/src/cli.test.ts
-extensions/matrix/src/cli.ts
 extensions/matrix/src/matrix/actions/verification.test.ts
 extensions/matrix/src/matrix/client/config.ts
 extensions/matrix/src/matrix/monitor/events.test.ts
@@ -463,7 +462,6 @@ src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
 src/agents/harness/selection.ts
 src/agents/main-session-restart-recovery.test.ts
-src/agents/main-session-restart-recovery.ts
 src/agents/model-auth-availability.ts
 src/agents/model-auth.profiles.test.ts
 src/agents/model-auth.test.ts
@@ -866,7 +864,6 @@ src/infra/exec-approvals-allowlist.ts
 src/infra/exec-approvals-store.test.ts
 src/infra/exec-authorization-plan.ts
 src/infra/heartbeat-runner.returns-default-unset.test.ts
-src/infra/heartbeat-runner.ts
 src/infra/host-env-security.test.ts
 src/infra/infra-runtime.test.ts
 src/infra/net/fetch-guard.ssrf.test.ts

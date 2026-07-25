@@ -11,22 +11,6 @@ import {
 
 type TerminalDock = Exclude<DockPanelSide, "left">;
 
-export function renderTerminalPanelResizer(
-  fullscreen: boolean,
-  dock: TerminalDock,
-  startResize: (event: PointerEvent) => void,
-): TemplateResult | typeof nothing {
-  if (fullscreen) {
-    return nothing;
-  }
-  return html`<div
-    class="tp-resizer tp-resizer--${dock}"
-    @pointerdown=${startResize}
-    role="separator"
-    aria-label=${t("terminal.resize")}
-  ></div>`;
-}
-
 export function renderTerminalPanelToolbar(
   fullscreen: boolean,
   dock: TerminalDock,
