@@ -1681,6 +1681,38 @@ describe("memory index", () => {
     expect((third as unknown as { closed: boolean }).closed).toBe(false);
   });
 
+  it("canonicalizes agent ids before builtin manager acquisition", async () => {
+    const cfg = createCfg({ model: "canonical-model" });
+    const first = await RuntimeMemoryIndexManager.get({ cfg, agentId: "Main-Agent" });
+    const second = await RuntimeMemoryIndexManager.get({ cfg, agentId: "main-agent" });
+    if (!first || !second) {
+      throw new Error("Expected canonical memory index managers");
+    }
+    managersForCleanup.add(first);
+    managersForCleanup.add(second);
+    expect(second).toBe(first);
+  });
+
+  it("retires the prior builtin manager when an agent workspace changes", async () => {
+    const firstCfg = createCfg({ model: "workspace-model" });
+    const secondCfg = createCfg({ model: "workspace-model" });
+    if (!firstCfg.agents?.defaults || !secondCfg.agents?.defaults) {
+      throw new Error("Expected agent defaults");
+    }
+    firstCfg.agents.defaults.workspace = path.join(fixtureRoot, "workspace-a");
+    secondCfg.agents.defaults.workspace = path.join(fixtureRoot, "workspace-b");
+
+    const first = await RuntimeMemoryIndexManager.get({ cfg: firstCfg, agentId: "main" });
+    const second = await RuntimeMemoryIndexManager.get({ cfg: secondCfg, agentId: "main" });
+    if (!first || !second) {
+      throw new Error("Expected workspace memory index managers");
+    }
+    managersForCleanup.add(first);
+    managersForCleanup.add(second);
+    expect(second === first).toBe(false);
+    expect((first as unknown as { closed: boolean }).closed).toBe(true);
+  });
+
   it("does not block another agent while one scope retires its manager", async () => {
     const firstCfg = createCfg({
       model: "first-model",

@@ -237,10 +237,8 @@ export async function closeMemoryIndexManagersForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   await closeMemoryIndexManagersForScope({
-    agentId: params.agentId,
-    workspaceDir,
+    agentId: normalizeAgentId(params.agentId),
     purpose: "default",
   });
 }
@@ -316,28 +314,22 @@ function isMemoryIndexManagerCacheKeyInScope(
   key: string,
   params: {
     agentId: string;
-    workspaceDir: string;
     purpose: MemoryIndexManagerPurpose;
   },
 ): boolean {
-  return (
-    key.startsWith(`${params.agentId}:${params.workspaceDir}:`) &&
-    key.endsWith(`:${params.purpose}`)
-  );
+  return key.startsWith(`${params.agentId}:`) && key.endsWith(`:${params.purpose}`);
 }
 
 function resolveMemoryIndexManagerScopeKey(params: {
   agentId: string;
-  workspaceDir: string;
   purpose: MemoryIndexManagerPurpose;
 }): string {
-  return JSON.stringify([params.agentId, params.workspaceDir, params.purpose]);
+  return JSON.stringify([params.agentId, params.purpose]);
 }
 
 async function runMemoryIndexManagerScopeOperation<T>(
   params: {
     agentId: string;
-    workspaceDir: string;
     purpose: MemoryIndexManagerPurpose;
   },
   operation: () => Promise<T>,
@@ -371,7 +363,6 @@ async function runMemoryIndexManagerScopeOperation<T>(
 
 async function closeMemoryIndexManagersForScopeUnlocked(params: {
   agentId: string;
-  workspaceDir: string;
   purpose: MemoryIndexManagerPurpose;
   exceptKey?: string;
 }): Promise<void> {
@@ -407,7 +398,6 @@ async function closeMemoryIndexManagersForScopeUnlocked(params: {
 
 async function closeMemoryIndexManagersForScope(params: {
   agentId: string;
-  workspaceDir: string;
   purpose: MemoryIndexManagerPurpose;
   exceptKey?: string;
 }): Promise<void> {
@@ -518,24 +508,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     purpose?: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const agentId = normalizeAgentId(params.agentId);
     const purpose =
       params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
-    return await runMemoryIndexManagerScopeOperation(
-      { agentId: params.agentId, workspaceDir, purpose },
-      async () => {
-        if (INDEX_GLOBAL_LIFECYCLE.closeFailed) {
-          try {
-            await closeAllMemoryIndexManagersUnlocked();
-            INDEX_GLOBAL_LIFECYCLE.closeFailed = false;
-          } catch (err) {
-            INDEX_GLOBAL_LIFECYCLE.closeFailed = true;
-            throw err;
-          }
+    return await runMemoryIndexManagerScopeOperation({ agentId, purpose }, async () => {
+      if (INDEX_GLOBAL_LIFECYCLE.closeFailed) {
+        try {
+          await closeAllMemoryIndexManagersUnlocked();
+          INDEX_GLOBAL_LIFECYCLE.closeFailed = false;
+        } catch (err) {
+          INDEX_GLOBAL_LIFECYCLE.closeFailed = true;
+          throw err;
         }
-        return await MemoryIndexManager.getWithinGlobalLifecycle(params);
-      },
-    );
+      }
+      return await MemoryIndexManager.getWithinGlobalLifecycle({ ...params, agentId });
+    });
   }
 
   private static async getWithinGlobalLifecycle(params: {
@@ -603,7 +590,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const cachedManager = INDEX_CACHE.get(key);
     await closeMemoryIndexManagersForScopeUnlocked({
       agentId,
-      workspaceDir,
       purpose,
       ...(cachedManager?.closed ? {} : { exceptKey: key }),
     });
