@@ -11,7 +11,7 @@ type DetailPanel = HTMLElement & {
   updateComplete: Promise<unknown>;
 };
 
-describe.runIf(browserMode)("chat markdown sidebar layout", () => {
+describe.runIf(browserMode)("chat sidebar layout", () => {
   it("keeps long markdown scrollable inside a bounded sidebar", async () => {
     const container = document.createElement("div");
     container.style.cssText = "display:flex;width:480px;height:320px;";
@@ -37,6 +37,42 @@ describe.runIf(browserMode)("chat markdown sidebar layout", () => {
       content!.scrollTop = content!.scrollHeight;
       await new Promise(requestAnimationFrame);
       expect(content!.scrollTop).toBeGreaterThan(0);
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("keeps long files scrollable inside CodeMirror", async () => {
+    const container = document.createElement("div");
+    container.style.cssText = "display:flex;width:480px;height:320px;";
+
+    const panel = document.createElement("openclaw-chat-detail-panel") as DetailPanel;
+    panel.className = "chat-sidebar";
+    panel.content = {
+      kind: "file",
+      path: "src/long-example.ts",
+      name: "long-example.ts",
+      language: "typescript",
+      content: Array.from(
+        { length: 200 },
+        (_, index) => `export const value${index + 1} = ${index + 1};`,
+      ).join("\n"),
+    };
+    container.append(panel);
+    document.body.append(container);
+
+    try {
+      await panel.updateComplete;
+      await expect
+        .poll(() => panel.querySelector<HTMLElement>(".cm-scroller"), { timeout: 5_000 })
+        .not.toBeNull();
+      const scroller = panel.querySelector<HTMLElement>(".cm-scroller");
+      expect(scroller).not.toBeNull();
+      expect(scroller!.clientHeight).toBeLessThan(scroller!.scrollHeight);
+
+      scroller!.scrollTop = scroller!.scrollHeight;
+      await new Promise(requestAnimationFrame);
+      expect(scroller!.scrollTop).toBeGreaterThan(0);
     } finally {
       container.remove();
     }

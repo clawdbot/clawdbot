@@ -1280,9 +1280,10 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const currentMatchIndex = matches.length
       ? Math.min(this.fileSearchMatchIndex, matches.length - 1)
       : 0;
-    // Markdown previews need a bounded host wrapper so their inner content can
-    // shrink and scroll. Content-sized kinds keep auto height.
-    const fillHost = this.visibleContent?.kind === "markdown";
+    // Markdown previews and file editors need a bounded host wrapper so their
+    // inner content can shrink and scroll. Content-sized kinds keep auto height.
+    const fillHost =
+      this.visibleContent?.kind === "file" || this.visibleContent?.kind === "markdown";
     return html`
       <div class=${fillHost ? "sidebar-panel-host--fill" : ""} @click=${this.handlePanelClick}>
         ${renderMarkdownSidebar({
