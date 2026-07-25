@@ -1,6 +1,7 @@
 import { createRouter } from "@openclaw/uirouter";
 import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import {
+  INTERNAL_SESSION_PATH_PARAM,
   pathForRoute,
   routeIdFromPath,
   sessionRefFromPath,
@@ -108,9 +109,16 @@ function routerHistoryLocation(location: ReturnType<RouterHistory["location"]>, 
     };
   }
   const sessionRef = sessionRefFromPath(location.pathname, basePath);
-  return sessionRef
-    ? { ...location, pathname: pathForRoute(sessionRef.face, basePath) }
-    : location;
+  if (!sessionRef) {
+    return location;
+  }
+  const search = new URLSearchParams(location.search);
+  search.set(INTERNAL_SESSION_PATH_PARAM, location.pathname);
+  return {
+    ...location,
+    pathname: pathForRoute(sessionRef.face, basePath),
+    search: `?${search.toString()}`,
+  };
 }
 
 export async function startApplicationRouter(
@@ -176,6 +184,7 @@ export {
   APP_ROUTE_IDS,
   isRouteId,
   locationForRoute,
+  pathForSession,
   pathForRoute,
   routeIdFromPath,
   type RouteId,

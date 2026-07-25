@@ -40,9 +40,7 @@ describe("model setup first-run redirect", () => {
   it("compares the canonical route location directly", () => {
     const expected = { pathname: "/chat/main", search: "", hash: "" };
     expect(locationsMatch({ ...expected }, expected)).toBe(true);
-    expect(
-      locationsMatch({ pathname: "/chat/other", search: "", hash: "" }, expected),
-    ).toBe(false);
+    expect(locationsMatch({ pathname: "/chat/other", search: "", hash: "" }, expected)).toBe(false);
   });
 
   it("detects once, caches the result, and redirects once", async () => {

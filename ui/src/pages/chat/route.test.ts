@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { loadChatRoute, resolveSessionPrefix } from "./route.ts";
 
 const sessionId = "12345678-90ab-cdef-1234-567890abcdef";
@@ -100,8 +100,11 @@ describe("loadChatRoute", () => {
       signal,
     );
     expect(redirected).toEqual({
-      type: "redirect",
-      location: {
+      kind: "session",
+      sessionKey: `agent:main:dashboard:${sessionId}`,
+      draft: "ship",
+      face: "chat",
+      canonicalLocation: {
         pathname: "/chat/main/deploy-monitor-12345678",
         search: "?draft=ship",
         hash: "",

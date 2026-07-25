@@ -405,9 +405,11 @@ describe("routeIdFromPath", () => {
       agentId: "wrong",
       shortId: "1234567890ab",
     });
-    expect(
-      sessionRefFromPath("/chat/12345678-90ab-cdef-1234-567890abcdef"),
-    ).toEqual({ face: "chat", kind: "session", shortId: "1234567890abcdef1234567890abcdef" });
+    expect(sessionRefFromPath("/chat/12345678-90ab-cdef-1234-567890abcdef")).toEqual({
+      face: "chat",
+      kind: "session",
+      shortId: "1234567890abcdef1234567890abcdef",
+    });
     expect(routeIdFromPath("/dashboard/main/deploy-12345678")).toBe("dashboard");
     expect(inferBasePathFromPathname("/ui/chat/main/deploy-12345678")).toBe("/ui");
   });

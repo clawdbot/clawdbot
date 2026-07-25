@@ -12,6 +12,7 @@ const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 const SESSION_ID_PREFIX_RE = /^[0-9a-f]{8,32}$/i;
 const SESSION_REF_SUFFIX_RE = /(?:^|-)([0-9a-f]{8,32})$/i;
 const SESSION_SLUG_MAX_LENGTH = 48;
+export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
@@ -179,7 +180,7 @@ export function sessionRefFromPath(pathname: string, basePath = ""): SessionPath
       continue;
     }
     const segments = normalizedPath.slice(prefix.length).split("/");
-    if (segments.length < 1 || segments.length > 2) {
+    if (segments.length > 2) {
       return null;
     }
     const first = decodePathSegment(segments[0] ?? "");
@@ -194,9 +195,7 @@ export function sessionRefFromPath(pathname: string, basePath = ""): SessionPath
     }
     const sessionRef = decodePathSegment(segments[1] ?? "");
     const shortId = sessionRef ? shortIdFromSessionRef(sessionRef) : null;
-    return shortId
-      ? { face, kind: "session", agentId: normalizeAgentId(first), shortId }
-      : null;
+    return shortId ? { face, kind: "session", agentId: normalizeAgentId(first), shortId } : null;
   }
   return null;
 }

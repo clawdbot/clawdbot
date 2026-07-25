@@ -3,8 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { pathForSession } from "../../app-route-paths.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { mobileNavLayoutMediaQuery, shouldMergeChatChrome } from "../../app/mobile-nav-layout.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -138,6 +138,10 @@ export class ChatPage extends OpenClawLightDomElement {
       this.consumedDraftData !== data &&
       (!this.layout || activePane?.sessionKey === data.sessionKey);
     if (changedProperties.has("data")) {
+      if (data?.canonicalLocation) {
+        this.context.replace(data.face ?? "chat", data.canonicalLocation);
+        return;
+      }
       this.syncRouteToActivePane();
     }
     if (data && routeDraftWasRendered) {
@@ -396,11 +400,7 @@ export class ChatPage extends OpenClawLightDomElement {
     }
   }
 
-  private readonly handlePaneFaceChange = (
-    paneId: string,
-    sessionKey: string,
-    face: BoardFace,
-  ) => {
+  private readonly handlePaneFaceChange = (paneId: string, sessionKey: string, face: BoardFace) => {
     const layout = this.layout;
     if (layout && layout.activePaneId !== paneId) {
       this.persistLayout(setActivePane(layout, paneId));

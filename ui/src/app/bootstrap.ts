@@ -61,7 +61,6 @@ function normalizeInitialApplicationLocation(
   basePath: string,
   sessionKey: string,
 ) {
-  const routeId = routeIdFromPath(location.pathname, basePath);
   if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
     return location;
   }

@@ -1,14 +1,16 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { definePage, notFound, redirect } from "@openclaw/uirouter";
-import { html } from "lit";
+import { definePage, notFound } from "@openclaw/uirouter";
+import { html, nothing } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
+  INTERNAL_SESSION_PATH_PARAM,
   pathForSession,
   sessionRefFromPath,
   type SessionPathTarget,
 } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import {
   buildAgentMainSessionKey,
@@ -26,7 +28,13 @@ type SessionCandidate = {
 };
 
 export type ChatRouteData =
-  | { kind: "session"; sessionKey: string; draft?: string; face: BoardFace }
+  | {
+      kind: "session";
+      sessionKey: string;
+      draft?: string;
+      face: BoardFace;
+      canonicalLocation?: RouteLocation;
+    }
   | {
       kind: "ambiguous";
       shortId: string;
@@ -64,11 +72,14 @@ export function resolveSessionPrefix(
   if (sessions.length === 0) {
     return { kind: "not-found" };
   }
-  return { kind: "unique", session: sessions[0] };
+  const session = sessions[0];
+  return session ? { kind: "unique", session } : { kind: "not-found" };
 }
 
-function abortError(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException("Session route load aborted", "AbortError");
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException("Session route load aborted", "AbortError");
 }
 
 function waitForGatewayClient(
@@ -80,7 +91,7 @@ function waitForGatewayClient(
     return Promise.resolve(current);
   }
   return new Promise((resolve, reject) => {
-    let unsubscribe = () => undefined;
+    let unsubscribe: () => void = () => undefined;
     let settled = false;
     const cleanup = () => {
       unsubscribe();
@@ -144,10 +155,20 @@ function draftFromLocation(location: RouteLocation): string | undefined {
   return new URLSearchParams(location.search).get("draft") || undefined;
 }
 
-function mainSessionKey(context: ApplicationContext, target: SessionPathTarget): string {
-  if (target.kind !== "main") {
-    throw new Error("Main session target required.");
+function targetFromLocation(location: RouteLocation, basePath: string) {
+  const direct = sessionRefFromPath(location.pathname, basePath);
+  if (direct) {
+    return { target: direct, normalized: false };
   }
+  const internalPath = new URLSearchParams(location.search).get(INTERNAL_SESSION_PATH_PARAM);
+  const target = internalPath ? sessionRefFromPath(internalPath, basePath) : null;
+  return target ? { target, normalized: true } : null;
+}
+
+function mainSessionKey(
+  context: ApplicationContext,
+  target: Extract<SessionPathTarget, { kind: "main" }>,
+): string {
   return buildAgentMainSessionKey({
     agentId: target.agentId,
     mainKey: resolveUiConfiguredMainKey({
@@ -183,11 +204,12 @@ export async function loadChatRoute(
   location: RouteLocation,
   face: BoardFace,
   signal: AbortSignal,
-): Promise<ChatRouteData | ReturnType<typeof notFound> | ReturnType<typeof redirect>> {
-  const target = sessionRefFromPath(location.pathname, context.basePath);
-  if (!target || target.face !== face) {
+): Promise<ChatRouteData | ReturnType<typeof notFound>> {
+  const resolvedTarget = targetFromLocation(location, context.basePath);
+  if (!resolvedTarget || resolvedTarget.target.face !== face) {
     return notFound({ routeId: face });
   }
+  const { target } = resolvedTarget;
   if (target.kind === "main") {
     return {
       kind: "session",
@@ -218,22 +240,22 @@ export async function loadChatRoute(
     displayName: row.displayName,
     sessionId: row.sessionId,
   });
-  if (location.pathname !== canonicalPath) {
-    return redirect({ ...location, pathname: canonicalPath });
-  }
   return {
     kind: "session",
     sessionKey: row.key,
     draft: draftFromLocation(location),
     face,
+    ...(!resolvedTarget.normalized && location.pathname !== canonicalPath
+      ? { canonicalLocation: { ...location, pathname: canonicalPath } }
+      : {}),
   };
 }
 
 function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
   return html`
     <section class="card">
-      <h2>Choose a session</h2>
-      <p>More than one session matches <code>${data.shortId}</code>.</p>
+      <h2>${t("chat.sessionRoute.chooseTitle")}</h2>
+      <p>${t("chat.sessionRoute.multipleMatches", { shortId: data.shortId })}</p>
       ${data.candidates.map(
         (candidate) => html`
           <p>
@@ -243,7 +265,7 @@ function renderAmbiguous(data: Extract<ChatRouteData, { kind: "ambiguous" }>) {
         `,
       )}
       ${data.truncated
-        ? html`<p><small>Additional matches were omitted. Use a longer id prefix.</small></p>`
+        ? html`<p><small>${t("chat.sessionRoute.additionalMatches")}</small></p>`
         : null}
     </section>
   `;
@@ -261,7 +283,10 @@ function sessionPage(face: BoardFace) {
       import("./chat-page.ts").then(() => ({
         header: true,
         render: (data: unknown) => {
-          const routeData = data as ChatRouteData;
+          const routeData = data as ChatRouteData | undefined;
+          if (!routeData) {
+            return nothing;
+          }
           return routeData.kind === "ambiguous"
             ? renderAmbiguous(routeData)
             : html`<openclaw-chat-page .data=${routeData}></openclaw-chat-page>`;

@@ -71,7 +71,8 @@ describe("ClickClack discussion service", () => {
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
       expect.objectContaining({
-        external_url: "https://control.example/control/chat/main/control-link-12345678?tenant=alpha",
+        external_url:
+          "https://control.example/control/chat/main/control-link-12345678?tenant=alpha",
       }),
     );
   });

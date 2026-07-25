@@ -976,7 +976,10 @@ class OpenClawShell extends OpenClawLightDomElement {
       return;
     }
     this.closeNavDrawer({ restoreFocus: true });
-    context.navigate(routeId, isSessionRouteId(routeId) ? this.chatNavigationOptions(options) : options);
+    context.navigate(
+      routeId,
+      isSessionRouteId(routeId) ? this.chatNavigationOptions(options) : options,
+    );
   }
 
   private replaceChatWithCurrentSession() {
@@ -1712,10 +1715,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     // its scrolling and pins the composer dock to the bottom.
     const chatLikeRoute =
       isSessionRouteId(activeRoute) || activeRoute === "custodian" || activeRoute === "new-session";
-    const inlineApproval =
-      isSessionRouteId(activeRoute)
-        ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
-        : null;
+    const inlineApproval = isSessionRouteId(activeRoute)
+      ? findInlineApproval(overlaySnapshot.approvalQueue, this.activeSessionKey)
+      : null;
     // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
     // and the upgraded panels catch the first toggle instead of dropping the event.
     return html`

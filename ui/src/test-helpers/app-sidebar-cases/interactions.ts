@@ -482,8 +482,8 @@ describe("AppSidebar catalog session rows", () => {
       await sidebar.updateComplete;
       const row = sidebar.querySelector('[data-session-key*="thread-1"]') as HTMLElement;
       (row.querySelector("a") as HTMLElement).click();
-      expect(navigate).toHaveBeenCalledWith("chat", {
-        search: "?session=catalog%3Acodex%3Agateway%253Alocal%3Athread-1",
+      expect(navigate).toHaveBeenCalledWith("new-session", {
+        search: "?agent=main&catalog=codex",
       });
       row.dispatchEvent(
         new MouseEvent("contextmenu", {

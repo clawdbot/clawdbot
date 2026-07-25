@@ -162,6 +162,7 @@ function sessionRow(
   options: { model?: string; modelProvider?: string } & Record<string, unknown> = {},
 ) {
   const { model, modelProvider, ...extra } = options;
+  const id = mockFileHash(key).slice(0, 32);
   return {
     contextTokens: 200_000,
     displayName: label,
@@ -171,6 +172,7 @@ function sessionRow(
     label,
     model: (model as string | undefined) ?? "gpt-5.6-luna",
     modelProvider: (modelProvider as string | undefined) ?? "openai",
+    sessionId: `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`,
     status: "done",
     totalTokens: 0,
     updatedAt,
@@ -1135,12 +1137,11 @@ async function createChatPickerScenario(
           }),
         ]
       : [];
-  const sessions = [
-    sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
-      childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
-    }),
-    ...swarmChildRows,
-    sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
+  const observerSessionRow = sessionRow(
+    OBSERVER_DEMO_SESSION_KEY,
+    "Session observer demo",
+    baseTime - 3_000,
+    {
       activeRunIds: [OBSERVER_DEMO_RUN_ID],
       hasActiveRun: true,
       lastReadAt: baseTime + 2_000,
@@ -1153,7 +1154,14 @@ async function createChatPickerScenario(
       },
       startedAt: baseTime - 4_000,
       status: "running",
+    },
+  );
+  const sessions = [
+    sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
+      childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
     }),
+    ...swarmChildRows,
+    observerSessionRow,
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
       createdActor: MOCK_CREATOR_MIRA,
       hasActiveRun: true,
@@ -1796,6 +1804,15 @@ async function createChatPickerScenario(
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
+          ...buildSessionListCases([observerSessionRow], {
+            archived: "all",
+            configuredAgentsOnly: true,
+            includeDerivedTitles: true,
+            includeGlobal: true,
+            includeUnknown: true,
+            limit: 20,
+            search: observerSessionRow.sessionId.slice(0, 8),
+          }),
           ...buildSessionListCases([...sessions, ...archivedSessions], {}, MOCK_SESSION_CREATORS),
         ],
       },

@@ -131,7 +131,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   });
   return html`
     <a
-      href=${pathForSessionKey("chat", mainKey, host.basePath, mainRow)}
+      href=${pathForSessionKey("chat", mainKey, host.basePath, mainRow ?? undefined)}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {

@@ -355,3 +355,17 @@ export function pathForSessionKey(
     sessionId: row?.sessionId,
   });
 }
+
+export function tryPathForSessionKey(
+  face: BoardFace,
+  sessionKey: string,
+  basePath = "",
+  row?: Pick<GatewaySessionRow, "displayName" | "key" | "sessionId">,
+  mainKey?: string | null,
+): string | null {
+  try {
+    return pathForSessionKey(face, sessionKey, basePath, row, mainKey);
+  } catch {
+    return null;
+  }
+}

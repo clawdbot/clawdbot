@@ -1,5 +1,5 @@
-import type { RouteId } from "../app-routes.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
+import type { RouteId } from "../app-routes.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 
 const MOBILE_NAV_MAX_WIDTH = 1100;

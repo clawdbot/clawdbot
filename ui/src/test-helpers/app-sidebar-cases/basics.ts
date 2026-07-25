@@ -403,7 +403,7 @@ describe("AppSidebar agent chip", () => {
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
     // createSessionState stamps ascending updatedAt, so the last key is newest.
     expect(setSessionKey).toHaveBeenCalledWith("agent:main:task");
-    expect(onNavigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Atask" });
+    expect(onNavigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/00000002" });
   });
 
   it("keeps agent ids distinct from utility command values", async () => {
@@ -441,7 +441,7 @@ describe("AppSidebar agent chip", () => {
 
     expect(setSessionKey).toHaveBeenCalledWith("agent:settings:main");
     expect(onNavigate).toHaveBeenCalledWith("chat", {
-      search: "?session=agent%3Asettings%3Amain",
+      pathname: "/chat/settings",
     });
     expect(onNavigate).not.toHaveBeenCalledWith("config");
   });
@@ -621,7 +621,7 @@ describe("AppSidebar agent chip", () => {
 
     home?.click();
     expect(setSessionKey).toHaveBeenCalledWith("agent:main:main");
-    expect(navigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Amain" });
+    expect(navigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main" });
   });
 
   it("treats the global key as the main session under global scope", async () => {

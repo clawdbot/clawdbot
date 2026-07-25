@@ -79,7 +79,7 @@ describe("AppSidebar agent chip", () => {
     // No cached sessions for the other agent: resume falls back to its main key.
     expect(setSessionKey).toHaveBeenCalledWith("agent:research:main");
     expect(onNavigate).toHaveBeenCalledWith("chat", {
-      search: "?session=agent%3Aresearch%3Amain",
+      pathname: "/chat/research",
     });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });

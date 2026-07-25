@@ -145,6 +145,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     sessions: keys.map((key, index) => ({
       key,
       kind: "direct" as const,
+      sessionId: `${(index + 1).toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`,
       updatedAt: index + 1,
     })),
   } satisfies SessionsListResult;
