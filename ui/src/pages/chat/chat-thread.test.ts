@@ -15,6 +15,7 @@ import {
   resetChatThreadState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
 describe("assistantGroupCanOwnActiveRunStatus", () => {
   const group = (message: Record<string, unknown>): MessageGroup => ({
@@ -267,6 +268,45 @@ describe("assistant commentary grouping", () => {
       "user",
       "stream",
     ]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps a queued current prompt before a terminal delivered ahead of its ACK", () => {
+    const paneId = "terminal-before-send-ack";
+    const terminal = rememberLiveTerminalRun(
+      { role: "assistant", content: "Terminal reply", timestamp: 1_000 },
+      "run-active",
+    );
+    const sending = {
+      id: "sending-current",
+      text: "Current prompt",
+      createdAt: 2_000,
+      sendAttempts: 1,
+      sendRunId: "run-active",
+      sendState: "sending" as const,
+    };
+    const liveItems = buildCachedChatItems(
+      createProps({ paneId, runId: "run-active", messages: [terminal], queue: [sending] }),
+    );
+    const stableItems = buildCachedChatItems(
+      createProps({
+        paneId,
+        messages: [
+          {
+            role: "user",
+            content: "Current prompt",
+            timestamp: 2_000,
+            __openclaw: { idempotencyKey: "run-active:user" },
+          },
+          terminal,
+        ],
+      }),
+    );
+    const roles = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.filter((item) => item.kind === "group").map((item) => item.role);
+
+    expect(roles(liveItems)).toEqual(["user", "assistant"]);
+    expect(roles(stableItems)).toEqual(["user", "assistant"]);
     resetChatThreadState(paneId);
   });
 
@@ -2744,6 +2784,25 @@ describe("buildCachedChatItems", () => {
 
     expect(canvasBlocksIn(groupAt(groups, 0))).toHaveLength(1);
     expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
+  });
+
+  it("keeps a clock-skewed live App preview after the latest user boundary", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "Earlier request", timestamp: 1_000 },
+        { role: "assistant", content: "Earlier response", timestamp: 1_100 },
+        { role: "user", content: "Current request", timestamp: 2_000 },
+      ],
+      toolMessages: [
+        { ...mcpAppResult("mcp-app-skewed", "call-skewed", 900), runId: "run-active" },
+      ],
+      runId: "run-active",
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
   });
 
   it("keeps a live App preview on an assistant search match", () => {

@@ -49,6 +49,7 @@ import {
   turnHasMatchingAssistant,
 } from "./chat-thread-items.ts";
 import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
+import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 import type { PlanStatus } from "./tool-stream.ts";
 
 export type BuildChatItemsProps = {
@@ -78,6 +79,20 @@ export type BuildChatItemsProps = {
   searchOpen?: boolean;
   searchQuery?: string;
 };
+
+function findCurrentTurnStartIndex(items: ChatItem[]): number {
+  return (
+    items.findLastIndex((item) => {
+      if (item.kind !== "message") {
+        return false;
+      }
+      const normalized = safeNormalizeMessage(item.message);
+      return normalized
+        ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user"
+        : false;
+    }) + 1
+  );
+}
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
@@ -191,7 +206,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   // the stable rows themselves, so optimistic user bubbles stay after the
   // preceding assistant reply even when client and Gateway clocks disagree.
   const toolStreamItems: ChatItem[] = [];
-  const appendQueuedSend = (queued: ChatQueueItem) => {
+  const appendQueuedSend = (queued: ChatQueueItem, beforeMessage?: unknown) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
     }
@@ -207,28 +222,53 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     ) {
       return;
     }
-    items.push({
+    const queuedItem: ChatItem = {
       kind: "message",
       // Mirror buildMessageKeys for a send-identity source key so the pending
       // row and its history successor resolve to the same Lit key.
       key: queued.sendRunId ? `msg:send:${queued.sendRunId}:0` : `pending-send:${queued.id}`,
       message,
-    });
+    };
+    const insertionIndex =
+      beforeMessage === undefined
+        ? -1
+        : items.findIndex((item) => item.kind === "message" && item.message === beforeMessage);
+    if (insertionIndex === -1) {
+      items.push(queuedItem);
+    } else {
+      items.splice(insertionIndex, 0, queuedItem);
+    }
   };
   for (const queued of currentRunQueuedSends) {
-    appendQueuedSend(queued);
+    const runId = queued.sendRunId;
+    const liveTerminal = runId
+      ? history.find((message) => isLiveTerminalForRun(message, runId))
+      : undefined;
+    appendQueuedSend(queued, liveTerminal);
   }
+  const currentTurnStartIndex = findCurrentTurnStartIndex(items);
   for (const liftedCanvasSource of liftedCanvasSources) {
     const baseIdentity = canvasPreviewBaseIdentity(liftedCanvasSource.message, liftedCanvasSource);
     if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
       continue;
     }
-    const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
+    const sourceRunId = asRecord(liftedCanvasSource.message)?.runId;
+    const canvasMinimumIndex =
+      props.runId != null && sourceRunId === props.runId ? currentTurnStartIndex : 0;
+    const assistantIndex = findNearestAssistantMessageIndex(
+      items,
+      liftedCanvasSource.timestamp,
+      canvasMinimumIndex,
+    );
     if (assistantIndex == null) {
       if (searchFiltering) {
         continue;
       }
-      const insertionIndex = findCanvasInsertionIndex(items, liftedCanvasSource.timestamp);
+      const insertionIndex = findCanvasInsertionIndex(
+        items,
+        liftedCanvasSource.timestamp,
+        canvasMinimumIndex,
+      );
       const nextItem = items[insertionIndex];
       const nextTimestamp =
         nextItem?.kind === "message" ? rawMessageTimestamp(nextItem.message) : null;
@@ -349,16 +389,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   // Merge collected live tool/stream rows into the stable transcript order.
   // The latest user row is a causal floor: current-run items must not jump
   // above it under clock skew, then jump back when history materializes them.
-  const currentTurnStartIndex =
-    items.findLastIndex((item) => {
-      if (item.kind !== "message") {
-        return false;
-      }
-      const normalized = safeNormalizeMessage(item.message);
-      return normalized
-        ? normalizeRoleForGrouping(normalized.role).toLowerCase() === "user"
-        : false;
-    }) + 1;
   insertChatItemsByTimestamp(items, toolStreamItems, currentTurnStartIndex, toolStreamPredecessors);
 
   // Working spark contract: whenever the agent works with nothing visibly

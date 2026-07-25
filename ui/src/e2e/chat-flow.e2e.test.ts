@@ -540,6 +540,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await gateway.deferNext("chat.send");
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.getByRole("button", { name: "Send message" }).click();
 
@@ -579,6 +580,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor({
         timeout: 10_000,
       });
+      expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
     } finally {
       await closeBrowserContext(context);

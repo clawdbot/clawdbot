@@ -190,10 +190,11 @@ export function transcriptPositionTimestamp(
 export function findNearestAssistantMessageIndex(
   items: ChatItem[],
   toolTimestamp: number | null,
+  minimumIndex = 0,
 ): number | null {
-  let currentTurnStart = 0;
+  let currentTurnStart = minimumIndex;
   let currentTurnEnd = items.length;
-  for (let index = 0; index < items.length; index += 1) {
+  for (let index = minimumIndex; index < items.length; index += 1) {
     const item = items[index];
     if (item?.kind !== "message") {
       continue;
@@ -261,11 +262,15 @@ export function findNearestAssistantMessageIndex(
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
 }
 
-export function findCanvasInsertionIndex(items: ChatItem[], toolTimestamp: number | null): number {
+export function findCanvasInsertionIndex(
+  items: ChatItem[],
+  toolTimestamp: number | null,
+  minimumIndex = 0,
+): number {
   if (toolTimestamp == null) {
     return items.length;
   }
-  for (let index = 0; index < items.length; index += 1) {
+  for (let index = minimumIndex; index < items.length; index += 1) {
     const item = items[index];
     if (item?.kind !== "message") {
       continue;
