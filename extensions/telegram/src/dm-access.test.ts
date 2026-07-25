@@ -171,4 +171,65 @@ describe("enforceTelegramDmAccess", () => {
       "telegram pairing request",
     );
   });
+
+  it("rethrows recipient-unreachable pairing reply errors for ingress drain classification", async () => {
+    const blockedError = Object.assign(new Error("403: Forbidden: bot was blocked by the user"), {
+      error_code: 403,
+    });
+    createChannelPairingChallengeIssuerMock.mockReturnValueOnce(
+      ({
+        sendPairingReply,
+      }: Parameters<ReturnType<typeof createChannelPairingChallengeIssuer>>[0]) =>
+        (async () => {
+          await sendPairingReply("Pairing code: 123456");
+        })(),
+    );
+
+    await expect(
+      enforceTelegramDmAccess({
+        isGroup: false,
+        dmPolicy: "pairing",
+        msg: createDmMessage(),
+        chatId: 42,
+        effectiveDmAllow: normalizeAllowFrom([]),
+        accountId: "main",
+        bot: { api: { sendMessage: vi.fn(() => Promise.reject(blockedError)) } } as never,
+        logger: { info: vi.fn() },
+        upsertPairingRequest: upsertChannelPairingRequestMock,
+      }),
+    ).rejects.toThrow("bot was blocked by the user");
+  });
+
+  it("rethrows recipient-unreachable errors delivered via onReplyError", async () => {
+    const blockedError = Object.assign(new Error("403: Forbidden: bot was blocked by the user"), {
+      error_code: 403,
+    });
+    createChannelPairingChallengeIssuerMock.mockReturnValueOnce(
+      ({
+        sendPairingReply,
+        onReplyError,
+      }: Parameters<ReturnType<typeof createChannelPairingChallengeIssuer>>[0]) =>
+        (async () => {
+          try {
+            await sendPairingReply("Pairing code: 123456");
+          } catch (err) {
+            onReplyError?.(err);
+          }
+        })(),
+    );
+
+    await expect(
+      enforceTelegramDmAccess({
+        isGroup: false,
+        dmPolicy: "pairing",
+        msg: createDmMessage(),
+        chatId: 42,
+        effectiveDmAllow: normalizeAllowFrom([]),
+        accountId: "main",
+        bot: { api: { sendMessage: vi.fn(() => Promise.reject(blockedError)) } } as never,
+        logger: { info: vi.fn() },
+        upsertPairingRequest: upsertChannelPairingRequestMock,
+      }),
+    ).rejects.toThrow("bot was blocked by the user");
+  });
 });

@@ -13,6 +13,7 @@ import {
   createTelegramIngressResolver,
   telegramAllowEntries,
 } from "./ingress.js";
+import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
 
 type TelegramDmAccessLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
@@ -163,10 +164,18 @@ export async function enforceTelegramDmAccess(params: {
           });
         },
         onReplyError: (err) => {
+          const nonRetryable = resolveTelegramIngressNonRetryableFailure(err);
+          if (nonRetryable?.reason === "recipient-unreachable") {
+            throw err;
+          }
           logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
         },
       });
     } catch (err) {
+      const nonRetryable = resolveTelegramIngressNonRetryableFailure(err);
+      if (nonRetryable?.reason === "recipient-unreachable") {
+        throw err;
+      }
       logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
     }
     return false;
