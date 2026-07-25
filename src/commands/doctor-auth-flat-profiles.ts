@@ -35,6 +35,7 @@ import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFile } from "../infra/json-file.js";
+import { writeJsonSync } from "../infra/json-files.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -739,10 +740,6 @@ function backupAndRemoveAuthProfileJson(
   return backupPath;
 }
 
-function writeJsonFile(pathname: string, value: unknown): void {
-  fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
 /**
  * Imports legacy auth profile JSON and state files into the per-agent SQLite store.
  *
@@ -974,7 +971,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       if (fs.existsSync(candidate.authPath)) {
         if (unresolvedSidecarRawStore) {
           backups.push(backupAuthProfileJson(candidate.authPath, "sqlite-import", now));
-          writeJsonFile(candidate.authPath, unresolvedSidecarRawStore);
+          writeJsonSync(candidate.authPath, unresolvedSidecarRawStore);
         } else {
           backups.push(backupAndRemoveAuthProfileJson(candidate.authPath, "sqlite-import", now));
         }

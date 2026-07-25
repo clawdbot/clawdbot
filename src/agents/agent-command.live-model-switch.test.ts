@@ -3572,10 +3572,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "",
-      MediaPath: "/media/inbound/image-1.png",
-      MediaPaths: ["/media/inbound/image-1.png"],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: {
+        media: [
+          expect.objectContaining({ path: "/media/inbound/image-1.png", contentType: "image/png" }),
+        ],
+      },
     });
   });
 

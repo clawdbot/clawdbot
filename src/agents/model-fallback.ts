@@ -55,7 +55,11 @@ import {
   isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
 } from "./fallback-skip-cache.js";
-import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
+import {
+  MissingAgentHarnessError,
+  isAgentHarnessPreflightError,
+  isMissingAgentHarnessError,
+} from "./harness/errors.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
@@ -412,6 +416,11 @@ async function runFallbackCandidate<T>(params: {
     };
   } catch (err) {
     if (isCommandLaneTaskTimeoutError(err)) {
+      throw err;
+    }
+    // Harness preflight is model-independent. Preserve its typed ownership
+    // before timeout-shaped messages can be normalized as provider failures.
+    if (isAgentHarnessPreflightError(err)) {
       throw err;
     }
     const fallbackError = resolveModelFallbackError(err, {
@@ -1891,6 +1900,11 @@ async function runWithModelFallbackInternal<T>(
       if (isMissingAgentHarnessError(err)) {
         throw err;
       }
+      // Harness preflight depends on the selected runtime and its local state,
+      // not the model candidate. Retrying it would only amplify the same stall.
+      if (isAgentHarnessPreflightError(err)) {
+        throw err;
+      }
       const normalized =
         coerceToFailoverError(err, {
           provider: candidate.provider,
@@ -2066,6 +2080,7 @@ export async function runWithImageModelFallback<T>(params: {
   modelOverride?: string;
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
+  abortSignal?: AbortSignal;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
@@ -2088,6 +2103,10 @@ export async function runWithImageModelFallback<T>(params: {
       attempts,
       attempt: i + 1,
       total: candidates.length,
+      abortSignal: params.abortSignal,
+    }).catch((error: unknown) => {
+      params.abortSignal?.throwIfAborted();
+      throw error;
     });
     if ("success" in attemptRun) {
       return attemptRun.success;

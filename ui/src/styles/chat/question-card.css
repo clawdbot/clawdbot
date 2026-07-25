@@ -209,7 +209,7 @@ openclaw-chat-question-panel {
   gap: 9px;
   width: 100%;
   padding: 10px 11px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--panel) 72%, transparent);
   color: var(--text);
@@ -326,7 +326,7 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__skip {
-  border-color: var(--border-subtle);
+  border-color: var(--border);
   background: transparent;
   color: var(--muted);
 }

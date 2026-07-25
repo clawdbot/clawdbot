@@ -32,10 +32,13 @@ export {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
+  supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
+  supportsClaudeFastMode,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";

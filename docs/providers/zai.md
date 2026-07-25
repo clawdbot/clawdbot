@@ -165,22 +165,12 @@ openclaw models list --all --provider zai
 
 The manifest-backed catalog currently includes:
 
-| Model ref            | Notes                           |
-| -------------------- | ------------------------------- |
-| `zai/glm-5.2`        | Coding Plan default; 1M context |
-| `zai/glm-5.1`        | General API default             |
-| `zai/glm-5`          |                                 |
-| `zai/glm-5-turbo`    |                                 |
-| `zai/glm-5v-turbo`   |                                 |
-| `zai/glm-4.7`        |                                 |
-| `zai/glm-4.7-flash`  |                                 |
-| `zai/glm-4.7-flashx` |                                 |
-| `zai/glm-4.6`        |                                 |
-| `zai/glm-4.6v`       |                                 |
-| `zai/glm-4.5`        |                                 |
-| `zai/glm-4.5-air`    |                                 |
-| `zai/glm-4.5-flash`  |                                 |
-| `zai/glm-4.5v`       |                                 |
+| Model ref          | Notes                                             |
+| ------------------ | ------------------------------------------------- |
+| `zai/glm-5.2`      | Coding Plan default; 1M context                   |
+| `zai/glm-5-turbo`  | OpenClaw-optimized text model; 200K context       |
+| `zai/glm-5v-turbo` | Multimodal coding model; 200K context             |
+| `zai/glm-5.1`      | Deprecated; hidden unless configured; use GLM-5.2 |
 
 Catalog token-cost metadata follows Z.AI's current
 [pay-as-you-go pricing](https://docs.z.ai/guides/overview/pricing). Coding Plan
@@ -188,7 +178,7 @@ subscriptions use plan quota instead of per-token billing; see the live
 [subscription page](https://z.ai/subscribe) for plan pricing and availability.
 
 <Tip>
-GLM models are available as `zai/<model>` (example: `zai/glm-5`).
+GLM models are available as `zai/<model>` (example: `zai/glm-5.2`).
 </Tip>
 
 <Note>

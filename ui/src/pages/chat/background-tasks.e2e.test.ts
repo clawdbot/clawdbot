@@ -173,12 +173,17 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       }
       await page.screenshot({ path: path.join(artifactDir, "01-rail-open.png"), fullPage: true });
 
+      const chatUrl = page.url();
       await rail
         .locator('[data-task-id="task-subagent"]')
         .getByRole("button", { name: "Show details for Map model routing code" })
         .click();
       await rail.getByText("Trace model routing across provider and session boundaries.").waitFor();
       expect(await rail.textContent()).toContain("Reading provider catalogs");
+      expect(await rail.getByRole("button", { name: "Back to background tasks" }).count()).toBe(1);
+      expect(await rail.getByRole("button", { name: "View transcript" }).count()).toBe(0);
+      expect(page.url()).toBe(chatUrl);
+      await page.getByText("Background tasks rail proof.").waitFor({ state: "visible" });
       const detailRequest = await gateway.waitForRequest("tasks.get");
       expect(detailRequest.params).toEqual({ taskId: "task-subagent" });
       await page.screenshot({
@@ -195,17 +200,19 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
           terminalSummary: "Routing map complete",
         },
       });
+      await rail.getByText("Routing map complete").waitFor({ state: "visible" });
+      await page.screenshot({
+        path: path.join(artifactDir, "03-pushed-completion.png"),
+        fullPage: true,
+      });
+
+      await rail.getByRole("button", { name: "Back to background tasks" }).click();
       await rail
         .locator('[data-tasks-section="finished"] [data-task-id="task-subagent"]')
         .waitFor({ state: "visible" });
       await rail
         .locator('[data-tasks-section="running"] [data-task-id="task-subagent"]')
         .waitFor({ state: "detached" });
-      expect(await rail.textContent()).toContain("Routing map complete");
-      await page.screenshot({
-        path: path.join(artifactDir, "03-pushed-completion.png"),
-        fullPage: true,
-      });
 
       await rail
         .locator('[data-task-id="task-cron"]')
@@ -213,27 +220,16 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
         .click();
       const cancelRequest = await gateway.waitForRequest("tasks.cancel");
       expect(cancelRequest.params).toEqual({ taskId: "task-cron" });
-
-      const transcriptButton = rail
-        .locator('[data-task-id="task-subagent"]')
-        .getByRole("button", { name: "View transcript" });
-      await transcriptButton.click();
-      await expect
-        .poll(() => new URL(page.url()).searchParams.get("session"))
-        .toBe("agent:main:subagent:routing");
-      await page.getByText("Subagent transcript proof.").waitFor({ state: "visible" });
-      await page.getByText("Background tasks rail proof.").waitFor({ state: "detached" });
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("chat.history")).some(
-            (request) =>
-              (request.params as { sessionKey?: string }).sessionKey ===
-              runningSubagent.childSessionKey,
-          ),
-        )
-        .toBe(true);
+      expect(page.url()).toBe(chatUrl);
+      expect(
+        (await gateway.getRequests("chat.history")).some(
+          (request) =>
+            (request.params as { sessionKey?: string }).sessionKey ===
+            runningSubagent.childSessionKey,
+        ),
+      ).toBe(false);
       await page.screenshot({
-        path: path.join(artifactDir, "04-transcript-open.png"),
+        path: path.join(artifactDir, "04-back-to-list.png"),
         fullPage: true,
       });
     } finally {

@@ -11,4 +11,4 @@ openclaw gateway restart
 ```
 
 Configure a GMI Cloud API key, then select models with refs such as
-`gmi/google/gemini-3.1-flash-lite`.
+`gmi/openai/gpt-5.6-sol`.

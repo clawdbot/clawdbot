@@ -1,8 +1,9 @@
 // Qa Lab plugin module provides reusable fixture utilities.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type QaFixtureFetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
@@ -331,7 +332,7 @@ function countNeedlesInSqliteTranscriptEvents(
   const counts = createCounts(needles);
   let db: DatabaseSync | null = null;
   try {
-    db = new DatabaseSync(sqlitePath, { readOnly: true });
+    db = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
     const hasTranscriptEvents = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
       .get();

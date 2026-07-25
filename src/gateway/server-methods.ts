@@ -241,6 +241,10 @@ const loadSessionObserverHandlers = lazyHandlerModule(
   () => import("./session-observer-rpc.js"),
   (module) => module.sessionObserverHandlers,
 );
+const loadSessionCompanionHandlers = lazyHandlerModule(
+  () => import("./session-companion-rpc.js"),
+  (module) => module.sessionCompanionHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -715,6 +719,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["sessions.observer.ask", "sessions.observer.visibility"],
     loadHandlers: loadSessionObserverHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.companion.ask", "sessions.companion.state", "sessions.companion.reset"],
+    loadHandlers: loadSessionCompanionHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

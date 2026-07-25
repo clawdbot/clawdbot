@@ -45,6 +45,8 @@ export type ConfigWriteOptions = {
   explicitSetPaths?: readonly (readonly string[])[];
   /** Source-shaped values paired with explicitSetPaths. */
   explicitSetValueSource?: OpenClawConfig;
+  /** Permit explicit local overrides below an ancestor $include without flattening it. */
+  allowIncludeAncestorExplicitSetPaths?: boolean;
   /** Fresh snapshot fast path for an immediate write. */
   baseSnapshot?: ConfigFileSnapshot;
   /** Plugin metadata paired with baseSnapshot. */

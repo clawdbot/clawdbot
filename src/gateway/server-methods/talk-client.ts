@@ -14,10 +14,7 @@ import {
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  buildAgentMainSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -25,6 +22,7 @@ import {
 } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
@@ -71,6 +69,13 @@ function pruneLegacyVoiceBindings(now = Date.now()): void {
       legacyVoiceSessionByClient.delete(key);
     }
   }
+}
+
+function resolveTalkClientAgentId(
+  config: Parameters<typeof resolveTalkSessionAgentId>[0],
+  key: string,
+) {
+  return resolveTalkSessionAgentId(config, key);
 }
 
 /**
@@ -299,7 +304,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+    const config = request.context.getRuntimeConfig();
+    const agentId = resolveTalkClientAgentId(config, params.sessionKey);
     const relaySessionId = normalizeOptionalString(params.relaySessionId);
     const connId = normalizeOptionalString(request.client?.connId);
     pruneLegacyVoiceBindings();
@@ -424,15 +430,16 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const config = context.getRuntimeConfig();
       await appendClientVoiceTranscript({
-        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+        agentId: resolveTalkClientAgentId(config, params.sessionKey),
         sessionKey: params.sessionKey,
         voiceSessionId: params.voiceSessionId,
         entryId: params.entryId,
         role: params.role,
         text: params.text,
         ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
-        config: context.getRuntimeConfig(),
+        config,
       });
       respond(true, { ok: true }, undefined);
     } catch (err) {
@@ -452,7 +459,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+      const config = context.getRuntimeConfig();
+      const agentId = resolveTalkClientAgentId(config, params.sessionKey);
       const origin = resolveClientVoiceSessionOrigin({
         agentId,
         sessionKey: params.sessionKey,
@@ -465,7 +473,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         agentId,
         sessionKey: params.sessionKey,
         voiceSessionId: params.voiceSessionId,
-        config: context.getRuntimeConfig(),
+        config,
       });
       const connId = normalizeOptionalString(client?.connId);
       if (connId) {

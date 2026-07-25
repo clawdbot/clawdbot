@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -811,6 +812,79 @@ describe("config plugin validation", () => {
 
       expect(res.ok).toBe(true);
       expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not attribute keyed agent model refs to another agent", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          entries: {
+            openclaw: {
+              default: true,
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+            },
+            ops: {
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "openai/gpt-5.6": { agentRuntime: { id: "pi" } },
+              },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("keeps numeric legacy list indices bound to their pre-migration agents", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          list: [
+            {
+              id: "10",
+              default: true,
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "openai/gpt-5.6": { agentRuntime: { id: "pi" } },
+              },
+            },
+            {
+              id: "2",
+              model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+              subagents: { model: "anthropic/claude-sonnet-4-6" },
+            },
+          ],
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("keeps the two-argument diagnostic API correct for a legacy list", () => {
+      expect(
+        shouldSuppressMissingCodexPluginDiagnostics(
+          {
+            agents: {
+              list: [
+                {
+                  id: "10",
+                  default: true,
+                  model: "anthropic/claude-sonnet-4-6",
+                },
+                { id: "2", model: "openai/gpt-5.6" },
+              ],
+            },
+            plugins: { entries: { codex: {} } },
+          },
+          suiteEnv(),
+        ),
+      ).toBe(false);
     });
 
     it("warns when a default exact Codex policy remains reachable by another agent", () => {

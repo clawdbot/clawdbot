@@ -8,6 +8,10 @@ import { installProcessWarningFilter } from "./warning-filter.js";
 const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
 
+type NodeSqliteDatabaseOptions = ConstructorParameters<
+  typeof import("node:sqlite").DatabaseSync
+>[1];
+
 export function resolveSqliteFilesystemPath(pathname: string): string {
   if (process.platform !== "win32") {
     return pathname;
@@ -15,6 +19,13 @@ export function resolveSqliteFilesystemPath(pathname: string): string {
   // Node's fs APIs normalize long paths, but node:sqlite passes filesystem
   // names directly to SQLite's Windows VFS.
   return path.toNamespacedPath(path.resolve(pathname));
+}
+
+export function resolveNodeSqliteLocation(location: string): string {
+  if (location === "" || location === ":memory:" || location.startsWith("file:")) {
+    return location;
+  }
+  return resolveSqliteFilesystemPath(location);
 }
 
 function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): void {
@@ -70,4 +81,18 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
       cause: err,
     });
   }
+}
+
+/** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */
+export function openNodeSqliteDatabase(
+  location: string,
+  options?: NodeSqliteDatabaseOptions,
+): import("node:sqlite").DatabaseSync {
+  const sqlite = requireNodeSqlite();
+  // Callers may pass file: URIs or already-namespaced paths from specialized
+  // resolvers; location normalization must remain idempotent for those forms.
+  const resolvedLocation = resolveNodeSqliteLocation(location);
+  return options === undefined
+    ? new sqlite.DatabaseSync(resolvedLocation)
+    : new sqlite.DatabaseSync(resolvedLocation, options);
 }

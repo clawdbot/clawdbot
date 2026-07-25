@@ -20,6 +20,28 @@ export const AGENT_MODEL_CONFIG_KEYS = [
   "pdfModel",
 ] as const;
 
+/** List raw refs from one string or primary/fallback model selector. */
+export function listModelRefsFromConfigValue(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  const refs: string[] = [];
+  if (typeof value.primary === "string") {
+    refs.push(value.primary);
+  }
+  if (Array.isArray(value.fallbacks)) {
+    for (const fallback of value.fallbacks) {
+      if (typeof fallback === "string") {
+        refs.push(fallback);
+      }
+    }
+  }
+  return refs;
+}
+
 /** Collect configured model references from agents, channels, hooks, and message config. */
 export function collectConfiguredModelRefs(
   config: unknown,
@@ -85,6 +107,10 @@ export function collectConfiguredModelRefs(
   if (isRecord(agents.entries)) {
     for (const [agentId, entry] of Object.entries(agents.entries)) {
       collectFromAgent(`agents.entries.${agentId}`, entry);
+    }
+  } else if (Array.isArray(agents.list)) {
+    for (const [index, entry] of agents.list.entries()) {
+      collectFromAgent(`agents.list.${index}`, entry);
     }
   }
   if (options.includeChannelModelOverrides !== false) {

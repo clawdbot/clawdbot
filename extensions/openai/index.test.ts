@@ -472,7 +472,9 @@ describe("openai plugin", () => {
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Heartbeat = useful proactive progress, not chatter.",
     );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain("Wake, orient, read HEARTBEAT.md, act.");
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
+      "Wake, orient, use the provided monitor scratch, act.",
+    );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Assigned/ongoing work: pursue spirit with judgment.",
     );

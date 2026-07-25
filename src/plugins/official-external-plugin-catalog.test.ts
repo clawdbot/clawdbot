@@ -389,9 +389,17 @@ describe("official external plugin catalog", () => {
     });
 
     const result = await loadHostedCatalog({
-      env: {
-        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
-        OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY: signed.publicKeyPem,
+      catalogConfig: {
+        feeds: {
+          "clawhub-public": {
+            url: "https://clawhub.ai/v1/feeds/plugins",
+            feedId: "clawhub-official",
+            verification: {
+              mode: "signed",
+              keys: [{ keyId: "acme-root", publicKey: signed.publicKeyPem }],
+            },
+          },
+        },
       },
       ifModifiedSince: "Mon, 22 Jun 2026 00:00:00 GMT",
       fetchImpl,
@@ -404,7 +412,7 @@ describe("official external plugin catalog", () => {
     expect(result.trust).toMatchObject({ mode: "signed", signedBy: "acme-root" });
   });
 
-  it("preserves default ClawHub trust when the built-in profile is customized", async () => {
+  it("uses configured ClawHub trust when the built-in profile is customized", async () => {
     const feed = {
       ...hostedCatalogFeed({ sequence: 12, pluginName: "@openclaw/default-configured" }),
       id: "clawhub-official",
@@ -416,12 +424,12 @@ describe("official external plugin catalog", () => {
           "clawhub-public": {
             url: "https://clawhub.ai/v1/feeds/plugins",
             feedId: "clawhub-official",
+            verification: {
+              mode: "signed",
+              keys: [{ keyId: "acme-root", publicKey: signed.publicKeyPem }],
+            },
           },
         },
-      },
-      env: {
-        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
-        OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY: signed.publicKeyPem,
       },
       fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
       snapshotStore: null,
@@ -446,9 +454,6 @@ describe("official external plugin catalog", () => {
           },
         },
       },
-      env: {
-        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "incomplete",
-      },
       fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
       snapshotStore: null,
     });
@@ -463,9 +468,17 @@ describe("official external plugin catalog", () => {
     });
 
     const result = await loadHostedCatalog({
-      env: {
-        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
-        OPENCLAW_CLAWHUB_FEED_TRUSTED_PUBLIC_KEY: signed.publicKeyPem,
+      catalogConfig: {
+        feeds: {
+          "clawhub-public": {
+            url: "https://clawhub.ai/v1/feeds/plugins",
+            feedId: "clawhub-official",
+            verification: {
+              mode: "signed",
+              keys: [{ keyId: "acme-root", publicKey: signed.publicKeyPem }],
+            },
+          },
+        },
       },
       fetchImpl: vi.fn(async () => dsseResponse(signed.body, { status: 200 })),
       snapshotStore: null,
@@ -476,39 +489,6 @@ describe("official external plugin catalog", () => {
     expect(result.error).toContain(
       'feed id "openclaw-official-external-plugins" did not match expected "clawhub-official"',
     );
-  });
-
-  it("fails closed before fetch when default ClawHub trust env is incomplete", async () => {
-    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
-    const result = await loadHostedCatalog({
-      env: {
-        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
-      },
-      fetchImpl,
-      snapshotStore: null,
-    });
-
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expectBundledFallback(result);
-    expect(result.entries).toEqual([]);
-    expect(result.error).toContain("requires both key id and public key env vars");
-  });
-
-  it("preserves default ClawHub trust for an explicit default feed URL", async () => {
-    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
-    const result = await loadHostedCatalog({
-      feedUrl: "https://clawhub.ai/v1/feeds/plugins",
-      env: {
-        OPENCLAW_CLAWHUB_FEED_TRUSTED_KEY_ID: "acme-root",
-      },
-      fetchImpl,
-      snapshotStore: null,
-    });
-
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expectBundledFallback(result);
-    expect(result.entries).toEqual([]);
-    expect(result.error).toContain("requires both key id and public key env vars");
   });
 
   it("loads schema-v2 marketplace entries and gates installs by state and trust", async () => {

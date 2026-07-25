@@ -534,31 +534,31 @@
       "text": "Replying to"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
-      "text": "% ctx"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-bubble.ts",
       "text": "JSON"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
+      "text": "% ctx"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "R"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message.ts",
+      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "W"
     },
     {

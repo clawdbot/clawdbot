@@ -1,4 +1,5 @@
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
 const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
@@ -22,10 +23,6 @@ const INTERNAL_RUNTIME_MARKER_LINES = [
   "<<<END_UNTRUSTED_CHILD_RESULT>>>",
 ] as const;
 const PROMPT_DATA_TAG_NAMES = ["prompt-data", "untrusted-text"] as const;
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function standaloneLinePattern(token: string): string {
   return `(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`;

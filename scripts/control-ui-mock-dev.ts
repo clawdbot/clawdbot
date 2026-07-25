@@ -24,7 +24,7 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "board";
+  fixture?: "board" | "swarm";
   host: string;
   port: number;
 };
@@ -140,11 +140,11 @@ function parseArgs(args: string[]): CliOptions {
   return options;
 }
 
-function parseFixture(value: string | undefined): "board" | undefined {
+function parseFixture(value: string | undefined): "board" | "swarm" | undefined {
   if (!value) {
     return undefined;
   }
-  if (value !== "board") {
+  if (value !== "board" && value !== "swarm") {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -628,13 +628,14 @@ function buildProfileUsageMocks(baseTime: number) {
  * across a few real section keys, and `config.get` returns a matching
  * snapshot with the hash `config.set`/`config.apply` are guarded by.
  */
-function buildConfigMocks() {
+function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
     gateway: { port: 18789, bind: "127.0.0.1" },
     agents: { defaults: { thinkingDefault: "medium" } },
     models: { mode: "merge" },
+    ...(options.swarmEnabled ? { tools: { swarm: true } } : {}),
     mcp: {
       servers: {
         context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
@@ -820,7 +821,9 @@ function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
 
-async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario> {
+async function createChatPickerScenario(
+  fixture?: CliOptions["fixture"],
+): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
   const selfProfile: UserProfile = {
     id: "presence-riley",
@@ -1082,10 +1085,61 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       runtimeMs: 200_000,
     },
   );
+  const swarmGroupId = "swarm:agent:main:main:mock-turn";
+  const swarmChildRows =
+    fixture === "swarm"
+      ? [
+          sessionRow("agent:main:subagent:swarm-plan", "National polling", baseTime - 9_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "done",
+          }),
+          sessionRow("agent:main:subagent:swarm-work", "Work and labor", baseTime - 8_000, {
+            hasActiveRun: true,
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmLog: "Comparing labor, education, and consumer signals.",
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "running",
+          }),
+          sessionRow("agent:main:subagent:swarm-health", "Health", baseTime - 7_000, {
+            hasActiveRun: true,
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "running",
+          }),
+          sessionRow("agent:main:subagent:swarm-trust", "Governance and trust", baseTime - 6_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            subagentRunState: "active",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: undefined,
+          }),
+          sessionRow("agent:main:subagent:swarm-media", "Media signals", baseTime - 5_000, {
+            parentSessionKey: "agent:main:main",
+            spawnedBy: "agent:main:main",
+            swarmGroupId,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            status: "failed",
+          }),
+        ]
+      : [];
   const sessions = [
     sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
-      childSessions: ["agent:main:lisbon-trip"],
+      childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
     }),
+    ...swarmChildRows,
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
       activeRunIds: [OBSERVER_DEMO_RUN_ID],
       hasActiveRun: true,
@@ -1204,7 +1258,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   const channelWizard = buildChannelWizardMocks();
-  const configMocks = buildConfigMocks();
+  const configMocks = buildConfigMocks({ swarmEnabled: fixture === "swarm" });
   return {
     assistantAgentId: "main",
     assistantName: "Molty",
@@ -1356,17 +1410,20 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           },
         ],
       },
-      "exec.approval.list": [
-        {
-          id: "mock-production-export-approval",
-          request: {
-            command: "openclaw export --target production",
-            sessionKey: "agent:main:production-export",
-          },
-          createdAtMs: baseTime - 75_000,
-          expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
-        },
-      ],
+      "exec.approval.list":
+        fixture === "swarm"
+          ? []
+          : [
+              {
+                id: "mock-production-export-approval",
+                request: {
+                  command: "openclaw export --target production",
+                  sessionKey: "agent:main:production-export",
+                },
+                createdAtMs: baseTime - 75_000,
+                expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+              },
+            ],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
       "sessions.patch": { ok: true },
@@ -1722,7 +1779,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
           // Child fetches must precede the catch-all page case (subset match).
           {
             match: { spawnedBy: "agent:main:main" },
-            response: pagedSessionsListResponse([mainChildRow], 0),
+            response: pagedSessionsListResponse([mainChildRow, ...swarmChildRows], 0),
           },
           {
             match: { spawnedBy: "agent:main:tax-research" },
@@ -1880,7 +1937,7 @@ async function waitForShutdown(): Promise<void> {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const scenario = await createChatPickerScenario();
+const scenario = await createChatPickerScenario(options.fixture);
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),

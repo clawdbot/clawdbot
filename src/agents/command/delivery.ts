@@ -1,6 +1,7 @@
 /**
  * Normalizes and delivers agent command results to outbound channels.
  */
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -182,10 +183,6 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
-}
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function hasNonEmptyStringArray(value: unknown): value is string[] {

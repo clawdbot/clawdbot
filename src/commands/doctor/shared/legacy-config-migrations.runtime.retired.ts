@@ -22,6 +22,7 @@ import {
   stripRetiredTuningKnobs,
 } from "./legacy-config-migrations.runtime.retired-media.js";
 import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-eval.js";
+import { visitChannelEntries } from "./legacy-config-record-shared.js";
 
 const rule = (
   path: string[],
@@ -198,42 +199,9 @@ function migrateFinalLayoutRenames(raw: Record<string, unknown>, changes: string
     }
   }
 
-  const slack = getRecord(getRecord(raw.channels)?.slack);
-  moveKey(slack, "identity", "postAs", "channels.slack", changes);
-  const slackAccounts = getRecord(slack?.accounts);
-  if (slackAccounts) {
-    for (const [accountId, value] of Object.entries(slackAccounts)) {
-      moveKey(
-        getRecord(value),
-        "identity",
-        "postAs",
-        `channels.slack.accounts.${accountId}`,
-        changes,
-      );
-    }
-  }
-}
-
-function visitChannelEntries(
-  raw: Record<string, unknown>,
-  channelId: string,
-  visitor: (entry: Record<string, unknown>, path: string) => void,
-): void {
-  const channel = getRecord(getRecord(raw.channels)?.[channelId]);
-  if (!channel) {
-    return;
-  }
-  visitor(channel, `channels.${channelId}`);
-  const accounts = getRecord(channel.accounts);
-  if (!accounts) {
-    return;
-  }
-  for (const [accountId, value] of Object.entries(accounts)) {
-    const account = getRecord(value);
-    if (account) {
-      visitor(account, `channels.${channelId}.accounts.${accountId}`);
-    }
-  }
+  visitChannelEntries(raw, "slack", (entry, path) => {
+    moveKey(entry, "identity", "postAs", path, changes);
+  });
 }
 
 function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]): void {

@@ -16,6 +16,9 @@ import {
   validateNodeSkillsUpdateParams,
   validateNodePresenceActivityPayload,
   validateSessionsListParams,
+  validateSessionsCompanionAskParams,
+  validateSessionsCompanionResetParams,
+  validateSessionsCompanionStateParams,
   validateSessionsObserverAskParams,
   validateSessionsObserverVisibilityParams,
   validateSessionsSearchParams,
@@ -291,6 +294,33 @@ describe("lazy protocol validators", () => {
         question: "x".repeat(401),
       }),
     ).toBe(false);
+  });
+
+  it("validates closed bounded session companion params", () => {
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "What changed in the project?",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "x".repeat(401),
+      }),
+    ).toBe(false);
+    expect(validateSessionsCompanionAskParams({ sessionKey: "", question: "why" })).toBe(false);
+    expect(
+      validateSessionsCompanionAskParams({
+        sessionKey: "agent:main:current",
+        question: "why",
+        extra: true,
+      }),
+    ).toBe(false);
+    expect(validateSessionsCompanionStateParams({ sessionKey: "agent:main:current" })).toBe(true);
+    expect(validateSessionsCompanionStateParams({ sessionKey: "" })).toBe(false);
+    expect(validateSessionsCompanionResetParams({ sessionKey: "agent:main:current" })).toBe(true);
+    expect(validateSessionsCompanionResetParams({})).toBe(false);
   });
 
   it("validates closed session observer visibility declarations", () => {

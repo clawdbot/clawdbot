@@ -474,7 +474,7 @@ describe("github-copilot plugin", () => {
           },
         },
       ],
-      defaultModel: "github-copilot/claude-opus-4.7",
+      defaultModel: "github-copilot/claude-opus-5",
     });
   });
 
@@ -1228,9 +1228,9 @@ describe("github-copilot plugin", () => {
       mode: "token",
     });
     expect(result?.agents?.defaults?.model).toEqual({
-      primary: "github-copilot/claude-opus-4.7",
+      primary: "github-copilot/claude-opus-5",
     });
-    expect(result?.agents?.defaults?.models?.["github-copilot/claude-opus-4.7"]).toStrictEqual({});
+    expect(result?.agents?.defaults?.models?.["github-copilot/claude-opus-5"]).toStrictEqual({});
 
     const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
     expect(profile).toEqual({
@@ -1329,7 +1329,7 @@ describe("github-copilot plugin", () => {
     expect(runtime.error).not.toHaveBeenCalled();
     expect(result?.agents?.defaults?.model).toEqual({
       fallbacks: ["openai/gpt-5.4"],
-      primary: "github-copilot/claude-opus-4.7",
+      primary: "github-copilot/claude-opus-5",
     });
 
     const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];

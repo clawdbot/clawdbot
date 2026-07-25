@@ -54,10 +54,13 @@ openclaw gateway restart
 
 ## Built-in catalog
 
-| Model ref                            | Input       | Context | Max output | Reasoning | Notes         |
-| ------------------------------------ | ----------- | ------- | ---------- | --------- | ------------- |
-| `qianfan/deepseek-v3.2`              | text        | 98,304  | 32,768     | Yes       | Default model |
-| `qianfan/ernie-5.0-thinking-preview` | text, image | 119,000 | 64,000     | Yes       | Multimodal    |
+| Model ref                            | Input       | Context   | Max output | Reasoning | Notes                                                                      |
+| ------------------------------------ | ----------- | --------- | ---------- | --------- | -------------------------------------------------------------------------- |
+| `qianfan/deepseek-v4-pro`            | text        | 1,000,000 | 393,216    | Yes       | Current DeepSeek flagship                                                  |
+| `qianfan/ernie-5.1`                  | text        | 128,000   | 65,536     | No        | Latest ERNIE text flagship                                                 |
+| `qianfan/ernie-5.0`                  | text, image | 128,000   | 65,536     | Yes       | Current multimodal and thinking model                                      |
+| `qianfan/deepseek-v3.2`              | text        | 128,000   | 32,768     | No        | Deprecated onboarding compatibility default; replaced by `deepseek-v4-pro` |
+| `qianfan/ernie-5.0-thinking-preview` | text, image | 128,000   | 65,536     | Yes       | Deprecated alias; replaced by `ernie-5.0`                                  |
 
 The catalog is static; there is no live model discovery.
 
@@ -67,14 +70,16 @@ You only need to override `models.providers.qianfan` when you need a custom base
 
 ## Config example
 
+This example explicitly selects the current DeepSeek flagship instead of the onboarding compatibility default.
+
 ```json5
 {
   env: { QIANFAN_API_KEY: "bce-v3/ALTAK-..." },
   agents: {
     defaults: {
-      model: { primary: "qianfan/deepseek-v3.2" },
+      model: { primary: "qianfan/deepseek-v4-pro" },
       models: {
-        "qianfan/deepseek-v3.2": { alias: "QIANFAN" },
+        "qianfan/deepseek-v4-pro": { alias: "QIANFAN" },
       },
     },
   },
@@ -85,22 +90,18 @@ You only need to override `models.providers.qianfan` when you need a custom base
         api: "openai-completions",
         models: [
           {
-            id: "deepseek-v3.2",
-            name: "DEEPSEEK V3.2",
+            id: "deepseek-v4-pro",
+            name: "DeepSeek V4 Pro",
             reasoning: true,
             input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 98304,
-            maxTokens: 32768,
-          },
-          {
-            id: "ernie-5.0-thinking-preview",
-            name: "ERNIE-5.0-Thinking-Preview",
-            reasoning: true,
-            input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 119000,
-            maxTokens: 64000,
+            cost: {
+              input: 1.771957,
+              output: 3.543915,
+              cacheRead: 0.147663,
+              cacheWrite: 0,
+            },
+            contextWindow: 1000000,
+            maxTokens: 393216,
           },
         ],
       },
@@ -110,7 +111,7 @@ You only need to override `models.providers.qianfan` when you need a custom base
 ```
 
 <Note>
-Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v3.2`).
+Model refs use the `qianfan/` prefix (for example `qianfan/deepseek-v4-pro`).
 </Note>
 
 <AccordionGroup>

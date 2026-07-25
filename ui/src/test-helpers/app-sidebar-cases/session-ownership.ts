@@ -357,12 +357,8 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
 
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
-    expect(
-      row?.querySelector(".sidebar-session-avatar openclaw-session-owner-chip"),
-    ).not.toBeNull();
-    expect(
-      row?.querySelector('.sidebar-session-avatar__badge[aria-label="Unread"]'),
-    ).not.toBeNull();
+    expect(row?.querySelector(".session-glyph openclaw-session-owner-chip")).not.toBeNull();
+    expect(row?.querySelector('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
     expect(row?.querySelector(".sidebar-recent-session__unread")).toBeNull();
     expect(row?.querySelector(".sidebar-session-indicator__dot")).toBeNull();
   });

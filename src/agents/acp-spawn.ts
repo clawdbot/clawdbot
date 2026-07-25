@@ -68,6 +68,7 @@ import {
   type AcpSpawnParentRelayHandle,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
+import { listAgentEntries } from "./agent-scope-config.js";
 import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -349,7 +350,7 @@ function isHeartbeatEnabledForSessionAgent(params: {
     return true;
   }
 
-  const agentEntries = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
+  const agentEntries = listAgentEntries(params.cfg);
   const hasExplicitHeartbeatAgents = agentEntries.some((entry) => Boolean(entry?.heartbeat));
   const enabledByPolicy = hasExplicitHeartbeatAgents
     ? agentEntries.some(
@@ -435,7 +436,7 @@ function resolveTargetAcpAgentId(params: {
 }): { ok: true; agentId: string; configAgentId?: string } | { ok: false; error: string } {
   const requested = normalizeOptionalAgentId(params.requestedAgentId);
   if (requested) {
-    const configuredAgent = params.cfg.agents?.list?.find(
+    const configuredAgent = listAgentEntries(params.cfg).find(
       (agent) => normalizeOptionalAgentId(agent.id) === requested,
     );
     if (configuredAgent?.runtime?.type === "acp") {
@@ -451,7 +452,7 @@ function resolveTargetAcpAgentId(params: {
         error:
           `agentId "${requested}" is an OpenClaw config agent, not an ACP harness. ` +
           'Use runtime="subagent" or omit runtime for OpenClaw config agents. ' +
-          'Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.list[].runtime.type="acp" with runtime.acp.agent.',
+          'Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.entries.*.runtime.type="acp" with runtime.acp.agent.',
       };
     }
     return {
@@ -485,7 +486,7 @@ function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): bool
 
 function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>(listAgentIds(cfg));
-  for (const agent of cfg.agents?.list ?? []) {
+  for (const agent of listAgentEntries(cfg)) {
     if (agent.runtime?.type !== "acp") {
       continue;
     }
@@ -1246,7 +1247,7 @@ export async function spawnAcpDirect(
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   const childIdem = crypto.randomUUID();
   const parentAgentId = parentSessionKey
-    ? resolveAgentIdFromSessionKey(parentSessionKey)
+    ? resolveAgentIdFromSessionKey(parentSessionKey, resolveDefaultAgentId(cfg))
     : undefined;
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.

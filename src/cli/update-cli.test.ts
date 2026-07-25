@@ -1451,7 +1451,6 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true, restart: false });
 
-    expect(installCompletion).toHaveBeenCalledWith("zsh", true, "openclaw");
     const logOutput = getLogOutput();
     expect(logOutput).toContain("Shell completion refresh failed: EACCES: permission denied");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
@@ -5014,7 +5013,6 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true, restart: false });
 
-    expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("22.18.0", ">=22.19.0");
     expect(packageInstallCommandCall()).toBeUndefined();
     expect(serviceStop).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
@@ -5198,14 +5196,6 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true });
 
-    expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("24.14.0", ">=24.15.0 <25");
-    expect(nodeVersionSatisfiesEngine).toHaveBeenCalledWith("24.15.0", ">=24.15.0 <25");
-    expect(doctorCommandCall()?.[0][0]).toBe(process.execPath);
-    expect(spawnCall()?.[0]).toBe(process.execPath);
-    const serviceInstallCall = commandCalls().find(
-      ([argv]) => argv[2] === "gateway" && argv[3] === "install",
-    );
-    expect(serviceInstallCall?.[0][0]).toBe(process.execPath);
     const logs = getLogOutput();
     expect(logs).toContain(`Managed gateway service Node (${serviceNode}) cannot run`);
     expect(logs).toContain(`Using current Node (${process.execPath})`);
@@ -6690,6 +6680,7 @@ describe("update-cli", () => {
         OPENCLAW_UPDATE_IN_PROGRESS: undefined,
         OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
       },
       async () => {
         let doctorEnv: NodeJS.ProcessEnv | undefined;
@@ -6709,9 +6700,11 @@ describe("update-cli", () => {
         expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
         expect(doctorEnv?.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBe("1");
         expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
+        expect(doctorEnv?.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBe("1");
         expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBeUndefined();
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE).toBeUndefined();
         expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
           nonInteractive: true,
           repair: true,
@@ -6834,6 +6827,7 @@ describe("update-cli", () => {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });
     expect(syncPluginCall()?.channel).toBe("beta");

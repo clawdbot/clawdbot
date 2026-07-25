@@ -326,7 +326,7 @@ function parseOpenCodeSession(value: unknown): SessionCatalogSession | undefined
     source: "opencode-cli",
     modelProvider: "opencode",
     archived: false,
-    canContinue: false,
+    canContinue: true,
     canArchive: false,
   };
 }
