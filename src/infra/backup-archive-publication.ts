@@ -272,6 +272,7 @@ export async function publishPreparedBackupArchive(params: {
   let preparedHandle: FileHandle | undefined;
   let publishedIdentity: Stats | undefined;
   let publicationCollision = false;
+  let publicationStarted = false;
   let committed = false;
   try {
     await assertPublicationParentUnchanged(plan);
@@ -282,6 +283,7 @@ export async function publishPreparedBackupArchive(params: {
       publicationCollision = true;
       throw error;
     }
+    publicationStarted = true;
     try {
       const publication = await publishFileNoClobber(
         prepared.archivePath,
@@ -353,20 +355,9 @@ export async function publishPreparedBackupArchive(params: {
     await assertPublishedArchiveUnchanged(plan, preparedHandle, publishedIdentity);
   } catch (error) {
     if (!committed) {
-      if (!publishedIdentity && !publicationCollision) {
-        const currentTargetIdentity = await fs
-          .lstat(plan.canonicalOutputPath)
-          .catch(() => undefined);
-        if (
-          currentTargetIdentity?.isFile() &&
-          sameFileIdentity(currentTargetIdentity, prepared.identity)
-        ) {
-          publishedIdentity = currentTargetIdentity;
-        }
-      }
-      if (publishedIdentity) {
+      if (publishedIdentity || (publicationStarted && !publicationCollision)) {
         params.log?.(
-          `Backup archiver preserved the final archive after publication failed so a concurrent replacement could not be deleted: ${plan.requestedOutputPath}.`,
+          `Backup archiver preserved any final output after publication failed so a concurrent replacement could not be deleted: ${plan.requestedOutputPath}.`,
         );
       }
       if (!removePreparedBackupArchive(prepared)) {
