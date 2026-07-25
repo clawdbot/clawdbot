@@ -175,8 +175,10 @@ restart handling continues.
   drains.
 
   When the breaker is tripped, the **control plane still starts**, but channel
-  plugins (and other auto-started side services) stay down until an operator
-  overrides or the unclean-boot window drains. Gateway logs look like:
+  plugins (and other auto-started side services) stay down for the current boot
+  unless an operator manually overrides the suppression. Automatic startup
+  resumes on a later boot after the unclean-boot window drains. Gateway logs
+  look like:
   `channel autostart suppressed by crash-loop breaker; refusing automatic
 start for <channel>… Use channels.start to override.`
 
