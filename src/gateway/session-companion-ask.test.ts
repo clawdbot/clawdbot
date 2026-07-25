@@ -129,7 +129,7 @@ describe("session companion asks", () => {
         question: "Second?",
         connId: "conn-2",
       }),
-    ).rejects.toMatchObject<Partial<SessionCompanionAskError>>({ reason: "busy" });
+    ).rejects.toMatchObject({ reason: "busy" } satisfies Partial<SessionCompanionAskError>);
 
     pending.resolve("first answer");
     await expect(first).resolves.toMatchObject({ answer: "first answer" });
@@ -152,10 +152,10 @@ describe("session companion asks", () => {
         question: "One too many?",
         connId: "conn-1",
       }),
-    ).rejects.toMatchObject<Partial<SessionCompanionAskError>>({
+    ).rejects.toMatchObject({
       reason: "rate-limited",
       retryAfterMs: 60_000,
-    });
+    } satisfies Partial<SessionCompanionAskError>);
     expect(harness.run).toHaveBeenCalledTimes(4);
     harness.service.dispose();
   });
@@ -176,9 +176,9 @@ describe("session companion asks", () => {
         question: "One too many globally?",
         connId: "conn-overflow",
       }),
-    ).rejects.toMatchObject<Partial<SessionCompanionAskError>>({
+    ).rejects.toMatchObject({
       reason: "rate-limited",
-    });
+    } satisfies Partial<SessionCompanionAskError>);
     expect(harness.run).toHaveBeenCalledTimes(12);
     harness.service.dispose();
   });
@@ -277,9 +277,9 @@ describe("session companion asks", () => {
     });
     await vi.waitFor(() => expect(harness.run).toHaveBeenCalledOnce());
     harness.service.reset("agent:main:main");
-    await expect(active).rejects.toMatchObject<Partial<SessionCompanionAskError>>({
+    await expect(active).rejects.toMatchObject({
       reason: "unavailable",
-    });
+    } satisfies Partial<SessionCompanionAskError>);
     expect(harness.service.state("agent:main:main")).toEqual({ exchanges: [] });
     harness.service.dispose();
   });
@@ -309,8 +309,8 @@ describe("session companion tool scope", () => {
     expect(SESSION_COMPANION_TOOLS).toEqual(["read", "sessions_history", "sessions_search"]);
     expect(cfg.tools?.fs?.workspaceOnly).toBe(true);
     expect(cfg.tools?.sessions?.visibility).toBe("self");
-    expect(cfg.tools?.toolSearch?.enabled).toBe(false);
-    expect(cfg.tools?.codeMode?.enabled).toBe(false);
+    expect(cfg.tools?.toolSearch).toMatchObject({ enabled: false });
+    expect(cfg.tools?.codeMode).toMatchObject({ enabled: false });
 
     const guard = await createSessionVisibilityGuard({
       action: "history",
