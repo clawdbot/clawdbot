@@ -249,8 +249,16 @@ async function checkGitUpdateStatus(params: {
         .catch(() => false)
     : null;
 
-  const counts =
+  const mergeBase =
     upstream && upstream.length > 0
+      ? await runCommandWithTimeout(["git", "-C", root, "merge-base", "HEAD", upstream], {
+          timeoutMs,
+        }).catch(() => null)
+      : null;
+  // Three-dot rev-list still counts disconnected or truncated shallow histories.
+  // Require Git to expose a common ancestor before presenting those counts as divergence.
+  const counts =
+    upstream && mergeBase?.code === 0 && mergeBase.stdout.trim().length > 0
       ? await runCommandWithTimeout(
           ["git", "-C", root, "rev-list", "--left-right", "--count", `HEAD...${upstream}`],
           { timeoutMs },
