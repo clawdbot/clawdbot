@@ -32,6 +32,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isReplaceableAssistantStreamEvent,
@@ -1108,6 +1109,10 @@ export async function handleOpenResponsesHttpRequest(
     unsubscribe();
   });
 
+  // The streamed run outlives this handler, whose root-work admission is
+  // released on return. Without retaining it, subordinate session/lane
+  // admissions inherit a released lease and fail as GatewayDrainingError.
+  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await runResponsesAgentCommand({
@@ -1354,6 +1359,7 @@ export async function handleOpenResponsesHttpRequest(
         data: { phase: "error" },
       });
     } finally {
+      releaseRootWork?.();
       if (!closed) {
         // Emit lifecycle end to trigger completion
         emitAgentEvent({

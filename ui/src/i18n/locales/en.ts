@@ -977,7 +977,9 @@ export const en: TranslationMap = {
   },
   configForm: {
     showAdvanced: "Show advanced",
-    advancedCount: "Advanced ({count})",
+    advancedHidden: "{count} advanced setting hidden",
+    advancedHiddenPlural: "{count} advanced settings hidden",
+    advancedDivider: "Advanced",
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",
@@ -1434,8 +1436,10 @@ export const en: TranslationMap = {
     revealEnvValues: "Reveal env values",
     peek: "Peek",
     loadingSchema: "Loading schema…",
-    formUnsafe:
-      "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.",
+    formUnsafeCount: "1 setting in this config can only be edited as text: {paths}",
+    formUnsafeCountPlural: "{count} settings in this config can only be edited as text: {paths}",
+    formUnsafeMore: "+{count} more",
+    openRawEditor: "Open Raw editor",
     rawConfig: "Raw config (JSON/JSON5)",
     secretCount: "{count} secret",
     secretCountPlural: "{count} secrets",

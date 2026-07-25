@@ -46,7 +46,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
   const registeredDatabases = listOpenClawRegisteredAgentDatabases({ env: options.env });
   const grouped = new Map<
     string,
-    Array<{ target: SessionStoreTarget; databaseOwnerAgentId?: string }>
+    Array<{ target: SessionStoreTarget; databaseOwnerAgentId?: string; shared: boolean }>
   >();
   const logicalGroups = new Map<
     string,
@@ -73,6 +73,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     const group = grouped.get(sqlitePath) ?? [];
     group.push({
       target,
+      shared: resolved.shared === true,
       ...(resolved.agentId ? { databaseOwnerAgentId: normalizeAgentId(resolved.agentId) } : {}),
     });
     grouped.set(sqlitePath, group);
@@ -155,11 +156,19 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
         registeredOwners[0] ??
         (collision ? options.defaultAgentId : group[0]!.target.agentId),
     );
-    const selected = byAgentId.get(ownerAgentId);
+    const ownerTarget = byAgentId.get(ownerAgentId);
+    // An exact shared database can outlive its schema owner's roster entry. Keep one
+    // configured claimant so the accessor can reopen the path under its durable owner.
+    const selected =
+      ownerTarget ??
+      (group.some((entry) => entry.shared)
+        ? (byAgentId.get(normalizeAgentId(options.defaultAgentId)) ?? group[0]?.target)
+        : undefined);
     if (selected) {
       deduped.push(selected);
     }
-    const ignoredAgentIds = [...byAgentId.keys()].filter((agentId) => agentId !== ownerAgentId);
+    const selectedAgentId = selected ? normalizeAgentId(selected.agentId) : ownerAgentId;
+    const ignoredAgentIds = [...byAgentId.keys()].filter((agentId) => agentId !== selectedAgentId);
     if (!selected || ignoredAgentIds.length > 0) {
       const effectiveIgnoredAgentIds = selected ? ignoredAgentIds : [...byAgentId.keys()];
       const diagnostic: SessionStoreTargetCollisionDiagnostic = {

@@ -1344,11 +1344,7 @@ export async function runCodeModeScriptHeadless(params: {
     const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
     const catalog = runtime.all({ includeMcp: false });
     const namespaceCatalog = runtime.namespaceEntries();
-    const namespaceRuntime = await awaitHeadlessDeadline({
-      promise: createCodeModeNamespaceRuntime(params.ctx, namespaceCatalog),
-      deadline,
-      signal: abortScope.signal,
-    });
+    const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
     const preparedSource = await awaitHeadlessDeadline({
       promise: prepareSource({ code: params.code, language: params.language, config }),
       deadline,
@@ -1708,7 +1704,7 @@ function createCodeModeExecDescription(
   ctx: CodeModeToolContext,
   catalog?: readonly ToolSearchCatalogEntry[],
 ): string {
-  const namespacePrompt = describeCodeModeNamespacesForPrompt(ctx, catalog);
+  const namespacePrompt = describeCodeModeNamespacesForPrompt(catalog);
   // A known run catalog with neither MCP nor swarm has no virtual API files.
   const catalogKnown = catalog !== undefined;
   const hasMcp = catalog?.some((entry) => entry.source === "mcp") ?? false;
@@ -1722,17 +1718,12 @@ function createCodeModeExecDescription(
   const swarmGuidance = swarmEnabled
     ? " Swarm globals `agents.run`, `phase`, and `log` are available; read `agents.d.ts` for types and orchestration idioms."
     : "";
-  const namespaceGuidance =
-    !catalogKnown || namespacePrompt
-      ? " Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog."
-      : "";
   const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
   return (
     "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Quick-index arrows show trusted declared output hints; `-> ?` means never guess result field names. When the needed tool has an unknown output, including a final dependent call after declared-output calls, the first exec must return the raw tool value unchanged with `return await tools.callValue(id, args);`; do not wrap it in the requested answer shape or read guessed fields; filter or map it only in a later exec after observing its shape. When the arrow declares the fields you need, select, call, and process them in the first exec; do not spend another exec inspecting that declared shape. Within that exec, perform dependent reads, checks, and follow-up calls in order; nested calls still enforce normal tool policy and approvals. Parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids, input hints, and declared output hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
     apiGuidance +
     mcpGuidance +
     swarmGuidance +
-    namespaceGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
@@ -1780,9 +1771,7 @@ async function runExec(params: {
     params.code,
     params.assistantTurnId,
   );
-  // Namespace scope factories are trusted plugin registrations; abort is
-  // re-checked at the worker boundary rather than racing this setup.
-  const namespaceRuntime = await createCodeModeNamespaceRuntime(params.ctx, namespaceCatalog);
+  const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
   const apiFiles = createCodeModeApiFilesForRun(namespaceCatalog, swarmEnabled);
   let source: string;
   try {
@@ -1939,7 +1928,7 @@ async function settleCodeModeResult(params: {
       if (result.pendingRequests.every((request) => request.method === "namespace")) {
         return {
           status: "failed" as const,
-          error: "restart-safe code mode cannot call plugin namespaces.",
+          error: "restart-safe code mode cannot call namespace tools.",
           code: "invalid_input" as const,
           output,
           replaySafe: true,
@@ -2206,7 +2195,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       code: Type.Optional(
         Type.String({
           description:
-            "JavaScript or TypeScript source for one complete workflow. Select exact ids from `ALL_TOOLS` or `tools.search`; never invent ids. `tools.search` takes a query string, not an object. Keep dependent operations in this program, never put dependent calls in Promise.all, and return the final value. `API` virtual declaration files and registered namespace globals are also available in scope; Node built-in modules are not.",
+            "JavaScript or TypeScript source for one complete workflow. Select exact ids from `ALL_TOOLS` or `tools.search`; never invent ids. `tools.search` takes a query string, not an object. Keep dependent operations in this program, never put dependent calls in Promise.all, and return the final value. `API` virtual declaration files and MCP namespace globals are also available in scope; Node built-in modules are not.",
         }),
       ),
       command: Type.Optional(
@@ -2221,7 +2210,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       restartSafe: Type.Optional(
         Type.Boolean({
           description:
-            "Set true only when every catalog call is explicitly replay-safe and OpenClaw may reconstruct the work after a gateway restart. Leave unset for ordinary calls; true rejects unmarked or side-effecting tools and plugin namespaces.",
+            "Set true only when every catalog call is explicitly replay-safe and OpenClaw may reconstruct the work after a gateway restart. Leave unset for ordinary calls; true rejects unmarked, side-effecting, or namespace tool calls.",
         }),
       ),
     }),

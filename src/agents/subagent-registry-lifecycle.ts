@@ -4,7 +4,6 @@
  * Completes/fails task runs, clears delivery state, emits lifecycle events, and cleans attached resources.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,6 +34,7 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
+import { isSilentAgentReplyText } from "./embedded-agent-runner/message-visibility.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
@@ -665,7 +665,7 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     const trimmed = captured?.trim();
-    if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+    if (!trimmed || isSilentAgentReplyText(trimmed)) {
       return false;
     }
 

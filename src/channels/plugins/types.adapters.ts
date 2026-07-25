@@ -172,8 +172,6 @@ export type ChannelSecretsAdapter = {
 
 export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
-  /** @deprecated Core never consumed this; removed after the next release train. */
-  resolveGroupIntroHint?: (params: ChannelGroupContext) => string | undefined;
   resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
 };
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {

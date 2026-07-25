@@ -15,6 +15,9 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
@@ -2330,6 +2333,32 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       );
     },
   );
+
+  it("keeps streamed agent work admitted after the HTTP handler returns", async () => {
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const continueAgent = createDeferred();
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async () => {
+      await continueAgent.promise;
+      const queued = await enqueueCommandInLane("openai-http-admission-probe", async () => true);
+      return { payloads: [{ text: queued ? "answer queued" : "unreachable" }] };
+    }) as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      stream: true,
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    continueAgent.resolve();
+
+    const streamed = parseSseDataLines(await res.text()).join("\n");
+    expect(streamed).toContain("answer queued");
+    expect(streamed).not.toContain("Error: internal error");
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+  });
 
   it("buffers replaceable assistant events for streaming chat completions", async () => {
     const port = enabledPort;

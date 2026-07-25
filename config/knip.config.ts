@@ -78,7 +78,6 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
-  "scripts/repro/tsx-name-repro.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
@@ -106,9 +105,6 @@ const rootEntries = [
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
-  "scripts/repro/code-mode-namespace-live.ts!",
-  "scripts/repro/tool-schema-hint-bench.ts!",
-  "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/bench-transcript-cursors.ts!",

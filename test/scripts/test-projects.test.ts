@@ -1068,25 +1068,6 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("routes code-mode namespace live repro changes through its regression test", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live.ts"])).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/code-mode-namespace-live.test.ts"],
-    });
-  });
-
-  it("routes code-mode namespace live Docker repro changes through its regression tests", () => {
-    expect(
-      resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live-docker.sh"]),
-    ).toEqual({
-      mode: "targets",
-      targets: [
-        "test/scripts/code-mode-namespace-live.test.ts",
-        "test/scripts/docker-build-helper.test.ts",
-      ],
-    });
-  });
-
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expect(
       resolveChangedTestTargetPlan([

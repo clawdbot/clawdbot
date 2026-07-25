@@ -6,9 +6,9 @@ scenario:
   runtimePairLane: core
   coverage:
     primary:
-      - agent-runtime.subagent-turns-subagents
-    secondary:
       - agent-runtime.subagent-turns-synthesis
+    secondary:
+      - agent-runtime.subagent-turns-subagents
   objective: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
   successCriteria:
     - Parent flow launches at least two bounded subagent tasks.

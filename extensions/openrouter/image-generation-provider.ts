@@ -10,7 +10,7 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
-import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -25,7 +25,6 @@ import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_RESULTS = 4;
-const MB = 1024 * 1024;
 const SUPPORTED_MODELS = [
   DEFAULT_MODEL,
   "google/gemini-3-pro-image-preview",
@@ -217,16 +216,6 @@ function resolveImageCount(count: number | undefined): number {
   return Math.max(1, Math.min(MAX_IMAGE_RESULTS, Math.trunc(count)));
 }
 
-function resolveGeneratedImageMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * MB);
-  }
-  return MAX_IMAGE_BYTES;
-}
-
 function isGeminiImageModel(model: string): boolean {
   return model.startsWith("google/gemini-");
 }
@@ -344,7 +333,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
         const payload = await readProviderJsonResponse(response, "openrouter.image-generation", {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             count,
-            resolveGeneratedImageMaxBytes(req),
+            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           ),
         });
         const images = extractOpenRouterImagesFromResponse(payload, {

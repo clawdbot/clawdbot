@@ -105,7 +105,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   {
-    prefix: "agents.list",
+    prefix: "agents.entries",
     kind: "hot",
     actions: ["restart-heartbeat"],
   },

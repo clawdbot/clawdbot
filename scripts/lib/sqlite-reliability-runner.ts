@@ -29,6 +29,7 @@ import {
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
 import { runPublicationInterruptionProof } from "./sqlite-reliability-publication.js";
+import { runRepositoryInterruptionProof } from "./sqlite-reliability-repository.js";
 import { runRestoreInterruptionProof } from "./sqlite-reliability-restore.js";
 import { monitorSqliteWalDuring } from "./sqlite-reliability-wal-monitor.js";
 import {
@@ -486,6 +487,23 @@ async function runMaintenanceRoundTrip(params: {
       `compaction payload setup failed: rows=${expectedPayload.rows} bytes=${expectedPayload.bytes}`,
     );
   }
+  const repositoryInterruption = await runRepositoryInterruptionProof({
+    expectedPayload,
+    expectedState,
+    identity: params.target.identity,
+    repositoryPath: path.join(params.restoreRoot, "repository-interruptions"),
+    sourcePath: params.target.path,
+    validationRootPath: params.validationRoot,
+    verifyPayload: readCompactionPayload,
+    verifyState: (databasePath) =>
+      verifyRestoredDatabase({
+        expectedState,
+        identity: params.target.identity,
+        path: databasePath,
+        rowsPerBatch: params.rowsPerBatch,
+        uncommittedBatch: null,
+      }),
+  });
   const interruptedSnapshot = await params.repositoryProvider.create({
     identity: params.target.identity,
     path: params.target.path,
@@ -570,6 +588,7 @@ async function runMaintenanceRoundTrip(params: {
       snapshotMs: Number(snapshotMs.toFixed(3)),
       state,
     },
+    repositoryInterruption,
     restoreInterruption,
     vacuumInterruption,
   };

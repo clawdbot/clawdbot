@@ -73,6 +73,26 @@ function areAsciiCaseVariants(left: string | undefined, right: string | undefine
   return left !== undefined && right !== undefined && foldAsciiCase(left) === foldAsciiCase(right);
 }
 
+function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
+  const hasNonAscii = (value: string) =>
+    value.split("").some((character) => character.charCodeAt(0) > 0x7f);
+  if (!hasNonAscii(left) && !hasNonAscii(right)) {
+    return false;
+  }
+  const lowercaseEquivalent = left.toLowerCase() === right.toLowerCase();
+  const uppercaseEquivalent = left.toUpperCase() === right.toUpperCase();
+  if (!lowercaseEquivalent && !uppercaseEquivalent) {
+    return false;
+  }
+  // Keep dotted-I expansions distinct even on filesystems that collapse them.
+  // That existing isolation contract avoids locale-sensitive owner aliasing.
+  return !(
+    Array.from(left).length !== Array.from(right).length &&
+    lowercaseEquivalent &&
+    !uppercaseEquivalent
+  );
+}
+
 function isWindowsReservedPathComponent(value: string): boolean {
   const stem = value
     .split(".", 1)[0]!
@@ -282,9 +302,6 @@ function areMissingSuffixAliases(params: {
   if (params.left === params.right) {
     return true;
   }
-  if (!areAsciiCaseVariants(params.left.normalize("NFC"), params.right.normalize("NFC"))) {
-    return false;
-  }
   const leftSegments = params.left.split(path.sep);
   const rightSegments = params.right.split(path.sep);
   if (
@@ -318,11 +335,6 @@ function areMissingSuffixAliases(params: {
       const rightSegment = rightSegments[index]!;
       const normalizedLeft = leftSegment.normalize("NFC");
       const normalizedRight = rightSegment.normalize("NFC");
-      if (!areAsciiCaseVariants(normalizedLeft, normalizedRight)) {
-        missingSuffixAliasCache.set(cacheKey, false);
-        return false;
-      }
-
       const availableProbeNameLength =
         maxProbePathLength - probeParent.length - (probeParent.endsWith(path.sep) ? 0 : 1);
       const componentProbeNameLength = Math.max(
@@ -333,9 +345,30 @@ function areMissingSuffixAliases(params: {
 
       let nextProbeParent: string | undefined;
       if (normalizedLeft !== normalizedRight) {
+        // Case and normalization are independent gates. A synthetic ASCII case
+        // probe here never bypasses the raw-spelling normalization probe below.
+        let caseProbeParent = probeParent;
+        let caseProbePairs = createAsciiCaseProbePairs(componentProbeNameLength, forbiddenNames);
+        if (!areAsciiCaseVariants(normalizedLeft, normalizedRight)) {
+          if (!shouldProbeUnicodeCaseVariants(normalizedLeft, normalizedRight)) {
+            missingSuffixAliasCache.set(cacheKey, false);
+            return false;
+          }
+          const privateParent = createNeutralProbeDirectory({
+            parentPath: probeParent,
+            createdPaths,
+            forbiddenNames,
+            nameLength: componentProbeNameLength,
+          });
+          if (!privateParent) {
+            return true;
+          }
+          caseProbeParent = privateParent;
+          caseProbePairs = [[leftSegment, rightSegment]];
+        }
         const caseProbe = createDirectoryAliasProbe({
-          parentPath: probeParent,
-          pairs: createAsciiCaseProbePairs(componentProbeNameLength, forbiddenNames),
+          parentPath: caseProbeParent,
+          pairs: caseProbePairs,
           createdPaths,
         });
         if (!caseProbe) {

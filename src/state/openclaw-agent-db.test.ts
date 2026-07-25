@@ -43,6 +43,7 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
+  migrateOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -1794,6 +1795,100 @@ describe("openclaw agent database", () => {
     },
   );
 
+  it("matches volume semantics for non-ASCII case aliases", () => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    const upperPath = path.join(stateDir, "É.sqlite");
+    const lowerPath = path.join(stateDir, "é.sqlite");
+    fs.writeFileSync(upperPath, "probe");
+    let aliases = false;
+    try {
+      const upperStat = fs.lstatSync(upperPath, { bigint: true });
+      const lowerStat = fs.lstatSync(lowerPath, { bigint: true });
+      aliases = upperStat.dev === lowerStat.dev && upperStat.ino === lowerStat.ino;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    } finally {
+      fs.unlinkSync(upperPath);
+    }
+
+    expect(isSameOpenClawAgentDatabasePath(upperPath, lowerPath)).toBe(aliases);
+  });
+
+  it("matches volume semantics for Unicode simple case-fold aliases", () => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    const sigmaPath = path.join(stateDir, "σ.sqlite");
+    const finalSigmaPath = path.join(stateDir, "ς.sqlite");
+    fs.writeFileSync(sigmaPath, "probe");
+    let aliases = false;
+    try {
+      const sigmaStat = fs.lstatSync(sigmaPath, { bigint: true });
+      const finalSigmaStat = fs.lstatSync(finalSigmaPath, { bigint: true });
+      aliases = sigmaStat.dev === finalSigmaStat.dev && sigmaStat.ino === finalSigmaStat.ino;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    } finally {
+      fs.unlinkSync(sigmaPath);
+    }
+
+    expect(isSameOpenClawAgentDatabasePath(sigmaPath, finalSigmaPath)).toBe(aliases);
+  });
+
+  it("does not probe unrelated Unicode spellings as case aliases", () => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    expect(
+      isSameOpenClawAgentDatabasePath(
+        path.join(stateDir, "猫.sqlite"),
+        path.join(stateDir, "犬.sqlite"),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps case and normalization semantics distinct for missing aliases", () => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    const composedUpperPath = path.join(stateDir, "É.sqlite");
+    const decomposedLowerPath = path.join(stateDir, "é.sqlite");
+    fs.writeFileSync(composedUpperPath, "probe");
+    let aliases = false;
+    try {
+      const upperStat = fs.lstatSync(composedUpperPath, { bigint: true });
+      const lowerStat = fs.lstatSync(decomposedLowerPath, { bigint: true });
+      aliases = upperStat.dev === lowerStat.dev && upperStat.ino === lowerStat.ino;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    } finally {
+      fs.unlinkSync(composedUpperPath);
+    }
+
+    expect(isSameOpenClawAgentDatabasePath(composedUpperPath, decomposedLowerPath)).toBe(aliases);
+  });
+
+  it("requires raw normalization after an ASCII-only case difference", () => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    const composedUpperPath = path.join(stateDir, "ÉA.sqlite");
+    const decomposedMixedPath = path.join(stateDir, "Éa.sqlite");
+    fs.writeFileSync(composedUpperPath, "probe");
+    let aliases = false;
+    try {
+      const upperStat = fs.lstatSync(composedUpperPath, { bigint: true });
+      const mixedStat = fs.lstatSync(decomposedMixedPath, { bigint: true });
+      aliases = upperStat.dev === mixedStat.dev && upperStat.ino === mixedStat.ino;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    } finally {
+      fs.unlinkSync(composedUpperPath);
+    }
+
+    expect(isSameOpenClawAgentDatabasePath(composedUpperPath, decomposedMixedPath)).toBe(aliases);
+  });
+
   it.runIf(tempVolumeIsCaseInsensitive)(
     "matches nested missing aliases using exact component case semantics",
     () => {
@@ -2753,6 +2848,12 @@ describe("openclaw agent database", () => {
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       /missing table auth_profile_store/iu,
     );
+    expect(() =>
+      migrateOpenClawAgentDatabaseForMaintenance({
+        agentId: "worker-1",
+        pathname: databasePath,
+      }),
+    ).toThrow(/missing table auth_profile_store/iu);
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -2849,8 +2950,7 @@ describe("openclaw agent database", () => {
         PRIMARY KEY (scope, key)
       ) STRICT;
       CREATE INDEX idx_agent_cache_expiry
-        ON cache_entries(scope, expires_at, key)
-        WHERE expires_at IS NOT NULL;
+        ON cache_entries(key);
       CREATE INDEX idx_agent_cache_updated
         ON cache_entries(scope, updated_at DESC, key);
     `);
@@ -2859,6 +2959,26 @@ describe("openclaw agent database", () => {
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       /unexpected unique index on cache_entries/iu,
     );
+    expect(() =>
+      migrateOpenClawAgentDatabaseForMaintenance({
+        agentId: "worker-1",
+        pathname: databasePath,
+      }),
+    ).toThrow(/unexpected unique index on cache_entries/iu);
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_cache_expiry'",
+          )
+          .get(),
+      ).toEqual({
+        sql: "CREATE INDEX idx_agent_cache_expiry\n        ON cache_entries(key)",
+      });
+    } finally {
+      after.close();
+    }
   });
 
   it("rejects primary-key collation drift in a current-schema table", () => {
