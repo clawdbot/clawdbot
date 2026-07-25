@@ -39,8 +39,8 @@ function authenticatedPrincipalId(client: GatewayClient | null): string {
   return (
     client?.internal?.agentRuntimeIdentity?.sessionKey ??
     client?.authenticatedUserId ??
-    client?.pairedClientId ??
     client?.connect.device?.id ??
+    client?.pairedClientId ??
     client?.connId ??
     "internal"
   );

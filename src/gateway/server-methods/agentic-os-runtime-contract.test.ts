@@ -74,6 +74,7 @@ async function invoke(
   params: Record<string, unknown> = {},
   deviceId?: string,
   scopes?: string[],
+  pairedClientId?: string,
 ) {
   const respond = vi.fn();
   const handler = agenticOsRuntimeContractHandlers[method];
@@ -98,6 +99,7 @@ async function invoke(
               device: { id: deviceId },
               scopes: scopes ?? ["operator.admin", "operator.read", "operator.write"],
             },
+            pairedClientId,
           } as never)
         : null,
     req: { type: "req", id: "req-1", method },
@@ -214,6 +216,58 @@ describe("Agentic OS runtime contract v1", () => {
     ).toHaveLength(1);
     expect(
       payload(await invoke("subagents.allowLease.status", {}, "device-b")).leases,
+    ).toHaveLength(1);
+  });
+
+  it("keys Browser Copilot leases by signed device before shared paired client identity", async () => {
+    const sharedBrowserCopilotClientId = "openclaw-browser-copilot";
+    const first = payload(
+      await invoke(
+        "subagents.allowLease.acquire",
+        acquireParams,
+        "device-a",
+        undefined,
+        sharedBrowserCopilotClientId,
+      ),
+    );
+    const secondParams = {
+      ...acquireParams,
+      idempotency_key: "lease-idem-device-b",
+      run_id: "run-device-b",
+      transition_id: "transition-device-b",
+    };
+    const second = payload(
+      await invoke(
+        "subagents.allowLease.acquire",
+        secondParams,
+        "device-b",
+        undefined,
+        sharedBrowserCopilotClientId,
+      ),
+    );
+
+    expect(second.gateway_lease_id).not.toBe(first.gateway_lease_id);
+    expect(
+      payload(
+        await invoke(
+          "subagents.allowLease.status",
+          {},
+          "device-a",
+          undefined,
+          sharedBrowserCopilotClientId,
+        ),
+      ).leases,
+    ).toHaveLength(1);
+    expect(
+      payload(
+        await invoke(
+          "subagents.allowLease.status",
+          {},
+          "device-b",
+          undefined,
+          sharedBrowserCopilotClientId,
+        ),
+      ).leases,
     ).toHaveLength(1);
   });
 
@@ -405,6 +459,33 @@ describe("Agentic OS runtime contract v1", () => {
       ),
     );
     expect(accepted.session_key).toBe("agent:ai-engineer:subagent:retry-child");
+  });
+
+  it("rolls back allow lease reservation when snapshot persistence fails", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const store = await import("../agentic-os-runtime-contract-store.js");
+    vi.spyOn(store, "saveAgenticOsRuntimeSnapshot").mockImplementationOnce(() => {
+      throw new Error("synthetic snapshot failure");
+    });
+
+    expectInvalid(
+      await invoke("sessions_spawn", spawnParamsFor(gatewayLeaseId)),
+      "Agentic OS runtime contract failure",
+    );
+
+    const accepted = payload(
+      await invoke(
+        "sessions_spawn",
+        spawnParamsFor(gatewayLeaseId, {
+          client_request_id: "spawn-retry",
+          idempotency_key: "spawn-retry-idem",
+          task_digest: "sha256:spawn-retry",
+          task: "retry after failed snapshot write",
+        }),
+      ),
+    );
+    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
   it("persists lease, session, and idempotency authority in the canonical state database", async () => {

@@ -566,7 +566,13 @@ export async function spawnAgenticOsSession(
   assertRecordCapacity(spawnPendingByIdempotencyKey, "pending session spawn");
   lease.spawn_reserved_at_ms = Date.now();
   lease.spawn_reservation_fingerprint = fingerprint;
-  persistRuntimeState();
+  try {
+    persistRuntimeState();
+  } catch (error) {
+    delete lease.spawn_reserved_at_ms;
+    delete lease.spawn_reservation_fingerprint;
+    throw error;
+  }
   const pending: SpawnPending = {
     fingerprint,
     authenticatedPrincipalId,
