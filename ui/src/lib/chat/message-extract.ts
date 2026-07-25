@@ -156,3 +156,48 @@ export function formatReasoningMarkdown(text: string): string {
     .map((line) => `_${line}_`);
   return lines.length ? ["_Reasoning:_", ...lines].join("\n") : "";
 }
+
+function isTextOnlyContent(content: unknown): boolean {
+  if (typeof content === "string") {
+    return true;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return true;
+  }
+  let sawText = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (entry.type !== "text") {
+      return false;
+    }
+    sawText = true;
+    if (typeof entry.text !== "string") {
+      return false;
+    }
+  }
+  return sawText;
+}
+
+/** True for user rows with no text and no media facts; such rows hide from history. */
+export function isEmptyUserTextOnlyMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
+    return false;
+  }
+  if (hasTranscriptMediaFacts(entry)) {
+    return false;
+  }
+  if (!isTextOnlyContent(entry.content ?? entry.text)) {
+    return false;
+  }
+  return (extractText(message)?.trim() ?? "") === "";
+}

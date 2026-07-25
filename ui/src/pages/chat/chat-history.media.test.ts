@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isEmptyUserTextOnlyMessage } from "./chat-history.ts";
+import { isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
 
 describe("chat history canonical media filtering", () => {
   it.each([

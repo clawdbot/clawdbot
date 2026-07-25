@@ -70,7 +70,7 @@ export function readPersistedMediaFactsWithLegacyFallback(
   return legacy.length > 0 ? legacy : undefined;
 }
 
-export const LEGACY_MEDIA_CONTEXT_KEYS = [
+const LEGACY_MEDIA_CONTEXT_KEYS = [
   "MediaPath",
   "MediaPaths",
   "MediaUrl",
@@ -202,30 +202,6 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
     ...(media.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),
   };
   return normalized;
-}
-
-/** True when media already carries staged workspace paths. */
-export function hasStagedMediaProjection(source: MediaFactSource): boolean {
-  // MediaWorkspaceDir is a whole-context SDK contract and applies to every
-  // fact through the workspace fallback in the positional resolver.
-  if (normalizeOptionalString(source.MediaWorkspaceDir)) {
-    return true;
-  }
-  if (source.MediaStaged === true) {
-    const legacy = resolveMediaFacts({ ...source, media: undefined });
-    if (!legacy.some((fact) => fact.path)) {
-      return true;
-    }
-    const merged = resolveStagedMediaFacts(source);
-    if (
-      merged.every(
-        (fact, index) => !normalizeOptionalString(fact.path) || Boolean(legacy[index]?.path),
-      )
-    ) {
-      return true;
-    }
-  }
-  return hasStagedMediaFacts(source.media);
 }
 
 /** True when every path-bearing canonical fact has explicit staging proof. */
