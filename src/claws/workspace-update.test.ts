@@ -24,7 +24,14 @@ describe("applyClawWorkspaceUpdate", () => {
     await mkdir(targetRoot);
     await writeFile(join(currentRoot, "SOUL.md"), "current soul\n", "utf8");
     await writeFile(join(currentRoot, "OLD.md"), "old\n", "utf8");
-    await writeFile(join(targetRoot, "SOUL.md"), "target soul\n", "utf8");
+    const targetSoul = Buffer.from("target soul\n");
+    await writeFile(
+      join(targetRoot, "CLAW.md"),
+      Buffer.concat([
+        Buffer.from("---\nschemaVersion: 1\nagent: { id: worker }\n---\n"),
+        targetSoul,
+      ]),
+    );
     await writeFile(join(targetRoot, "NEW.md"), "new\n", "utf8");
 
     const currentParsed = parseClawManifest({
@@ -39,7 +46,6 @@ describe("applyClawWorkspaceUpdate", () => {
       schemaVersion: 1,
       agent: { id: "worker" },
       workspace: {
-        bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
         files: [{ source: "NEW.md", path: "NEW.md" }],
       },
     });
@@ -60,7 +66,7 @@ describe("applyClawWorkspaceUpdate", () => {
       ...currentSource,
       version: "2.0.0",
       packageRoot: targetRoot,
-      manifestPath: join(targetRoot, "openclaw.claw.json"),
+      manifestPath: join(targetRoot, "CLAW.md"),
       integrity: "sha256:target",
     };
     const workspace = join(root, "workspace");
@@ -81,6 +87,7 @@ describe("applyClawWorkspaceUpdate", () => {
     const updatePlan = await buildClawUpdatePlan({
       agentId: "worker",
       targetManifest: targetParsed.manifest,
+      targetClawMarkdownBody: targetSoul,
       targetSource,
       config,
       sourceMcpServers: {},
@@ -88,6 +95,7 @@ describe("applyClawWorkspaceUpdate", () => {
     });
     const targetAddPlan = await buildClawAddPlan({
       manifest: targetParsed.manifest,
+      clawMarkdownBody: targetSoul,
       source: targetSource,
       context: { agentId: "worker", workspace },
     });

@@ -75,6 +75,7 @@ type PendingWorkspaceFileAction = {
   sourcePath: string;
   manifestPath: string;
   byteLength: number;
+  content?: Buffer;
 };
 
 function blockedWorkspaceFileAction(params: {
@@ -191,6 +192,7 @@ async function inspectWorkspaceFileAction(params: {
 
 export async function buildClawAddPlan(params: {
   manifest: ClawManifest;
+  clawMarkdownBody?: Buffer;
   openClawProfile?: ClawOpenClawProfile;
   source: ClawSourceIdentity;
   diagnostics?: ClawDiagnostic[];
@@ -410,6 +412,10 @@ export async function buildClawAddPlan(params: {
     }
   } else {
     for (const pending of pendingWorkspaceFiles) {
+      if (pending.content) {
+        pending.action.digest = `sha256:${createHash("sha256").update(pending.content).digest("hex")}`;
+        continue;
+      }
       try {
         await assertNoSymlinkParents({
           rootDir: source.packageRoot,
