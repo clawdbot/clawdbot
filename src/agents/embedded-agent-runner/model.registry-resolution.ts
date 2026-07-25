@@ -13,10 +13,10 @@ import {
   applyConfiguredProviderOverrides,
   findInlineModelMatch,
   mergeStaticCatalogInlineModel,
-  resolveConfiguredProviderConfig,
   shouldSuppressConfiguredModel,
   type StaticCatalogFallbackModel,
 } from "./model.configured-overrides.js";
+import { resolveConfiguredProviderConfig } from "./model.inline-provider.js";
 import {
   DEFAULT_PROVIDER_RUNTIME_HOOKS,
   normalizeResolvedModel,

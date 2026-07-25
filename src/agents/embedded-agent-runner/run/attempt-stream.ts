@@ -262,27 +262,23 @@ export function installEmbeddedAttemptStreamGuards(input: {
   const resolvedRunTimeoutMs =
     attempt.runTimeoutOverrideMs ??
     (attempt.timeoutMs !== configuredRunTimeoutMs ? attempt.timeoutMs : undefined);
+  // Both watchdogs read the same model facts, including the host-owned
+  // `requestTimeoutMs` derived from `models.providers.<id>.timeoutSeconds`.
+  const watchdogParams = {
+    cfg: attempt.config,
+    runTimeoutMs: resolvedRunTimeoutMs,
+    modelRequestTimeoutMs: attempt.model.requestTimeoutMs,
+    model: {
+      baseUrl: attempt.model.baseUrl,
+      id: attempt.modelId,
+      provider: attempt.provider,
+    },
+  };
   const idleTimeoutMs = resolveLlmIdleTimeoutMs({
-    cfg: attempt.config,
+    ...watchdogParams,
     trigger: attempt.trigger,
-    runTimeoutMs: resolvedRunTimeoutMs,
-    modelRequestTimeoutMs: (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs,
-    model: {
-      baseUrl: attempt.model.baseUrl,
-      id: attempt.modelId,
-      provider: attempt.provider,
-    },
   });
-  const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
-    cfg: attempt.config,
-    runTimeoutMs: resolvedRunTimeoutMs,
-    modelRequestTimeoutMs: (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs,
-    model: {
-      baseUrl: attempt.model.baseUrl,
-      id: attempt.modelId,
-      provider: attempt.provider,
-    },
-  });
+  const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs(watchdogParams);
   if (idleTimeoutMs > 0) {
     session.agent.streamFn = streamWithIdleTimeout(
       session.agent.streamFn,

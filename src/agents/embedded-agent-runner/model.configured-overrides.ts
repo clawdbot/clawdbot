@@ -5,7 +5,7 @@ import type { Api, Model } from "../../llm/types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
+import { normalizeProviderId } from "../model-selection.js";
 import { shouldSuppressBuiltInModel, shouldUnconditionallySuppress } from "../model-suppression.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -26,11 +26,7 @@ import {
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
-import {
-  normalizeTransportBaseUrl,
-  resolveProviderRequestTimeoutMs,
-  resolveProviderTransport,
-} from "./model.provider-hooks.js";
+import { normalizeTransportBaseUrl, resolveProviderTransport } from "./model.provider-hooks.js";
 import {
   resolveBundledStaticCatalogModel,
   type ManifestModelCatalogProviderAliasMetadata,
@@ -144,19 +140,6 @@ export function findInlineModelMatch(params: {
   const normalizedProvider = normalizeProviderId(params.provider);
   return inlineModels.find(
     (entry) => normalizeProviderId(entry.provider) === normalizedProvider && matchesModelId(entry),
-  );
-}
-
-export function resolveConfiguredProviderConfig(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-): InlineProviderConfig | undefined {
-  const configuredProviders = cfg?.models?.providers;
-  if (!configuredProviders) {
-    return undefined;
-  }
-  return (
-    configuredProviders[provider] ?? findNormalizedProviderValue(configuredProviders, provider)
   );
 }
 
@@ -322,7 +305,6 @@ export function applyConfiguredProviderOverrides(params: {
   const { providerConfig, modelId } = params;
   const discoveredModel = markDiscoveredMaxTokensSource(params.discoveredModel);
   const manifestAliasTransport = params.manifestAlias.transport;
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const defaultModelParams = findConfiguredAgentModelParams({
     cfg: params.cfg,
     provider: params.provider,
@@ -418,7 +400,6 @@ export function applyConfiguredProviderOverrides(params: {
     providerConfig.contextWindow === undefined &&
     providerConfig.contextTokens === undefined &&
     providerConfig.maxTokens === undefined &&
-    requestTimeoutMs === undefined &&
     !providerHeaders &&
     !providerRequest &&
     !providerParams &&
@@ -581,7 +562,6 @@ export function applyConfiguredProviderOverrides(params: {
             }
           : {}),
         ...(resolvedParams ? { params: resolvedParams } : {}),
-        ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         headers: requestConfig.headers,
         ...(providerConfig.authHeader !== undefined
           ? { authHeader: providerConfig.authHeader }

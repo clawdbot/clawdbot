@@ -9,7 +9,8 @@ import type {
 } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
-import type { AssistantMessage, Model } from "../../../llm/types.js";
+import type { AssistantMessage } from "../../../llm/types.js";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -151,7 +152,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptAbort?: () => void;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
-  model: Model;
+  /**
+   * Resolved runtime model. Typed as `ProviderRuntimeModel` rather than `Model`
+   * so host-owned fields such as `requestTimeoutMs` stay visible to consumers
+   * instead of needing structural casts (#113092).
+   */
+  model: ProviderRuntimeModel;
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
   authProfileStore: AuthProfileStore;

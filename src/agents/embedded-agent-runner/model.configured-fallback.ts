@@ -13,13 +13,13 @@ import {
   findConfiguredProviderModel,
   hasConfiguredFallbackSurface,
   mergeConfiguredRuntimeModelParams,
-  resolveConfiguredProviderConfig,
   resolveConfiguredProviderDefaultApi,
   shouldSuppressConfiguredModel,
   type StaticCatalogFallbackModel,
 } from "./model.configured-overrides.js";
 import {
   normalizeResolvedTransportApi,
+  resolveConfiguredProviderConfig,
   resolveProviderModelInput,
   sanitizeModelHeaders,
 } from "./model.inline-provider.js";
@@ -27,7 +27,6 @@ import {
   normalizeResolvedModel,
   normalizeTransportBaseUrl,
   type ProviderRuntimeHooks,
-  resolveProviderRequestTimeoutMs,
   resolveProviderTransport,
 } from "./model.provider-hooks.js";
 import {
@@ -46,7 +45,6 @@ export function resolveConfiguredFallbackModel(params: {
 }): Model | undefined {
   const { provider, modelId, cfg, agentDir, workspaceDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
   if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
     return undefined;
@@ -200,7 +198,6 @@ export function resolveConfiguredFallbackModel(params: {
               }
             : {}),
           ...(resolvedParams ? { params: resolvedParams } : {}),
-          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
           ...(providerConfig?.authHeader !== undefined
             ? { authHeader: providerConfig.authHeader }

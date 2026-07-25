@@ -101,7 +101,7 @@ export async function resolveEmbeddedRunModelSetup(params: {
   let modelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
   if (nativeModelOwned) {
     modelResolution = {
-      model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
+      model: createNativeModelOwnedRuntimeModel({ provider, modelId, cfg: runParams.config }),
       ...createEmptyAgentDiscoveryStores(),
     };
   } else {

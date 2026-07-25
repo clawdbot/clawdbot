@@ -19,10 +19,8 @@ import {
 } from "../sessions/index.js";
 import { mergeModelMediaInput } from "./model.compat.js";
 import { resolveConfiguredFallbackModel } from "./model.configured-fallback.js";
-import {
-  applyConfiguredProviderOverrides,
-  resolveConfiguredProviderConfig,
-} from "./model.configured-overrides.js";
+import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
+import { resolveConfiguredProviderConfig } from "./model.inline-provider.js";
 import {
   DEFAULT_PROVIDER_RUNTIME_HOOKS,
   normalizeResolvedModel,

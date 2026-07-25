@@ -295,6 +295,33 @@ describe("buildInlineProviderModels", () => {
   });
 });
 
+describe("buildInlineProviderModels request timeout inheritance", () => {
+  it("inherits provider timeoutSeconds onto every inline model", () => {
+    const result = buildInlineProviderModels({
+      custom: {
+        baseUrl: "http://127.0.0.1:8080/v1",
+        timeoutSeconds: 3600,
+        models: [{ id: "model-a" }, { id: "model-b" }],
+      },
+    } as unknown as Parameters<typeof buildInlineProviderModels>[0]);
+
+    expect(result).toHaveLength(2);
+    for (const model of result) {
+      expect((model as { requestTimeoutMs?: number }).requestTimeoutMs).toBe(3_600_000);
+    }
+  });
+
+  it("omits requestTimeoutMs when the provider declares no timeoutSeconds", () => {
+    const result = buildInlineProviderModels({
+      custom: { baseUrl: "http://127.0.0.1:8080/v1", models: [{ id: "model-a" }] },
+    } as unknown as Parameters<typeof buildInlineProviderModels>[0]);
+
+    expect(expectDefined(result[0], "result[0] test invariant")).not.toHaveProperty(
+      "requestTimeoutMs",
+    );
+  });
+});
+
 describe("resolveProviderModelInput", () => {
   it("keeps configured Anthropic model input unchanged before provider-owned normalization", () => {
     expect(

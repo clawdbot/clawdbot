@@ -8,6 +8,7 @@ import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-mod
 import { AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE } from "../../../sessions/agent-harness-session-key.js";
 import {
   buildBeforeModelResolveAttachments,
+  createNativeModelOwnedRuntimeModel,
   resolveAgentHarnessRunAdmissionError,
   resolveEmbeddedRuntimeModelPolicy,
   resolveHookModelSelection,
@@ -295,6 +296,31 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       tokens: 272_000,
     });
     expect(result.effectiveModel.contextWindow).toBe(272_000);
+  });
+});
+
+describe("createNativeModelOwnedRuntimeModel", () => {
+  // This harness bypasses `normalizeResolvedModel`, so the provider request
+  // timeout has to be applied here or the operator's configured
+  // `timeoutSeconds` never reaches the stream watchdogs (#113092).
+  const cfgWithTimeout = {
+    models: { providers: { codex: { timeoutSeconds: 3600 } } },
+  } as unknown as OpenClawConfig;
+
+  it("stamps the configured provider request timeout", () => {
+    expect(
+      createNativeModelOwnedRuntimeModel({
+        provider: "codex",
+        modelId: "gpt-5.6-luna",
+        cfg: cfgWithTimeout,
+      }).requestTimeoutMs,
+    ).toBe(3_600_000);
+  });
+
+  it("omits requestTimeoutMs when the provider declares no timeoutSeconds", () => {
+    expect(
+      createNativeModelOwnedRuntimeModel({ provider: "codex", modelId: "gpt-5.6-luna" }),
+    ).not.toHaveProperty("requestTimeoutMs");
   });
 });
 

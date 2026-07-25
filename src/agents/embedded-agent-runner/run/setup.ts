@@ -31,6 +31,10 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
 import { log } from "../logger.js";
 import { readAgentModelContextTokens } from "../model-context-tokens.js";
+import {
+  resolveConfiguredProviderConfig,
+  resolveProviderRequestTimeoutMs,
+} from "../model.inline-provider.js";
 
 type HookContext = {
   agentId?: string;
@@ -183,7 +187,15 @@ export function resolveNativeModelOwnedHarnessId(params: {
 export function createNativeModelOwnedRuntimeModel(params: {
   provider: string;
   modelId: string;
+  cfg?: OpenClawConfig;
 }): ProviderRuntimeModel {
+  // This harness synthesizes its model instead of resolving one, so it never
+  // reaches `normalizeResolvedModel` where provider config is normally applied.
+  // Stamp the host-owned request timeout here or the operator's configured
+  // `timeoutSeconds` is silently dropped for pinned native harnesses (#113092).
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(
+    resolveConfiguredProviderConfig(params.cfg, params.provider)?.timeoutSeconds,
+  );
   return {
     provider: params.provider,
     id: params.modelId,
@@ -195,6 +207,7 @@ export function createNativeModelOwnedRuntimeModel(params: {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_CONTEXT_TOKENS,
+    ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
   };
 }
 

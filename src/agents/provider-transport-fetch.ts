@@ -600,8 +600,11 @@ function resolveModelRequestPolicy(model: Model) {
   });
 }
 
+// Structural `requestTimeoutMs` rather than importing `ProviderRuntimeModel`:
+// this module sits under the transport barrel, and importing the plugin runtime
+// model type here closes a madge cycle back through `src/plugin-sdk/llm.ts`.
 export function resolveModelRequestTimeoutMs(
-  model: Model,
+  model: Model & { requestTimeoutMs?: number },
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
@@ -609,7 +612,9 @@ export function resolveModelRequestTimeoutMs(
       ? clampTimerTimeoutMs(timeoutMs)
       : undefined;
   }
-  const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
+  // Plugin-supplied models are structurally unchecked, so keep validating the
+  // value even though the field is now typed.
+  const modelTimeoutMs = model.requestTimeoutMs;
   return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
     ? clampTimerTimeoutMs(modelTimeoutMs)
     : undefined;

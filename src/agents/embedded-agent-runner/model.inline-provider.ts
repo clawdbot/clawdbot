@@ -1,11 +1,14 @@
 /**
  * Converts inline provider model config into runtime model definitions.
  */
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
+import { findNormalizedProviderValue } from "../model-selection-normalize.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
@@ -17,6 +20,7 @@ import {
  * Normalizes inline `models.providers` config into runtime model entries.
  */
 type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+  requestTimeoutMs?: number;
   api?: Api;
   provider: string;
   baseUrl?: string;
@@ -37,6 +41,30 @@ export type InlineProviderConfig = {
   request?: ModelProviderConfig["request"];
   localService?: ModelProviderConfig["localService"];
 };
+
+/**
+ * Resolves the configured provider entry for `provider`, falling back to the
+ * normalized-id lookup so `models.providers` keys match how callers spell the
+ * provider. Kept here beside `InlineProviderConfig` so every consumer shares one
+ * lookup policy instead of re-deriving it.
+ */
+export function resolveConfiguredProviderConfig(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): InlineProviderConfig | undefined {
+  const configuredProviders = cfg?.models?.providers;
+  if (!configuredProviders) {
+    return undefined;
+  }
+  return (
+    configuredProviders[provider] ?? findNormalizedProviderValue(configuredProviders, provider)
+  );
+}
+
+/** Converts `models.providers.<id>.timeoutSeconds` into a timer-safe millisecond ceiling. */
+export function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
+}
 
 /** Returns a supported transport API id from raw config values. */
 export function normalizeResolvedTransportApi(
@@ -151,6 +179,7 @@ export function buildInlineProviderModels(
       stripSecretRefMarkers: true,
     });
     const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
+    const requestTimeoutMs = resolveProviderRequestTimeoutMs(entry?.timeoutSeconds);
     return (entry?.models ?? []).map((model) => {
       const transport = resolveInlineProviderTransport({
         api: model.api ?? entry?.api,
@@ -177,6 +206,7 @@ export function buildInlineProviderModels(
             contextWindow: model.contextWindow ?? entry?.contextWindow,
             contextTokens: model.contextTokens ?? entry?.contextTokens,
             maxTokens: model.maxTokens ?? entry?.maxTokens,
+            ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
             input: resolveProviderModelInput({
               provider: trimmed,
               modelId: model.id,

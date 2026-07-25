@@ -1,6 +1,6 @@
-import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
@@ -13,7 +13,9 @@ import {
 import { canonicalizeOpenAIModelId } from "../openai-routing.js";
 import {
   normalizeResolvedTransportApi,
+  resolveConfiguredProviderConfig,
   resolveProviderModelInput,
+  resolveProviderRequestTimeoutMs,
 } from "./model.inline-provider.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
@@ -86,7 +88,10 @@ export function resolveRuntimeHooks(params?: {
   return DEFAULT_PROVIDER_RUNTIME_HOOKS;
 }
 
-function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
+function canonicalizeLegacyResolvedModel(params: {
+  provider: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel {
   const canonicalModelId = canonicalizeOpenAIModelId(params.provider, params.model.id);
   if (canonicalModelId === params.model.id) {
     return params.model;
@@ -144,7 +149,7 @@ export function normalizeResolvedModel(params: {
   agentDir?: string;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
-}): Model {
+}): ProviderRuntimeModel {
   const normalizeModelCost = (cost: unknown): Model["cost"] => {
     if (!cost || typeof cost !== "object" || Array.isArray(cost)) {
       return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -219,13 +224,26 @@ export function normalizeResolvedModel(params: {
       runtimeHooks,
       model: pluginNormalized ?? normalizedInputModel,
     });
-  return canonicalizeLegacyResolvedModel({
+  const canonicalModel = canonicalizeLegacyResolvedModel({
     provider: params.provider,
     model: normalizeResolvedProviderModel({
       provider: params.provider,
       model: fallbackTransportNormalized ?? pluginNormalized ?? normalizedInputModel,
     }),
   });
+  // `requestTimeoutMs` is host-owned config (`models.providers.<id>.timeoutSeconds`),
+  // so it must land *after* the provider plugin hooks above. Those hooks may
+  // legally return a freshly built model rather than a spread of their input;
+  // stamping earlier lets such a plugin drop the operator's timeout, and the
+  // stream watchdogs silently fall back to the implicit 120s/300s ceilings
+  // (#113092). This is the single terminal step of every resolution branch.
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(
+    resolveConfiguredProviderConfig(params.cfg, params.provider)?.timeoutSeconds,
+  );
+  if (requestTimeoutMs === undefined || canonicalModel.requestTimeoutMs === requestTimeoutMs) {
+    return canonicalModel;
+  }
+  return { ...canonicalModel, requestTimeoutMs };
 }
 
 export function resolveProviderTransport(params: {
@@ -264,8 +282,4 @@ export function normalizeTransportBaseUrl(baseUrl: unknown): string | undefined 
   }
   const trimmed = baseUrl.trim();
   return trimmed ? trimmed : undefined;
-}
-
-export function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
-  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
 }

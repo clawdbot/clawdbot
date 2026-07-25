@@ -1,4 +1,5 @@
 import type { Model } from "../../../llm/types.js";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -27,7 +28,7 @@ export function resolveEmbeddedRunEffectiveModel(
   params: HarnessSelectionContext & {
     modelConfigProvider: string;
     agentHarnessId: string;
-    runtimeModel: Model;
+    runtimeModel: ProviderRuntimeModel;
     nativeModelOwned: boolean;
   },
 ) {
