@@ -10,6 +10,25 @@ describe("resolveSessionCreateParams", () => {
       succeedsParent: false,
     });
   });
+
+  it("carries the parent agent when the dashboard omits an explicit agent", () => {
+    expect(resolveSessionCreateParams(" agent:research:dashboard:child ")).toEqual({
+      agentId: "research",
+      parentSessionKey: "agent:research:dashboard:child",
+      emitCommandHooks: true,
+      succeedsParent: false,
+    });
+  });
+
+  it("keeps no-context and legacy sentinel creates on the gateway default", () => {
+    expect(resolveSessionCreateParams()).toEqual({});
+    expect(resolveSessionCreateParams("unknown")).toEqual({});
+    expect(resolveSessionCreateParams("global")).toEqual({
+      parentSessionKey: "global",
+      emitCommandHooks: true,
+      succeedsParent: false,
+    });
+  });
 });
 
 describe("requestSessionCreate", () => {

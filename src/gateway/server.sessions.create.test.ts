@@ -430,6 +430,27 @@ test("createGatewaySession rechecks admin scope after incognito inheritance reso
   }
 });
 
+test("sessions.create preserves explicit and parent-derived agent routing", async () => {
+  const parent = await directSessionReq<{ key?: string }>("sessions.create", {
+    agentId: "work",
+  });
+  expect(parent.ok, JSON.stringify(parent.error)).toBe(true);
+  const parentSessionKey = requireNonEmptyString(parent.payload?.key, "work parent key");
+
+  const inherited = await directSessionReq<{ key?: string }>("sessions.create", {
+    parentSessionKey,
+  });
+  expect(inherited.ok, JSON.stringify(inherited.error)).toBe(true);
+  expect(inherited.payload?.key).toMatch(/^agent:work:dashboard:/u);
+
+  const explicit = await directSessionReq<{ key?: string }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey,
+  });
+  expect(explicit.ok, JSON.stringify(explicit.error)).toBe(true);
+  expect(explicit.payload?.key).toMatch(/^agent:main:dashboard:/u);
+});
+
 test("incognito operator RPCs treat identityless connections as owner-equivalent", async () => {
   const { dir } = await createSessionStoreDir();
   const admin = await openClient({
@@ -2856,7 +2877,6 @@ test("sessions.create rejects fork while the parent session is active", async ()
 test("sessions.create resolves an agent-qualified fork from the parent store", async () => {
   const { dir } = await createSessionStoreDir();
   const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
   const workStorePath = storeTemplate.replace("{agentId}", "work");
   const workDir = path.dirname(workStorePath);
   testState.sessionStorePath = storeTemplate;
@@ -2898,7 +2918,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
     });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.key).toMatch(/^agent:work:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:work:main");
     expect(created.payload?.entry?.forkSource).toEqual({
       sessionKey: "agent:work:main",
@@ -2917,7 +2937,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
           "agent-qualified forked session id",
         ),
         sessionKey: created.payload?.key ?? "",
-        storePath: mainStorePath,
+        storePath: workStorePath,
       }),
     ).resolves.toEqual(
       expect.arrayContaining([
