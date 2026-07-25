@@ -61,7 +61,7 @@ export type SessionUpstreamJsonValue =
   | SessionUpstreamJsonValue[]
   | { [key: string]: SessionUpstreamJsonValue };
 
-export type SessionUpstreamKind = "claude-cli" | "codex-app-server";
+export type SessionUpstreamKind = "claude-cli" | "codex-app-server" | "opencode-cli" | "pi-cli";
 
 export type SessionUpstreamProbe = {
   sessionKey: string;
@@ -164,28 +164,34 @@ export function listAdoptedSessionCatalogSessions(params: {
   return adopted;
 }
 
-export function createSessionCatalogAdoptionCoordinator() {
-  const operations = new Map<string, Promise<{ sessionKey: string }>>();
+export function createSessionCatalogAdoptionCoordinator<TResult extends { sessionKey: string }>() {
+  const operations = new Map<string, Promise<TResult>>();
   return async (params: {
     sourceKey: string;
     findExisting: () => string | undefined;
     create: () => Promise<{ sessionKey: string }>;
-  }): Promise<{ sessionKey: string }> => {
-    const existing = params.findExisting();
-    if (existing) {
-      return { sessionKey: existing };
-    }
+    complete: (continued: { sessionKey: string }) => Promise<TResult>;
+  }): Promise<TResult> => {
     const pending = operations.get(params.sourceKey);
     if (pending) {
       return await pending;
     }
-    const operation = params.create().catch((error: unknown) => {
-      const raced = params.findExisting();
-      if (raced) {
-        return { sessionKey: raced };
+    const operation = (async () => {
+      const existing = params.findExisting();
+      if (existing) {
+        // The gateway's same-source link upsert preserves its active marker. Re-running
+        // completion only supplies a new baseline after that link was removed.
+        return await params.complete({ sessionKey: existing });
       }
-      throw error;
-    });
+      const continued = await params.create().catch((error: unknown) => {
+        const raced = params.findExisting();
+        if (raced) {
+          return { sessionKey: raced };
+        }
+        throw error;
+      });
+      return await params.complete(continued);
+    })();
     operations.set(params.sourceKey, operation);
     try {
       return await operation;

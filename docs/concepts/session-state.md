@@ -48,7 +48,7 @@ Watcher identity must be an agent-qualified session key. Under `session.scope="g
 
 Watches clean themselves up: cursor rows expire with signal-log retention, are removed when the watcher session resets, and are deleted with either session. There is no unwatch verb in v1.
 
-Watched sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Detected activity enters the same signal log and watcher flow as other direct human turns.
+Watched Claude, Codex, OpenCode, and Pi sessions adopted from a session catalog are checked for direct upstream human activity on a fixed cadence. Pi monitoring starts after the session is in its append-only v3 format. Detected activity enters the same signal log and watcher flow as other direct human turns.
 
 If an adopted session's upstream source is deleted externally, three consecutive missing checks (about three monitor ticks) produce one `upstream_missing` signal for its watchers and remove the upstream link. Continuing the catalog session again creates a fresh link.
 
@@ -105,6 +105,9 @@ Current limits:
 - Cancelled-outcome payload detail is currently produced by ACP child runs; native sub-agent cancellations surface as generic failures.
 - Upstream self-echo detection compares normalized user text. An external prompt matching one of the session's 10 most recent OpenClaw-side user messages is treated as self-echo.
 - A single local Claude JSONL row larger than the 1 MiB per-cadence scan cap blocks that session's cursor in v1; unclassified bytes are never skipped.
+- A single Pi JSONL row larger than the 1 MiB per-cadence scan cap blocks that session's cursor in v1; unclassified bytes are never skipped.
+- Legacy Pi sessions are adopted without an upstream link. Resume once to migrate the file to v3, then continue it from the catalog again to start monitoring.
+- OpenCode checks issue one batched database query per cadence. A session export runs only when that query shows its latest message changed.
 - Paired-node Claude checks classify the latest 50 transcript items per cadence. Larger bursts can fall outside the v1 scan window.
 - Paired-node Claude history reads do not expose a definitive thread-not-found result, so remote Claude deletions are not classified as `upstream_missing` in v1.
 - Catalog sessions that have not been adopted remain outside the awareness layer in v1.
