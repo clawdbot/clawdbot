@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { inspectPathPermissions, safeStat } from "@openclaw/fs-safe/permissions";
+import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { trustedPlanPathPolicy } from "./trusted-plan-path-policy.js";
 
 const { isSafeWindowsDirectoryAclSummary, isTrustedOwner } = trustedPlanPathPolicy;
