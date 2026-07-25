@@ -83,7 +83,7 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
           ? retainedSessionKey
           : markerMatches.length === 1
             ? markerMatches[0]?.sessionKey
-            : markerMatches.length === 0
+            : markerMatches.length === 0 && !retainedEntry
               ? retainedSessionKey
               : undefined;
       if (

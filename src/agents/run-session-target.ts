@@ -110,8 +110,8 @@ export async function resolveAgentRunSessionTarget(params: {
     legacyMarker &&
     !hasCompleteTypedTarget &&
     candidateMarkerKey &&
-    ((candidateMarkerEntry && candidateMarkerEntry.sessionId !== legacyMarker.sessionId) ||
-      (!candidateMarkerEntry && markerMatches.length > 0))
+    candidateMarkerEntry &&
+    candidateMarkerEntry.sessionId !== legacyMarker.sessionId
   ) {
     throw new Error("Legacy SQLite transcript marker conflicts with the supplied session key");
   }

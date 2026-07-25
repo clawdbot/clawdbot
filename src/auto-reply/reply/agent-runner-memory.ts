@@ -51,7 +51,7 @@ import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-event
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -986,10 +986,10 @@ export async function runPreflightCompactionIfNeeded(params: {
       await notifyTerminalCompaction("skipped");
       return entry ?? params.sessionEntry;
     }
-    const compactionAgentId =
-      resolveAgentIdFromSessionKey(compactionSessionKey) ??
-      params.followupRun.run.agentId ??
-      "main";
+    const keyAgentId = resolveAgentIdFromSessionKey(compactionSessionKey);
+    const compactionAgentId = isUnscopedSessionKeySentinel(compactionSessionKey)
+      ? (params.followupRun.run.agentId ?? keyAgentId ?? "main")
+      : (keyAgentId ?? params.followupRun.run.agentId ?? "main");
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
       sessionKey: compactionSessionKey,

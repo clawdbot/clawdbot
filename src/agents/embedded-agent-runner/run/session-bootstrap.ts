@@ -11,6 +11,7 @@ import {
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -55,14 +56,18 @@ export function buildContextEngineCompactionSessionTarget(params: {
         storePath: marker.storePath,
       }).filter(({ entry }) => entry.sessionId === marker.sessionId)
     : [];
+  const preferredMarkerSessionKey = marker
+    ? resolvePreferredSessionKeyForSessionIdMatches(
+        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        marker.sessionId,
+      )
+    : undefined;
   const markerSessionKey = marker
     ? suppliedEntry?.sessionId === marker.sessionId
       ? candidateSessionKey
-      : markerMatches.length === 1
-        ? markerMatches[0]?.sessionKey
-        : markerMatches.length === 0
-          ? candidateSessionKey
-          : undefined
+      : candidateSessionKey && !suppliedEntry
+        ? candidateSessionKey
+        : preferredMarkerSessionKey
     : undefined;
   if (marker && !markerSessionKey) {
     throw new Error("Legacy compaction transcript identity is ambiguous");
@@ -72,9 +77,7 @@ export function buildContextEngineCompactionSessionTarget(params: {
     ((targetAgentId && targetAgentId !== marker.agentId) ||
       (targetSessionId && targetSessionId !== marker.sessionId) ||
       (targetStorePath && path.resolve(targetStorePath) !== path.resolve(marker.storePath)) ||
-      (candidateSessionKey &&
-        ((suppliedEntry && suppliedEntry.sessionId !== marker.sessionId) ||
-          (!suppliedEntry && markerMatches.length > 0))))
+      (candidateSessionKey && suppliedEntry && suppliedEntry.sessionId !== marker.sessionId))
   ) {
     throw new Error("Legacy compaction transcript identity is inconsistent");
   }

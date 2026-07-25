@@ -740,7 +740,7 @@ async function compactResolvedContextEngine(
               ? runtimeTarget.sessionKey
               : markerMatches.length === 1
                 ? markerMatches[0]?.sessionKey
-                : markerMatches.length === 0
+                : markerMatches.length === 0 && !retainedMarkerEntry
                   ? runtimeTarget.sessionKey
                   : undefined
             : undefined;
