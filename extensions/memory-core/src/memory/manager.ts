@@ -1671,6 +1671,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const reportPendingWorkError = (err: unknown) => {
       log.warn(`memory close: pending manager work failed: ${formatErrorMessage(err)}`);
     };
+    const retirementErrors: unknown[] = [];
     const awaitCurrentSync = async () => {
       const pendingSync = this.syncing;
       if (!pendingSync) {
@@ -1689,14 +1690,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       pendingProviderInit: pendingFallbackInit?.then(() => undefined),
       onError: reportPendingWorkError,
     });
-    await awaitPendingManagerWork({
-      pendingProviderInit: this.providerRetirementPromise,
-      onError: reportPendingWorkError,
-    });
-    await awaitPendingManagerWork({
-      pendingProviderInit: this.retireCurrentProvider(),
-      onError: reportPendingWorkError,
-    });
+    for (
+      let attempt = 0;
+      attempt < 2 && (this.provider !== null || this.providersPendingRetirement.size > 0);
+      attempt += 1
+    ) {
+      try {
+        await this.retireCurrentProvider();
+      } catch (err) {
+        retirementErrors.push(err);
+        reportPendingWorkError(err);
+      }
+    }
     rememberCurrentProvider();
     try {
       await awaitCurrentSync();
@@ -1708,7 +1713,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         INDEX_CACHE.delete(this.cacheKey);
       }
     }
-    const closeError = closeErrors.values().next().value;
+    const closeError =
+      (this.providersPendingRetirement.size > 0 ? retirementErrors.at(-1) : undefined) ??
+      closeErrors.values().next().value;
     if (closeError) {
       throw toLintErrorObject(closeError, "Non-Error thrown");
     }
