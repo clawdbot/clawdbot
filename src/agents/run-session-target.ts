@@ -2,11 +2,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
+  listSessionEntries,
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 
 /** Identifies a run transcript target without naming the current storage artifact. */
 export type AgentRunSessionTarget = {
@@ -56,10 +58,23 @@ export async function resolveAgentRunSessionTarget(params: {
       : undefined;
   const targetSessionKey = normalizeOptionalString(sessionTarget?.sessionKey);
   const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
+  const markerSessionKey =
+    legacyMarker && !targetSessionKey && !suppliedSessionKey
+      ? resolvePreferredSessionKeyForSessionIdMatches(
+          listSessionEntries({
+            agentId: legacyMarker.agentId,
+            storePath: legacyMarker.storePath,
+          })
+            .filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)
+            .map(({ sessionKey, entry }) => [sessionKey, entry]),
+          legacyMarker.sessionId,
+        )
+      : undefined;
   const sessionKey =
     targetSessionKey ??
     suppliedSessionKey ??
     compatibilitySessionKey ??
+    markerSessionKey ??
     normalizeOptionalString(sessionId);
   const compatibilitySessionKeySelected =
     !targetSessionKey && !suppliedSessionKey && sessionKey === compatibilitySessionKey;

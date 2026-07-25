@@ -144,10 +144,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
           settlePrompt?.();
           return;
         }
-        if (reloadFailed) {
-          throw reloadFailure;
-        }
         try {
+          if (reloadFailed) {
+            throw reloadFailure;
+          }
           await params.reloadPromptReleasedSessionFile?.();
         } catch (error) {
           reloadFailed = true;

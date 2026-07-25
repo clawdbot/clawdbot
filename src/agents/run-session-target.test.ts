@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { upsertSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentRunSessionTarget } from "./run-session-target.js";
 
@@ -85,6 +87,26 @@ describe("agent run session target", () => {
       sessionKey: "agent:helper:compat-session",
       storePath,
     });
+  });
+
+  it("recovers the stored key from a legacy SQLite marker", async () => {
+    const storePath = path.join(tempDir, "legacy", "sessions.json");
+    const sessionKey = "agent:main:dashboard:legacy-session";
+    await upsertSessionEntry(
+      { agentId: "main", sessionId: "legacy-session", sessionKey, storePath },
+      { sessionId: "legacy-session", updatedAt: 1 },
+    );
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "legacy-session",
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "legacy-session",
+          storePath,
+        }),
+      }),
+    ).resolves.toMatchObject({ sessionKey, storePath });
   });
 
   it("rejects a compatibility key from another target agent", async () => {

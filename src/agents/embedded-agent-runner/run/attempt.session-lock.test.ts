@@ -145,6 +145,9 @@ describe("createEmbeddedAttemptSessionLockController", () => {
 
     await expect(controller.reacquireAfterPrompt()).rejects.toBe(reloadError);
     await expect(controller.withSessionWriteLock(run)).rejects.toBe(reloadError);
+    await controller.releaseForPrompt();
+    await expect(controller.reacquireAfterPrompt()).rejects.toBe(reloadError);
+    await expect(controller.acquireForCleanup()).resolves.toBeDefined();
 
     expect(run).not.toHaveBeenCalled();
     expect(controller.hasSessionTakeover()).toBe(false);
