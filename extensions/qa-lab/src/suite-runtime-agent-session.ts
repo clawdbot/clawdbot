@@ -365,7 +365,7 @@ async function seedQaSessionTranscript(
 }
 
 async function readRawQaSessionStore(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  env: { gateway: Pick<QaSuiteRuntimeEnv["gateway"], "tempRoot"> },
   options: {
     agentId?: string;
     readEntries?: typeof listSessionEntries;
