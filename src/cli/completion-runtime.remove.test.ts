@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { removeCompletionBlockFromProfile } from "./completion-runtime.js";
+import {
+  completionProfileCandidates,
+  removeCompletionBlockFromProfile,
+} from "./completion-runtime.js";
 
 const CACHE = "/home/kng/.openclaw/completions/openclaw.bash";
 
@@ -32,7 +35,7 @@ describe("removeCompletionBlockFromProfile (#112625)", () => {
   });
 
   it("removes a dynamic `openclaw completion` source line", () => {
-    const content = ["setup", 'source <(openclaw completion bash)', "done"].join("\n");
+    const content = ["setup", "source <(openclaw completion bash)", "done"].join("\n");
     const { next, changed } = removeCompletionBlockFromProfile(content, "openclaw", null);
     expect(changed).toBe(true);
     expect(next).not.toContain("openclaw completion");
@@ -60,6 +63,27 @@ describe("removeCompletionBlockFromProfile (#112625)", () => {
     );
     const { next } = removeCompletionBlockFromProfile(content, "openclaw", CACHE);
     expect(next).toBe("");
+  });
+
+  it("preserves unrelated trailing bytes after the removed block (#112631 review)", () => {
+    const content = [
+      "export EDITOR=vim",
+      "# OpenClaw Completion",
+      `[ -f "${CACHE}" ] && source "${CACHE}"`,
+      "",
+      "",
+    ].join("\n");
+    const { next, changed } = removeCompletionBlockFromProfile(content, "openclaw", CACHE);
+    expect(changed).toBe(true);
+    expect(next).not.toContain("# OpenClaw Completion");
+    expect(next).toBe("export EDITOR=vim\n\n");
+  });
+
+  it("targets both bash profiles so a .bash_profile install is cleaned (#112631 review)", () => {
+    expect(completionProfileCandidates("bash", { env: { HOME: "/home/kng" } })).toEqual([
+      "/home/kng/.bashrc",
+      "/home/kng/.bash_profile",
+    ]);
   });
 
   it("is idempotent", () => {

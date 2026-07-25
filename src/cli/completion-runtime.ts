@@ -173,6 +173,11 @@ export function removeCompletionBlockFromProfile(
     const line = lines[i] ?? "";
     if (isCompletionProfileHeader(line)) {
       removed = true;
+      // Drop the single blank separator the installer writes before the block;
+      // leave all other user whitespace untouched.
+      if (filtered[filtered.length - 1] === "") {
+        filtered.pop();
+      }
       i += 1; // drop the source line that follows the header too
       continue;
     }
@@ -187,31 +192,55 @@ export function removeCompletionBlockFromProfile(
   if (!removed) {
     return { next: content, changed: false };
   }
-  const trimmed = filtered.join("\n").trimEnd();
-  const next = trimmed ? `${trimmed}\n` : "";
+  // Rejoin without normalizing the tail so user bytes after the block survive.
+  const next = filtered.join("\n");
   return { next, changed: next !== content };
 }
 
 /**
- * Strips the OpenClaw completion block from a shell's startup profile on disk.
- * A no-op when the profile is absent or holds no OpenClaw lines.
+ * Every startup profile the installer may have written the completion block to.
+ * `installCompletion` falls back to `~/.bash_profile` when `~/.bashrc` is absent, so
+ * uninstall must check both bash profiles to avoid leaving a stale source line.
+ */
+export function completionProfileCandidates(
+  shell: CompletionShell,
+  options: { env?: NodeJS.ProcessEnv; homeDir?: () => string; platform?: NodeJS.Platform } = {},
+): string[] {
+  const primary = resolveCompletionProfilePath(shell, options);
+  if (shell === "bash") {
+    const env = options.env ?? process.env;
+    const home = env.HOME || (options.homeDir ?? os.homedir)();
+    return [primary, path.join(home, ".bash_profile")];
+  }
+  return [primary];
+}
+
+/**
+ * Strips the OpenClaw completion block from a shell's startup profile(s) on disk.
+ * A no-op when a profile is absent or holds no OpenClaw lines.
  */
 export async function removeCompletionInstall(
   shell: CompletionShell,
   binName = "openclaw",
 ): Promise<{ profilePath: string; changed: boolean }> {
-  const profilePath = resolveCompletionProfilePath(shell);
-  if (!(await pathExists(profilePath))) {
-    return { profilePath, changed: false };
-  }
   const cachePathCandidate = resolveCompletionCachePath(shell, binName);
   const cachedPath = (await pathExists(cachePathCandidate)) ? cachePathCandidate : null;
-  const content = await fs.readFile(profilePath, "utf-8");
-  const { next, changed } = removeCompletionBlockFromProfile(content, binName, cachedPath);
-  if (changed) {
-    await fs.writeFile(profilePath, next, "utf-8");
+  const candidates = completionProfileCandidates(shell);
+  let changedPath = candidates[0] ?? resolveCompletionProfilePath(shell);
+  let changed = false;
+  for (const profilePath of candidates) {
+    if (!(await pathExists(profilePath))) {
+      continue;
+    }
+    const content = await fs.readFile(profilePath, "utf-8");
+    const result = removeCompletionBlockFromProfile(content, binName, cachedPath);
+    if (result.changed) {
+      await fs.writeFile(profilePath, result.next, "utf-8");
+      changed = true;
+      changedPath = profilePath;
+    }
   }
-  return { profilePath, changed };
+  return { profilePath: changedPath, changed };
 }
 
 /** Resolves the shell startup profile path that should contain the OpenClaw completion block. */
