@@ -1090,14 +1090,7 @@ extension OpenClawChatView {
     }
 
     private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {
-        message.content.contains { content in
-            switch content.type ?? "text" {
-            case "file", "attachment":
-                true
-            default:
-                false
-            }
-        }
+        message.content.contains(where: \.isInlineAttachment)
     }
 
     private func toolCalls(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {

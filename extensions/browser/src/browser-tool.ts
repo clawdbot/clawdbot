@@ -21,6 +21,7 @@ import {
 import {
   type AnyAgentTool,
   type NodeListNode,
+  BrowserToolOutputSchema,
   BrowserToolSchema,
   browserAct,
   browserArmDialog,
@@ -418,6 +419,7 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
+    outputSchema: BrowserToolOutputSchema,
     execute: async (_toolCallId, args) => {
       const bindingResult =
         opts?.runToolBinding === undefined

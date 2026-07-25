@@ -846,6 +846,134 @@ describe("readRemoteMediaBuffer", () => {
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
   });
 
+  it("preserves content-disposition CSV detection for streamed downloads", async () => {
+    const csv = Buffer.from("name,value\nopenclaw,1\n");
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([csv.subarray(0, 8), csv.subarray(8)]), {
+          status: 200,
+          headers: {
+            "content-disposition": 'attachment; filename="report.csv"',
+            "content-type": "application/octet-stream",
+          },
+        }),
+    );
+
+    const saved = await saveRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 64,
+    });
+
+    expect(saved.fileName).toBe("report.csv");
+    expect(saved.contentType).toBe("text/csv");
+    expect(saved.path).toMatch(/[a-f0-9-]{36}\.csv$/);
+    expect(saved.path).not.toMatch(/report---/);
+    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(csv);
+  });
+
+  it("preserves content-disposition CSV detection for provided response streams", async () => {
+    const csv = Buffer.from("name,value\nopenclaw,1\n");
+    const response = new Response(makeStream([csv.subarray(0, 8), csv.subarray(8)]), {
+      status: 200,
+      headers: {
+        "content-disposition": 'attachment; filename="report.csv"',
+        "content-type": "application/octet-stream",
+      },
+    });
+
+    const saved = await saveResponseMedia(response, {
+      sourceUrl: "https://example.com/download",
+      maxBytes: 64,
+    });
+
+    expect(saved.fileName).toBe("report.csv");
+    expect(saved.contentType).toBe("text/csv");
+    expect(saved.path).toMatch(/[a-f0-9-]{36}\.csv$/);
+    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(csv);
+  });
+
+  it("preserves content-disposition CSV detection for buffered downloads", async () => {
+    const csv = Buffer.from("name,value\nopenclaw,1\n");
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([csv.subarray(0, 8), csv.subarray(8)]), {
+          status: 200,
+          headers: {
+            "content-disposition": 'attachment; filename="report.csv"',
+            "content-type": "application/octet-stream",
+          },
+        }),
+    );
+
+    const media = await readRemoteMediaBuffer({
+      url: "https://example.com/download",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 64,
+    });
+
+    expect(media.fileName).toBe("report.csv");
+    expect(media.contentType).toBe("text/csv");
+    expect(media.buffer).toStrictEqual(csv);
+  });
+
+  it("keeps explicit stream detection hints ahead of content-disposition filenames", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+          status: 200,
+          headers: {
+            "content-disposition": 'attachment; filename="report.csv"',
+            "content-type": "application/octet-stream",
+          },
+        }),
+    );
+
+    const saved = await saveRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      filePathHint: "document.docx",
+      maxBytes: 8,
+    });
+
+    expect(saved.fileName).toBe("report.csv");
+    expect(saved.contentType).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    expect(saved.path).toMatch(/[a-f0-9-]{36}\.docx$/);
+    expect(saved.path).not.toMatch(/\.csv$/);
+  });
+
+  it("keeps byte-sniffed images ahead of content-disposition stream hints", async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([jpeg]), {
+          status: 200,
+          headers: {
+            "content-disposition": 'attachment; filename="report.csv"',
+            "content-type": "application/octet-stream",
+          },
+        }),
+    );
+
+    const saved = await saveRemoteMedia({
+      url: "https://example.com/download",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 8,
+    });
+
+    expect(saved.fileName).toBe("report.csv");
+    expect(saved.contentType).toBe("image/jpeg");
+    expect(saved.path).toMatch(/[a-f0-9-]{36}\.jpg$/);
+    expect(saved.path).not.toMatch(/\.csv$/);
+    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(jpeg);
+  });
+
   it("keeps saving a healthy streaming body after the response-header deadline", async () => {
     vi.useFakeTimers();
     try {

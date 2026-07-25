@@ -21,12 +21,14 @@ function createSkill() {
     blockedByAllowlist: false,
     eligible: true,
     requirements: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],
       os: [],
     },
     missing: {
+      anyBins: [],
       bins: [],
       env: [],
       config: [],

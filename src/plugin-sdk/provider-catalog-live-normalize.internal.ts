@@ -172,6 +172,7 @@ function inferLiveModelReasoning(modelId: string): boolean {
 function buildOpenAICompatibleLiveModel(
   row: unknown,
   fallback: ModelProviderConfig,
+  acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig | undefined {
   const record = readLiveModelCatalogRecord(row);
   const id = readLiveModelString(record, ["id", "model", "model_name", "modelName"]);
@@ -201,6 +202,13 @@ function buildOpenAICompatibleLiveModel(
   const exact = fallback.models.find((model) => model.id === id);
   if (exact) {
     return exact;
+  }
+  // Manifest-published ids returned above are known-good. Everything past this
+  // point is a model the manifest has never described, so an opted-in provider
+  // gate decides whether its request shaping is understood well enough to
+  // surface it at all.
+  if (acceptUnknownModel && !acceptUnknownModel({ id, record })) {
+    return undefined;
   }
   const template = findLiveModelTemplate(id, fallback.models);
   const inputModalities = readLiveModelStringArray(
@@ -276,9 +284,10 @@ function buildOpenAICompatibleLiveModel(
 export function buildOpenAICompatibleLiveModels(
   rows: readonly unknown[],
   fallback: ModelProviderConfig,
+  acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig[] {
   const models = rows
-    .map((row) => buildOpenAICompatibleLiveModel(row, fallback))
+    .map((row) => buildOpenAICompatibleLiveModel(row, fallback, acceptUnknownModel))
     .filter((model): model is ModelDefinitionConfig => Boolean(model));
   return [...new Map(models.map((model) => [model.id, model])).values()].toSorted((a, b) =>
     a.id.localeCompare(b.id),

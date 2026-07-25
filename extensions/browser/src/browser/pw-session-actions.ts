@@ -52,7 +52,10 @@ import {
   getObservedBrowserStateForPage,
   normalizeCdpUrl,
 } from "./pw-session-state.js";
-import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
+import {
+  BROWSER_REF_MARKER_ATTRIBUTE,
+  readMainFrameDocumentIdentityForPage,
+} from "./pw-session.page-cdp.js";
 
 export async function getObservedBrowserStateViaPlaywright(opts: {
   cdpUrl: string;
@@ -61,6 +64,15 @@ export async function getObservedBrowserStateViaPlaywright(opts: {
 }): Promise<BrowserObservedState> {
   const page = await getPageForTargetId(opts);
   return getObservedBrowserStateForPage(page);
+}
+
+/** Resolve a page and read its current main-frame document identity. */
+export async function getMainFrameDocumentIdentityViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+}): Promise<string | undefined> {
+  const page = await getPageForTargetId(opts);
+  return await readMainFrameDocumentIdentityForPage(page);
 }
 
 export function refLocator(page: Page, ref: string) {

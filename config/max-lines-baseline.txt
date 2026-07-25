@@ -151,7 +151,6 @@ extensions/matrix/src/onboarding.ts
 extensions/mattermost/src/channel.test.ts
 extensions/mattermost/src/channel.ts
 extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
-extensions/mattermost/src/mattermost/monitor.ts
 extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.runtime.ts
@@ -661,7 +660,6 @@ src/commands/doctor/shared/legacy-config-core-normalizers.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
-src/commands/doctor/shared/missing-configured-plugin-install.ts
 src/commands/doctor/shared/preview-warnings.test.ts
 src/commands/doctor/shared/preview-warnings.ts
 src/commands/doctor/shared/stale-auth-order.test.ts

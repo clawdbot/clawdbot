@@ -28,6 +28,7 @@ import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { resolveModelPrimary } from "../../lib/agents/display.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -1054,7 +1055,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private renderQuickConfig(configObject: Record<string, unknown>) {
     const runtimeConfig = this.context.runtimeConfig;
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
-    const model = typeof agentsDefaults?.model === "string" ? agentsDefaults.model : "default";
+    const model = resolveModelPrimary(agentsDefaults?.model) ?? "default";
     const thinkingLevel =
       typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
     const fastMode = agentsDefaults?.fastMode;
