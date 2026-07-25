@@ -249,6 +249,40 @@ describe("secrets runtime fast path", () => {
       },
     },
     {
+      name: "selected provider entry without web search config",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "host-proxy-search": {
+              config: {},
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "empty plugin entries",
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "host-proxy-search",
+            },
+          },
+        },
+        plugins: {
+          entries: {},
+        },
+      },
+    },
+    {
       name: "legacy x_search surface",
       config: {
         tools: {

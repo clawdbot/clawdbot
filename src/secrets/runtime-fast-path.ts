@@ -203,7 +203,8 @@ function isKeylessHostProxiedWebSearchSurface(
   ) {
     return false;
   }
-  return Object.entries(entries).every(([pluginId, entry]) => {
+  let matchedKeylessProvider = false;
+  for (const [pluginId, entry] of Object.entries(entries)) {
     if (!isRecord(entry)) {
       return false;
     }
@@ -213,7 +214,7 @@ function isKeylessHostProxiedWebSearchSurface(
     }
     const webSearch = pluginConfig?.webSearch;
     if (webSearch === undefined) {
-      return true;
+      continue;
     }
     if (
       pluginId !== providerId ||
@@ -223,8 +224,12 @@ function isKeylessHostProxiedWebSearchSurface(
     ) {
       return false;
     }
-    return !hasCredentialBearingObjectValue(webSearch, defaults);
-  });
+    if (hasCredentialBearingObjectValue(webSearch, defaults)) {
+      return false;
+    }
+    matchedKeylessProvider = true;
+  }
+  return matchedKeylessProvider;
 }
 
 function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {

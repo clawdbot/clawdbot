@@ -6507,7 +6507,7 @@ def prepare_codex_runtime_auth(
 
 
 def codex_exec_isolation_flags() -> list[str]:
-    return ["--ignore-rules", "--skip-git-repo-check"]
+    return ["--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"]
 
 
 def claude_review_isolation_flags() -> list[str]:
@@ -7882,6 +7882,7 @@ def self_test_engine_isolation() -> int:
             codex_record = json.loads(record_path.read_text())
             codex_argv = codex_record["argv"]
             for required in [
+                "--ignore-user-config",
                 "--ignore-rules",
                 "project_doc_max_bytes=0",
                 'cli_auth_credentials_store="auto"',
