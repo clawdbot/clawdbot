@@ -113,19 +113,18 @@ export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   };
 }
 
-/** @deprecated Use buildManifestModelDefinition. */
-export const buildBasetenModelDefinition = buildManifestModelDefinition({
-  providerId: "baseten",
-  catalog: BASETEN_MANIFEST_CATALOG,
-  decorate: (normalized) => ({
-    ...normalized,
-    compat: buildBasetenModelCompat(normalized.id),
-  }),
-});
-
 /** Builds the network-free fallback catalog. */
 export function buildStaticBasetenModels(): ModelDefinitionConfig[] {
-  return BASETEN_MODEL_CATALOG.map(buildBasetenModelDefinition);
+  return BASETEN_MODEL_CATALOG.map(
+    buildManifestModelDefinition({
+      providerId: "baseten",
+      catalog: BASETEN_MANIFEST_CATALOG,
+      decorate: (normalized) => ({
+        ...normalized,
+        compat: buildBasetenModelCompat(normalized.id),
+      }),
+    }),
+  );
 }
 
 type BasetenLiveModelRow = {

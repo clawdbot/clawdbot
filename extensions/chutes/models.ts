@@ -41,16 +41,13 @@ function decorateChutesModelDefinition(model: ModelDefinitionConfig): ModelDefin
   };
 }
 
-/** @deprecated Use buildManifestModelDefinition. */
-export const buildChutesModelDefinition = buildManifestModelDefinition({
-  providerId: "chutes",
-  catalog: CHUTES_MANIFEST_CATALOG,
-  decorate: decorateChutesModelDefinition,
-});
-
 /** Bundled fallback Chutes model catalog, normalized from the plugin manifest. */
 export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = CHUTES_MANIFEST_CATALOG.models.map(
-  buildChutesModelDefinition,
+  buildManifestModelDefinition({
+    providerId: "chutes",
+    catalog: CHUTES_MANIFEST_CATALOG,
+    decorate: decorateChutesModelDefinition,
+  }),
 );
 
 interface ChutesModelEntry {

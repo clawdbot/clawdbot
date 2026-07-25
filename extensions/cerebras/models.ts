@@ -12,13 +12,9 @@ export const CEREBRAS_BASE_URL = CEREBRAS_MANIFEST_CATALOG.baseUrl;
 /** Cerebras model catalog entries from the plugin manifest. */
 export const CEREBRAS_MODEL_CATALOG = CEREBRAS_MANIFEST_CATALOG.models;
 
-/** @deprecated Use buildManifestModelDefinition. */
-export const buildCerebrasModelDefinition = buildManifestModelDefinition({
-  providerId: "cerebras",
-  catalog: CEREBRAS_MANIFEST_CATALOG,
-});
-
 /** Builds normalized Cerebras catalog model definitions. */
 export function buildCerebrasCatalogModels(): ModelDefinitionConfig[] {
-  return CEREBRAS_MODEL_CATALOG.map(buildCerebrasModelDefinition);
+  return CEREBRAS_MODEL_CATALOG.map(
+    buildManifestModelDefinition({ providerId: "cerebras", catalog: CEREBRAS_MANIFEST_CATALOG }),
+  );
 }

@@ -10,14 +10,12 @@ export const TOKENHUB_PROVIDER_ID = "tencent-tokenhub";
 export const TOKENHUB_BASE_URL = manifest.modelCatalog.providers[TOKENHUB_PROVIDER_ID].baseUrl;
 
 const TOKENHUB_MANIFEST_CATALOG = manifest.modelCatalog.providers[TOKENHUB_PROVIDER_ID];
-/** @deprecated Use buildManifestModelDefinition. */
-export const buildTokenHubModelDefinition = buildManifestModelDefinition({
-  providerId: TOKENHUB_PROVIDER_ID,
-  catalog: TOKENHUB_MANIFEST_CATALOG,
-  decorate: (model) => ({ ...model, api: "openai-completions" }),
-});
 export const TOKENHUB_MODEL_CATALOG: ModelDefinitionConfig[] = TOKENHUB_MANIFEST_CATALOG.models.map(
-  buildTokenHubModelDefinition,
+  buildManifestModelDefinition({
+    providerId: TOKENHUB_PROVIDER_ID,
+    catalog: TOKENHUB_MANIFEST_CATALOG,
+    decorate: (model) => ({ ...model, api: "openai-completions" }),
+  }),
 );
 
 // ---------- TokenPlan provider ----------
@@ -27,11 +25,11 @@ export const TOKENPLAN_PROVIDER_ID = "tencent-tokenplan";
 export const TOKENPLAN_BASE_URL = manifest.modelCatalog.providers[TOKENPLAN_PROVIDER_ID].baseUrl;
 
 const TOKENPLAN_MANIFEST_CATALOG = manifest.modelCatalog.providers[TOKENPLAN_PROVIDER_ID];
-/** @deprecated Use buildManifestModelDefinition. */
-export const buildTokenPlanModelDefinition = buildManifestModelDefinition({
-  providerId: TOKENPLAN_PROVIDER_ID,
-  catalog: TOKENPLAN_MANIFEST_CATALOG,
-  decorate: (model) => ({ ...model, api: "openai-completions" }),
-});
 export const TOKENPLAN_MODEL_CATALOG: ModelDefinitionConfig[] =
-  TOKENPLAN_MANIFEST_CATALOG.models.map(buildTokenPlanModelDefinition);
+  TOKENPLAN_MANIFEST_CATALOG.models.map(
+    buildManifestModelDefinition({
+      providerId: TOKENPLAN_PROVIDER_ID,
+      catalog: TOKENPLAN_MANIFEST_CATALOG,
+      decorate: (model) => ({ ...model, api: "openai-completions" }),
+    }),
+  );

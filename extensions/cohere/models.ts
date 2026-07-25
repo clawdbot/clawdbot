@@ -24,12 +24,8 @@ export function isModernCohereModelId(modelId: string): boolean {
   return COHERE_MODERN_MODEL_IDS.has(modelId.trim().toLowerCase());
 }
 
-/** @deprecated Use buildManifestModelDefinition. */
-export const buildCohereModelDefinition = buildManifestModelDefinition({
-  providerId: "cohere",
-  catalog: COHERE_MANIFEST_CATALOG,
-});
-
 export function buildCohereCatalogModels(): ModelDefinitionConfig[] {
-  return COHERE_MODEL_CATALOG.map(buildCohereModelDefinition);
+  return COHERE_MODEL_CATALOG.map(
+    buildManifestModelDefinition({ providerId: "cohere", catalog: COHERE_MANIFEST_CATALOG }),
+  );
 }

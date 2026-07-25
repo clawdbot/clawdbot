@@ -12,13 +12,9 @@ export const META_BASE_URL = META_MANIFEST_CATALOG.baseUrl;
 /** Meta model catalog entries from the plugin manifest. */
 export const META_MODEL_CATALOG = META_MANIFEST_CATALOG.models;
 
-/** @deprecated Use buildManifestModelDefinition. */
-export const buildMetaModelDefinition = buildManifestModelDefinition({
-  providerId: "meta",
-  catalog: META_MANIFEST_CATALOG,
-});
-
 /** Builds normalized Meta catalog model definitions. */
 export function buildMetaCatalogModels(): ModelDefinitionConfig[] {
-  return META_MODEL_CATALOG.map(buildMetaModelDefinition);
+  return META_MODEL_CATALOG.map(
+    buildManifestModelDefinition({ providerId: "meta", catalog: META_MANIFEST_CATALOG }),
+  );
 }

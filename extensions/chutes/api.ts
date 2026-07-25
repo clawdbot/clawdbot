@@ -1,9 +1,4 @@
-export {
-  buildChutesModelDefinition,
-  CHUTES_BASE_URL,
-  CHUTES_MODEL_CATALOG,
-  discoverChutesModels,
-} from "./models.js";
+export { CHUTES_BASE_URL, CHUTES_MODEL_CATALOG, discoverChutesModels } from "./models.js";
 export { buildChutesProvider } from "./provider-catalog.js";
 export {
   applyChutesApiKeyConfig,

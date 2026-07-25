@@ -63,16 +63,13 @@ function decorateVeniceModelDefinition(entry: ModelDefinitionConfig): ModelDefin
   };
 }
 
-/** @deprecated Use buildManifestModelDefinition. */
-export const buildVeniceModelDefinition = buildManifestModelDefinition({
-  providerId: "venice",
-  catalog: VENICE_MANIFEST_CATALOG,
-  decorate: decorateVeniceModelDefinition,
-});
-
 /** Venice's decorated network-free fallback catalog. */
 export const VENICE_MODEL_CATALOG: ModelDefinitionConfig[] = VENICE_MANIFEST_CATALOG.models.map(
-  buildVeniceModelDefinition,
+  buildManifestModelDefinition({
+    providerId: "venice",
+    catalog: VENICE_MANIFEST_CATALOG,
+    decorate: decorateVeniceModelDefinition,
+  }),
 );
 
 interface VeniceModelSpec {

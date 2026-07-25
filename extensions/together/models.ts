@@ -6,13 +6,10 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 const TOGETHER_MANIFEST_CATALOG = manifest.modelCatalog.providers.together;
 export const TOGETHER_BASE_URL = TOGETHER_MANIFEST_CATALOG.baseUrl;
 
-/** @deprecated Use buildManifestModelDefinition. */
-export const buildTogetherModelDefinition = buildManifestModelDefinition({
-  providerId: "together",
-  catalog: TOGETHER_MANIFEST_CATALOG,
-  decorate: (model) => ({ ...model, api: "openai-completions" }),
-});
-
 export const TOGETHER_MODEL_CATALOG: ModelDefinitionConfig[] = TOGETHER_MANIFEST_CATALOG.models.map(
-  buildTogetherModelDefinition,
+  buildManifestModelDefinition({
+    providerId: "together",
+    catalog: TOGETHER_MANIFEST_CATALOG,
+    decorate: (model) => ({ ...model, api: "openai-completions" }),
+  }),
 );
