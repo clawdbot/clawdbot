@@ -253,11 +253,21 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
     sessionKey: "agent:main:main",
     storePath,
   });
-  fixture.session.appendMessage({
+  const futureMessage = {
     role: "user",
     content: "future turn after checkpoint",
     timestamp: Date.now(),
-  });
+  } as const;
+  fixture.session.appendMessage(futureMessage);
+  await appendTranscriptMessage(
+    {
+      agentId: "main",
+      sessionId: fixture.sessionId,
+      sessionKey: "agent:main:main",
+      storePath,
+    },
+    { message: futureMessage, now: futureMessage.timestamp },
+  );
 
   const { ws } = await openClient();
 
