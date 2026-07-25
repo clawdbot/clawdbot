@@ -10,6 +10,11 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
+import {
+  markModelSpendAlertsQueued,
+  preparePendingModelSpendAlertBestEffort,
+  releasePreparedModelSpendAlertsBestEffort,
+} from "../../agents/model-spend-alerts.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
@@ -19,6 +24,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
+import { isPrivateOwnerRouteTarget } from "../../routing/private-owner-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -147,13 +153,13 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         config: cfg,
       })
     : undefined;
+  const effectiveAgentId = resolvedAgentId ?? resolveSessionAgentId({ config: cfg });
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
-  const responsePrefix = resolveEffectiveMessagesConfig(
-    cfg,
-    resolvedAgentId ?? resolveSessionAgentId({ config: cfg }),
-    { channel: normalizedChannel, accountId },
-  ).responsePrefix;
+  const responsePrefix = resolveEffectiveMessagesConfig(cfg, effectiveAgentId, {
+    channel: normalizedChannel,
+    accountId,
+  }).responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
     responsePrefixContext: params.responsePrefixContext,
@@ -219,6 +225,32 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     return { ok: false, error: "Reply routing aborted" };
   }
 
+  const outboundSession = buildOutboundSessionContext({
+    cfg,
+    agentId: effectiveAgentId,
+    sessionKey: params.sessionKey,
+    policySessionKey: params.policySessionKey,
+    conversationType: params.policyConversationType,
+    isGroup: params.policySessionKey || params.policyConversationType ? undefined : params.isGroup,
+    requesterSenderId: params.requesterSenderId,
+    requesterSenderName: params.requesterSenderName,
+    requesterSenderUsername: params.requesterSenderUsername,
+    requesterSenderE164: params.requesterSenderE164,
+  });
+  // Agent-wide billing totals are private operator data. Leave alerts pending
+  // until a final reply targets a configured owner in an explicit direct chat.
+  const canDeliverSpendAlert =
+    outboundSession?.conversationKind === "direct" &&
+    isPrivateOwnerRouteTarget({ cfg, channel: channelId, to });
+  const spendAlert =
+    params.replyKind === "final" && canDeliverSpendAlert
+      ? preparePendingModelSpendAlertBestEffort({
+          cfg,
+          agentId: effectiveAgentId,
+          sessionKey: params.sessionKey,
+        })
+      : undefined;
+
   const payloadMetadata = getReplyPayloadMetadata(normalized);
   const payloadReplyDelivery = payloadMetadata?.replyDelivery;
   const payloadPolicyMatchesRoute =
@@ -255,26 +287,24 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : (threadId ?? null);
   const deliveryPayload = {
     ...externalPayload,
+    ...(spendAlert
+      ? { text: [externalPayload.text, spendAlert.text].filter(Boolean).join("\n\n") }
+      : {}),
     replyToId: resolvedReplyToId,
   };
+  const spendAlertCompletion = spendAlert
+    ? {
+        kind: "model_spend_alert" as const,
+        agentId: effectiveAgentId,
+        alertIds: spendAlert.alertIds,
+        deliveryIntentId: spendAlert.deliveryIntentId,
+      }
+    : undefined;
 
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
     const { sendDurableMessageBatch } = await loadDeliverRuntime();
-    const outboundSession = buildOutboundSessionContext({
-      cfg,
-      agentId: resolvedAgentId,
-      sessionKey: params.sessionKey,
-      policySessionKey: params.policySessionKey,
-      conversationType: params.policyConversationType,
-      isGroup:
-        params.policySessionKey || params.policyConversationType ? undefined : params.isGroup,
-      requesterSenderId: params.requesterSenderId,
-      requesterSenderName: params.requesterSenderName,
-      requesterSenderUsername: params.requesterSenderUsername,
-      requesterSenderE164: params.requesterSenderE164,
-    });
     const send = await sendDurableMessageBatch({
       cfg,
       channel: channelId,
@@ -298,12 +328,22 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       session: outboundSession,
+      ...(spendAlertCompletion
+        ? {
+            deliveryCompletion: spendAlertCompletion,
+            deliveryIntentId: spendAlertCompletion.deliveryIntentId,
+            // This is the fencing check before platform I/O. A stale lease must
+            // abort the queued send instead of delivering an old alert payload.
+            onDeliveryIntent: (intent) =>
+              markModelSpendAlertsQueued(spendAlertCompletion, intent.id),
+          }
+        : {}),
       signal: abortSignal,
       mirror:
         params.mirror !== false && params.sessionKey
           ? {
               sessionKey: params.sessionKey,
-              agentId: resolvedAgentId,
+              agentId: effectiveAgentId,
               text,
               mediaUrls,
               ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
@@ -330,6 +370,9 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     const last = results.at(-1);
     return { ok: true, messageId: last?.messageId };
   } catch (err) {
+    if (spendAlertCompletion) {
+      releasePreparedModelSpendAlertsBestEffort(spendAlertCompletion);
+    }
     const message = formatErrorMessage(err);
     return {
       ok: false,

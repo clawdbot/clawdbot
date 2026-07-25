@@ -31,6 +31,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { recordConfiguredModelSpendCall } from "../../agents/model-spend-alerts.js";
 import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
@@ -65,6 +66,7 @@ import type {
   Tool,
   Usage,
 } from "../../llm/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
@@ -75,6 +77,7 @@ import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
+const log = createSubsystemLogger("gateway/worker-inference");
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
 export type WorkerInferenceExecutionParams = Parameters<WorkerInferenceExecutor>[0];
 
@@ -715,6 +718,17 @@ export function createWorkerInferenceExecutor(
         trace,
         contentCapture: resolveDiagnosticModelContentCapturePolicy(approved.config),
         nextCallId: () => `${request.runId}:${request.turnId}:worker-model:${(modelCallSeq += 1)}`,
+        onTerminal: (event) => {
+          try {
+            recordConfiguredModelSpendCall({
+              cfg: approved.config,
+              agentId: target.agentId,
+              call: event,
+            });
+          } catch (error) {
+            log.warn(`model-spend worker accounting failed: ${String(error)}`);
+          }
+        },
       });
       let usageRecorded = false;
       const recordUsage = (usage: Usage) => {

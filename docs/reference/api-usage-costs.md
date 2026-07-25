@@ -31,6 +31,25 @@ Map of OpenClaw features that can call paid provider APIs, where each reads its 
 - Labels the daily chart scale directly. A `√` badge means square-root compression is keeping low-usage days visible.
 - These totals describe the available local session history, not a provider invoice or lifetime billing ledger. The UI warns when pricing is missing for some entries.
 
+**Per-agent spend alerts** (daily text-model notifications)
+
+- `agents.entries.*.modelSpend` can warn whenever a configured provider's daily
+  text-model spend crosses another USD interval. The alert is informational;
+  it does not cap spend or alter model routing, retries, fallbacks, or auth.
+- All models under one provider share that provider's daily pool. Pools reset
+  using `agents.defaults.userTimezone`, and tracking begins with new calls after
+  the setting is enabled.
+- Provider-reported billed cost wins when available. Otherwise OpenClaw
+  estimates from model pricing and token usage. Missing usage or pricing emits
+  at most one tracking-incomplete notice per provider per day.
+- Alerts ride only a final private reply whose route matches
+  `commands.ownerAllowFrom`; group and non-owner replies leave them pending.
+  Compaction and worker spend is delivered with the agent's next private owner
+  reply, without an extra model call.
+
+See [Agent configuration](/gateway/config-agents#model-spend-alerts) for setup
+and the complete scope.
+
 **CLI usage windows** (provider quotas, not per-message cost)
 
 - `openclaw status --usage` and `openclaw channels list` show provider **usage windows** as `X% left`.

@@ -38,6 +38,7 @@ import {
 } from "./openclaw-agent-db-session-provenance.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import { AGENT_SCHEMA_WITHOUT_MODEL_SPEND_SQL } from "./openclaw-agent-model-spend-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
@@ -524,7 +525,11 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       }
       backfillSessionEntryProvenance(db, previousVersion);
       migrateSessionNodesAndWindows(db, previousVersion);
-      db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      db.exec(
+        previousVersion === OPENCLAW_AGENT_SCHEMA_VERSION
+          ? AGENT_SCHEMA_WITHOUT_MODEL_SPEND_SQL
+          : OPENCLAW_AGENT_SCHEMA_SQL,
+      );
       if (previousVersion < OPENCLAW_AGENT_SCHEMA_VERSION) {
         ensureOpenClawAgentBoardSchemaInTransaction(db);
       }

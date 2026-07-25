@@ -28,6 +28,8 @@ import {
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import { generateSecureUuid } from "../../../infra/secure-random.js";
+import type { Model } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -54,7 +56,15 @@ type ModelCallDiagnosticContext = {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   nextCallId: () => string;
   onStarted?: () => void;
+  onTerminal?: (event: ModelCallTerminalObservation) => void;
   suppressPluginHooks?: boolean;
+};
+
+export type ModelCallTerminalObservation = {
+  accountingCallId: string;
+  model: Model;
+  outcome: "completed" | "error";
+  usage?: UsageLike;
 };
 
 type ModelCallEventBase = Omit<
@@ -93,6 +103,10 @@ type ModelCallObservationState = {
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
+  rawUsage?: UsageLike;
+  accountingCallId?: string;
+  model?: Model;
+  onTerminal?: (event: ModelCallTerminalObservation) => void;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   lastStreamProgressAt?: number;
   terminalEventEmitted?: boolean;
@@ -247,9 +261,32 @@ function observeModelCallUsage(state: ModelCallObservationState, value: unknown)
   } catch {
     return;
   }
+  if (isRecord(rawUsage)) {
+    state.rawUsage = rawUsage as UsageLike;
+  }
   const usage = normalizedModelCallUsage(rawUsage);
   if (usage) {
     state.usage = usage;
+  }
+}
+
+function emitModelCallTerminalObservation(
+  state: ModelCallObservationState,
+  outcome: ModelCallTerminalObservation["outcome"],
+): void {
+  if (!state.onTerminal || !state.accountingCallId || !state.model) {
+    return;
+  }
+  try {
+    state.onTerminal({
+      accountingCallId: state.accountingCallId,
+      model: state.model,
+      outcome,
+      ...(state.rawUsage ? { usage: state.rawUsage } : {}),
+    });
+  } catch {
+    // Terminal observers are best-effort accounting/telemetry; they must not
+    // turn a completed provider response into an agent-run failure.
   }
 }
 
@@ -596,6 +633,7 @@ function emitModelCallCompleted(
       ...sizeTimingFields,
     });
   }
+  emitModelCallTerminalObservation(state, "completed");
 }
 
 function emitModelCallError(
@@ -630,6 +668,7 @@ function emitModelCallError(
       ...fields,
     });
   }
+  emitModelCallTerminalObservation(state, "error");
 }
 
 function withDiagnosticRequestContext(
@@ -880,6 +919,13 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       modelContent,
       contentCapture: ctx.contentCapture,
       suppressPluginHooks: ctx.suppressPluginHooks,
+      ...(ctx.onTerminal
+        ? {
+            accountingCallId: generateSecureUuid(),
+            model,
+            onTerminal: ctx.onTerminal,
+          }
+        : {}),
     };
     // Provider wrappers consume this same call id for transport correlation,
     // keeping external request evidence joined to the emitted diagnostics.

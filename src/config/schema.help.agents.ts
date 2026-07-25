@@ -78,6 +78,12 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
   "agents.entries.*.modelPolicy.allow":
     'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*" or "provider/namespace/*"; empty permits any model.',
+  "agents.entries.*.modelSpend":
+    "Optional per-agent text-model spend alerts delivered on private replies to routes in commands.ownerAllowFrom. Alerts are informational only: they do not block calls, change retry or fallback behavior, or rotate credentials.",
+  "agents.entries.*.modelSpend.providers":
+    "Provider IDs to track for this agent. All text models under one listed provider share that provider's daily spend pool; IDs are normalized to lowercase and duplicates are removed.",
+  "agents.entries.*.modelSpend.dailyAlertEveryUsd":
+    "Positive USD interval for daily spend alerts. OpenClaw warns after each newly crossed multiple, resets pools at midnight in agents.defaults.userTimezone, and counts only calls made while tracking is enabled.",
   "agents.entries.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.entries.*.models.*.agentRuntime.id":

@@ -1293,5 +1293,53 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expectNumberField(completedEvent, "durationMs");
     expect(events[1]).not.toHaveProperty("errorCategory");
   });
+
+  it("reports raw terminal usage once with an accounting id independent of diagnostic ids", async () => {
+    const onTerminal = vi.fn();
+    const usage = {
+      input: 10,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 1.5,
+        totalOrigin: "provider-billed",
+      },
+    };
+    async function* stream() {
+      yield { type: "done", message: { role: "assistant", content: [], usage } };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-retry",
+        provider: "deepseek",
+        model: "deepseek-chat",
+        trace: createDiagnosticTraceContext(),
+        // Attempt wrappers can reset this sequence across internal retries.
+        nextCallId: () => "same-diagnostic-call-id",
+        onTerminal,
+      },
+    );
+    const model = { provider: "deepseek", id: "deepseek-chat" } as never;
+
+    await drain(wrapped(model, {} as never, {} as never) as AsyncIterable<unknown>);
+    await drain(wrapped(model, {} as never, {} as never) as AsyncIterable<unknown>);
+
+    expect(onTerminal).toHaveBeenCalledTimes(2);
+    expect(onTerminal.mock.calls[0]?.[0]).toMatchObject({
+      model,
+      outcome: "completed",
+      usage,
+    });
+    expect(onTerminal.mock.calls[0]?.[0].accountingCallId).not.toBe(
+      onTerminal.mock.calls[1]?.[0].accountingCallId,
+    );
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

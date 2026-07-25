@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { AGENT_SCHEMA_WITHOUT_MODEL_SPEND_SQL } from "./openclaw-agent-model-spend-schema.js";
 
 const BOARD_SCHEMA_START = "CREATE TABLE IF NOT EXISTS board_tabs (";
 const BOARD_SCHEMA_END = "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (";
@@ -23,7 +23,7 @@ function splitBoardSchema(sql: string): { board: string; withoutBoard: string } 
   };
 }
 
-const boardSchema = splitBoardSchema(OPENCLAW_AGENT_SCHEMA_SQL);
+const boardSchema = splitBoardSchema(AGENT_SCHEMA_WITHOUT_MODEL_SPEND_SQL);
 
 const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = boardSchema.board;
 export const AGENT_V14_BOARD_SCHEMA_SQL = OPENCLAW_AGENT_BOARD_SCHEMA_SQL;

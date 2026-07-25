@@ -11,6 +11,7 @@ import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { isUsdRepresentableAsMicroUsd } from "../utils/micro-usd.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -899,6 +900,33 @@ export const AgentModelPolicySchema = z
   })
   .strict();
 
+export const AgentModelSpendSchema = z
+  .object({
+    providers: z
+      .array(z.string().transform((value) => normalizeLowercaseStringOrEmpty(value)))
+      .min(1)
+      .transform((providers, ctx) => {
+        const normalized = uniqueStrings(providers.filter(Boolean));
+        if (normalized.length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "providers must contain at least one non-empty provider id",
+          });
+          return z.NEVER;
+        }
+        return normalized;
+      }),
+    dailyAlertEveryUsd: z
+      .number()
+      .finite()
+      .min(0.000_001)
+      .max(Number.MAX_SAFE_INTEGER / 1_000_000)
+      .refine(isUsdRepresentableAsMicroUsd, {
+        message: "dailyAlertEveryUsd must use at most 6 decimal places",
+      }),
+  })
+  .strict();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -911,6 +939,7 @@ export const AgentEntrySchema = z
     utilityModel: z.string().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
+    modelSpend: AgentModelSpendSchema.optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
       .optional(),

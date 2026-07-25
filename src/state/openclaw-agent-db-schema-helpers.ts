@@ -20,7 +20,10 @@ import {
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import {
+  AGENT_MODEL_SPEND_SCHEMA_SQL,
+  AGENT_SCHEMA_WITHOUT_MODEL_SPEND_SQL,
+} from "./openclaw-agent-model-spend-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
   AGENT_V14_CORE_SCHEMA_SQL,
@@ -70,7 +73,16 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
     );
   }
-  assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+  assertOpenClawAgentSchemaContains(
+    database,
+    options.pathname,
+    AGENT_SCHEMA_WITHOUT_MODEL_SPEND_SQL,
+  );
+  // This feature group is lazy for current-version databases. Once any table
+  // exists, require the whole group so partial creation cannot hide data loss.
+  if (hasAnyCanonicalTable(database, AGENT_MODEL_SPEND_SCHEMA_SQL)) {
+    repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_MODEL_SPEND_SCHEMA_SQL);
+  }
 }
 
 function hasAnyCanonicalTable(database: DatabaseSync, schemaSql: string): boolean {

@@ -37,6 +37,13 @@ export type AgentRuntimeConfig =
       acp?: AgentRuntimeAcpConfig;
     };
 
+export type AgentModelSpendConfig = {
+  /** Provider ids whose text-model calls share one daily alert pool per provider. */
+  providers: string[];
+  /** Emit an alert whenever daily provider spend crosses another multiple of this USD amount. */
+  dailyAlertEveryUsd: number;
+};
+
 export type AgentBindingMatch = {
   channel: string;
   /**
@@ -100,6 +107,8 @@ export type AgentConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Per-agent model override policy. Replaces the default policy when allow is present. */
   modelPolicy?: AgentModelPolicyConfig;
+  /** Optional provider-call spend alerts for this agent. Alerts do not block model calls. */
+  modelSpend?: AgentModelSpendConfig;
   /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
   compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */

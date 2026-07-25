@@ -7,6 +7,7 @@ import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-mode
 import type { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
+import { recordConfiguredModelSpendCall } from "../../model-spend-alerts.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
@@ -337,6 +338,27 @@ export function installEmbeddedAttemptStreamGuards(input: {
     trace: input.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+    ...(attempt.config
+      ? {
+          onTerminal: (event) => {
+            try {
+              recordConfiguredModelSpendCall({
+                cfg: attempt.config!,
+                agentId: input.sessionAgentId,
+                deliveryTarget: {
+                  sessionKey: attempt.sessionKey,
+                  channel: attempt.messageChannel ?? attempt.messageProvider,
+                  to: attempt.messageTo,
+                  chatType: attempt.chatType,
+                },
+                call: event,
+              });
+            } catch (error) {
+              log.warn(`model-spend accounting failed: ${String(error)}`);
+            }
+          },
+        }
+      : {}),
     onStarted: () => {
       attempt.onExecutionPhase?.({
         phase: "model_call_started",

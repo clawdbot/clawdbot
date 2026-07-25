@@ -187,6 +187,62 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("normalizes per-agent model spend alert providers", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: {
+          main: {
+            modelSpend: {
+              providers: [" DeepSeek ", "deepseek"],
+              dailyAlertEveryUsd: 1.4,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.entries?.main?.modelSpend).toEqual({
+        providers: ["deepseek"],
+        dailyAlertEveryUsd: 1.4,
+      });
+    }
+  });
+
+  it("accepts model spend alert thresholds representable as micro-USD", () => {
+    for (const dailyAlertEveryUsd of [1.000_001, 2_147_483_648.799_307]) {
+      expect(
+        validateConfigObject({
+          agents: {
+            entries: {
+              main: {
+                modelSpend: {
+                  providers: ["deepseek"],
+                  dailyAlertEveryUsd,
+                },
+              },
+            },
+          },
+        }).ok,
+      ).toBe(true);
+    }
+  });
+
+  it("rejects invalid providers and model spend alert thresholds", () => {
+    for (const modelSpend of [
+      { providers: ["  "], dailyAlertEveryUsd: 1.4 },
+      { providers: ["deepseek"], dailyAlertEveryUsd: 0 },
+      { providers: ["deepseek"], dailyAlertEveryUsd: 0.000_000_1 },
+      { providers: ["deepseek"], dailyAlertEveryUsd: 0.000_001_1 },
+      { providers: ["deepseek"], dailyAlertEveryUsd: 1_000_000_000.000_000_4 },
+    ]) {
+      expect(validateConfigObject({ agents: { entries: { main: { modelSpend } } } }).ok).toBe(
+        false,
+      );
+    }
+  });
+
   it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
     const res = validateConfigObject({
       agents: {

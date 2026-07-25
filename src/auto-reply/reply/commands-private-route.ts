@@ -1,15 +1,13 @@
 /** Private command reply routing for sensitive owner-only command output. */
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getLoadedChannelPlugin,
   listChannelPlugins,
   resolveChannelApprovalAdapter,
 } from "../../channels/plugins/index.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
+import { resolvePrivateOwnerRoutePreference } from "../../routing/private-owner-route.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -179,35 +177,11 @@ function resolveOwnerPreferenceIndex(params: {
   cfg: HandleCommandsParams["cfg"];
   target: PrivateCommandRouteTarget;
 }): number {
-  const owners = params.cfg.commands?.ownerAllowFrom;
-  if (!Array.isArray(owners) || owners.length === 0) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-  const keys = buildPrivateCommandRouteOwnerKeys(params.target);
-  const index = owners.findIndex((owner) =>
-    keys.has(normalizeLowercaseStringOrEmpty(String(owner))),
-  );
-  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
-}
-
-function buildPrivateCommandRouteOwnerKeys(target: PrivateCommandRouteTarget): Set<string> {
-  const channel = normalizeLowercaseStringOrEmpty(target.channel);
-  const to = normalizeLowercaseStringOrEmpty(target.to);
-  const keys = new Set<string>();
-  if (to) {
-    keys.add(to);
-    keys.add(`user:${to}`);
-  }
-  if (channel && to) {
-    keys.add(`${channel}:${to}`);
-    for (const prefix of getLoadedChannelPlugin(channel)?.messaging?.targetPrefixes ?? []) {
-      const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
-      if (normalizedPrefix) {
-        keys.add(`${normalizedPrefix}:${to}`);
-      }
-    }
-  }
-  return keys;
+  return resolvePrivateOwnerRoutePreference({
+    cfg: params.cfg,
+    channel: params.target.channel,
+    to: params.target.to,
+  });
 }
 
 function sortPrivateCommandRouteTargets(params: {

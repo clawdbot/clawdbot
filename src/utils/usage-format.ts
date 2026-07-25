@@ -58,6 +58,8 @@ export type ModelCostConfig = {
   tieredPricing?: PricingTier[];
 };
 
+export type ModelCostRates = Pick<ModelCostConfig, "input" | "output" | "cacheRead" | "cacheWrite">;
+
 type UsageTotals = {
   input?: number;
   output?: number;
@@ -726,24 +728,18 @@ function getSortedPricingTiers(tiers: PricingTier[]): PricingTier[] {
   return sorted;
 }
 
-function computeTieredCost(
-  tiers: PricingTier[],
-  input: number,
-  output: number,
-  cacheRead: number,
-  cacheWrite: number,
-): number {
-  const tier = selectPricingTier(tiers, input);
-  if (!tier) {
-    return 0;
+/** Resolves the flat or input-tier-specific rates used for one usage record. */
+export function resolveUsageCostRates(params: {
+  usage?: NormalizedUsage | UsageTotals | null;
+  cost?: ModelCostConfig;
+}): ModelCostRates | undefined {
+  if (!params.usage || !params.cost) {
+    return undefined;
   }
-
-  return (
-    input * tier.input +
-    output * tier.output +
-    cacheRead * tier.cacheRead +
-    cacheWrite * tier.cacheWrite
-  );
+  if (params.cost.tieredPricing && params.cost.tieredPricing.length > 0) {
+    return selectPricingTier(params.cost.tieredPricing, toNumber(params.usage.input));
+  }
+  return params.cost;
 }
 
 /**
@@ -755,8 +751,8 @@ export function estimateUsageCost(params: {
   cost?: ModelCostConfig;
 }): number | undefined {
   const usage = params.usage;
-  const cost = params.cost;
-  if (!usage || !cost) {
+  const rates = resolveUsageCostRates(params);
+  if (!usage || !rates) {
     return undefined;
   }
   const input = toNumber(usage.input);
@@ -764,16 +760,11 @@ export function estimateUsageCost(params: {
   const cacheRead = toNumber(usage.cacheRead);
   const cacheWrite = toNumber(usage.cacheWrite);
 
-  let total: number;
-  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
-    total = computeTieredCost(cost.tieredPricing, input, output, cacheRead, cacheWrite);
-  } else {
-    total =
-      input * cost.input +
-      output * cost.output +
-      cacheRead * cost.cacheRead +
-      cacheWrite * cost.cacheWrite;
-  }
+  const total =
+    input * rates.input +
+    output * rates.output +
+    cacheRead * rates.cacheRead +
+    cacheWrite * rates.cacheWrite;
 
   if (!Number.isFinite(total)) {
     return undefined;

@@ -953,6 +953,56 @@ For npm installs without a source checkout, see [Sandboxing § Images and setup]
 
 ### `agents.entries` (per-agent overrides)
 
+#### Model spend alerts
+
+Use `agents.entries.*.modelSpend` to receive informational alerts when an
+agent's text-model spend crosses configured daily USD intervals. This does not
+set a spending limit: OpenClaw does not block calls, change retries or
+fallbacks, or rotate credentials.
+
+```json5
+{
+  commands: {
+    ownerAllowFrom: ["telegram:849985193"],
+  },
+  agents: {
+    defaults: { userTimezone: "Asia/Shanghai" },
+    entries: {
+      main: {
+        modelSpend: {
+          providers: ["deepseek"],
+          dailyAlertEveryUsd: 1.4,
+        },
+      },
+    },
+  },
+}
+```
+
+- `providers`: non-empty provider ID list. IDs are trimmed, normalized to
+  lowercase, and deduplicated. All text models under one provider share that
+  provider's daily pool.
+- `dailyAlertEveryUsd`: USD interval of at least `0.000001`, with at most six
+  decimal places. A single expensive call that crosses several intervals
+  produces one combined alert.
+- Daily pools reset at midnight in `agents.defaults.userTimezone`, or the host
+  timezone when that setting is absent.
+- Tracking starts with calls made after the setting is enabled; OpenClaw does
+  not reconstruct earlier spend from transcripts.
+- Provider-reported billed cost is authoritative when available. Otherwise,
+  OpenClaw estimates cost from the selected model's token usage and pricing.
+  Missing usage or pricing produces at most one tracking-incomplete warning per
+  provider per day.
+- Alerts contain agent-wide billing totals, so they are appended only to a
+  final reply in a private route matching `commands.ownerAllowFrom`. Group and
+  non-owner replies leave the alert pending. Spend from compaction or worker
+  calls is held for the agent's next private owner reply. Alert delivery does
+  not make another model call.
+
+Only text-model calls are included. Media generation, media understanding,
+embeddings, and web search are outside this tracker. See [API usage and
+costs](/reference/api-usage-costs) for the broader list of paid surfaces.
+
 Use `agents.entries.*.tts` to give an agent its own TTS provider, voice, model,
 style, or auto-TTS mode. The agent block deep-merges over global
 `tts`, so shared credentials can stay in one place while individual

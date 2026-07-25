@@ -101,6 +101,7 @@ import {
   resolveModelCandidateChain,
   runWithModelFallback,
 } from "../model-fallback.js";
+import { recordConfiguredModelSpendCall } from "../model-spend-alerts.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -1449,6 +1450,23 @@ async function compactEmbeddedAgentSessionDirectOnce(
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
               nextCallId: () =>
                 `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
+              ...(params.config
+                ? {
+                    onTerminal: (event) => {
+                      try {
+                        recordConfiguredModelSpendCall({
+                          cfg: params.config!,
+                          agentId: sessionAgentId,
+                          call: event,
+                        });
+                      } catch (accountingError) {
+                        log.warn(
+                          `model-spend compaction accounting failed: ${String(accountingError)}`,
+                        );
+                      }
+                    },
+                  }
+                : {}),
             },
           );
 

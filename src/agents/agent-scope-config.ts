@@ -32,6 +32,7 @@ export type ResolvedAgentConfig = {
   runtime?: AgentEntry["runtime"];
   modelPolicy?: AgentEntry["modelPolicy"];
   agentRuntime?: AgentEntry["agentRuntime"];
+  modelSpend?: AgentEntry["modelSpend"];
   utilityModel?: AgentEntry["utilityModel"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
@@ -214,6 +215,7 @@ export function resolveAgentConfig(
     ...(entry.runtime ? { runtime: entry.runtime } : {}),
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
     ...(entry.agentRuntime ? { agentRuntime: entry.agentRuntime } : {}),
+    modelSpend: entry.modelSpend,
     utilityModel: readStringValue(entry.utilityModel),
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
