@@ -28,6 +28,42 @@ function expectSchemaIssue(
   }
 }
 
+describe("FeishuConfigSchema custom domain", () => {
+  // URL schemes are case-insensitive (RFC 3986 §3.1); an uppercase HTTPS scheme
+  // must validate and normalize to lowercase so resolveDomain() can hand the
+  // value straight to the Lark SDK as a base URL.
+  it("accepts and normalizes an uppercase HTTPS custom domain", () => {
+    expect(FeishuConfigSchema.parse({ domain: "HTTPS://tenant.example/" }).domain).toBe(
+      "https://tenant.example",
+    );
+    expect(FeishuConfigSchema.parse({ domain: "Https://tenant.example/base/" }).domain).toBe(
+      "https://tenant.example/base",
+    );
+  });
+
+  it("accepts and normalizes an uppercase HTTPS custom domain per account", () => {
+    expect(
+      FeishuConfigSchema.parse({
+        accounts: { work: { domain: "HTTPS://tenant.example/base/" } },
+      }).accounts?.work?.domain,
+    ).toBe("https://tenant.example/base");
+  });
+
+  it("keeps a lowercase https custom domain stable", () => {
+    expect(FeishuConfigSchema.parse({ domain: "https://tenant.example" }).domain).toBe(
+      "https://tenant.example",
+    );
+  });
+
+  it("rejects a custom HTTP domain", () => {
+    expectSchemaIssue(FeishuConfigSchema.safeParse({ domain: "http://tenant.example" }), "domain");
+    expectSchemaIssue(
+      FeishuConfigSchema.safeParse({ accounts: { work: { domain: "http://tenant.example" } } }),
+      "accounts.work.domain",
+    );
+  });
+});
+
 describe("FeishuConfigSchema webhook validation", () => {
   it("applies top-level defaults", () => {
     const result = FeishuConfigSchema.parse({});
