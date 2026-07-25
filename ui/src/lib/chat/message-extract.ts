@@ -125,7 +125,7 @@ export function extractRawText(message: unknown): string | null {
   return null;
 }
 
-export function hasTranscriptMediaFacts(message: unknown): boolean {
+function hasTranscriptMediaFacts(message: unknown): boolean {
   return message != null && typeof message === "object"
     ? (readPersistedMediaFacts(message) ?? []).some(isMeaningfulMediaFact)
     : false;
