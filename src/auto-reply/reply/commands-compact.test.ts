@@ -400,10 +400,16 @@ describe("handleCompactCommand", () => {
     const resolveCall = requireResolveSessionAgentIdCall();
     expect(resolveCall.sessionKey).toBe("agent:target:whatsapp:direct:12345");
     expect(resolveCall.config).toBe(cfg);
-    expect(vi.mocked(resolveSessionFilePathOptions)).toHaveBeenCalledWith({
-      agentId: "target",
-      storePath: undefined,
-    });
+    expect(vi.mocked(compactEmbeddedAgentSession)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionTarget: {
+          agentId: "target",
+          sessionId: "session-1",
+          sessionKey: "agent:target:whatsapp:direct:12345",
+          storePath: "/tmp/openclaw-session-store.json",
+        },
+      }),
+    );
   });
 
   it("uses the canonical session agent directory for compaction runtime inputs", async () => {

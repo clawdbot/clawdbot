@@ -36,6 +36,9 @@ function buildCompactionResultSessionTarget(params: {
   const targetSessionId = normalizeOptionalString(params.sessionTarget?.sessionId);
   const targetSessionKey = normalizeOptionalString(params.sessionTarget?.sessionKey);
   const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
+  const suppliedAgentId = normalizeOptionalString(params.agentId);
+  const suppliedSessionId = normalizeOptionalString(params.sessionId);
+  const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
   const completeTarget = Boolean(
     targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
   );
@@ -53,12 +56,12 @@ function buildCompactionResultSessionTarget(params: {
   ) {
     throw new Error("Legacy context-engine successor identity is inconsistent");
   }
-  const sessionId = targetSessionId ?? params.sessionId ?? marker?.sessionId;
+  const sessionId = targetSessionId ?? suppliedSessionId ?? marker?.sessionId;
   if (!sessionId) {
     return undefined;
   }
-  const agentId = targetAgentId ?? params.agentId ?? marker?.agentId;
-  const sessionKey = targetSessionKey ?? params.sessionKey;
+  const agentId = targetAgentId ?? suppliedAgentId ?? marker?.agentId;
+  const sessionKey = targetSessionKey ?? suppliedSessionKey;
   const storePath = targetStorePath ?? marker?.storePath;
   return {
     ...(agentId ? { agentId } : {}),

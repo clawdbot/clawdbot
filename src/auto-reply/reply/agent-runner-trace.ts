@@ -416,7 +416,9 @@ function formatContextManagementTraceBlock(
 }
 
 export async function accumulateSessionUsageFromTranscript(params: {
+  agentId?: string;
   sessionId?: string;
+  sessionKey?: string;
   storePath?: string;
   sessionFile?: string;
 }): Promise<
@@ -435,7 +437,9 @@ export async function accumulateSessionUsageFromTranscript(params: {
   }
   try {
     const usage = await readLatestSessionUsageFromTranscriptAsync({
+      agentId: params.agentId,
       sessionId,
+      sessionKey: params.sessionKey,
       storePath: params.storePath,
       sessionFile: params.sessionFile,
     });

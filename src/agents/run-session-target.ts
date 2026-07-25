@@ -61,13 +61,17 @@ export async function resolveAgentRunSessionTarget(params: {
       ? legacySessionFile
       : undefined;
   const suppliedSessionKey = normalizeOptionalString(params.sessionKey);
+  const markerEntries =
+    legacyMarker && !hasCompleteTypedTarget
+      ? listSessionEntries({
+          agentId: legacyMarker.agentId,
+          storePath: legacyMarker.storePath,
+        })
+      : [];
   const markerSessionKey =
-    legacyMarker && !targetSessionKey && !suppliedSessionKey
+    legacyMarker && !hasCompleteTypedTarget
       ? resolvePreferredSessionKeyForSessionIdMatches(
-          listSessionEntries({
-            agentId: legacyMarker.agentId,
-            storePath: legacyMarker.storePath,
-          })
+          markerEntries
             .filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)
             .map(({ sessionKey, entry }) => [sessionKey, entry]),
           legacyMarker.sessionId,
@@ -96,6 +100,18 @@ export async function resolveAgentRunSessionTarget(params: {
       params.sessionId !== legacyMarker.sessionId)
   ) {
     throw new Error("Legacy SQLite transcript marker conflicts with the supplied session identity");
+  }
+  if (
+    legacyMarker &&
+    !hasCompleteTypedTarget &&
+    (targetSessionKey || suppliedSessionKey) &&
+    !markerEntries.some(
+      ({ sessionKey: candidateKey, entry }) =>
+        candidateKey === (targetSessionKey ?? suppliedSessionKey) &&
+        entry.sessionId === legacyMarker.sessionId,
+    )
+  ) {
+    throw new Error("Legacy SQLite transcript marker conflicts with the supplied session key");
   }
   if (
     compatibilitySessionKeySelected &&

@@ -656,6 +656,15 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
 export async function readLatestSessionUsageFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
+  const artifactFile = scope.sessionFile?.trim();
+  if (artifactFile && path.isAbsolute(artifactFile) && artifactFile.endsWith(".jsonl")) {
+    return await readLatestSessionUsageFromTranscriptAsyncFile(
+      scope.sessionId,
+      scope.storePath,
+      artifactFile,
+      scope.agentId,
+    );
+  }
   const target = resolveTranscriptReadTarget(scope);
   if (isSqliteReadTarget(target)) {
     return readSqliteAggregateUsageSnapshot(target);
@@ -705,3 +714,4 @@ export function readSessionPreviewItemsFromTranscript(
     maxChars,
   );
 }
+import path from "node:path";

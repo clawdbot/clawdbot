@@ -6,7 +6,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  resolveTranscriptSessionKeyBySessionId,
+} from "../config/sessions/session-accessor.js";
 import { hasPluginSessionsChangedSubscribers } from "../plugins/gateway-events.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -161,6 +164,21 @@ async function handleTranscriptUpdateBroadcast(
   const completeTarget = Boolean(
     targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
   );
+  const markerSessionKey =
+    legacyMarker && !completeTarget
+      ? resolveTranscriptSessionKeyBySessionId(legacyMarker)
+      : undefined;
+  const targetKeyEntry =
+    targetSessionKey && legacyMarker && !completeTarget
+      ? loadSessionEntry({
+          agentId: legacyMarker.agentId,
+          sessionKey: targetSessionKey,
+          storePath: legacyMarker.storePath,
+        })
+      : undefined;
+  if (targetKeyAgentId && targetAgentId && targetKeyAgentId !== targetAgentId) {
+    return;
+  }
   if (
     legacyMarker &&
     update.target &&
@@ -168,6 +186,7 @@ async function handleTranscriptUpdateBroadcast(
     ((targetAgentId && targetAgentId !== legacyMarker.agentId) ||
       (targetSessionId && targetSessionId !== legacyMarker.sessionId) ||
       (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
+      (targetSessionKey && targetKeyEntry?.sessionId !== legacyMarker.sessionId) ||
       (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)))
   ) {
     return;
@@ -176,7 +195,7 @@ async function handleTranscriptUpdateBroadcast(
   const storageAgentId = targetAgentId ?? update.agentId ?? compatibleLegacyMarker?.agentId;
   let sessionKey = update.target?.sessionKey ?? update.sessionKey;
   if (!sessionKey && compatibleLegacyMarker) {
-    sessionKey = resolveTranscriptSessionKeyBySessionId(compatibleLegacyMarker);
+    sessionKey = markerSessionKey;
   }
   if (!sessionKey || update.message === undefined) {
     return;

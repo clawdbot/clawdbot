@@ -17,6 +17,7 @@ import {
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -238,6 +239,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     abortSignal: params.opts?.abortSignal,
     sessionId,
     sessionKey: params.sessionKey,
+    sessionTarget: {
+      agentId: sessionAgentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: resolveStorePath(params.cfg.session?.store, { agentId: sessionAgentId }),
+    },
     allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     clientCaps: params.ctx.GatewayClientCaps,

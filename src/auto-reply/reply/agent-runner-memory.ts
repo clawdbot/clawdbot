@@ -33,6 +33,7 @@ import {
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
+  resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -980,9 +981,22 @@ export async function runPreflightCompactionIfNeeded(params: {
       await notifyTerminalCompaction("skipped");
       return entry ?? params.sessionEntry;
     }
+    const compactionSessionKey = params.sessionKey;
+    const compactionAgentId =
+      resolveAgentIdFromSessionKey(compactionSessionKey) ??
+      params.followupRun.run.agentId ??
+      "main";
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
-      sessionKey: params.sessionKey,
+      sessionKey: compactionSessionKey,
+      sessionTarget: {
+        agentId: compactionAgentId,
+        sessionId: entry.sessionId,
+        sessionKey: compactionSessionKey,
+        storePath:
+          params.storePath ??
+          resolveStorePath(params.cfg.session?.store, { agentId: compactionAgentId }),
+      },
       sandboxSessionKey: params.runtimePolicySessionKey,
       allowGatewaySubagentBinding: true,
       messageChannel: params.followupRun.run.messageProvider,
