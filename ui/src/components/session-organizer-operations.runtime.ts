@@ -80,18 +80,6 @@ export async function patchSession(
         return "stale";
       }
     }
-    if (patch.archived !== true || !session.active) {
-      return "completed";
-    }
-    host.replaceCurrentSession(
-      buildAgentMainSessionKey({
-        agentId,
-        mainKey: resolveUiConfiguredMainKey({
-          agentsList: scope.context.agents.state.agentsList,
-          hello: scope.gateway.snapshot.hello,
-        }),
-      }),
-    );
     return "completed";
   } catch (error) {
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
@@ -231,7 +219,6 @@ async function restoreArchivedSessions(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  let restoredActiveKey: string | null = null;
   for (const { session, pinned } of archived) {
     const result = await patchSession(
       host,
@@ -243,18 +230,12 @@ async function restoreArchivedSessions(
     if (result === "stale") {
       return;
     }
-    if (result === "completed" && session.active) {
-      restoredActiveKey = session.key;
-    }
   }
-  const refreshed = await refreshSessionsAfterBatch(
+  await refreshSessionsAfterBatch(
     host,
     scope,
     archived.map((entry) => entry.session),
   );
-  if (restoredActiveKey && refreshed !== "stale") {
-    host.replaceCurrentSession(restoredActiveKey);
-  }
 }
 
 /** One confirm and one preserved-worktrees alert for the whole selection. */

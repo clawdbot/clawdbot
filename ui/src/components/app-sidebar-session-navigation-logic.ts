@@ -71,6 +71,7 @@ export function buildSidebarSessionNavigationState(input: {
   context: ApplicationContext<RouteId> | undefined;
   routeSessionKey: string;
   sessionsResult: SessionsListResult | null;
+  activeSession?: GatewaySessionRow | null;
   sessionsAgentId: string | null;
   showCron: boolean;
   statusFilter: SidebarSessionStatusFilter;
@@ -85,6 +86,7 @@ export function buildSidebarSessionNavigationState(input: {
   const { context } = input;
   const navigation = resolveSessionNavigation({
     result: input.sessionsResult,
+    activeSession: input.activeSession,
     resultAgentId: input.sessionsAgentId,
     sessionKey: input.routeSessionKey,
     assistantAgentId:

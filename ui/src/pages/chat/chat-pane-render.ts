@@ -311,6 +311,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       disabledBanner:
         selectedSessionArchived && !catalogDisabledReason
           ? {
+              kind: "composer-replacement",
               text: t("chat.archivedSessionDisabled"),
               actionLabel: t("common.unarchive"),
               onAction: () => void this.restoreArchivedSession(state.sessionKey),
