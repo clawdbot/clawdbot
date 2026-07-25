@@ -1284,6 +1284,9 @@ describe("thread binding lifecycle", () => {
       conversationId: "user:1177378744822943744",
       parentConversationId: "user:1177378744822943744",
     });
+    expectFields(requireRecord(bound, "bound session").metadata, "bound metadata", {
+      agentId: "main",
+    });
     const resolved = requireRecord(
       getSessionBindingService().resolveByConversation({
         channel: "discord",
