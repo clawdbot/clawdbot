@@ -401,7 +401,6 @@ src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
 src/agents/code-mode-namespaces.ts
 src/agents/code-mode.test.ts
-src/agents/code-mode.ts
 src/agents/command/attempt-execution.cli.test.ts
 src/agents/command/attempt-execution.test.ts
 src/agents/command/attempt-execution.ts
