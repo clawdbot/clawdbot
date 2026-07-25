@@ -7,8 +7,8 @@ import {
   resolveOpenAIProjectedToolsStrictToolFlag,
   type OpenAIToolProjection,
 } from "../internal/openai.js";
-import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
+import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
@@ -220,7 +220,7 @@ export function buildOpenAIClientHeaders(
     // The backend derives its prompt cache key from this header and enforces
     // OpenAI's 64-char limit server-side; long internal session ids
     // (companion/btw effects sessions) 400 without this clamp.
-    resolvedHeaders.session_id = clampOpenAIPromptCacheKey(sessionId);
+    resolvedHeaders.session_id = clampOpenAIPromptCacheKey(sessionId) ?? sessionId;
   }
   return resolvedHeaders;
 }

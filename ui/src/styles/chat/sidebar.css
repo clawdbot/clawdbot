@@ -192,7 +192,6 @@
   min-width: 400px;
   min-height: 0;
   flex: 0 0 400px;
-  border-left: 1px solid var(--border);
 }
 
 /* No border-left: the resizable divider rendered next to this panel draws

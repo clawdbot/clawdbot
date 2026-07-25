@@ -9,13 +9,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 const COMPANION_BUSY_DETAIL_CODE = "SESSION_COMPANION_BUSY";
 const MAX_COMPANION_EXCHANGES = 24;
 
-export type ChatSessionCompanionHint = "busy" | "unavailable";
-
 export type ChatSessionCompanionThread = {
   exchanges: SessionCompanionExchange[];
   pendingQuestion: string | null;
   failedQuestion: string | null;
-  hint: ChatSessionCompanionHint | null;
+  hint: "busy" | "unavailable" | null;
   draft: string;
 };
 

@@ -627,10 +627,6 @@ export function renderChatSearchBar(
   `;
 }
 
-export function isChatThreadSearchOpen(paneId: string): boolean {
-  return getChatThreadState(paneId).searchOpen;
-}
-
 export function toggleChatThreadSearch(paneId: string, requestUpdate: () => void): void {
   const state = getChatThreadState(paneId);
   state.searchOpen = !state.searchOpen;

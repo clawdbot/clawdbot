@@ -4,14 +4,13 @@ import {
   createSessionVisibilityGuard,
 } from "../agents/tools/sessions-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { SessionCompanionAskError } from "./session-companion-ask.js";
 import {
   buildSessionCompanionRunConfig,
   SESSION_COMPANION_TOOLS,
-  SessionCompanionAskError,
-  type SessionCompanionPromptMessage,
-} from "./session-companion-ask.js";
+} from "./session-companion-policy.js";
 import { trimSessionCompanionExchanges } from "./session-companion-state.js";
-import { createSessionCompanion, SESSION_COMPANION_IDLE_TTL_MS } from "./session-companion.js";
+import { createSessionCompanion } from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 
@@ -27,7 +26,7 @@ function createHarness(overrides?: {
   now?: () => number;
   readSeedMessages?: () => Promise<Array<{ role: "user" | "assistant"; text: string; ts: number }>>;
   run?: (params: {
-    messages: SessionCompanionPromptMessage[];
+    messages: Array<{ role: "user" | "assistant"; content: string; ts: number }>;
     systemPrompt: string;
   }) => Promise<string>;
   snapshot?: () => SessionObserverCompanionSnapshot;
@@ -257,7 +256,7 @@ describe("session companion asks", () => {
       question: "Before idle?",
       connId: "conn-1",
     });
-    now = SESSION_COMPANION_IDLE_TTL_MS;
+    now = 2 * 60 * 60_000;
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(harness.service.state("agent:main:main")).toEqual({ exchanges: [] });
     harness.service.dispose();

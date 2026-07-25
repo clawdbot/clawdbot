@@ -305,7 +305,8 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
               </div>
               ${
                 opts.sessionRailBody !== undefined
-                  ? `<section class="chat-session-rail chat-session-rail--expanded" role="region" aria-label="Session companion">
+                  ? `<openclaw-chat-session-rail>
+                    <section class="chat-session-rail chat-session-rail--expanded" role="region" aria-label="Session companion">
                       <header class="chat-session-rail__header">
                         <div class="chat-session-rail__header-copy">
                           <strong class="chat-session-rail__headline">Reviewing the session</strong>
@@ -323,7 +324,8 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                         </label>
                         <button class="btn btn--ghost btn--icon chat-icon-btn chat-session-rail__submit">${iconSvg()}</button>
                       </footer>
-                    </section>`
+                    </section>
+                  </openclaw-chat-session-rail>`
                   : ""
               }
               <div class="agent-chat__composer-shell">

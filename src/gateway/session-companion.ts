@@ -20,12 +20,12 @@ export type SessionCompanionService = {
   dispose: () => void;
 };
 
-export type SessionCompanionDeps = SessionCompanionAskDeps & {
+type SessionCompanionDeps = SessionCompanionAskDeps & {
   setIntervalFn?: typeof setInterval;
   clearIntervalFn?: typeof clearInterval;
 };
 
-export const SESSION_COMPANION_IDLE_TTL_MS = 2 * 60 * 60_000;
+const SESSION_COMPANION_IDLE_TTL_MS = 2 * 60 * 60_000;
 const SESSION_COMPANION_SWEEP_INTERVAL_MS = 10 * 60_000;
 
 export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompanionService {

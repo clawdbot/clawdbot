@@ -15,6 +15,10 @@ import type { Message, Usage } from "../llm/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  buildSessionCompanionRunConfig,
+  SESSION_COMPANION_TOOLS,
+} from "./session-companion-policy.js";
+import {
   trimSessionCompanionExchanges,
   type SessionCompanionSeedMessage,
   type SessionCompanionThread,
@@ -35,9 +39,7 @@ const ASK_RATE_WINDOW_MS = 60_000;
 const MAX_ASKS_PER_RATE_WINDOW = 12;
 const MAX_ASKS_PER_CONNECTION_RATE_WINDOW = 4;
 
-export const SESSION_COMPANION_TOOLS = ["read", "sessions_history", "sessions_search"] as const;
-
-export type SessionCompanionPromptMessage = {
+type SessionCompanionPromptMessage = {
   role: "user" | "assistant";
   content: string;
   ts: number;
@@ -92,21 +94,6 @@ export class SessionCompanionAskError extends Error {
     super(message);
     this.name = "SessionCompanionAskError";
   }
-}
-
-export function buildSessionCompanionRunConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const toolSearch = cfg.tools?.toolSearch;
-  const codeMode = cfg.tools?.codeMode;
-  return {
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      sessions: { ...cfg.tools?.sessions, visibility: "self" },
-      fs: { ...cfg.tools?.fs, workspaceOnly: true },
-      toolSearch: { ...(typeof toolSearch === "object" ? toolSearch : {}), enabled: false },
-      codeMode: { ...(typeof codeMode === "object" ? codeMode : {}), enabled: false },
-    },
-  };
 }
 
 function buildSystemPrompt(sessionKey: string): string {

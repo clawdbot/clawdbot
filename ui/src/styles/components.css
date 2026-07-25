@@ -1963,6 +1963,7 @@ openclaw-chat-session-rail {
   height: 100%;
   max-height: none;
   border: 0;
+  border-left: 1px solid var(--border);
   border-radius: 0;
   box-shadow: none;
   backdrop-filter: none;
