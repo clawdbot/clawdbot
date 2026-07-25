@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const relayMocks = vi.hoisted(() => ({
   connect: vi.fn<() => Promise<void>>(),
   auth: vi.fn<() => Promise<string>>(),
-  publish: vi.fn<() => Promise<string>>(),
+  publish: vi.fn<(event: Event) => Promise<string>>(),
   subscriptionClose: vi.fn(),
   close: vi.fn(),
   onevent: undefined as ((event: Event) => void) | undefined,
@@ -37,7 +37,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
   };
 });
 
-import { startBuzzBus } from "./buzz-bus.js";
+import { sendBuzzTextOneShot, startBuzzBus } from "./buzz-bus.js";
 
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
 const SENDER_PRIVATE_KEY = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
@@ -79,6 +79,48 @@ describe("Buzz bus lifecycle", () => {
     ).rejects.toThrow("auth rejected");
 
     expect(relayMocks.connect).toHaveBeenCalledOnce();
+    expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("publishes and closes a standalone authenticated send", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+
+    const messageId = await sendBuzzTextOneShot({
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      channelId: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
+      text: "hello",
+      threadId: "root-id",
+      replyToId: "parent-id",
+    });
+
+    const event = relayMocks.publish.mock.calls[0]?.[0];
+    expect(event).toMatchObject({
+      id: messageId,
+      kind: 9,
+      content: "hello",
+      tags: [
+        ["h", "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
+        ["e", "root-id", "", "root"],
+        ["e", "parent-id", "", "reply"],
+      ],
+    });
+    expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("closes a standalone relay when publishing fails", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    relayMocks.publish.mockRejectedValue(new Error("rejected"));
+
+    await expect(
+      sendBuzzTextOneShot({
+        relayUrl: "wss://buzz.example.com",
+        privateKey: PRIVATE_KEY,
+        channelId: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
+        text: "hello",
+      }),
+    ).rejects.toThrow("rejected");
+
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 

@@ -6,6 +6,8 @@ import type { ResolvedBuzzAccount } from "./types.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
+  busSendText: vi.fn(async () => "event-id"),
+  sendBuzzTextOneShot: vi.fn(async () => "standalone-event-id"),
   onMessage: undefined as
     | ((message: import("./message-event.js").BuzzInboundMessage, bus: BuzzBus) => Promise<void>)
     | undefined,
@@ -15,6 +17,7 @@ const gatewayMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./buzz-bus.js", () => ({
+  sendBuzzTextOneShot: gatewayMocks.sendBuzzTextOneShot,
   startBuzzBus: gatewayMocks.startBuzzBus,
 }));
 
@@ -22,7 +25,8 @@ vi.mock("./inbound.js", () => ({
   handleBuzzInbound: vi.fn(async () => {}),
 }));
 
-import { startBuzzGatewayAccount } from "./gateway.js";
+import { buzzOutboundAdapter, startBuzzGatewayAccount } from "./gateway.js";
+import { setBuzzRuntime } from "./runtime.js";
 import { resolveBuzzAccount } from "./types.js";
 
 const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
@@ -34,6 +38,16 @@ describe("Buzz gateway lifecycle", () => {
     gatewayMocks.onMessage = undefined;
     gatewayMocks.onMessageError = undefined;
     gatewayMocks.onFatalError = undefined;
+    gatewayMocks.busSendText.mockResolvedValue("event-id");
+    gatewayMocks.sendBuzzTextOneShot.mockResolvedValue("standalone-event-id");
+    setBuzzRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode: () => "preserve",
+          convertMarkdownTables: (text: string) => text,
+        },
+      },
+    } as never);
     gatewayMocks.startBuzzBus.mockImplementation(
       async (options: {
         onMessage: (
@@ -48,7 +62,7 @@ describe("Buzz gateway lifecycle", () => {
         gatewayMocks.onFatalError = options.onFatalError;
         return {
           publicKey: "a".repeat(64),
-          sendText: async () => "event-id",
+          sendText: gatewayMocks.busSendText,
           close: gatewayMocks.close,
         };
       },
@@ -96,6 +110,86 @@ describe("Buzz gateway lifecycle", () => {
     abortController.abort();
     await expect(lifecycle).resolves.toBeUndefined();
     expect(gatewayMocks.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses a one-shot authenticated connection when no gateway bus is running", async () => {
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.com",
+          privateKey: PRIVATE_KEY,
+          groups: { [CHANNEL_ID]: {} },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await buzzOutboundAdapter.sendText({
+      cfg,
+      to: `buzz:${CHANNEL_ID}`,
+      text: "hello",
+      accountId: "default",
+      threadId: "root-id",
+      replyToId: "parent-id",
+    });
+
+    expect(gatewayMocks.sendBuzzTextOneShot).toHaveBeenCalledWith({
+      relayUrl: "wss://buzz.example.com",
+      privateKey: PRIVATE_KEY,
+      authTag: "",
+      channelId: CHANNEL_ID,
+      text: "hello",
+      threadId: "root-id",
+      replyToId: "parent-id",
+    });
+    expect(result).toEqual({
+      channel: "buzz",
+      to: CHANNEL_ID,
+      messageId: "standalone-event-id",
+    });
+  });
+
+  it("reuses the gateway bus for sends in the running process", async () => {
+    const abortController = new AbortController();
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.com",
+          privateKey: PRIVATE_KEY,
+          groups: { [CHANNEL_ID]: {} },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveBuzzAccount({ cfg });
+    const ctx = {
+      cfg,
+      accountId: account.accountId,
+      account,
+      runtime: {},
+      abortSignal: abortController.signal,
+      log: { info: vi.fn(), error: vi.fn() },
+      getStatus: vi.fn(),
+      setStatus: vi.fn(),
+    } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
+    const lifecycle = startBuzzGatewayAccount(ctx);
+    await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+
+    await buzzOutboundAdapter.sendText({
+      cfg,
+      to: `buzz:${CHANNEL_ID}`,
+      text: "hello",
+      accountId: "default",
+    });
+
+    expect(gatewayMocks.busSendText).toHaveBeenCalledWith({
+      channelId: CHANNEL_ID,
+      text: "hello",
+      threadId: undefined,
+      replyToId: undefined,
+    });
+    expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
+
+    abortController.abort();
+    await expect(lifecycle).resolves.toBeUndefined();
   });
 
   it("uses the rolling lookback after a failed initial session", async () => {

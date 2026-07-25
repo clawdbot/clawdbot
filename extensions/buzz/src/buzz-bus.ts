@@ -25,6 +25,70 @@ export interface BuzzBus {
   close: () => Promise<void>;
 }
 
+function buildBuzzTextEvent(params: {
+  secretKey: Uint8Array;
+  channelId: string;
+  text: string;
+  threadId?: string;
+  replyToId?: string;
+}): Event {
+  return finalizeEvent(
+    {
+      kind: MESSAGE_KIND,
+      content: params.text,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: buildBuzzMessageTags(params),
+    },
+    params.secretKey,
+  );
+}
+
+async function connectAuthenticatedBuzzRelay(params: {
+  relayUrl: string;
+  secretKey: Uint8Array;
+  authTag?: string[];
+  signal?: AbortSignal;
+}): Promise<Relay> {
+  const relay = new Relay(params.relayUrl, { enableReconnect: false });
+  const signAuth = createBuzzAuthSigner({
+    secretKey: params.secretKey,
+    authTag: params.authTag,
+  });
+  try {
+    await relay.connect({ abort: params.signal });
+    await authenticateBuzzRelay({ relay, signAuth, signal: params.signal });
+    relay.onauth = signAuth;
+    return relay;
+  } catch (error) {
+    relay.close();
+    throw error;
+  }
+}
+
+export async function sendBuzzTextOneShot(params: {
+  relayUrl: string;
+  privateKey: string;
+  authTag?: string;
+  channelId: string;
+  text: string;
+  threadId?: string;
+  replyToId?: string;
+}): Promise<string> {
+  const secretKey = decodeBuzzPrivateKey(params.privateKey);
+  const relay = await connectAuthenticatedBuzzRelay({
+    relayUrl: params.relayUrl,
+    secretKey,
+    authTag: parseBuzzAuthTag(params.authTag ?? ""),
+  });
+  try {
+    const event = buildBuzzTextEvent({ ...params, secretKey });
+    await relay.publish(event);
+    return event.id;
+  } finally {
+    relay.close();
+  }
+}
+
 export async function startBuzzBus(options: {
   accountId: string;
   relayUrl: string;
@@ -41,7 +105,6 @@ export async function startBuzzBus(options: {
   const secretKey = decodeBuzzPrivateKey(options.privateKey);
   const publicKey = resolveBuzzPublicKey(options.privateKey);
   const authTag = parseBuzzAuthTag(options.authTag ?? "");
-  const relay = new Relay(options.relayUrl, { enableReconnect: false });
   const sessionStartedAt = Math.floor(Date.now() / 1000);
   const replayGuard = createChannelReplayGuard<Event>({
     dedupe: {
@@ -57,20 +120,17 @@ export async function startBuzzBus(options: {
     buildReplayKey: (event) => event.id,
     namespace: () => options.accountId,
   });
-  const signAuth = createBuzzAuthSigner({ secretKey, authTag });
+  const relay = await connectAuthenticatedBuzzRelay({
+    relayUrl: options.relayUrl,
+    secretKey,
+    authTag,
+    signal: options.signal,
+  });
   let subscriptions: Array<ReturnType<Relay["subscribe"]>> = [];
   const bus: BuzzBus = {
     publicKey,
     sendText: async ({ channelId, text, threadId, replyToId }) => {
-      const event = finalizeEvent(
-        {
-          kind: MESSAGE_KIND,
-          content: text,
-          created_at: Math.floor(Date.now() / 1000),
-          tags: buildBuzzMessageTags({ channelId, threadId, replyToId }),
-        },
-        secretKey,
-      );
+      const event = buildBuzzTextEvent({ secretKey, channelId, text, threadId, replyToId });
       await relay.publish(event);
       return event.id;
     },
@@ -84,12 +144,6 @@ export async function startBuzzBus(options: {
   };
 
   try {
-    await relay.connect({ abort: options.signal });
-    // Buzz rejects relay operations until its proactive NIP-42 challenge is signed.
-    // Do not subscribe or publish before this account-level authentication completes.
-    await authenticateBuzzRelay({ relay, signAuth, signal: options.signal });
-    relay.onauth = signAuth;
-
     subscriptions = options.channelIds.map((channelId) =>
       relay.subscribe(
         [

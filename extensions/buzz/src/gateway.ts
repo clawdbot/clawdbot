@@ -3,7 +3,7 @@ import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { ChannelGatewayContext } from "../runtime-api.js";
-import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
+import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { isConfiguredBuzzChannel, parseBuzzTarget } from "./target.js";
@@ -158,10 +158,14 @@ export const buzzOutboundAdapter = {
   }) => {
     const runtime = getBuzzRuntime();
     const resolvedAccountId = accountId ?? resolveDefaultBuzzAccountId(cfg);
-    const bus = activeBuses.get(resolvedAccountId);
-    if (!bus) {
-      throw new Error(`Buzz bus not running for account ${resolvedAccountId}`);
+    const account = resolveBuzzAccount({ cfg, accountId: resolvedAccountId });
+    if (!account.enabled) {
+      throw new Error(`Buzz is disabled for account ${resolvedAccountId}`);
     }
+    if (!account.configured) {
+      throw new Error(`Buzz is not configured for account ${resolvedAccountId}`);
+    }
+    const bus = activeBuses.get(resolvedAccountId);
     const channelId = parseBuzzTarget(to);
     const tableMode = runtime.channel.text.resolveMarkdownTableMode({
       cfg,
@@ -169,12 +173,20 @@ export const buzzOutboundAdapter = {
       accountId: resolvedAccountId,
     });
     const message = runtime.channel.text.convertMarkdownTables(text ?? "", tableMode);
-    const messageId = await bus.sendText({
+    const outboundMessage = {
       channelId,
       text: message,
       threadId: threadId == null ? undefined : String(threadId),
       replyToId: replyToId == null ? undefined : String(replyToId),
-    });
+    };
+    const messageId = bus
+      ? await bus.sendText(outboundMessage)
+      : await sendBuzzTextOneShot({
+          relayUrl: account.relayUrl,
+          privateKey: account.privateKey,
+          authTag: account.authTag,
+          ...outboundMessage,
+        });
     return attachChannelToResult("buzz", { to: channelId, messageId });
   },
 };
