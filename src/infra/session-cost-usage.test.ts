@@ -33,6 +33,7 @@ import {
   loadSessionUsageTimeSeries as loadSessionUsageTimeSeriesForAgent,
   resolveExistingUsageSessionFile as resolveExistingUsageSessionFileForAgent,
 } from "./session-cost-usage.js";
+import { testing as sessionCostUsageTestApi } from "./session-cost-usage.test-support.js";
 
 type WithOptionalAgentId<T> = T extends (params: infer P) => unknown
   ? Omit<P, "agentId"> & { agentId?: string }
@@ -75,6 +76,13 @@ function waitForFast<T>(
   options: { timeout?: number; interval?: number } = {},
 ) {
   return vi.waitFor(callback, { interval: 1, ...options });
+}
+
+async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void> {
+  await sessionCostUsageTestApi.usageCostRefreshRuntime.refreshCostUsageCacheForAgent({
+    agentId: "main",
+    sessionFiles: [sessionFile],
+  });
 }
 
 function clearGatewayModelPricingState(): void {
@@ -931,6 +939,7 @@ describe("session cost usage", () => {
       [
         JSON.stringify(assistantEntry(undefined, 1_000)),
         JSON.stringify(assistantEntry("2026-02-05T12:00:00.000Z", 20)),
+        "",
       ].join("\n"),
       "utf-8",
     );
@@ -938,14 +947,18 @@ describe("session cost usage", () => {
     await withStateDir(root, async () => {
       const session = { sessionId: "sess-v8-upgrade", sessionFile };
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
-      await waitForFast(async () => {
-        const current = await loadSessionCostSummariesFromCache({
-          sessions: [session],
-          agentId: "main",
-          requestRefresh: false,
-        });
-        expect(current.cacheStatus.status).toBe("fresh");
-      });
+      await refreshSessionCostUsageForTest(sessionFile);
+      await waitForFast(
+        async () => {
+          const current = await loadSessionCostSummariesFromCache({
+            sessions: [session],
+            agentId: "main",
+            requestRefresh: false,
+          });
+          expect(current.cacheStatus.status).toBe("fresh");
+        },
+        { interval: 10, timeout: 2_000 },
+      );
 
       const currentRow = requireValue(
         readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
@@ -974,35 +987,43 @@ describe("session cost usage", () => {
         startMs: Date.UTC(2026, 1, 5),
         endMs: rangeEndMs,
       });
-      await waitForFast(async () => {
-        const rebuilt = await loadSessionCostSummariesFromCache({
-          sessions: [session],
-          agentId: "main",
-          startMs: Date.UTC(2026, 1, 5),
-          endMs: rangeEndMs,
-          requestRefresh: false,
-        });
-        expect(rebuilt.cacheStatus.status).toBe("fresh");
-        expect(rebuilt.summaries[0]?.totalTokens).toBe(20);
-      });
+      await refreshSessionCostUsageForTest(sessionFile);
+      await waitForFast(
+        async () => {
+          const rebuilt = await loadSessionCostSummariesFromCache({
+            sessions: [session],
+            agentId: "main",
+            startMs: Date.UTC(2026, 1, 5),
+            endMs: rangeEndMs,
+            requestRefresh: false,
+          });
+          expect(rebuilt.cacheStatus.status).toBe("fresh");
+          expect(rebuilt.summaries[0]?.totalTokens).toBe(20);
+        },
+        { interval: 10, timeout: 2_000 },
+      );
 
       await fs.appendFile(
         sessionFile,
-        `\n${JSON.stringify(assistantEntry("2026-02-05T13:00:00.000Z", 5))}`,
+        `${JSON.stringify(assistantEntry("2026-02-05T13:00:00.000Z", 5))}\n`,
         "utf-8",
       );
       await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
-      await waitForFast(async () => {
-        const appended = await loadSessionCostSummariesFromCache({
-          sessions: [session],
-          agentId: "main",
-          startMs: Date.UTC(2026, 1, 5),
-          endMs: rangeEndMs,
-          requestRefresh: false,
-        });
-        expect(appended.cacheStatus.status).toBe("fresh");
-        expect(appended.summaries[0]?.totalTokens).toBe(25);
-      });
+      await refreshSessionCostUsageForTest(sessionFile);
+      await waitForFast(
+        async () => {
+          const appended = await loadSessionCostSummariesFromCache({
+            sessions: [session],
+            agentId: "main",
+            startMs: Date.UTC(2026, 1, 5),
+            endMs: rangeEndMs,
+            requestRefresh: false,
+          });
+          expect(appended.cacheStatus.status).toBe("fresh");
+          expect(appended.summaries[0]?.totalTokens).toBe(25);
+        },
+        { interval: 10, timeout: 2_000 },
+      );
 
       const appendedRow = requireValue(
         readSessionCostUsageRollupRows("main").find((row) => row.key === sessionFile),
