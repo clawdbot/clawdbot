@@ -171,7 +171,8 @@ restart handling continues.
 
 - **Crash-loop breaker:** 3 unclean boots within 5 minutes trip a breaker that
   suppresses auto-start side services on the next boot, so a crashing gateway
-  does not amplify itself. It recovers once the unclean-boot window drains.
+  does not amplify itself. A later boot recovers once the unclean-boot window
+  drains.
 
   When the breaker is tripped, the **control plane still starts**, but channel
   plugins (and other auto-started side services) stay down until an operator
@@ -199,9 +200,8 @@ start for <channel>… Use channels.start to override.`
      `channels.start` is a **manual** override; it does not disable the
      breaker for other channels.
 
-  5. Or wait for the unclean-boot window to drain — the gateway logs when
-     channel auto-start is restored, and subsequent boots start channels
-     normally again.
+  5. Or wait for the unclean-boot window to drain, then restart the gateway.
+     The next boot logs whether channel auto-start is restored.
 
   See also [Gateway](/gateway) (safe mode paragraph) for the same control-plane
   vs channel-autostart split.

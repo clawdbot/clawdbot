@@ -158,7 +158,8 @@ If the gateway process is healthy but a channel stays stopped after repeated
 unclean boots, the [crash-loop breaker](/gateway/restart-recovery#safety-valves-and-observability)
 may be suppressing channel auto-start. Use
 `openclaw gateway call channels.start --params '{"channel":"<id>"}'` to
-override, or wait for the unclean-boot window to drain.
+override, or wait for the unclean-boot window to drain and then restart the
+gateway.
 
 ## Related
 
