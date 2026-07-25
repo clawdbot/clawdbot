@@ -14,6 +14,7 @@ import {
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import {
+  renderSidebarCatalogViewMenu,
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
@@ -315,6 +316,26 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
         return;
       }
       controller.closeSessionSortMenu({ restoreFocus });
+    },
+  });
+}
+
+export function renderSidebarCatalogViewMenuForController(controller: SidebarMenusController) {
+  const { host } = controller;
+  const position = controller.catalogViewMenuPosition;
+  return renderSidebarCatalogViewMenu({
+    position,
+    trigger: controller.catalogViewMenuTrigger,
+    grouping: host.catalogProjectGrouping,
+    onGroupingChange: (grouping) => {
+      host.setCatalogProjectGrouping(grouping);
+      controller.closeCatalogViewMenu({ restoreFocus: true });
+    },
+    onClose: (restoreFocus) => {
+      if (controller.catalogViewMenuPosition !== position) {
+        return;
+      }
+      controller.closeCatalogViewMenu({ restoreFocus });
     },
   });
 }

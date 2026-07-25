@@ -327,7 +327,13 @@ function renderSessionCatalogs(params: {
         display,
       }),
     onToggleSection: (sectionId) => host.toggleSection(sectionId),
-    onToggleProjectGrouping: () => host.toggleCatalogProjectGrouping(),
+    // aria-expanded must land on the one header whose menu is open, so the
+    // catalog id rides on the trigger's data attribute instead of a global flag.
+    viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition
+      ? (host.sidebarMenus.catalogViewMenuTrigger?.getAttribute("data-session-catalog-view-menu") ??
+        null)
+      : null,
+    onOpenViewMenu: (trigger) => host.sidebarMenus.toggleCatalogViewMenu(trigger),
     onLoadMore: (catalogId) => void host.sessionData.loadMoreSessionCatalog(catalogId),
     onOpenNewSession: host.onOpenNewSession,
     onNavigate: host.onNavigate,

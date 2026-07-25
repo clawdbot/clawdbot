@@ -285,8 +285,11 @@ suite("Codex native session catalog", () => {
       // Counts only render while a section is collapsed.
       expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
 
-      const groupingToggle = section.locator('[data-session-catalog-grouping-toggle="codex"]');
-      await groupingToggle.click();
+      const viewMenuButton = section.locator('[data-session-catalog-view-menu="codex"]');
+      await viewMenuButton.click();
+      await page
+        .getByRole("menuitemradio", { name: "None" })
+        .evaluate((element) => (element as HTMLElement).click());
       await expect.poll(() => projectHeads.count()).toBe(0);
       expect(await section.locator("[data-session-key]").count()).toBe(4);
       expect(
@@ -300,7 +303,10 @@ suite("Codex native session catalog", () => {
         });
       }
 
-      await groupingToggle.click();
+      await viewMenuButton.click();
+      await page
+        .getByRole("menuitemradio", { name: "Project" })
+        .evaluate((element) => (element as HTMLElement).click());
       await expect.poll(() => projectHeads.count()).toBe(2);
       expect(
         await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),

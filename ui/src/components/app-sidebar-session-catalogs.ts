@@ -104,7 +104,8 @@ type SessionCatalogGroupsParams = {
   creatorId?: string | null;
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
-  onToggleProjectGrouping: () => void;
+  viewMenuOpenCatalogId: string | null;
+  onOpenViewMenu: (trigger: HTMLElement) => void;
   onLoadMore: (catalogId: string) => void;
   onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
@@ -218,7 +219,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               >${collapsed ? icons.chevronRight : icons.chevronDown}</span
             >
             ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
-            ${hasError || rows.length > 0
+            ${hasError || (collapsed && rows.length > 0)
               ? html`<span
                   class="sidebar-session-group-count ${hasError
                     ? "sidebar-session-group-count--error"
@@ -231,19 +232,23 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
           </button>
           <button
             type="button"
-            class="sidebar-session-sort sidebar-session-catalog-grouping"
-            aria-pressed=${String(params.projectGrouping === "project")}
-            data-session-catalog-grouping-toggle=${catalog.id}
-            title=${t("chat.sidebar.groupCatalogSessionsByProject")}
-            aria-label=${t("chat.sidebar.groupCatalogSessionsByProject")}
-            @click=${() => params.onToggleProjectGrouping()}
+            class="sidebar-session-group-actions sidebar-session-sort sidebar-session-catalog-grouping"
+            data-session-catalog-view-menu=${catalog.id}
+            title=${t("chat.sidebar.catalogViewOptions")}
+            aria-label=${t("chat.sidebar.catalogViewOptions")}
+            aria-haspopup="menu"
+            aria-expanded=${String(params.viewMenuOpenCatalogId === catalog.id)}
+            @click=${(event: MouseEvent) => {
+              event.stopPropagation();
+              params.onOpenViewMenu(event.currentTarget as HTMLElement);
+            }}
           >
-            ${icons.folder}
+            ${icons.listFilter}
           </button>
           ${canCreateSession
             ? html`<button
                 type="button"
-                class="sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
+                class="sidebar-session-group-actions sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
                 title=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
                 aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
                 ?disabled=${!params.connected}
