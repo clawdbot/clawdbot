@@ -17,7 +17,7 @@ type GatewayCronListPage = Partial<CronListPageResult> & {
   deliveryPreviews?: Record<string, CronDeliveryPreview>;
 };
 
-export type GatewayCronJobInventory = GatewayCronListPage & {
+type GatewayCronJobInventory = GatewayCronListPage & {
   jobs: CronJob[];
   deliveryPreviews?: Record<string, CronDeliveryPreview>;
 };
