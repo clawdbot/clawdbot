@@ -1,5 +1,7 @@
 // Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
+import path from "node:path";
 import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   buildMemoryPromptSection,
@@ -8,6 +10,7 @@ import {
   type MemoryPromptSectionParams,
   type PreparedMemoryPromptSection,
 } from "../plugins/memory-state.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type {
   ContextEngine,
@@ -27,14 +30,36 @@ function buildCompactionResultSessionTarget(params: {
   sessionKey?: string;
   sessionTarget?: ContextEngineSessionTarget;
 }): ContextEngineSessionTarget | undefined {
-  const marker = parseSqliteSessionFileMarker(params.sessionFile);
-  const sessionId = params.sessionTarget?.sessionId ?? params.sessionId ?? marker?.sessionId;
+  const sessionFile = normalizeOptionalString(params.sessionFile);
+  const marker = parseSqliteSessionFileMarker(sessionFile);
+  const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
+  const targetSessionId = normalizeOptionalString(params.sessionTarget?.sessionId);
+  const targetSessionKey = normalizeOptionalString(params.sessionTarget?.sessionKey);
+  const targetStorePath = normalizeOptionalString(params.sessionTarget?.storePath);
+  const completeTarget = Boolean(
+    targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
+  );
+  if (!completeTarget && sessionFile && !marker) {
+    throw new Error("Legacy context-engine file successors are unsupported");
+  }
+  if (
+    marker &&
+    !completeTarget &&
+    ((targetAgentId && targetAgentId !== marker.agentId) ||
+      (targetSessionId && targetSessionId !== marker.sessionId) ||
+      (parseAgentSessionKey(targetSessionKey)?.agentId &&
+        parseAgentSessionKey(targetSessionKey)?.agentId !== marker.agentId) ||
+      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(marker.storePath)))
+  ) {
+    throw new Error("Legacy context-engine successor identity is inconsistent");
+  }
+  const sessionId = targetSessionId ?? params.sessionId ?? marker?.sessionId;
   if (!sessionId) {
     return undefined;
   }
-  const agentId = params.sessionTarget?.agentId ?? params.agentId ?? marker?.agentId;
-  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey;
-  const storePath = params.sessionTarget?.storePath ?? marker?.storePath;
+  const agentId = targetAgentId ?? params.agentId ?? marker?.agentId;
+  const sessionKey = targetSessionKey ?? params.sessionKey;
+  const storePath = targetStorePath ?? marker?.storePath;
   return {
     ...(agentId ? { agentId } : {}),
     sessionId,

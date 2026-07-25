@@ -109,6 +109,39 @@ describe("agent run session target", () => {
     ).resolves.toMatchObject({ sessionKey, storePath });
   });
 
+  it("uses the marker store for a compatible partial typed target", async () => {
+    const storePath = path.join(tempDir, "legacy-partial", "sessions.json");
+
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "legacy-session",
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "legacy-session",
+          storePath,
+        }),
+        sessionTarget: { agentId: "main", sessionId: "legacy-session" },
+      }),
+    ).resolves.toMatchObject({ agentId: "main", sessionId: "legacy-session", storePath });
+  });
+
+  it("rejects a partial typed key from another marker agent", async () => {
+    await expect(
+      resolveAgentRunSessionTarget({
+        sessionId: "legacy-session",
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "legacy-session",
+          storePath: path.join(tempDir, "legacy.json"),
+        }),
+        sessionTarget: {
+          sessionId: "legacy-session",
+          sessionKey: "agent:worker:legacy-session",
+        },
+      }),
+    ).rejects.toThrow("Legacy SQLite transcript marker conflicts");
+  });
+
   it("rejects a compatibility key from another target agent", async () => {
     await expect(
       resolveAgentRunSessionTarget({

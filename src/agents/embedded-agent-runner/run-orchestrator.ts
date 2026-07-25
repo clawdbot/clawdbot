@@ -116,9 +116,9 @@ async function runEmbeddedAgentInternal(
   });
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
-    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    agentId: runSessionTarget.agentId,
     sessionId: runSessionTarget.sessionId,
-    sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
+    sessionKey: runSessionTarget.sessionKey,
     sessionTarget: runSessionTarget,
     sessionFile: runSessionTarget.sessionKey,
     skillWorkshopProposalMutationBudget,

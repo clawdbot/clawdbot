@@ -1,3 +1,4 @@
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -81,6 +82,7 @@ export async function resolveAgentRunSessionTarget(params: {
   const compatibilitySessionKeySelected =
     !targetSessionKey && !suppliedSessionKey && sessionKey === compatibilitySessionKey;
   const suppliedKeyAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  const targetKeyAgentId = parseAgentSessionKey(targetSessionKey)?.agentId;
   const compatibilityKeyAgentId = parseAgentSessionKey(compatibilitySessionKey)?.agentId;
   if (
     legacyMarker &&
@@ -88,7 +90,9 @@ export async function resolveAgentRunSessionTarget(params: {
     ((targetAgentId && targetAgentId !== legacyMarker.agentId) ||
       (targetSessionId && targetSessionId !== legacyMarker.sessionId) ||
       (params.agentId && params.agentId !== legacyMarker.agentId) ||
+      (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
       (suppliedKeyAgentId && suppliedKeyAgentId !== legacyMarker.agentId) ||
+      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)) ||
       params.sessionId !== legacyMarker.sessionId)
   ) {
     throw new Error("Legacy SQLite transcript marker conflicts with the supplied session identity");
@@ -105,6 +109,7 @@ export async function resolveAgentRunSessionTarget(params: {
   if (sessionTarget && sessionKey) {
     const storePath =
       targetStorePath ??
+      legacyMarker?.storePath ??
       resolveStorePath(params.config?.session?.store, { agentId: effectiveAgentId });
     return await resolveSessionTranscriptRuntimeTarget({
       ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),

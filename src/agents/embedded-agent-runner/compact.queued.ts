@@ -682,6 +682,7 @@ async function compactResolvedContextEngine(
             agentId: delegatedSessionTarget.agentId ?? sessionAgentId,
             config: params.config,
             sessionId: delegatedSessionTarget.sessionId ?? postCompactionSessionId,
+            sessionFile: delegatedSessionFile,
             sessionKey: delegatedSessionTarget.sessionKey ?? params.sessionKey,
             sessionTarget: delegatedSessionTarget,
           });

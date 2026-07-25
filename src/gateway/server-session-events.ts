@@ -1,5 +1,6 @@
 // Gateway session event broadcaster.
 // Projects transcript and lifecycle updates to websocket subscribers.
+import path from "node:path";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -7,7 +8,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveTranscriptSessionKeyBySessionId } from "../config/sessions/session-accessor.js";
 import { hasPluginSessionsChangedSubscribers } from "../plugins/gateway-events.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
@@ -152,10 +153,30 @@ async function handleTranscriptUpdateBroadcast(
   update: InternalSessionTranscriptUpdate,
 ): Promise<void> {
   const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
-  const storageAgentId = update.target?.agentId ?? update.agentId ?? legacyMarker?.agentId;
+  const targetAgentId = normalizeOptionalString(update.target?.agentId);
+  const targetSessionId = normalizeOptionalString(update.target?.sessionId);
+  const targetSessionKey = normalizeOptionalString(update.target?.sessionKey);
+  const targetKeyAgentId = parseAgentSessionKey(targetSessionKey)?.agentId;
+  const targetStorePath = normalizeOptionalString(update.target?.storePath);
+  const completeTarget = Boolean(
+    targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
+  );
+  if (
+    legacyMarker &&
+    update.target &&
+    !completeTarget &&
+    ((targetAgentId && targetAgentId !== legacyMarker.agentId) ||
+      (targetSessionId && targetSessionId !== legacyMarker.sessionId) ||
+      (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
+      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)))
+  ) {
+    return;
+  }
+  const compatibleLegacyMarker = completeTarget ? undefined : legacyMarker;
+  const storageAgentId = targetAgentId ?? update.agentId ?? compatibleLegacyMarker?.agentId;
   let sessionKey = update.target?.sessionKey ?? update.sessionKey;
-  if (!sessionKey && legacyMarker) {
-    sessionKey = resolveTranscriptSessionKeyBySessionId(legacyMarker);
+  if (!sessionKey && compatibleLegacyMarker) {
+    sessionKey = resolveTranscriptSessionKeyBySessionId(compatibleLegacyMarker);
   }
   if (!sessionKey || update.message === undefined) {
     return;
@@ -186,19 +207,22 @@ async function handleTranscriptUpdateBroadcast(
   if (messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
-    const updateStorePath = update.target?.storePath ?? legacyMarker?.storePath;
+    const updateStorePath = targetStorePath ?? compatibleLegacyMarker?.storePath;
     const fallbackTarget = updateStorePath
       ? undefined
       : loadSessionEntryReadOnly(sessionKey, { agentId: visibleAgentId });
     const entry = fallbackTarget?.entry;
-    const targetSessionId = update.target?.sessionId ?? legacyMarker?.sessionId ?? entry?.sessionId;
+    const messageSessionId =
+      normalizeOptionalString(update.target?.sessionId) ??
+      compatibleLegacyMarker?.sessionId ??
+      entry?.sessionId;
     const storePath = updateStorePath ?? fallbackTarget?.storePath;
-    messageSeq = targetSessionId
+    messageSeq = messageSessionId
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync({
             agentId: update.target?.agentId ?? storageAgentId ?? visibleAgentId,
             sessionEntry: entry,
-            sessionId: targetSessionId,
+            sessionId: messageSessionId,
             sessionKey,
             storePath,
           }),
