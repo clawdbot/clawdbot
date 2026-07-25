@@ -39,7 +39,7 @@ export type ClawHubSkillVerificationLock = {
   signature?: unknown;
 };
 
-export type ClawHubSkillLockEntry = {
+type ClawHubSkillLockEntry = {
   version: string;
   installedAt: number;
   registry?: string;
@@ -53,7 +53,7 @@ export type ClawHubSkillLockEntry = {
   verification?: ClawHubSkillVerificationLock;
 };
 
-export type ClawHubSkillOrigin = {
+type ClawHubSkillOrigin = {
   version: 1;
   registry: string;
   slug: string;
@@ -85,7 +85,7 @@ export type ClawHubSkillRef = {
   trustState?: ClawHubSkillsShTrustState;
 };
 
-export type StrictOriginReadResult =
+type StrictOriginReadResult =
   | { kind: "found"; origin: ClawHubSkillOrigin; path: string }
   | { kind: "missing" }
   | { kind: "malformed"; path: string; error: string };
@@ -94,7 +94,7 @@ function metadataPaths(rootDir: string, filename: string): string[] {
   return [path.join(rootDir, DOT_DIR, filename), path.join(rootDir, LEGACY_DOT_DIR, filename)];
 }
 
-export function normalizeClawHubOwnerHandle(raw: string): string {
+function normalizeClawHubOwnerHandle(raw: string): string {
   const ownerHandle = raw.trim().toLowerCase();
   if (!CLAWHUB_OWNER_HANDLE_PATTERN.test(ownerHandle)) {
     throw new Error(`Invalid ClawHub owner handle: ${raw}`);
