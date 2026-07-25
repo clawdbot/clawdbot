@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
+import "./components/session-discussion-panel.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
 type DiscussionTestPane = TestChatPane & {
