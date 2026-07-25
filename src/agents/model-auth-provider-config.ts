@@ -625,7 +625,7 @@ export function resolveLiteralProviderConfigApiKeyAuth(params: {
   };
 }
 
-export function resolveEnvSourceLabel(params: {
+function resolveEnvSourceLabel(params: {
   applied: Set<string>;
   envVars: string[];
   label: string;
