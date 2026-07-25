@@ -33,7 +33,7 @@ import {
 import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
 import { applyJobResult, armTimer, type CronTriggerEvalOutcome } from "./timer.js";
 
-export type PreparedManualRun =
+type PreparedManualRun =
   | {
       ok: true;
       ran: false;
