@@ -21,7 +21,7 @@ lane:
   evidence:
 ```
 
-Maintain at least ten active, differently scoped lanes while searching. Track blocked remote or device capacity explicitly. A finished worker, future worker, unstarted process, or duplicate subsystem is not an active lane.
+Maintain at least ten active, differently scoped lanes while searching whenever worker creation and network use are authorized. Track blocked worker, network, remote, and device capacity explicitly. A finished worker, future worker, unstarted process, sequential inspection, or duplicate subsystem is not an active lane. For an offline or single-agent task, inspect ten distinct surfaces but report the actual concurrency and independent-verification limitation.
 
 ## Bug ledger
 
