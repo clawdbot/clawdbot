@@ -717,6 +717,9 @@ describe("checkUpdateStatus", () => {
 
       const fullRoot = await cloneDivergedHistory("full");
       await expect(readDivergence(fullRoot)).resolves.toEqual({ ahead: 1, behind: 1 });
+      await runGit(fullRoot, "remote", "rename", "--", "origin", "-dash");
+      expect(await runGit(fullRoot, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("-dash/main");
+      await expect(readDivergence(fullRoot)).resolves.toEqual({ ahead: 1, behind: 1 });
 
       const truncatedRoot = await cloneDivergedHistory("shallow-depth-1", 1);
       await expect(readDivergence(truncatedRoot)).resolves.toEqual({
