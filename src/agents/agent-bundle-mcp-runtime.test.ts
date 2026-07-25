@@ -36,7 +36,7 @@ vi.mock("./embedded-agent-mcp.js", () => ({
 }));
 
 const tempDirs: string[] = [];
-const appMetadataTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
 
 type RuntimeFactoryOptions = NonNullable<
   Parameters<typeof testing.createSessionMcpRuntimeManager>[0]
@@ -413,7 +413,7 @@ describe("session MCP runtime", () => {
   });
 
   it("catalogs canonical and deprecated MCP App tool metadata", async () => {
-    const tempDir = appMetadataTempDirs.make("bundle-mcp-app-metadata-");
+    const tempDir = tempDirTracker.make("bundle-mcp-app-metadata-");
     const serverPath = path.join(tempDir, "app-metadata.mjs");
     const logPath = path.join(tempDir, "server.log");
     await writeListToolsMcpServer({
@@ -1043,7 +1043,7 @@ describe("session MCP runtime", () => {
   });
 
   it("retries a failed MCP catalog without stalling healthy siblings", async () => {
-    const tempDir = makeTempDir(tempDirs, "bundle-mcp-catalog-retry-");
+    const tempDir = tempDirTracker.make("bundle-mcp-catalog-retry-");
     const retryServerPath = path.join(tempDir, "retry-list-tools.mjs");
     const retryLogPath = path.join(tempDir, "retry-server.log");
     const healthyServerPath = path.join(tempDir, "healthy-list-tools.mjs");
