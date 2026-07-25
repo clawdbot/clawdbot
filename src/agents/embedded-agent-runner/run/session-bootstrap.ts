@@ -56,7 +56,6 @@ export function buildContextEngineCompactionSessionTarget(params: {
   const markerMatches = marker
     ? listSessionEntries({
         agentId: marker.agentId,
-        readOnly: true,
         storePath: marker.storePath,
       }).filter(({ entry }) => entry.sessionId === marker.sessionId)
     : [];

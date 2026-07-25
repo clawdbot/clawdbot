@@ -76,7 +76,6 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
         : undefined;
       const markerMatches = listSessionEntries({
         agentId: marker.agentId,
-        readOnly: true,
         storePath: marker.storePath,
       }).filter(({ entry }) => entry.sessionId === marker.sessionId);
       const preferredMarkerSessionKey = resolvePreferredSessionKeyForSessionIdMatches(
