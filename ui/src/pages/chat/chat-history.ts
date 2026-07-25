@@ -15,12 +15,7 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
-import {
-  retirePendingChatSideQuestion,
-  type ChatSideResult,
-  type ChatSideResultPending,
-} from "../../lib/chat/side-result.ts";
+import { extractText, isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -181,55 +176,6 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
-function isTextOnlyContent(content: unknown): boolean {
-  if (typeof content === "string") {
-    return true;
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  if (content.length === 0) {
-    return true;
-  }
-  let sawText = false;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text") {
-      return false;
-    }
-    sawText = true;
-    if (typeof entry.text !== "string") {
-      return false;
-    }
-  }
-  return sawText;
-}
-
-function isEmptyUserTextOnlyMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
-    return false;
-  }
-  const mediaPaths = Array.isArray(entry.MediaPaths)
-    ? entry.MediaPaths
-    : typeof entry.MediaPath === "string"
-      ? [entry.MediaPath]
-      : [];
-  if (mediaPaths.some((value) => typeof value === "string" && value.trim())) {
-    return false;
-  }
-  if (!isTextOnlyContent(entry.content ?? entry.text)) {
-    return false;
-  }
-  return (extractText(message)?.trim() ?? "") === "";
-}
-
 function isHeartbeatAckStream(text: string): boolean {
   return stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
@@ -353,12 +299,6 @@ export type ChatState = {
   lastError: string | null;
   chatError?: string | null;
   chatRunError?: { summary: string } | null;
-  /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
-  chatSideChatTurns?: ChatSideResult[];
-  chatSideResultPending?: ChatSideResultPending | null;
-  chatSideResultTerminalRuns?: Set<string>;
-  /** Panel closed via X/Escape; conversation kept until cleared or reset. */
-  chatSideChatHidden?: boolean;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
   onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
@@ -367,6 +307,7 @@ export type ChatState = {
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
   hello: GatewayHelloOk | null;
+  canvasPluginSurfaceUrl?: string | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
   sessions?: Partial<SessionCapability>;
   chatBranches?: SessionBranch[];
@@ -882,8 +823,6 @@ export async function clearChatHistory(
   }
   state.chatMessages = [];
   state.chatRunError = null;
-  state.chatSideChatTurns = [];
-  state.chatSideChatHidden = false;
   state.chatReplyTarget = null;
   reconcileChatRunLifecycle(state, {
     outcome: hadActiveRun ? "interrupted" : undefined,
@@ -893,13 +832,8 @@ export async function clearChatHistory(
     clearLocalRun: true,
     clearChatStream: true,
     clearToolStream: true,
-    clearSideResultTerminalRuns: true,
     clearRunStatus: !hadActiveRun,
   });
-  // After the suppression-set wipe above: retire (not just drop) a pending
-  // BTW run so its late resultless terminal event cannot re-enter the freshly
-  // cleared transcript.
-  retirePendingChatSideQuestion(state);
   await loadChatHistory(state);
   scheduleChatScroll(state);
   return "completed";

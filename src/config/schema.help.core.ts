@@ -313,6 +313,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.timeoutSeconds":
     "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
+  "agents.defaults.heartbeat.agentId":
+    "Agent that owns ambient heartbeat runs when no per-agent heartbeat configuration exists. Leave unset to preserve configured-default routing.",
   "agents.entries.*.heartbeat.timeoutSeconds":
     "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
+  "agents.defaults.systemAgent":
+    "Target settings for ambient OpenClaw system-agent and Custodian inference.",
+  "agents.defaults.systemAgent.agentId":
+    "Agent whose model and credentials own ambient system-agent and Custodian consults. Delegated consults still use their requesting agent.",
+  "talk.agentId":
+    "Agent that owns Talk sessions created without an explicit agent-scoped session key.",
 };

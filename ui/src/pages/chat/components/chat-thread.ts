@@ -31,13 +31,14 @@ import type {
   ChatStreamSegment,
   MessageGroup,
 } from "../../../lib/chat/chat-types.ts";
-import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import {
-  buildMoreDetailsSideCommand,
-  combineSideChatComposerDraft,
-} from "../../../lib/chat/side-question.ts";
+  buildCompanionQuestionPrefill,
+  buildMoreDetailsCompanionQuestion,
+} from "../../../lib/chat/companion-question.ts";
+import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -154,15 +155,13 @@ type ChatThreadProps = {
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
-  /** Current composer draft; the selection popup preserves it when prefilling. */
-  getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: MessageReplyTarget) => void;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   onFocusComposer?: () => void;
-  /** Sends a detached /btw side question built from the selection popup. */
-  onSideQuestion?: (command: string) => void;
+  onCompanionQuestion?: (question: string) => void;
+  onCompanionPrefill?: (question: string) => void;
   onOpenSession?: (sessionKey: string) => void;
   /** Tasks-rail snapshot backing the post-turn running-tasks status row. */
   backgroundTasks?: BackgroundTasksProps;
@@ -628,10 +627,6 @@ export function renderChatSearchBar(
   `;
 }
 
-export function isChatThreadSearchOpen(paneId: string): boolean {
-  return getChatThreadState(paneId).searchOpen;
-}
-
 export function toggleChatThreadSearch(paneId: string, requestUpdate: () => void): void {
   const state = getChatThreadState(paneId);
   state.searchOpen = !state.searchOpen;
@@ -751,12 +746,7 @@ function removeReplyContextMenu(paneId?: string) {
 
 function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
   const source = `${senderLabel ?? ""}\n${text}`;
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `reply:${(hash >>> 0).toString(16)}`;
+  return `reply:${fnv1aUtf16(source).toString(16)}`;
 }
 
 function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
@@ -789,22 +779,23 @@ function createMessageActionContextButton(params: {
 }
 
 function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
-  if (typeof props.onSideQuestion !== "function") {
+  if (
+    typeof props.onCompanionQuestion !== "function" ||
+    typeof props.onCompanionPrefill !== "function"
+  ) {
     return;
   }
   handleChatSelectionPointerUp(event, {
     onMoreDetails: (selection) => {
-      const command = buildMoreDetailsSideCommand(selection);
-      if (command) {
-        props.onSideQuestion?.(command);
+      const question = buildMoreDetailsCompanionQuestion(selection);
+      if (question) {
+        props.onCompanionQuestion?.(question);
       }
     },
     onAskSideChat: (selection) => {
-      const draft = combineSideChatComposerDraft(selection, props.getDraft?.());
-      if (draft) {
-        props.onDraftChange(draft);
-        props.onRequestUpdate?.();
-        props.onFocusComposer?.();
+      const question = buildCompanionQuestionPrefill(selection);
+      if (question) {
+        props.onCompanionPrefill?.(question);
       }
     },
   });

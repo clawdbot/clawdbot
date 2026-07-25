@@ -127,6 +127,16 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let details: AnyCodable?
     public let isError: Bool?
 
+    /// Gateway media and historical file attachments must stay visible in both chat and exports.
+    var isInlineAttachment: Bool {
+        switch self.type?.lowercased() {
+        case "file", "attachment", "image", "audio":
+            true
+        default:
+            false
+        }
+    }
+
     public init(
         type: String?,
         text: String?,

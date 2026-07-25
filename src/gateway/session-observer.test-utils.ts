@@ -2,7 +2,10 @@ import { vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import {
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
 import type { SessionObserverDeps } from "./session-observer-model.js";
 import { createSessionObserver } from "./session-observer.js";
 
@@ -77,6 +80,7 @@ export async function flushObserver(): Promise<void> {
 
 export function createHarness(options?: {
   subscribe?: boolean;
+  broadSubscribe?: boolean;
   visible?: boolean;
   completeModel?: ReturnType<typeof vi.fn>;
   prepareModel?: ReturnType<typeof vi.fn>;
@@ -87,8 +91,12 @@ export function createHarness(options?: {
   resolveUtilityModelRef?: ReturnType<typeof vi.fn>;
 }) {
   const subscribers = createSessionMessageSubscriberRegistry();
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry();
   if (options?.subscribe !== false) {
     subscribers.subscribe("conn-1", "agent:main:session-1")?.commit();
+  }
+  if (options?.broadSubscribe) {
+    sessionEventSubscribers.subscribe("conn-1");
   }
   const prepareModel = options?.prepareModel ?? vi.fn(async () => preparedModel());
   const completeModel =
@@ -107,6 +115,7 @@ export function createHarness(options?: {
   const observer = createSessionObserver({
     getConfig: () => options?.config ?? cfg,
     subscribers,
+    sessionEventSubscribers,
     broadcastToConnIds,
     resolveUtilityModelRef: (options?.resolveUtilityModelRef ??
       (() =>
@@ -118,12 +127,13 @@ export function createHarness(options?: {
     readSession: readSession as never,
     persistDigest: persistDigest as never,
   });
-  if (options?.subscribe !== false && options?.visible !== false) {
+  if ((options?.subscribe !== false || options?.broadSubscribe) && options?.visible !== false) {
     declareObserverVisibility(observer);
   }
   return {
     observer,
     subscribers,
+    sessionEventSubscribers,
     prepareModel,
     completeModel,
     broadcastToConnIds,

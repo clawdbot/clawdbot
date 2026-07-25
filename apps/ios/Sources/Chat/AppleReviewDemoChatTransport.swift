@@ -150,6 +150,10 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         ]
     }
 
+    func isSwarmEnabled(sessionKey _: String) async throws -> Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-swarm-chat-fixture")
+    }
+
     func sendMessage(
         sessionKey: String,
         message: String,
@@ -170,7 +174,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         search: String?,
         archived: Bool) async throws -> OpenClawChatSessionsListResponse
     {
-        let response = try await self.store.sessions()
+        let response = try await store.sessions()
         var sessions = response.sessions
         if archived {
             sessions = []
@@ -184,6 +188,63 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             count: sessions.count,
             defaults: response.defaults,
             sessions: sessions)
+    }
+
+    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+        guard ProcessInfo.processInfo.arguments.contains("--openclaw-swarm-chat-fixture") else { return [] }
+        let groupID = "swarm:\(parentKey):research"
+        return [
+            self.swarmChild("polling", "National polling", status: "done", groupID: groupID, parentKey: parentKey),
+            self.swarmChild("work", "Work and labor", status: "running", groupID: groupID, parentKey: parentKey),
+            self.swarmChild("health", "Health", status: "running", groupID: groupID, parentKey: parentKey),
+            self.swarmChild(
+                "trust",
+                "Governance and trust",
+                status: nil,
+                groupID: groupID,
+                parentKey: parentKey,
+                queued: true),
+            self.swarmChild("media", "Media signals", status: "failed", groupID: groupID, parentKey: parentKey),
+        ]
+    }
+
+    private func swarmChild(
+        _ key: String,
+        _ label: String,
+        status: String?,
+        groupID: String,
+        parentKey: String,
+        queued: Bool = false) -> OpenClawChatSessionEntry
+    {
+        OpenClawChatSessionEntry(
+            key: "agent:main:subagent:\(key)",
+            kind: "direct",
+            displayName: label,
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: 1,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: nil,
+            modelProvider: self.fixture.modelProvider,
+            model: self.fixture.modelID,
+            contextTokens: 128_000,
+            parentSessionKey: parentKey,
+            spawnedBy: parentKey,
+            status: status,
+            hasActiveRun: status == "running",
+            subagentRunState: queued ? "active" : nil,
+            swarmGroupId: groupID,
+            swarmPhase: "Research",
+            swarmPhaseRank: 0,
+            swarmLog: "Comparing labor, education, health, trust, and media signals.")
     }
 
     func setSessionModel(sessionKey _: String, model _: String?) async throws {}
@@ -366,7 +427,7 @@ private actor LocalFixtureChatStore {
 
     func sessions() throws -> OpenClawChatSessionsListResponse {
         let entry = OpenClawChatSessionEntry(
-            key: self.fixture.sessionKey,
+            key: fixture.sessionKey,
             kind: "chat",
             displayName: self.fixture.displayName,
             surface: "ios",

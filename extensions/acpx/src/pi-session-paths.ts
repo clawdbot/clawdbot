@@ -88,6 +88,22 @@ export function piSessionStore(
   };
 }
 
+/** Store root scanned by pi-acp@0.0.26 when resolving a native session id. */
+export function piAcpSessionStoreRoot(env: NodeJS.ProcessEnv): string | undefined {
+  const configuredAgentDir = env.PI_CODING_AGENT_DIR?.trim();
+  // Deliberately stricter than piSessionStore(): pi-acp's session lookup reads
+  // PI_CODING_AGENT_DIR raw, with no `~` expansion (getPiAgentDir, dist/index.js:1044,
+  // reached via findPiSessionFile -> listPiSessions). Expanding `~` here would advertise
+  // Continue on sessions pi-acp then fails to resolve with "Unknown sessionId".
+  if (configuredAgentDir && !isPiSessionCatalogPathAbsolute(configuredAgentDir)) {
+    return undefined;
+  }
+  const agentDir = configuredAgentDir
+    ? path.resolve(configuredAgentDir)
+    : path.join(piHome(env), ".pi", "agent");
+  return path.join(agentDir, "sessions");
+}
+
 export function piSessionStoreAvailable(env: NodeJS.ProcessEnv): boolean {
   try {
     return statSync(piSessionStore(env).root).isDirectory();

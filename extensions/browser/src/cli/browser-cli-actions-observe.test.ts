@@ -19,6 +19,21 @@ const mocks = vi.hoisted(() => ({
   >(async () => ({ response: { body: "ok" } })),
 }));
 
+const extractMocks = vi.hoisted(() => ({
+  completeBrowserExtract: vi.fn(async () => ({
+    content: [{ type: "text" as const, text: "[analyzed by test/model]\nThe answer." }],
+    details: {
+      url: "https://example.com",
+      chars: 12,
+      truncated: false,
+      model: "test/model",
+    },
+  })),
+  resolveBrowserExtractTimeoutMs: vi.fn(() => 60_000),
+}));
+
+vi.mock("../browser-extract.js", () => extractMocks);
+
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
 const browserCliRuntime = getBrowserCliRuntime();
 vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
@@ -39,7 +54,43 @@ function createActionObserveProgram(): Command {
 describe("browser action observe commands", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
+    extractMocks.completeBrowserExtract.mockClear();
+    extractMocks.resolveBrowserExtractTimeoutMs.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("captures page content privately and prints only the extracted answer", async () => {
+    mocks.callBrowserRequest.mockResolvedValueOnce({
+      ok: true,
+      targetId: "t1",
+      url: "https://example.com",
+      html: "<main>Private page body</main>",
+    });
+    const program = createActionObserveProgram();
+
+    await program.parseAsync(["browser", "extract", "What is the answer?", "--target-id", "t1"], {
+      from: "user",
+    });
+
+    expect(mocks.callBrowserRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ json: false }),
+      {
+        method: "POST",
+        path: "/extract",
+        query: undefined,
+        body: { targetId: "t1", timeoutMs: 60_000 },
+      },
+      { timeoutMs: 60_000 },
+    );
+    expect(extractMocks.completeBrowserExtract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        html: "<main>Private page body</main>",
+        query: "What is the answer?",
+        agentId: "main",
+      }),
+    );
+    expect(getBrowserCliRuntimeCapture().runtimeLogs.join("\n")).toContain("The answer.");
+    expect(getBrowserCliRuntimeCapture().runtimeLogs.join("\n")).not.toContain("Private page body");
   });
 
   it("rejects non-decimal responsebody numeric flags before dispatch", async () => {

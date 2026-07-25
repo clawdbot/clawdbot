@@ -33,6 +33,7 @@ type SupportedOpenAICompatFields = Pick<
   | "supportsReasoningEffort"
   | "supportsUsageInStreaming"
   | "supportsStrictMode"
+  | "supportsJsonSchemaResponseFormat"
   | "maxTokensField"
   | "requiresToolResultName"
   | "requiresAssistantAfterToolResult"
@@ -273,6 +274,13 @@ export type ModelPricingConfig = {
   enabled?: boolean;
 };
 
+export type ModelCatalogRefreshConfig = {
+  /** Fetch model catalog updates from the hosted OpenClaw catalog. Default: true. */
+  enabled?: boolean;
+  /** Override the hosted catalog URL (HTTPS mirrors, or localhost HTTP for testing). */
+  url?: string;
+};
+
 export type ModelsConfig = {
   /** Merge provider config with bundled catalogs or replace bundled catalogs entirely. */
   mode?: "merge" | "replace";
@@ -280,6 +288,8 @@ export type ModelsConfig = {
   providers?: Record<string, ModelProviderConfig>;
   /** Pricing enrichment settings. */
   pricing?: ModelPricingConfig;
+  /** Hosted model catalog refresh settings. */
+  catalogRefresh?: ModelCatalogRefreshConfig;
 };
 
 /** Top-level models config input before provider entries are normalized. */

@@ -36,16 +36,16 @@ describe("security audit exec safe-bin findings", () => {
           },
         },
         agents: {
-          list: [
-            {
-              id: "ops",
+          entries: {
+            ops: {
+              default: true,
               tools: {
                 exec: {
                   safeBins: ["node"],
                 },
               },
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig,
       expected: true,
@@ -64,9 +64,9 @@ describe("security audit exec safe-bin findings", () => {
           },
         },
         agents: {
-          list: [
-            {
-              id: "ops",
+          entries: {
+            ops: {
+              default: true,
               tools: {
                 exec: {
                   safeBins: ["node"],
@@ -78,7 +78,7 @@ describe("security audit exec safe-bin findings", () => {
                 },
               },
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig,
       expected: false,
@@ -99,6 +99,7 @@ describe("security audit exec safe-bin findings", () => {
     {
       name: "jq configured globally",
       cfg: {
+        agents: { entries: { main: { default: true } } },
         tools: {
           exec: {
             safeBins: ["jq"],
@@ -110,6 +111,7 @@ describe("security audit exec safe-bin findings", () => {
     {
       name: "jq not configured",
       cfg: {
+        agents: { entries: { main: { default: true } } },
         tools: {
           exec: {
             safeBins: ["cut"],
@@ -139,16 +141,16 @@ describe("security audit exec safe-bin findings", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
+            default: true,
             tools: {
               exec: {
                 safeBinTrustedDirs: ["./relative-bin-dir"],
               },
             },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig);
 
@@ -156,7 +158,7 @@ describe("security audit exec safe-bin findings", () => {
     expect(riskyFinding.severity).toBe("warn");
     expect(riskyFinding.detail).toContain(riskyGlobalTrustedDirs[0]);
     expect(riskyFinding.detail).toContain(riskyGlobalTrustedDirs[1]);
-    expect(riskyFinding.detail).toContain("agents.list.ops.tools.exec");
+    expect(riskyFinding.detail).toContain("agents.entries.ops.tools.exec");
   });
 
   it("ignores non-risky absolute dirs", async () => {
@@ -164,6 +166,7 @@ describe("security audit exec safe-bin findings", () => {
       hasFinding(
         "tools.exec.safe_bin_trusted_dirs_risky",
         await collectSecurityAuditFindings({
+          agents: { entries: { main: { default: true } } },
           tools: {
             exec: {
               safeBinTrustedDirs: ["/usr/libexec"],

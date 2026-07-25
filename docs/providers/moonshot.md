@@ -7,9 +7,9 @@ read_when:
 title: "Moonshot AI"
 ---
 
-Moonshot provides the Kimi API with OpenAI-compatible endpoints. Select
-`moonshot/kimi-k3` for Kimi K3, keep the onboarding default
-`moonshot/kimi-k2.6`, or use `kimi/kimi-for-coding` for Kimi Coding.
+Moonshot provides the Kimi API with OpenAI-compatible endpoints. Fresh Moonshot
+onboarding selects `moonshot/kimi-k3`; use `kimi/kimi-for-coding` for the
+separate Kimi Coding provider.
 
 <Warning>
 Moonshot and Kimi Coding are **separate providers**, each shipped as a separate external plugin. Keys are not interchangeable, endpoints differ, and model refs differ (`moonshot/...` vs `kimi/...`).
@@ -19,30 +19,27 @@ Moonshot and Kimi Coding are **separate providers**, each shipped as a separate 
 
 [//]: # "moonshot-kimi-k2-ids:start"
 
-| Model ref                           | Name                     | Reasoning  | Input       | Context   | Max output |
-| ----------------------------------- | ------------------------ | ---------- | ----------- | --------- | ---------- |
-| `moonshot/kimi-k2.6`                | Kimi K2.6                | No         | text, image | 262,144   | 262,144    |
-| `moonshot/kimi-k3`                  | Kimi K3                  | Always max | text, image | 1,048,576 | 1,048,576  |
-| `moonshot/kimi-k2.7-code`           | Kimi K2.7 Code           | Always on  | text, image | 262,144   | 262,144    |
-| `moonshot/kimi-k2.7-code-highspeed` | Kimi K2.7 Code HighSpeed | Always on  | text, image | 262,144   | 262,144    |
-| `moonshot/kimi-k2.5`                | Kimi K2.5                | No         | text, image | 262,144   | 262,144    |
+| Model ref                           | Name                     | Reasoning        | Input              | Context   | Max output |
+| ----------------------------------- | ------------------------ | ---------------- | ------------------ | --------- | ---------- |
+| `moonshot/kimi-k3`                  | Kimi K3                  | low / high / max | text, image, video | 1,048,576 | 1,048,576  |
+| `moonshot/kimi-k2.7-code`           | Kimi K2.7 Code           | Always on        | text, image, video | 262,144   | 262,144    |
+| `moonshot/kimi-k2.7-code-highspeed` | Kimi K2.7 Code HighSpeed | Always on        | text, image, video | 262,144   | 262,144    |
 
 [//]: # "moonshot-kimi-k2-ids:end"
 
 Catalog cost estimates use Moonshot's published pay-as-you-go rates. Check the
-live vendor pages for [Kimi K3](https://platform.kimi.ai/docs/pricing/chat-k3),
-[Kimi K2.7 Code](https://platform.kimi.ai/docs/pricing/chat-k27-code),
-[Kimi K2.6](https://platform.kimi.ai/docs/pricing/chat-k26), and
-[Kimi K2.5](https://platform.kimi.ai/docs/pricing/chat-k25) before making cost
-decisions.
+live vendor pages for [Kimi K3](https://platform.kimi.ai/docs/pricing/chat-k3)
+and [Kimi K2.7 Code](https://platform.kimi.ai/docs/pricing/chat-k27-code)
+before making cost decisions.
 
-Kimi K3 always reasons at `reasoning_effort: "max"`. OpenClaw exposes only
-`/think max`, omits the K2-only `thinking` field, and removes sampling
+Kimi K3 always reasons and accepts `reasoning_effort` values `low`, `high`,
+and `max` (the default). OpenClaw exposes those exact levels and maps `/think
+xhigh` to `max`; it omits the K2-only `thinking` field and removes sampling
 overrides (`temperature`, `top_p`, `n`, `presence_penalty`, and
 `frequency_penalty`) that K3 fixes to provider defaults. Kimi K2.7 Code also
 always uses native thinking but requires both `thinking` and
 `reasoning_effort` to be omitted; the HighSpeed variant uses the same contract.
-Kimi K2.6 remains the onboarding default.
+Kimi K3 is the onboarding default.
 See Moonshot's [Kimi K3 quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-quickstart).
 
 ## Getting started
@@ -78,9 +75,8 @@ onboarding.
         openclaw onboard --auth-choice moonshot-api-key-cn
         ```
       </Step>
-      <Step title="Set Kimi K3 as the default model">
-        Onboarding keeps Kimi K2.6 as the initial default. Switch explicitly
-        when you want Kimi K3:
+      <Step title="Confirm the Kimi K3 default">
+        Fresh onboarding selects Kimi K3. Existing installations can switch explicitly:
 
         ```bash
         openclaw models set moonshot/kimi-k3
@@ -119,14 +115,12 @@ onboarding.
       env: { MOONSHOT_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "moonshot/kimi-k2.6" },
+          model: { primary: "moonshot/kimi-k3" },
           models: {
             // moonshot-kimi-k2-aliases:start
-            "moonshot/kimi-k2.6": { alias: "Kimi K2.6" },
             "moonshot/kimi-k3": { alias: "Kimi K3" },
             "moonshot/kimi-k2.7-code": { alias: "Kimi K2.7 Code" },
             "moonshot/kimi-k2.7-code-highspeed": { alias: "Kimi K2.7 Code HighSpeed" },
-            "moonshot/kimi-k2.5": { alias: "Kimi K2.5" },
             // moonshot-kimi-k2-aliases:end
           },
         },
@@ -141,28 +135,19 @@ onboarding.
             models: [
               // moonshot-kimi-k2-models:start
               {
-                id: "kimi-k2.6",
-                name: "Kimi K2.6",
-                reasoning: false,
-                input: ["text", "image"],
-                cost: { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 262144,
-              },
-              {
                 id: "kimi-k3",
                 name: "Kimi K3",
                 reasoning: true,
                 thinkingLevelMap: {
                   off: null,
                   minimal: null,
-                  low: null,
+                  low: "low",
                   medium: null,
-                  high: null,
+                  high: "high",
                   xhigh: "max",
                   max: "max",
                 },
-                input: ["text", "image"],
+                input: ["text", "image", "video"],
                 cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
                 contextWindow: 1048576,
                 maxTokens: 1048576,
@@ -171,7 +156,7 @@ onboarding.
                 id: "kimi-k2.7-code",
                 name: "Kimi K2.7 Code",
                 reasoning: true,
-                input: ["text", "image"],
+                input: ["text", "image", "video"],
                 cost: { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
@@ -180,17 +165,8 @@ onboarding.
                 id: "kimi-k2.7-code-highspeed",
                 name: "Kimi K2.7 Code HighSpeed",
                 reasoning: true,
-                input: ["text", "image"],
+                input: ["text", "image", "video"],
                 cost: { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 262144,
-              },
-              {
-                id: "kimi-k2.5",
-                name: "Kimi K2.5",
-                reasoning: false,
-                input: ["text", "image"],
-                cost: { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 262144,
               },
@@ -421,7 +397,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     provider id pointed at the same native Moonshot host inherits the same
     streaming-usage behavior.
 
-    With the catalog K2.6 pricing, streamed usage that includes input, output,
+    With the catalog K3 pricing, streamed usage that includes input, output,
     and cache-read tokens is also converted into local estimated USD cost for
     `/status`, `/usage full`, `/usage cost`, and transcript-backed session
     accounting.

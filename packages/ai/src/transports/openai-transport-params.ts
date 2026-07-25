@@ -7,6 +7,7 @@ import {
   resolveOpenAIProjectedToolsStrictToolFlag,
   type OpenAIToolProjection,
 } from "../internal/openai.js";
+import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
@@ -216,7 +217,10 @@ export function buildOpenAIClientHeaders(
     ) &&
     usesNativeOpenAICodexResponsesBackend(model)
   ) {
-    resolvedHeaders.session_id = sessionId;
+    // The backend derives its prompt cache key from this header and enforces
+    // OpenAI's 64-char limit server-side; long internal session ids
+    // (companion/btw effects sessions) 400 without this clamp.
+    resolvedHeaders.session_id = clampOpenAIPromptCacheKey(sessionId) ?? sessionId;
   }
   return resolvedHeaders;
 }
@@ -267,6 +271,7 @@ function detectCompat(model: OpenAIModeModel) {
     openRouterRouting: {},
     vercelGatewayRouting: {},
     supportsStrictMode: defaults.supportsStrictMode,
+    supportsJsonSchemaResponseFormat: defaults.supportsJsonSchemaResponseFormat,
     requiresReasoningContentOnAssistantMessages:
       defaults.requiresReasoningContentOnAssistantMessages,
     requiresNonEmptyUserOrAssistantMessage: defaults.requiresNonEmptyUserOrAssistantMessage,
@@ -299,6 +304,8 @@ export function getCompat(model: OpenAIModeModel) {
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
       detected.vercelGatewayRouting,
     supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
+    supportsJsonSchemaResponseFormat:
+      compat.supportsJsonSchemaResponseFormat ?? detected.supportsJsonSchemaResponseFormat,
     supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
     supportsLongCacheRetention: compat.supportsLongCacheRetention !== false,
     requiresStringContent: compat.requiresStringContent ?? false,

@@ -66,6 +66,11 @@ The `models` root also owns global model-catalog behavior.
   models: {
     // Optional. Default: true. Requires a Gateway restart when changed.
     pricing: { enabled: false },
+    // Optional. Hosted catalog updates default on.
+    catalogRefresh: {
+      enabled: true,
+      // url: "https://catalog.example.com/openclaw/catalog.json",
+    },
   },
 }
 ```
@@ -80,6 +85,14 @@ The `models` root also owns global model-catalog behavior.
   starts after sidecars and channels reach the Gateway ready path. When `false`,
   the Gateway skips OpenRouter and LiteLLM pricing-catalog fetches; configured
   `models.providers.*.models[].cost` values still work for local cost estimates.
+- `models.catalogRefresh.enabled`: controls the hosted model catalog refresh
+  (default: `true`). Set it to `false` to prevent all remote catalog requests;
+  only catalog data shipped in the installed release is then used.
+- `models.catalogRefresh.url`: optional HTTPS mirror override (plain HTTP is
+  accepted only for explicit localhost testing). The Gateway
+  checks in the background at startup and every six hours. A downloaded catalog
+  applies on the next Gateway restart; a release whose bundled catalog is newer
+  always wins.
 
 ## MCP
 
@@ -733,7 +746,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 ```
 
 - `enabled`: enables TLS termination at the gateway listener (HTTPS/WSS) (default: `false`).
-- `autoGenerate`: auto-generates a local self-signed cert/key pair when explicit files are not configured; for local/dev use only.
+- `autoGenerate`: auto-generates a local self-signed cert/key pair when explicit files are not configured; for local/dev use only. Generated files are published without overwriting existing paths and their parent directories are synchronized when the filesystem supports it; unsupported directory flushing emits a structured degraded-durability warning.
 - `certPath`: filesystem path to the TLS certificate file.
 - `keyPath`: filesystem path to the TLS private key file; keep permission-restricted.
 - `caPath`: optional CA bundle path for client verification or custom trust chains.

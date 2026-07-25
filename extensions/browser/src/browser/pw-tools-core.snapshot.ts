@@ -24,6 +24,7 @@ import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
   finalizeRoleSnapshot,
+  type RoleSnapshotIdentityMode,
   type RoleSnapshotOptions,
   type RoleRefMap,
 } from "./pw-role-snapshot.js";
@@ -65,6 +66,35 @@ function resolveViewportDimension(value: unknown, label: "width" | "height"): nu
     throw new Error(`viewport ${label} exceeds maximum of ${ACT_MAX_VIEWPORT_DIMENSION}`);
   }
   return dimension;
+}
+
+/** Capture serialized HTML from the resolved Playwright page. */
+export async function pageContentViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const page = await getPageForTargetId(opts);
+  opts.signal?.throwIfAborted();
+  if (!opts.signal) {
+    return await page.content();
+  }
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      const reason = opts.signal?.reason;
+      reject(reason instanceof Error ? reason : new Error("browser page capture aborted"));
+    };
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([page.content(), aborted]);
+  } finally {
+    if (onAbort) {
+      opts.signal.removeEventListener("abort", onAbort);
+    }
+  }
 }
 
 async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
@@ -260,7 +290,13 @@ export async function snapshotAiViaPlaywright(opts: {
   maxChars?: number;
   urls?: boolean;
   ssrfPolicy?: SsrFPolicy;
-}): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
+  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
+}): Promise<{
+  snapshot: string;
+  truncated?: boolean;
+  refs: RoleRefMap;
+  newElements?: number;
+}> {
   const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
@@ -282,6 +318,7 @@ export async function snapshotAiViaPlaywright(opts: {
         snapshot,
         refs: built.refs,
         maxChars: opts.maxChars,
+        delta: opts.delta,
       });
       assertSnapshotFrameCurrent(isFrameCurrent);
       storeRoleRefsForTarget({
@@ -335,11 +372,13 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   built: { snapshot: string; refs: RoleRefMap };
   urls?: boolean;
   maxChars?: number;
+  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
   snapshot: string;
   truncated?: boolean;
   refs: RoleRefMap;
   stats: { lines: number; chars: number; refs: number; interactive: number };
+  newElements?: number;
 }> {
   const snapshot = params.urls
     ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
@@ -351,6 +390,7 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
     snapshot,
     refs: params.built.refs,
     maxChars: params.maxChars,
+    delta: params.delta,
   });
   storeRoleRefsForTarget({
     page: params.page,
@@ -376,11 +416,13 @@ export async function snapshotRoleViaPlaywright(opts: {
   maxChars?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
   snapshot: string;
   truncated?: boolean;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   stats: { lines: number; chars: number; refs: number; interactive: number };
+  newElements?: number;
 }> {
   const page = await prepareSnapshotPageViaPlaywright({
     cdpUrl: opts.cdpUrl,
@@ -411,6 +453,7 @@ export async function snapshotRoleViaPlaywright(opts: {
           mode: "aria",
           urls: opts.urls,
           maxChars: opts.maxChars,
+          delta: opts.delta,
         });
       },
     });
@@ -456,6 +499,7 @@ export async function snapshotRoleViaPlaywright(opts: {
         mode: "role",
         urls: opts.urls,
         maxChars: opts.maxChars,
+        delta: opts.delta,
       });
     },
   });

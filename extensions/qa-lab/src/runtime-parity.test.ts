@@ -463,7 +463,7 @@ describe("runtime parity", () => {
     expect(cell.toolCalls[0]?.argsHash).toBe(stableHash({ query: "release marker" }));
   });
 
-  it("captures tool evidence across multiple root sessions", async () => {
+  it("captures fixture-owned evidence across multiple root sessions", async () => {
     const now = Date.now();
     const tempRoot = await seedRuntimeParityTranscript({
       sessionId: "session-status-happy",
@@ -502,19 +502,49 @@ describe("runtime parity", () => {
       ],
       updatedAt: now,
     });
+    await seedRuntimeParityTranscript({
+      tempRoot,
+      sessionId: "unrelated-newer-root",
+      sessionKey: "agent:qa:unrelated-newer-root",
+      messages: [{ role: "user", content: "Unrelated setup." }],
+      updatedAt: now + 1_000,
+    });
 
     const cell = await captureRuntimeParityCell({
       runtime: "codex",
       gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
+      scenarioResult: {
+        status: "pass",
+        steps: [
+          {
+            status: "pass",
+            details: [
+              "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:session_status:happy",
+              "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:session_status:failure",
+            ].join("\n"),
+          },
+        ],
+      },
       wallClockMs: 10,
     });
 
     expect(cell.transcriptBytes).toContain("target=session_status");
     expect(cell.transcriptBytes).toContain("failure target=session_status");
+    expect(cell.transcriptBytes).not.toContain("Unrelated setup.");
     expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "session_status" })]);
-  });
 
+    const missingCell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot },
+      scenarioResult: {
+        status: "fail",
+        details: "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:missing:happy",
+      },
+      wallClockMs: 10,
+    });
+    expect(missingCell.transcriptBytes).toBe("");
+    expect(missingCell.toolCalls).toEqual([]);
+  });
   it("keeps an explicitly identified orphan result separate", async () => {
     const tempRoot = await seedRuntimeParityTranscript({
       sessionId: "orphan-trajectory-result",

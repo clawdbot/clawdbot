@@ -3618,8 +3618,9 @@ describe("runCliAgent reliability", () => {
         expect.objectContaining({
           role: "user",
           content: "recorder display prompt",
-          MediaPath: "/tmp/image.png",
-          MediaType: "image/png",
+          __openclaw: {
+            media: [expect.objectContaining({ path: "/tmp/image.png", contentType: "image/png" })],
+          },
           timestamp: 123,
           idempotencyKey: "cli-recorder:user",
         }),

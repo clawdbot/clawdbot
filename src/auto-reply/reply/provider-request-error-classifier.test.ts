@@ -14,6 +14,8 @@ const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
   "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
+const OPENAI_SERVICE_UNAVAILABLE_MESSAGE =
+  "unexpected status 503 Service Unavailable: Service Unavailable, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: qa-test-AMS, auth error: 503, auth error code: biscuit_baker_service_me_circuit_open";
 
 describe("provider request error classifier", () => {
   it("classifies provider HTTP 401 authentication failures", () => {
@@ -192,5 +194,31 @@ describe("provider request error classifier", () => {
       userMessage: PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
       technicalMessage: message,
     });
+  });
+
+  it("classifies an explicit provider HTTP 503 after failover normalizes its status", () => {
+    const error = new FailoverError("LLM request timed out.", {
+      reason: "timeout",
+      provider: "openai",
+      model: "gpt-5.6",
+      status: 408,
+      rawError: OPENAI_SERVICE_UNAVAILABLE_MESSAGE,
+    });
+
+    expect(classifyProviderRequestError(error)).toEqual({
+      code: "provider_internal_error",
+      userMessage: PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
+      technicalMessage: "LLM request timed out.",
+      allowTransientHttpRetry: true,
+    });
+  });
+
+  it.each([
+    "request timed out after 503ms",
+    "unexpected status 403 Forbidden",
+    "HTTP 429 Too Many Requests",
+    "HTTP 529 Provider Overloaded",
+  ])("does not classify unrelated status text as an internal error: %s", (message) => {
+    expect(classifyProviderRequestError(new Error(message))).toBeUndefined();
   });
 });

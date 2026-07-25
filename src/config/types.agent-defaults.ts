@@ -154,7 +154,7 @@ export type AgentDefaultsConfig = {
   modelPolicy?: AgentModelPolicyConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
-  /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
+  /** Optional default allowlist of skills for agents that do not set agents.entries.*.skills. */
   skills?: string[];
   /** Silent-reply policy by conversation type. */
   silentReply?: SilentReplyPolicyShape;
@@ -286,6 +286,8 @@ export type AgentDefaultsConfig = {
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
+    /** Agent that owns ambient heartbeat runs when no per-agent heartbeat is configured. */
+    agentId?: string;
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
@@ -325,6 +327,10 @@ export type AgentDefaultsConfig = {
      * avoiding the full session transcript.
      */
     isolatedSession?: boolean;
+  };
+  /** Owner for ambient OpenClaw system-agent/Custodian inference. */
+  systemAgent?: {
+    agentId?: string;
   };
   /** Max concurrent agent runs across all conversations. Default: 4. */
   maxConcurrent?: number;

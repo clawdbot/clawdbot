@@ -188,7 +188,9 @@ describe("cron view list pane", () => {
       HTMLElement,
     ) as HTMLElement & { checked: boolean };
     expect(active.checked).toBe(true);
-    expect(active.closest("wa-radio-group")?.getAttribute("label")).toBe("Automation status");
+    expect(active.closest("wa-radio-group")?.querySelector('[slot="label"]')?.textContent).toBe(
+      "Automation status",
+    );
 
     selectSegmented(getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLElement));
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
@@ -842,7 +844,7 @@ describe("cron view editor", () => {
     expect(systemEvent.querySelector("#cron-payload-model")).toBeNull();
   });
 
-  it("renders script payloads as read-only without exposing script authoring", () => {
+  it("renders script payloads as highlighted read-only code without exposing script authoring", () => {
     const script = "const result = await agent('check status')";
     const job = createJob("job-script", {
       name: "Status script",
@@ -860,15 +862,51 @@ describe("cron view editor", () => {
       },
     });
 
-    const payload = getElement(container, "#cron-payload-text", HTMLTextAreaElement);
-    expect(payload.readOnly).toBe(true);
-    expect(payload.value).toBe(script);
+    const payload = getElement(container, "#cron-payload-text", HTMLPreElement);
+    expect(payload.textContent).toBe(script);
+    expect(payload.querySelector(".hljs-keyword")?.textContent).toBe("const");
+    expect(payload.querySelector(".hljs-string")?.textContent).toBe("'check status'");
+    expect(container.querySelector("textarea#cron-payload-text")).toBeNull();
     expect(container.querySelector("#cron-payload-kind")?.getAttribute("value")).toBeNull();
     expect((container.querySelector("#cron-payload-kind") as HTMLInputElement).value).toBe(
       "Script",
     );
     expect(container.textContent).toContain("contents stay read-only");
     expect(container.querySelector('option[value="script"]')).toBeNull();
+  });
+
+  it("highlights locked command payloads as shell and keeps heartbeat payloads plain", () => {
+    const job = createJob("job-command", {
+      name: "Backup",
+      payload: { kind: "script", script: "" },
+    });
+    const command = renderView({
+      jobs: [job],
+      editingJobId: job.id,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        name: job.name,
+        payloadKind: "command",
+        payloadLocked: true,
+        payloadText: "echo $HOME",
+      },
+    });
+    const payload = getElement(command, "#cron-payload-text", HTMLPreElement);
+    expect(payload.textContent).toBe("echo $HOME");
+    expect(payload.querySelector(".hljs-built_in")?.textContent).toBe("echo");
+
+    const heartbeat = renderView({
+      jobs: [job],
+      editingJobId: job.id,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        name: job.name,
+        payloadKind: "heartbeat",
+        payloadLocked: true,
+        payloadText: "",
+      },
+    });
+    expect(heartbeat.querySelector("#cron-payload-text")).toBeInstanceOf(HTMLTextAreaElement);
   });
 
   it("disables submit and lists blocking fields when validation fails", () => {

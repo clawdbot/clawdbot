@@ -15,6 +15,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
+  renderSettingsSegmented,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
@@ -1302,33 +1303,21 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
               includeUnknown: checked,
             }),
         })}
-        <div
-          class="settings-segmented sessions-view-segment"
-          role="group"
-          aria-label=${t("sessionsView.sessionState")}
-        >
-          ${(["active", "archived", "all"] as const).map(
-            (statusFilter) => html`
-              <button
-                type="button"
-                class="settings-segmented__btn ${props.statusFilter === statusFilter
-                  ? "settings-segmented__btn--active"
-                  : ""}"
-                aria-pressed=${String(props.statusFilter === statusFilter)}
-                title=${statusFilter === "archived"
-                  ? t("sessionsView.archivedOnlyTooltip")
-                  : nothing}
-                @click=${() => props.onStatusFilterChange(statusFilter)}
-              >
-                ${statusFilter === "active"
-                  ? t("common.active")
-                  : statusFilter === "archived"
-                    ? t("sessionsView.archived")
-                    : t("sessionsView.all")}
-              </button>
-            `,
-          )}
-        </div>
+        ${renderSettingsSegmented<SessionArchivedFilter>({
+          value: props.statusFilter,
+          ariaLabel: t("sessionsView.sessionState"),
+          className: "sessions-view-segment",
+          options: [
+            { value: "active", label: t("common.active") },
+            {
+              value: "archived",
+              label: t("sessionsView.archived"),
+              title: t("sessionsView.archivedOnlyTooltip"),
+            },
+            { value: "all", label: t("sessionsView.all") },
+          ],
+          onChange: (value) => props.onStatusFilterChange(value),
+        })}
       </div>
       <span class="sessions-toolbar__divider" aria-hidden="true"></span>
       <label class="session-groupby">

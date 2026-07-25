@@ -182,6 +182,16 @@ describe("formatDocumentTitle", () => {
 });
 
 describe("titleForRoute", () => {
+  it("keeps every navigation title and subtitle backed by an English translation", () => {
+    // t() returns the raw dotted key (e.g. "tabs.advanced") when a catalog
+    // entry is missing; resolved copy is Title/Sentence case and never matches.
+    const rawI18nKey = /^[a-z][a-zA-Z0-9]*\.[a-zA-Z]/;
+    for (const routeId of ALL_ROUTES) {
+      expect(titleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
+      expect(subtitleForRoute(routeId), routeId).not.toMatch(rawI18nKey);
+    }
+  });
+
   it("returns expected titles for every route", () => {
     expect(
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, titleForRoute(routeId)])),

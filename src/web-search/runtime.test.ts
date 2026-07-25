@@ -458,7 +458,7 @@ describe("web search runtime", () => {
       runWebSearch({
         config: {
           agents: {
-            list: [{ id: "main", agentDir }],
+            list: [{ id: "main", default: true, agentDir }],
           },
         },
         args: { query: "oauth-backed web search" },

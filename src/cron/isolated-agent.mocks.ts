@@ -18,7 +18,9 @@ vi.mock("../agents/prepared-model-catalog.js", async () => {
   return {
     loadPreparedModelCatalog,
     loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
-    loadPublishedPreparedModelCatalogOwnerSnapshot: vi.fn(
+    publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
+      owner.agentId === agentId.trim().toLowerCase(),
+    loadResolvedPublishedModelCatalogOwner: vi.fn(
       async (params: {
         agentId?: string;
         agentDir?: string;

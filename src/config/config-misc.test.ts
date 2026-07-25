@@ -101,7 +101,7 @@ describe("agent timeoutSeconds config", () => {
     ["fractional", 1.5, false],
   ])("agents.defaults.timeoutSeconds %s", (_label, timeoutSeconds, ok) => {
     const result = OpenClawSchema.safeParse({
-      agents: { defaults: { timeoutSeconds } },
+      agents: { defaults: { timeoutSeconds }, entries: { main: { default: true } } },
     });
     expect(result.success).toBe(ok);
   });
@@ -430,6 +430,39 @@ describe("models.pricing", () => {
       },
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("models.catalogRefresh", () => {
+  it("accepts the refresh toggle and an http(s) override", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { enabled: false, url: "https://catalog.example.test/v1.json" } },
+      }).success,
+    ).toBe(true);
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { url: "http://localhost:8080/catalog.json" } },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects invalid refresh values", () => {
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { enabled: "false" } } }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "file:///tmp/catalog.json" } } })
+        .success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "not a url" } } }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        models: { catalogRefresh: { url: "http://catalog.internal.example/catalog.json" } },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -1028,6 +1061,7 @@ describe("model compat config schema", () => {
                   compat: {
                     supportsUsageInStreaming: true,
                     supportsStrictMode: false,
+                    supportsJsonSchemaResponseFormat: true,
                     requiresStringContent: true,
                     thinkingFormat,
                     requiresToolResultName: true,
@@ -1258,11 +1292,17 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.issues)).toContain("agents");
+      expect(issuePaths(snap.issues)).toContain("agents.entries.openclaw.sandbox");
       expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.legacyIssues)).toContain("agents.list");
-      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
-      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
+      expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
+        perSession: true,
+      });
+      expect(snap.sourceConfigBeforeMigrations?.agents?.list?.[0]?.sandbox).toEqual({
+        perSession: false,
+      });
+      expect(snap.sourceConfig.agents?.entries?.openclaw?.sandbox).toEqual({
+        perSession: false,
+      });
     });
   });
 

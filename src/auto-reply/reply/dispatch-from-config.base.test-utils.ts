@@ -1338,191 +1338,114 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
   });
 
-  it("does not kill a sibling recovery turn when a second visible turn races the same terminal snapshot", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:telegram:group:-1003774691295";
-    const sessionId = "failed-session-race";
-    // Leftover stuck run from the failed lifecycle; both racing turns read the
-    // same terminal store snapshot below.
-    const staleOperation = createReplyOperation({
+  it.each([
+    {
+      name: "does not kill a sibling recovery turn when a second visible turn races the same terminal snapshot",
+      sessionKey: "agent:main:telegram:group:-1003774691295",
+      sessionId: "failed-session-race",
+      firstMessageSid: "visible-race-first",
+      secondMessageSid: "visible-race-second",
+      startsWithStaleOperation: true,
+    },
+    {
+      name: "marks a clean no-stale terminal recovery so a racing visible turn cannot force-clear it",
+      sessionKey: "agent:main:telegram:group:-1003774691297",
+      sessionId: "failed-session-no-stale-race",
+      firstMessageSid: "visible-no-stale-first",
+      secondMessageSid: "visible-no-stale-second",
+      startsWithStaleOperation: false,
+    },
+  ])(
+    "$name",
+    async ({
       sessionKey,
       sessionId,
-      resetTriggered: false,
-    });
-    staleOperation.setPhase("running");
-    sessionStoreMocks.currentEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      status: "failed",
-    };
+      firstMessageSid,
+      secondMessageSid,
+      startsWithStaleOperation,
+    }) => {
+      setNoAbort();
+      const staleOperation = startsWithStaleOperation
+        ? createReplyOperation({ sessionKey, sessionId, resetTriggered: false })
+        : undefined;
+      staleOperation?.setPhase("running");
+      sessionStoreMocks.currentEntry = {
+        sessionId,
+        updatedAt: Date.now(),
+        status: "failed",
+      };
 
-    let releaseFirstTurn: () => void = () => {};
-    const firstResolverGate = new Promise<void>((release) => {
-      releaseFirstTurn = release;
-    });
-    let signalFirstResolverEntered: () => void = () => {};
-    const firstTurnEntered = new Promise<void>((resolve) => {
-      signalFirstResolverEntered = resolve;
-    });
-    const firstReplyResolver = vi.fn(async () => {
-      signalFirstResolverEntered();
-      await firstResolverGate;
-      return { text: "first recovery reply" } satisfies ReplyPayload;
-    });
-    const secondReplyResolver = vi.fn(
-      async () => ({ text: "second reply" }) satisfies ReplyPayload,
-    );
-    const firstDispatcher = createDispatcher();
-    const secondDispatcher = createDispatcher();
-
-    const buildRaceCtx = (messageSid: string) =>
-      buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        ChatType: "group",
-        SessionKey: sessionKey,
-        MessageSid: messageSid,
-        To: "telegram:-1003774691295",
-        BodyForAgent: "@openclaw recover",
+      let releaseFirstTurn: () => void = () => {};
+      const firstResolverGate = new Promise<void>((release) => {
+        releaseFirstTurn = release;
       });
-
-    const firstTurn = dispatchReplyFromConfig({
-      ctx: buildRaceCtx("visible-race-first"),
-      cfg: automaticGroupReplyConfig,
-      dispatcher: firstDispatcher,
-      replyResolver: firstReplyResolver,
-    });
-
-    // First turn cleared the leftover run and now owns the in-flight recovery
-    // operation; capture it before the second turn races in.
-    await firstTurnEntered;
-    expect(staleOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
-    const recoveryOperation = replyRunRegistry.get(sessionKey);
-    expect(recoveryOperation).toBeDefined();
-    expect(recoveryOperation).not.toBe(staleOperation);
-
-    const secondTurn = dispatchReplyFromConfig({
-      ctx: buildRaceCtx("visible-race-second"),
-      cfg: automaticGroupReplyConfig,
-      dispatcher: secondDispatcher,
-      replyResolver: secondReplyResolver,
-    });
-
-    // Give the second turn time to run its admission/recovery path. With the
-    // bug it would force-fail the first turn's fresh recovery operation here.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
-    expect(recoveryOperation?.result).toBeNull();
-    expect(secondReplyResolver).not.toHaveBeenCalled();
-
-    releaseFirstTurn();
-    const firstResult = await firstTurn;
-    const secondResult = await secondTurn;
-
-    // The first recovery completed normally; the second turn was never allowed
-    // to kill it and got its own admission once the first finished.
-    expect(recoveryOperation?.result).toMatchObject({ kind: "completed" });
-    expect(firstReplyResolver).toHaveBeenCalledTimes(1);
-    expect(secondReplyResolver).toHaveBeenCalledTimes(1);
-    expect(firstResult).toMatchObject({ queuedFinal: true });
-    expect(secondResult).toMatchObject({ queuedFinal: true });
-    expect(firstDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(secondDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
-  });
-
-  it("marks a clean no-stale terminal recovery so a racing visible turn cannot force-clear it", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:telegram:group:-1003774691297";
-    const sessionId = "failed-session-no-stale-race";
-    // No leftover op is pre-registered: the first visible turn reaches the clean
-    // admission path (nothing to force-clear). Both racing turns read the same
-    // terminal store snapshot below.
-    sessionStoreMocks.currentEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      status: "failed",
-    };
-
-    let releaseFirstTurn: () => void = () => {};
-    const firstResolverGate = new Promise<void>((release) => {
-      releaseFirstTurn = release;
-    });
-    let signalFirstResolverEntered: () => void = () => {};
-    const firstTurnEntered = new Promise<void>((resolve) => {
-      signalFirstResolverEntered = resolve;
-    });
-    const firstReplyResolver = vi.fn(async () => {
-      signalFirstResolverEntered();
-      await firstResolverGate;
-      return { text: "first recovery reply" } satisfies ReplyPayload;
-    });
-    const secondReplyResolver = vi.fn(
-      async () => ({ text: "second reply" }) satisfies ReplyPayload,
-    );
-    const firstDispatcher = createDispatcher();
-    const secondDispatcher = createDispatcher();
-
-    const buildRaceCtx = (messageSid: string) =>
-      buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        ChatType: "group",
-        SessionKey: sessionKey,
-        MessageSid: messageSid,
-        To: "telegram:-1003774691295",
-        BodyForAgent: "@openclaw recover",
+      let signalFirstResolverEntered: () => void = () => {};
+      const firstTurnEntered = new Promise<void>((resolve) => {
+        signalFirstResolverEntered = resolve;
       });
+      const firstReplyResolver = vi.fn(async () => {
+        signalFirstResolverEntered();
+        await firstResolverGate;
+        return { text: "first recovery reply" } satisfies ReplyPayload;
+      });
+      const secondReplyResolver = vi.fn(
+        async () => ({ text: "second reply" }) satisfies ReplyPayload,
+      );
+      const firstDispatcher = createDispatcher();
+      const secondDispatcher = createDispatcher();
+      const buildRaceCtx = (messageSid: string) =>
+        buildTestCtx({
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          ChatType: "group",
+          SessionKey: sessionKey,
+          MessageSid: messageSid,
+          To: "telegram:-1003774691295",
+          BodyForAgent: "@openclaw recover",
+        });
 
-    const firstTurn = dispatchReplyFromConfig({
-      ctx: buildRaceCtx("visible-no-stale-first"),
-      cfg: automaticGroupReplyConfig,
-      dispatcher: firstDispatcher,
-      replyResolver: firstReplyResolver,
-    });
+      const firstTurn = dispatchReplyFromConfig({
+        ctx: buildRaceCtx(firstMessageSid),
+        cfg: automaticGroupReplyConfig,
+        dispatcher: firstDispatcher,
+        replyResolver: firstReplyResolver,
+      });
+      await firstTurnEntered;
+      const recoveryOperation = replyRunRegistry.get(sessionKey);
+      expect(recoveryOperation).toBeDefined();
+      if (staleOperation) {
+        expect(staleOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
+        expect(recoveryOperation).not.toBe(staleOperation);
+      } else {
+        // Clean admission must carry the recovery marker or the racing turn can force-clear it.
+        expect(recoveryOperation?.terminalRecovery).toBe(true);
+      }
 
-    // First turn admitted cleanly and now owns the in-flight recovery operation;
-    // capture it before the second turn races in.
-    await firstTurnEntered;
-    const recoveryOperation = replyRunRegistry.get(sessionKey);
-    expect(recoveryOperation).toBeDefined();
-    // The marker must be set on the clean no-stale admission path too; without it
-    // the racing second visible turn would force-clear this op (#86827).
-    expect(recoveryOperation?.terminalRecovery).toBe(true);
+      const secondTurn = dispatchReplyFromConfig({
+        ctx: buildRaceCtx(secondMessageSid),
+        cfg: automaticGroupReplyConfig,
+        dispatcher: secondDispatcher,
+        replyResolver: secondReplyResolver,
+      });
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      expect(recoveryOperation?.result).toBeNull();
+      expect(secondReplyResolver).not.toHaveBeenCalled();
 
-    const secondTurn = dispatchReplyFromConfig({
-      ctx: buildRaceCtx("visible-no-stale-second"),
-      cfg: automaticGroupReplyConfig,
-      dispatcher: secondDispatcher,
-      replyResolver: secondReplyResolver,
-    });
-
-    // Give the second turn time to run its admission/recovery path. With the
-    // bug it would force-fail the first turn's fresh recovery operation here.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 100);
-    });
-    expect(recoveryOperation?.result).toBeNull();
-    expect(secondReplyResolver).not.toHaveBeenCalled();
-
-    releaseFirstTurn();
-    const firstResult = await firstTurn;
-    const secondResult = await secondTurn;
-
-    // The first recovery completed normally; the second turn was never allowed
-    // to kill it and got its own admission once the first finished.
-    expect(recoveryOperation?.result).toMatchObject({ kind: "completed" });
-    expect(firstReplyResolver).toHaveBeenCalledTimes(1);
-    expect(secondReplyResolver).toHaveBeenCalledTimes(1);
-    expect(firstResult).toMatchObject({ queuedFinal: true });
-    expect(secondResult).toMatchObject({ queuedFinal: true });
-    expect(firstDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(secondDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
-  });
+      releaseFirstTurn();
+      const [firstResult, secondResult] = await Promise.all([firstTurn, secondTurn]);
+      expect(recoveryOperation?.result).toMatchObject({ kind: "completed" });
+      expect(firstReplyResolver).toHaveBeenCalledTimes(1);
+      expect(secondReplyResolver).toHaveBeenCalledTimes(1);
+      expect(firstResult).toMatchObject({ queuedFinal: true });
+      expect(secondResult).toMatchObject({ queuedFinal: true });
+      expect(firstDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+      expect(secondDispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+      expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
+    },
+  );
 
   it("does not force-clear an active recovery operation for a heartbeat turn on a terminal session", async () => {
     setNoAbort();

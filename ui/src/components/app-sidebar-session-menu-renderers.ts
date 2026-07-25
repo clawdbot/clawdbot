@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
+import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import {
   SIDEBAR_SESSION_SORT_OPTIONS,
@@ -83,6 +84,76 @@ export function renderSidebarSessionGroupMenu(params: {
             <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
             <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
           </wa-dropdown-item>
+        </wa-dropdown>
+      </openclaw-menu-surface>
+    `,
+  );
+}
+
+export function renderSidebarCatalogViewMenu(params: {
+  position: { x: number; y: number } | null;
+  trigger: HTMLElement | null;
+  grouping: CatalogProjectGrouping;
+  onGroupingChange: (grouping: CatalogProjectGrouping) => void;
+  onClose: (restoreFocus: boolean) => void;
+}) {
+  const position = params.position;
+  if (!position) {
+    return nothing;
+  }
+  const groupingOptions = [
+    { grouping: "project", label: t("chat.sidebar.catalogGroupByProject") },
+    { grouping: "none", label: t("sessionsView.groupByNone") },
+  ] as const satisfies ReadonlyArray<{ grouping: CatalogProjectGrouping; label: string }>;
+  return keyed(
+    position,
+    html`
+      <openclaw-menu-surface>
+        <wa-dropdown
+          class="sidebar-session-sort-menu sidebar-catalog-view-menu"
+          .open=${true}
+          placement="bottom-start"
+          .distance=${0}
+          aria-label=${t("chat.sidebar.catalogViewOptions")}
+          @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+            event.preventDefault();
+            const value = event.detail.item.value;
+            if (value?.startsWith("grouping:")) {
+              params.onGroupingChange(value.slice("grouping:".length) as CatalogProjectGrouping);
+            }
+          }}
+          @keydown=${(event: KeyboardEvent) =>
+            trackDropdownKeyboardDismissal(event, () => params.trigger?.focus())}
+          @wa-after-hide=${(event: Event) =>
+            params.onClose(consumeDropdownKeyboardDismissal(event))}
+        >
+          <button
+            slot="trigger"
+            type="button"
+            tabindex="-1"
+            aria-hidden="true"
+            aria-label=${t("chat.sidebar.catalogViewOptions")}
+            style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+          ></button>
+          <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
+          ${groupingOptions.map(
+            (option) => html`
+              <wa-dropdown-item
+                class="sidebar-session-sort-menu__item"
+                value=${`grouping:${option.grouping}`}
+                role="menuitemradio"
+                aria-checked=${String(params.grouping === option.grouping)}
+                ${ref((element) =>
+                  syncDropdownItemRadio(element, params.grouping === option.grouping),
+                )}
+              >
+                <span slot="details" class="session-menu__check" aria-hidden="true"
+                  >${params.grouping === option.grouping ? icons.check : nothing}</span
+                >
+                <span class="session-menu__text">${option.label}</span>
+              </wa-dropdown-item>
+            `,
+          )}
         </wa-dropdown>
       </openclaw-menu-surface>
     `,

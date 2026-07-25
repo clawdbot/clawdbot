@@ -40,6 +40,7 @@ import {
   recordInboundSessionMeta,
   replaceSessionEntry,
   resetSessionEntryLifecycle,
+  SessionInitializationAgentScopeMismatchError,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionTranscriptReadTarget,
@@ -143,6 +144,34 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("derives a scoped key owner before fixed-store read and write target resolution", async () => {
+    const fixedStorePath = path.join(tempDir, "fixed-sessions.json");
+    const scope = {
+      defaultAgentId: "main",
+      sessionKey: "agent:ops:main",
+      storePath: fixedStorePath,
+    };
+
+    await replaceSessionEntry(scope, {
+      sessionId: "ops-session",
+      updatedAt: 10,
+    });
+
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "ops-session" });
+    await expect(loadTranscriptEvents({ ...scope, sessionId: "ops-session" })).resolves.toEqual([]);
+    const opsPath = resolveSqliteTargetFromSessionStorePath(fixedStorePath, {
+      agentId: "ops",
+      defaultAgentId: "main",
+    }).path;
+    const mainPath = resolveSqliteTargetFromSessionStorePath(fixedStorePath, {
+      agentId: "main",
+      defaultAgentId: "main",
+    }).path;
+    expect(opsPath).not.toBe(mainPath);
+    expect(fs.existsSync(opsPath)).toBe(true);
+    expect(fs.existsSync(mainPath)).toBe(false);
   });
 
   it("excludes transcript-only nodes from logical entry counts and keys", async () => {
@@ -913,7 +942,10 @@ describe("session accessor seam", () => {
     const resolved = resolveSessionEntryCandidateTarget({
       agentId: "support",
       candidateKeys: ["agent:support:main"],
-      cfg: { session: { store: storeTemplate } },
+      cfg: {
+        session: { store: storeTemplate },
+        agents: { entries: { support: { default: true } } },
+      },
     });
 
     expect(resolved).toMatchObject({
@@ -941,7 +973,10 @@ describe("session accessor seam", () => {
     );
 
     const resolved = resolveSessionEntryAccessTarget({
-      cfg: { session: { store: storeTemplate } },
+      cfg: {
+        session: { store: storeTemplate },
+        agents: { entries: { support: { default: true } } },
+      },
       sessionKey: "agent:support:main",
     });
 
@@ -1240,7 +1275,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1279,7 +1318,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1311,7 +1354,11 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     await upsertSessionEntry(
       { sessionKey, storePath },
       {
@@ -1350,7 +1397,11 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
       throw new Error("expected existing session entry");
@@ -1408,7 +1459,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
 
     // Background activity (heartbeat runner, delivery retry, etc.) can touch
     // metadata fields without rotating the session. The initialization guard
@@ -1470,7 +1525,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
 
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
@@ -1536,7 +1595,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     if (!snapshot.currentEntry) {
       throw new Error("expected reply session initialization snapshot");
     }
@@ -1603,7 +1666,11 @@ describe("session accessor seam", () => {
       },
     );
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
 
     const current = loadSessionEntry({ sessionKey, storePath });
     if (!current) {
@@ -1669,7 +1736,11 @@ describe("session accessor seam", () => {
       ],
     });
 
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,
       agentId: "main",
@@ -1691,6 +1762,39 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("next-session");
   });
 
+  it("rejects a reply initialization key scoped to another explicit agent", () => {
+    try {
+      loadReplySessionInitializationSnapshot({
+        agentId: "main",
+        sessionKey: "agent:ops:main",
+        storePath,
+      });
+      throw new Error("expected agent scope mismatch");
+    } catch (error) {
+      expect(error).toBeInstanceOf(SessionInitializationAgentScopeMismatchError);
+      expect(error).toMatchObject({
+        code: "SESSION_INITIALIZATION_AGENT_SCOPE_MISMATCH",
+        agentId: "main",
+        sessionKeyAgentId: "ops",
+      });
+    }
+  });
+
+  it("allows an unscoped legacy alias with an explicit agent owner", async () => {
+    await upsertSessionEntry(
+      { agentId: "ops", sessionKey: "main", storePath },
+      { sessionId: "legacy-ops-session", updatedAt: 10 },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "ops",
+      sessionKey: "main",
+      storePath,
+    });
+
+    expect(snapshot.currentEntry?.sessionId).toBe("legacy-ops-session");
+  });
+
   it("rejects reply session initialization when the entry is deleted during prepare", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry(
@@ -1700,7 +1804,11 @@ describe("session accessor seam", () => {
         updatedAt: 10,
       },
     );
-    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const snapshot = loadReplySessionInitializationSnapshot({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    });
 
     const committed = await commitReplySessionInitialization({
       activeSessionKey: sessionKey,

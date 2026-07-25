@@ -21,6 +21,9 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - `suggestedTargetId` is the label when one exists, otherwise the stable `tabId` handle like `t1`.
    - Avoid relying on raw DevTools `targetId` except for immediate diagnostics; it can change under Chromium target replacement.
 3. Read before you click:
+   - For “read the page and answer X,” use `action="extract"` with `query` so only the answer returns.
+   - Use `action="snapshot"` instead when you need action refs or page structure.
+   - If extract returns `NOT_FOUND` or asks for snapshot fallback, inspect the page with a snapshot.
    - Use `action="snapshot"` on the intended `targetId`.
    - Use the same `targetId` for follow-up actions so refs stay on the same tab.
    - For durable Playwright refs, request `refs="aria"` when supported. If you receive `axN` refs from `snapshotFormat="aria"`, use them only after that same snapshot call; stale or unbound `axN` refs fail fast and need a fresh snapshot.
@@ -42,6 +45,44 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 - Ref lifecycle: refs come from a `snapshot` run before the batch (snapshot is not a nested action). A nested action that changes page state — such as a `click` that triggers navigation, or an `evaluate` that mutates the DOM — can invalidate earlier refs for the rest of the batch; put state-changing actions first, or split into a follow-up batch after re-snapshotting. Navigation and re-snapshotting happen outside the batch, since `open`, `navigate`, and `snapshot` are not `/act` kinds.
 - Target id: nested actions share the request's tab; an explicit nested `targetId` that resolves to a different tab is rejected with `ACT_TARGET_ID_MISMATCH`.
 - Response: `{ "results": [{ "ok": true } | { "ok": false, "error": "..." }, ...] }` in order; with default `stopOnError` the array ends at the first failure. Any failed entry exits nonzero; use `--json` to preserve the full response in scripts.
+
+## Code Mode Loop
+
+When `tools.codeMode` is enabled, call the Browser tool from exec cells:
+
+```javascript
+const browserTool = "openclaw:browser:browser";
+let previousSnapshot = "";
+const callBrowser = async (input) => await tools.call(browserTool, input);
+```
+
+Keep the same labeled tab through the loop, and alternate reads with actions:
+
+```javascript
+const snapshotCall = await callBrowser({
+  action: "snapshot",
+  targetId: "task",
+  refs: "aria",
+  interactive: true,
+});
+const details = snapshotCall?.result?.details ?? {};
+const snapshot = (snapshotCall?.result?.content ?? []).map((block) => block?.text ?? "").join("\n");
+const relevant = snapshot
+  .split("\n")
+  .filter((line) => /submit|dialog|error|\[new\]/i.test(line))
+  .slice(0, 12);
+const changed = snapshot !== previousSnapshot;
+previousSnapshot = snapshot;
+return { targetId: details.targetId, url: details.url, relevant, changed };
+```
+
+- Request interactive-only snapshots and filter them in code before returning.
+- Return only the handful of relevant elements; never return the full tree.
+- Keep `previousSnapshot` between cells when a local diff helps explain a change.
+- Interleave each act with a URL or tabs check before the next dependent act.
+- If a batch returns `aborted`, take a fresh snapshot before continuing.
+- If `[new]` markers appear, inspect those elements first, then update the saved snapshot.
+- Use separate act calls when navigation is expected between steps.
 
 ## Tab Hygiene
 

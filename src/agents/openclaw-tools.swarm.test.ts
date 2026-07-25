@@ -4,11 +4,16 @@ import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 function toolNames(options: NonNullable<Parameters<typeof createOpenClawTools>[0]>) {
+  const config = options.config ?? {};
   return createOpenClawTools({
     disableMessageTool: true,
     disablePluginTools: true,
     wrapBeforeToolCallHook: false,
     ...options,
+    config: {
+      ...config,
+      agents: config.agents ?? { entries: { main: { default: true } } },
+    },
   }).map((tool) => tool.name);
 }
 
@@ -29,7 +34,12 @@ describe("openclaw-tools Swarm gating", () => {
         ...base,
         config: {
           tools: { swarm: false },
-          agents: { list: [{ id: "worker", tools: { swarm: true } }] },
+          agents: {
+            list: [
+              { id: "main", default: true },
+              { id: "worker", tools: { swarm: true } },
+            ],
+          },
         },
       }),
     ).toContain("agents_wait");
@@ -38,7 +48,12 @@ describe("openclaw-tools Swarm gating", () => {
         ...base,
         config: {
           tools: { swarm: true },
-          agents: { list: [{ id: "worker", tools: { swarm: false } }] },
+          agents: {
+            list: [
+              { id: "main", default: true },
+              { id: "worker", tools: { swarm: false } },
+            ],
+          },
         },
       }),
     ).not.toContain("agents_wait");
@@ -64,7 +79,10 @@ describe("openclaw-tools Swarm gating", () => {
     const names = createOpenClawCodingTools({
       sessionKey: "agent:worker:subagent:child",
       runId: "collector-run",
-      config: { tools: { allow: ["read"], swarm: true } },
+      config: {
+        agents: { entries: { main: { default: true } } },
+        tools: { allow: ["read"], swarm: true },
+      },
       swarmCollector: true,
       swarmOutputSchema: { type: "object", properties: { answer: { type: "string" } } },
     }).map((tool) => tool.name);
@@ -78,7 +96,10 @@ describe("openclaw-tools Swarm gating", () => {
     const names = createOpenClawCodingTools({
       sessionKey: "agent:worker:subagent:child",
       runId: "collector-run",
-      config: { tools: { swarm: true } },
+      config: {
+        agents: { entries: { main: { default: true } } },
+        tools: { swarm: true },
+      },
       swarmCollector: true,
     }).map((tool) => tool.name);
 
@@ -89,7 +110,10 @@ describe("openclaw-tools Swarm gating", () => {
     const names = createOpenClawCodingTools({
       sessionKey: "agent:worker:main",
       runId: "collector-run",
-      config: { tools: { swarm: true } },
+      config: {
+        agents: { entries: { main: { default: true } } },
+        tools: { swarm: true },
+      },
       swarmCollector: true,
     }).map((tool) => tool.name);
 

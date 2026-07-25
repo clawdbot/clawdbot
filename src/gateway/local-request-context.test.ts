@@ -41,14 +41,27 @@ describe("local gateway request context", () => {
   });
 
   it("defaults local model catalog snapshot reads to read-only", async () => {
-    const cfg = {} as OpenClawConfig;
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "worker",
+            default: true,
+            agentDir: "/tmp/local-model-catalog-agent",
+            workspace: "/tmp/local-model-catalog-workspace",
+          },
+        ],
+      },
+    } as OpenClawConfig;
     const loadOwner = vi
-      .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
+      .spyOn(preparedModelCatalog, "loadResolvedPublishedModelCatalogOwner")
       .mockResolvedValue({
+        agentId: "worker",
         agentDir: "/tmp/local-model-catalog-agent",
+        workspaceDir: "/tmp/local-model-catalog-workspace",
         config: cfg,
         modelCatalog: { entries: [], routeVariants: [] },
-      } as never);
+      });
 
     await withLocalGatewayRequestScope(
       {
@@ -61,7 +74,10 @@ describe("local gateway request context", () => {
           throw new Error("expected local gateway request context");
         }
         const snapshot = await context.loadGatewayModelCatalogSnapshot({ agentId: "worker" });
-        expect(snapshot).not.toHaveProperty("agentId");
+        expect(snapshot).toMatchObject({
+          agentId: "worker",
+          workspaceDir: "/tmp/local-model-catalog-workspace",
+        });
       },
     );
 

@@ -480,6 +480,59 @@ describe("matrix client storage paths", () => {
     );
   });
 
+  it("does not scan token-history roots when the canonical current-token state is claimed", () => {
+    const logger = createTestLogger();
+    const stateDir = setupStateDir(undefined, logger);
+    const oldCanonicalPaths = resolveMatrixAccountStorageRoot({
+      stateDir,
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accessToken: "secret-token-old",
+    });
+    const oldStoragePaths = seedExistingStorageRoot({
+      accessToken: "secret-token-old",
+      deviceId: "DEVICE123",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: oldCanonicalPaths.tokenHash,
+        deviceId: "DEVICE123",
+      },
+    });
+    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
+
+    const canonicalPaths = resolveMatrixAccountStorageRoot({
+      stateDir,
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accessToken: "secret-token-new",
+    });
+    seedCanonicalStorageRoot({
+      stateDir,
+      accessToken: "secret-token-new",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: canonicalPaths.tokenHash,
+        deviceId: "DEVICE123",
+        currentTokenStateClaimed: true,
+      },
+    });
+
+    const readdirSync = vi.spyOn(fs, "readdirSync");
+    const resolvedPaths = resolveDefaultStoragePaths({
+      accessToken: "secret-token-new",
+      deviceId: "DEVICE123",
+    });
+
+    expect(resolvedPaths.rootDir).toBe(canonicalPaths.rootDir);
+    expect(resolvedPaths.tokenHash).toBe(canonicalPaths.tokenHash);
+    expect(readdirSync).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("reads legacy storage metadata until doctor migrates it to SQLite", () => {
     setupStateDir();
     const oldStoragePaths = resolveDefaultStoragePaths({
@@ -545,7 +598,7 @@ describe("matrix client storage paths", () => {
     },
   );
 
-  it("prefers claimed current-token state over an empty new-token metadata root", () => {
+  it("scans for and prefers claimed current-token state over an unclaimed canonical root", () => {
     const stateDir = setupStateDir();
     const oldStoragePaths = seedCanonicalStorageRoot({
       stateDir,
@@ -571,6 +624,7 @@ describe("matrix client storage paths", () => {
       },
     });
 
+    const readdirSync = vi.spyOn(fs, "readdirSync");
     const rotatedStoragePaths = resolveDefaultStoragePaths({
       accessToken: "secret-token-new",
       deviceId: "DEVICE123",
@@ -578,6 +632,7 @@ describe("matrix client storage paths", () => {
 
     expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
     expect(rotatedStoragePaths.tokenHash).toBe(oldStoragePaths.tokenHash);
+    expect(readdirSync).toHaveBeenCalledOnce();
   });
 
   it("does not reuse a populated older token-hash root while deviceId is unknown", () => {

@@ -1,7 +1,6 @@
 import { consume } from "@lit/context";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
@@ -69,7 +68,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) widgetFrameUrl?: BoardWidgetFrameUrl;
   @property({ attribute: false }) callbacks?: BoardWidgetCellCallbacks;
-  @property({ attribute: false }) sessions: readonly GatewaySessionRow[] = [];
   @property({ attribute: false }) observer?: BoardObserverContext;
   @property({ type: Boolean }) dragging = false;
   @property({ type: Number }) focusTabIndex = -1;
@@ -256,7 +254,6 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       }
       return renderer({
         observer: this.observer,
-        sessions: this.sessions,
         sessionKey: this.sessionKey,
       });
     }
