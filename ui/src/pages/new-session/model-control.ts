@@ -140,6 +140,10 @@ export class NewSessionModelControl {
     if (!preference) {
       return;
     }
+    // A same-agent metadata refresh revalidates the stored pair. Clear the
+    // previous restoration first so retired catalog entries cannot survive.
+    this.selected = "";
+    this.thinkingLevel = "";
     const preferredTarget = preference.model
       ? resolveDraftModelTarget(preference.model, undefined, this.catalog)
       : null;
