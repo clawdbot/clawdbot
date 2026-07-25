@@ -10837,6 +10837,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Connection troubleshooting
   - H2: Related
 
+## web/urls.md
+
+- Route: /web/urls
+- Headings:
+  - H2: Session and dashboard URLs
+  - H3: Stability contract
+  - H2: Route table
+  - H2: Special documents and startup modes
+  - H2: Remote Gateway handoff
+  - H2: Related
+
 ## web/webchat.md
 
 - Route: /web/webchat

@@ -231,7 +231,7 @@ On multi-user gateways, only admin-scope connections can create or view incognit
 
 Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts with a **Search settings** field for quickly finding settings sections.
 
-On desktop web, a fixed control cluster at the top-left of the content area — the web counterpart of the macOS titlebar strip — holds the sidebar collapse toggle (⌘B) and the command-palette search button (⌘K). Clicking the agent identity row at the top of the sidebar opens the agent menu; **Home** opens the main session. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The identity row shows the agent's avatar (identity image or emoji), name, connection dot, and a live subtitle. Its agent-scoped menu contains the inline agent switcher (multi-agent setups), **New agent**, "What can this agent do?", and **Agent settings**. Rosters above ten agents get a filter field and list pinned agents first; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own `?agent=` selection and does not follow the shared page scope. The footer is one full-width identity card that remains available offline and shows **Reconnecting…** beneath the last-known account name. It opens the app/account menu, whose profile identity header is followed by **Settings**, **Usage**, mobile pairing, **Get the apps**, **Help** (help, Discord, Docs, and the changelog), an offline retry action when needed, the version/build chip, and the color-mode toggle. The build chip opens the About page. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma on Apple platforms or Ctrl-Shift-Comma elsewhere opens **Settings** without overriding the browser's plain Command-Comma shortcut. Collapsing the sidebar (⌘B or the cluster's toggle) hides it entirely for a full-width workspace; while collapsed, the top-left cluster keeps the expand toggle and search and gains a new-thread button — mirroring what the macOS app hosts natively in its titlebar. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title. In the macOS app the separate header row folds the titlebar clearance into a single compact strip beside the window controls. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and new-session buttons while it is collapsed.
+On desktop web, a fixed control cluster at the top-left of the content area — the web counterpart of the macOS titlebar strip — holds the sidebar collapse toggle (⌘B) and the command-palette search button (⌘K). Clicking the agent identity row at the top of the sidebar opens the agent menu; **Home** opens the main session. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The identity row shows the agent's avatar (identity image or emoji), name, connection dot, and a live subtitle. Its agent-scoped menu contains the inline agent switcher (multi-agent setups), **New agent**, "What can this agent do?", and **Agent settings**. Rosters above ten agents get a filter field and list pinned agents first; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own [URL selection](/web/urls#route-table) and does not follow the shared page scope. The footer is one full-width identity card that remains available offline and shows **Reconnecting…** beneath the last-known account name. It opens the app/account menu, whose profile identity header is followed by **Settings**, **Usage**, mobile pairing, **Get the apps**, **Help** (help, Discord, Docs, and the changelog), an offline retry action when needed, the version/build chip, and the color-mode toggle. The build chip opens the About page. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma on Apple platforms or Ctrl-Shift-Comma elsewhere opens **Settings** without overriding the browser's plain Command-Comma shortcut. Collapsing the sidebar (⌘B or the cluster's toggle) hides it entirely for a full-width workspace; while collapsed, the top-left cluster keeps the expand toggle and search and gains a new-thread button — mirroring what the macOS app hosts natively in its titlebar. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title. In the macOS app the separate header row folds the titlebar clearance into a single compact strip beside the window controls. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and new-session buttons while it is collapsed.
 
 Pending approvals also contribute an attention chip above the sidebar footer;
 select it to open the owning Approvals page.
@@ -258,7 +258,7 @@ select it to open the owning Approvals page.
     - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Memory (a tab on the Agents page, scoped to the selected agent): dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
     - Import Memory (`/memory-import`, reached from the Agents page's Memory tab): preview and copy local Claude Code auto-memory, Codex consolidated memory, or Hermes memory files into the selected agent workspace (`migrations.memory.plan`, `migrations.memory.apply`).
-    - Onboarding memory offer: when the Control UI opens in onboarding mode (`?onboarding=1`, used by the Linux companion app after its first-run install), a one-page dialog offers to import detected memories with the same plan/apply flow; skipping leaves the settings page as the later entry point.
+    - Onboarding memory offer: when the Control UI opens in [onboarding mode](/web/urls#special-documents-and-startup-modes), a one-page dialog offers to import detected memories with the same plan/apply flow; skipping leaves the settings page as the later entry point.
 
   </Accordion>
   <Accordion title="Cron, tasks, plugins, skills, devices, exec approvals">
@@ -395,7 +395,7 @@ Connection-owned sessions survive disconnects: a page reload, laptop sleep, or n
 
 Agent-owned sessions are not bound to a browser connection. `terminal.attach` adds each browser as a viewer without taking ownership, and closing a viewer tab detaches only that browser. The PTY remains until the owning agent closes it, its process exits, policy disables it, or the Gateway shuts down. `terminal.list` marks each entry as connection- or agent-owned, and `terminal.text` lets an admin connection read recent plain-text output without attaching.
 
-The terminal is also available as a full-screen, terminal-only document at `/?view=terminal`. The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal.
+The terminal is also available as a [full-screen terminal document](/web/urls#special-documents-and-startup-modes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal.
 
 ## Browser panel
 
@@ -665,9 +665,9 @@ This keeps media rendering compatible with browser-native media elements without
 
 ## Approval links
 
-Operator approval notifications can deep-link to a standalone approval document served under the reserved `${controlUiBasePath}/approve/{approvalId}` namespace (for example `/approve/<approvalId>`, or `/openclaw/approve/<approvalId>` with a configured base path). The URL is stable for the lifetime of the approval and safe to forward between your own devices: it identifies the approval, never authorizes it.
+Operator approval notifications can deep-link to a [standalone approval document](/web/urls#special-documents-and-startup-modes). The URL is stable for the lifetime of the approval and safe to forward between your own devices: it identifies the approval, never authorizes it.
 
-- The one-segment `/approve/<approvalId>` namespace is reserved by the Gateway ahead of plugin HTTP routes for **all** HTTP methods, so a plugin route can never shadow or intercept an approval document.
+- The approval namespace is reserved by the Gateway ahead of plugin HTTP routes for **all** HTTP methods, so a plugin route can never shadow or intercept an approval document.
 - Opening an approval document requires the same gateway auth as the rest of the Control UI (token/password, Tailscale Serve identity, or trusted-proxy identity); credentials are never part of the approval URL.
 - When Control UI serving is disabled, requests to the namespace return `404` instead of falling through to plugin handlers.
 - Signing in on an approval document is ephemeral for that page: it does not overwrite the gateway selection or settings saved by the full Control UI in the same browser.
@@ -712,29 +712,14 @@ The Control UI is static files; the WebSocket target is configurable and can dif
     pnpm ui:dev
     ```
   </Step>
-  <Step title="Open with gatewayUrl">
-    ```text
-    http://localhost:5173/?gatewayUrl=ws%3A%2F%2F<gateway-host>%3A18789
-    ```
-
-    Optional one-time auth (if needed):
-
-    ```text
-    http://localhost:5173/?gatewayUrl=wss%3A%2F%2F<gateway-host>%3A18789#token=<gateway-token>
-    ```
-
+  <Step title="Connect the remote Gateway">
+    Follow the [remote Gateway URL handoff](/web/urls#remote-gateway-handoff)
+    reference for the encoded Gateway URL and optional one-time credentials.
   </Step>
 </Steps>
 
 <AccordionGroup>
-  <Accordion title="Notes">
-    - `gatewayUrl` is stored in localStorage after load and removed from the URL.
-    - If you pass a full `ws://` or `wss://` endpoint via `gatewayUrl`, URL-encode the value so the browser parses the query string correctly.
-    - `token` should be passed via the URL fragment (`#token=...`) whenever possible. Fragments are not sent to the server, which avoids request-log and Referer leakage. Legacy `?token=` query params are still imported once for compatibility, but only as a fallback, and are stripped immediately after bootstrap.
-    - `password` is kept in memory only.
-    - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials. Provide `token` (or `password`) explicitly; missing explicit credentials is an error.
-    - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
-    - `gatewayUrl` is only accepted in a top-level window (not embedded), to prevent clickjacking.
+  <Accordion title="Origin security notes">
     - Public non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins` explicitly (full origins). Private same-origin LAN/Tailnet loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
     - Gateway startup may seed local origins such as `http://localhost:<port>` and `http://127.0.0.1:<port>` from the effective runtime bind and port, but remote browser origins still need explicit entries.
     - Do not use `gateway.controlUi.allowedOrigins: ["*"]` except for tightly controlled local testing; it means allow any browser origin, not "match whatever host I am using."
