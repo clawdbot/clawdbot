@@ -285,7 +285,11 @@ suite("Codex native session catalog", () => {
       // Counts only render while a section is collapsed.
       expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
 
+      // Header actions are hover-revealed; hover the head so the button
+      // regains pointer events before the click, mirroring the Threads menus.
+      const catalogHead = section.locator(".sidebar-recent-sessions__head");
       const viewMenuButton = section.locator('[data-session-catalog-view-menu="codex"]');
+      await catalogHead.hover();
       await viewMenuButton.click();
       await page
         .getByRole("menuitemradio", { name: "None" })
@@ -303,6 +307,7 @@ suite("Codex native session catalog", () => {
         });
       }
 
+      await catalogHead.hover();
       await viewMenuButton.click();
       await page
         .getByRole("menuitemradio", { name: "Project" })
