@@ -11,6 +11,11 @@ export function onGatewaySessionReset(listener: GatewaySessionResetListener): ()
 /** Notifies lifecycle-owned in-memory services after the session reset commits. */
 export function notifyGatewaySessionReset(sessionKey: string): void {
   for (const listener of listeners) {
-    listener(sessionKey);
+    try {
+      listener(sessionKey);
+    } catch {
+      // A process-local cleanup listener must not turn a committed reset into
+      // an apparent failure or prevent the remaining lifecycle owners running.
+    }
   }
 }

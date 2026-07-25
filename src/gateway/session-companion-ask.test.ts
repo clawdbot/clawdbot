@@ -10,7 +10,11 @@ import {
   SessionCompanionAskError,
   type SessionCompanionPromptMessage,
 } from "./session-companion-ask.js";
-import { createSessionCompanion, trimSessionCompanionExchanges } from "./session-companion.js";
+import {
+  createSessionCompanion,
+  SESSION_COMPANION_IDLE_TTL_MS,
+  trimSessionCompanionExchanges,
+} from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 
@@ -156,6 +160,29 @@ describe("session companion asks", () => {
     harness.service.dispose();
   });
 
+  it("enforces the global rate window across connections", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    for (let index = 0; index < 12; index += 1) {
+      await harness.service.ask({
+        sessionKey: `agent:main:global-${index}`,
+        question: `Question ${index}?`,
+        connId: `conn-${index}`,
+      });
+    }
+    await expect(
+      harness.service.ask({
+        sessionKey: "agent:main:global-overflow",
+        question: "One too many globally?",
+        connId: "conn-overflow",
+      }),
+    ).rejects.toMatchObject<Partial<SessionCompanionAskError>>({
+      reason: "rate-limited",
+    });
+    expect(harness.run).toHaveBeenCalledTimes(12);
+    harness.service.dispose();
+  });
+
   it("builds the seed once and advances observer note deltas across asks", async () => {
     vi.useFakeTimers();
     let notes = [{ sequence: 1, text: "first note" }];
@@ -212,6 +239,33 @@ describe("session companion asks", () => {
     ).toBeLessThanOrEqual(48 * 1024);
   });
 
+  it("truncates answers without splitting a UTF-16 surrogate pair", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness({ run: async () => "🦞".repeat(601) });
+    const result = await harness.service.ask({
+      sessionKey: "agent:main:main",
+      question: "Long answer?",
+      connId: "conn-1",
+    });
+    expect(result.answer).toBe("🦞".repeat(600));
+    harness.service.dispose();
+  });
+
+  it("sweeps idle threads after two hours", async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const harness = createHarness({ now: () => now });
+    await harness.service.ask({
+      sessionKey: "agent:main:main",
+      question: "Before idle?",
+      connId: "conn-1",
+    });
+    now = SESSION_COMPANION_IDLE_TTL_MS;
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(harness.service.state("agent:main:main")).toEqual({ exchanges: [] });
+    harness.service.dispose();
+  });
+
   it("reset clears state and cancels an active ask", async () => {
     vi.useFakeTimers();
     const pending = deferred<string>();
@@ -249,7 +303,9 @@ describe("session companion asks", () => {
 
 describe("session companion tool scope", () => {
   it("pins session tools to the target session and read to its workspace", async () => {
-    const cfg = buildSessionCompanionRunConfig({});
+    const cfg = buildSessionCompanionRunConfig({
+      tools: { toolSearch: true, codeMode: true },
+    });
     expect(SESSION_COMPANION_TOOLS).toEqual(["read", "sessions_history", "sessions_search"]);
     expect(cfg.tools?.fs?.workspaceOnly).toBe(true);
     expect(cfg.tools?.sessions?.visibility).toBe("self");

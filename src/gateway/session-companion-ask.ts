@@ -95,14 +95,16 @@ export class SessionCompanionAskError extends Error {
 }
 
 export function buildSessionCompanionRunConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const toolSearch = cfg.tools?.toolSearch;
+  const codeMode = cfg.tools?.codeMode;
   return {
     ...cfg,
     tools: {
       ...cfg.tools,
       sessions: { ...cfg.tools?.sessions, visibility: "self" },
       fs: { ...cfg.tools?.fs, workspaceOnly: true },
-      toolSearch: { ...cfg.tools?.toolSearch, enabled: false },
-      codeMode: { ...cfg.tools?.codeMode, enabled: false },
+      toolSearch: { ...(typeof toolSearch === "object" ? toolSearch : {}), enabled: false },
+      codeMode: { ...(typeof codeMode === "object" ? codeMode : {}), enabled: false },
     },
   };
 }
