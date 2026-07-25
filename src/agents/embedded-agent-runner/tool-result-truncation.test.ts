@@ -1462,7 +1462,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       sessionKey,
       agentId: "main",
       sessionId,
-      target: { agentId: "main", sessionId, sessionKey },
+      target: { agentId: "main", sessionId, sessionKey, storePath },
     });
 
     const toolResultTexts = (await loadTranscriptEvents(scope))
