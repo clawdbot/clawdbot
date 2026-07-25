@@ -433,6 +433,28 @@ const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp WebInboundMessage top-level admission fields remain available while callbacks migrate to the admission envelope.",
   },
   {
+    code: "sdk-untrusted-context-identifier-aliases",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-07-22",
+    deprecated: "2026-07-22",
+    warningStarts: "2026-07-22",
+    removeAfter: "2026-09-08",
+    replacement:
+      "`MsgContext.ChannelPromptContext`, `MsgContext.ChannelStructuredContext`, `ChannelStructuredContextEntry`, `SupplementalContextFacts.channelStructuredContext`, and `buildChannelMetadata`",
+    docsPath: "/plugins/compatibility",
+    surfaces: [
+      "openclaw/plugin-sdk reply-runtime MsgContext.UntrustedContext and UntrustedStructuredContext",
+      "openclaw/plugin-sdk reply-runtime UntrustedStructuredContextEntry",
+      "openclaw/plugin-sdk channel-inbound SupplementalContextFacts.untrustedContext",
+      "openclaw/plugin-sdk security-runtime buildUntrustedChannelMetadata",
+    ],
+    diagnostics: ["TypeScript deprecated SDK alias annotations"],
+    tests: ["src/auto-reply/reply/inbound-context.test.ts"],
+    releaseNote:
+      "Untrusted-named prompt-context SDK identifiers remain wired as deprecated aliases of the channel-named fields while plugins migrate.",
+  },
+  {
     code: "bundled-channel-sdk-compat-facades",
     status: "active",
     owner: "sdk",

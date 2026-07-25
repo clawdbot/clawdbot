@@ -12,6 +12,7 @@ import {
 } from "./command-detection.js";
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
+import { markInboundContextLabel } from "./reply/inbound-context-marker.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
@@ -1196,7 +1197,7 @@ describe("control command parsing", () => {
 
   it("detects commands wrapped in inbound metadata blocks", () => {
     const metaWrapped = [
-      "Conversation info (untrusted metadata):",
+      markInboundContextLabel("Conversation info:"),
       "```json",
       '{"message_id":"msg-abc","chat_id":"chat-123"}',
       "```",
@@ -1208,7 +1209,7 @@ describe("control command parsing", () => {
 
   it("detects /new command after metadata prefix", () => {
     const metaWrapped = [
-      "Sender (untrusted metadata):",
+      markInboundContextLabel("Sender:"),
       "```json",
       '{"name":"Alice","id":"user-1"}',
       "```",
@@ -1220,7 +1221,7 @@ describe("control command parsing", () => {
 
   it("detects /status command after timestamp + metadata prefix", () => {
     const metaWrapped = [
-      "[Wed 2026-03-11 23:51 PDT] Conversation info (untrusted metadata):",
+      `[Wed 2026-03-11 23:51 PDT] ${markInboundContextLabel("Conversation info:")}`,
       "```json",
       '{"chat_id":"chat-123"}',
       "```",

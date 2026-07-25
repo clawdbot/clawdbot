@@ -50,6 +50,10 @@ export type SessionTranscriptProjectionState = {
 type SessionTranscriptProjectionSourceRow = {
   event: unknown;
   seq: number;
+  // Row's own created_at, used as the FTS fallback timestamp for events that carry no embedded
+  // timestamp. Mirrors the forward-append path (applyForwardIndex passes params.createdAt) so a
+  // full rebuild reproduces the same timestamps instead of stamping Date.now().
+  createdAt: number;
 };
 
 function getIndexKysely(db: DatabaseSync) {
@@ -341,11 +345,13 @@ function rebuildSessionTranscriptIndexInTransaction(
   let activeEventCount = 0;
   let activeMessageCount = 0;
   for (const entry of selectVisibleTranscriptEventEntries(events)) {
-    const indexed = extractTranscriptIndexEntry(entry.event, now);
+    const source = rows[entry.seq - 1];
+    // Stamp timestamp-less events with their own row's created_at (matching the append path); only
+    // fall back to `now` when the source row is somehow missing.
+    const indexed = extractTranscriptIndexEntry(entry.event, source?.createdAt ?? now);
     if (indexed) {
       insertFtsRow(db, sessionId, indexed);
     }
-    const source = rows[entry.seq - 1];
     if (!source || !shouldProjectActiveEvent(entry.event)) {
       continue;
     }
@@ -401,7 +407,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
     db,
     getIndexKysely(db)
       .selectFrom("transcript_events")
-      .select(["event_json", "seq"])
+      .select(["event_json", "seq", "created_at"])
       .where("session_id", "=", sessionId)
       .orderBy("seq", "asc"),
   ).rows;
@@ -411,6 +417,7 @@ export function reconcileSessionTranscriptIndexInTransaction(
     rows.map((row) => ({
       event: JSON.parse(row.event_json) as unknown,
       seq: row.seq,
+      createdAt: row.created_at,
     })),
   );
   return true;

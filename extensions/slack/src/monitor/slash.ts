@@ -689,7 +689,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           },
         });
 
-      const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
+      const { channelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
         isRoomish,
         channelInfo,
         channelConfig,
@@ -733,7 +733,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         GroupSubject: isRoomish ? roomLabel : undefined,
         GroupSpace: ctx.teamId || undefined,
         GroupSystemPrompt: groupSystemPrompt,
-        UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+        ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,
         SenderName: senderName,
         SenderId: command.user_id,
         Provider: "slack" as const,

@@ -8,13 +8,22 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { sanitizeInboundSystemTags } from "../security/system-tags.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+
+// Queued events render as one `System:` line per newline (session-system-events.ts),
+// so a line-leading `System:` inside caller text would appear as a second system
+// line. Neutralize here: this queue is the single chokepoint every caller passes
+// through, including plugin-supplied text wrapped in an external-content envelope.
+const LINE_LEADING_SYSTEM_PREFIX_RE = /^(\s*)System:(?=\s|$)/gim;
+
+function neutralizeNestedSystemLines(text: string): string {
+  return text.replace(LINE_LEADING_SYSTEM_PREFIX_RE, "$1System (untrusted):");
+}
 
 export type SystemEvent = {
   text: string;
@@ -111,9 +120,7 @@ export function enqueueSystemEventEntry(
   }
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  // These entries are rendered as `System:` lines, so strip nested system-marker
-  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
-  const cleaned = sanitizeInboundSystemTags(text).trim();
+  const cleaned = neutralizeNestedSystemLines(text.trim());
   if (!cleaned) {
     return null;
   }
@@ -168,7 +175,7 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
 function replaceSystemEventEntry(text: string, options: SystemEventOptions): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  const cleaned = sanitizeInboundSystemTags(text).trim();
+  const cleaned = neutralizeNestedSystemLines(text.trim());
   if (!cleaned) {
     return null;
   }

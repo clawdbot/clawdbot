@@ -1,9 +1,6 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
-import {
-  normalizeInboundTextNewlines,
-  sanitizeInboundSystemTags,
-} from "../../auto-reply/reply/inbound-text.js";
+import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import {
   createAckReactionHandle,
   removeAckReactionAfterReply,
@@ -34,8 +31,8 @@ type DeepPartial<T> = {
 
 type BuildContextParams = Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0];
 type BuildContextResult = ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>;
-type UntrustedStructuredContextEntries = NonNullable<
-  Awaited<BuildContextResult>["UntrustedStructuredContext"]
+type ChannelStructuredContextEntries = NonNullable<
+  Awaited<BuildContextResult>["ChannelStructuredContext"]
 >;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -82,19 +79,24 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+  const normalized = normalizeInboundTextNewlines(value);
   return normalized.trim().length > 0 ? normalized : undefined;
 }
 
-function resolveMockUntrustedStructuredContext(
+function resolveMockChannelStructuredContext(
   params: Pick<BuildContextParams, "extra" | "supplemental">,
-): UntrustedStructuredContextEntries | undefined {
-  const entries: UntrustedStructuredContextEntries = [];
-  const extraEntries = params.extra?.UntrustedStructuredContext;
+): ChannelStructuredContextEntries | undefined {
+  const entries: ChannelStructuredContextEntries = [];
+  const extraEntries =
+    params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
   if (Array.isArray(extraEntries)) {
-    entries.push(...(extraEntries as UntrustedStructuredContextEntries));
+    entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(...(params.supplemental?.untrustedContext ?? []));
+  entries.push(
+    ...(params.supplemental?.channelStructuredContext ??
+      params.supplemental?.untrustedContext ??
+      []),
+  );
 
   const groupPrompt = normalizeUntrustedGroupPrompt(
     params.supplemental?.untrustedGroupSystemPrompt,
@@ -408,7 +410,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   ) as unknown as PluginRuntime["channel"]["inbound"]["run"];
   const buildChannelInboundEventContextMock = vi.fn((params: BuildContextParams) => {
-    const untrustedStructuredContext = resolveMockUntrustedStructuredContext(params);
+    const channelStructuredContext = resolveMockChannelStructuredContext(params);
     return {
       Body: params.message.body ?? params.message.rawBody,
       BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -438,7 +440,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       OriginatingTo: params.reply.originatingTo,
       CommandAuthorized: params.access?.commands?.authorized ?? false,
       ...params.extra,
-      UntrustedStructuredContext: untrustedStructuredContext,
+      ChannelStructuredContext: channelStructuredContext,
     } as Awaited<BuildContextResult>;
   }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
   const sessionRuntime = {

@@ -12,10 +12,7 @@ import {
   finalizeInboundContext as finalizeCoreInboundContext,
   type FinalizeInboundContextOptions,
 } from "../../auto-reply/reply/inbound-context.js";
-import {
-  normalizeInboundTextNewlines,
-  sanitizeInboundSystemTags,
-} from "../../auto-reply/reply/inbound-text.js";
+import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import type {
   FinalizedMsgContext,
   MentionSource,
@@ -108,9 +105,7 @@ export type BuildChannelInboundEventContextParams = {
 export type BuildChannelInboundEventContextAsyncParams = BuildChannelInboundEventContextParams &
   ChannelInboundSupplementalResolutionOptions;
 
-type UntrustedStructuredContextEntries = NonNullable<
-  FinalizedMsgContext["UntrustedStructuredContext"]
->;
+type ChannelStructuredContextEntries = NonNullable<FinalizedMsgContext["ChannelStructuredContext"]>;
 
 export type BuiltChannelInboundEventContext = FinalizedMsgContext & {
   Body: string;
@@ -336,7 +331,7 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
     ...(params.media ? { media: [...params.media] } : {}),
     ...mediaPayload,
   };
-  const untrustedStructuredContext = resolveUntrustedStructuredContext({
+  const channelStructuredContext = resolveChannelStructuredContext({
     supplemental: params.supplemental,
     extra: baseContext,
   });
@@ -344,7 +339,7 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   const context = finalize(
     {
       ...baseContext,
-      UntrustedStructuredContext: untrustedStructuredContext,
+      ChannelStructuredContext: channelStructuredContext,
     },
     params.finalizeOptions,
   ) as T & FinalizedMsgContext;
@@ -411,23 +406,28 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+  const normalized = normalizeInboundTextNewlines(value);
   return normalized.trim().length > 0 ? normalized : undefined;
 }
 
-function resolveUntrustedStructuredContext(params: {
+function resolveChannelStructuredContext(params: {
   supplemental?: SupplementalContextFacts;
   extra?: Record<string, unknown>;
-}): UntrustedStructuredContextEntries | undefined {
-  const entries: UntrustedStructuredContextEntries = [];
-  const extraEntries = params.extra?.UntrustedStructuredContext;
+}): ChannelStructuredContextEntries | undefined {
+  const entries: ChannelStructuredContextEntries = [];
+  const extraEntries =
+    params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
   if (Array.isArray(extraEntries)) {
-    entries.push(...(extraEntries as UntrustedStructuredContextEntries));
+    entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(...(params.supplemental?.untrustedContext ?? []));
+  entries.push(
+    ...(params.supplemental?.channelStructuredContext ??
+      params.supplemental?.untrustedContext ??
+      []),
+  );
 
   // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
-  // Keeping it with untrusted context prevents spoofed system markers from gaining prompt authority.
+  // Keeping it with untrusted context preserves its user-role boundary.
   const groupPrompt = normalizeUntrustedGroupPrompt(
     params.supplemental?.untrustedGroupSystemPrompt,
   );
