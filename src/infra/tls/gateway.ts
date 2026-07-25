@@ -69,45 +69,41 @@ async function publishGeneratedTlsOutput(
     await stagedHandle.close();
   }
   let publishedIdentity: Stats | undefined;
+  // Publication failures deliberately preserve any final path already created. Node has no
+  // cross-platform unlink-if-inode-matches primitive, so rollback could delete a replacement.
   try {
-    try {
-      await fs.link(stagedPath, finalPath);
-      const linkedIdentity = await fs.lstat(finalPath);
-      if (!linkedIdentity.isFile() || !sameFileIdentity(stagedIdentity, linkedIdentity)) {
-        throw new Error(`Generated TLS output changed during publication: ${finalPath}`);
-      }
-      publishedIdentity = linkedIdentity;
-    } catch (error) {
-      if (!isHardLinkUnsupportedError(error)) {
-        throw error;
-      }
-      degradationReasons.push("atomic hard-link publication unavailable");
-      // Some supported filesystems cannot publish with hard links. An exclusive handle keeps
-      // no-overwrite semantics without pathname cleanup that could delete concurrent output.
-      const handle = await fs.open(finalPath, "wx", 0o600);
-      try {
-        publishedIdentity = await handle.stat();
-        await handle.writeFile(contents, "utf8");
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
+    await fs.link(stagedPath, finalPath);
+    const linkedIdentity = await fs.lstat(finalPath);
+    if (!linkedIdentity.isFile() || !sameFileIdentity(stagedIdentity, linkedIdentity)) {
+      throw new Error(`Generated TLS output changed during publication: ${finalPath}`);
     }
-    if (!publishedIdentity) {
-      throw new Error(`Generated TLS output was not published: ${finalPath}`);
-    }
-    const directorySync = await syncDirectory(parentReceipt, {
-      label: "gateway TLS publication directory",
-    });
-    if (directorySync.status === "unsupported") {
-      degradationReasons.push("directory durability unavailable");
-    }
-    return { degradationReasons, identity: publishedIdentity };
+    publishedIdentity = linkedIdentity;
   } catch (error) {
-    // Node has no cross-platform unlink-if-inode-matches primitive. Preserve a published
-    // output on failure rather than risk deleting a pathname replacement during rollback.
-    throw error;
+    if (!isHardLinkUnsupportedError(error)) {
+      throw error;
+    }
+    degradationReasons.push("atomic hard-link publication unavailable");
+    // Some supported filesystems cannot publish with hard links. An exclusive handle keeps
+    // no-overwrite semantics without pathname cleanup that could delete concurrent output.
+    const handle = await fs.open(finalPath, "wx", 0o600);
+    try {
+      publishedIdentity = await handle.stat();
+      await handle.writeFile(contents, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
   }
+  if (!publishedIdentity) {
+    throw new Error(`Generated TLS output was not published: ${finalPath}`);
+  }
+  const directorySync = await syncDirectory(parentReceipt, {
+    label: "gateway TLS publication directory",
+  });
+  if (directorySync.status === "unsupported") {
+    degradationReasons.push("directory durability unavailable");
+  }
+  return { degradationReasons, identity: publishedIdentity };
 }
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
@@ -191,18 +187,13 @@ async function generateSelfSignedCert(params: {
       certDirectory,
     );
     certPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
-    let keyPublication: PublishedGeneratedTlsOutput;
-    try {
-      keyPublication = await publishGeneratedTlsOutput(
-        stagedKeyPath,
-        params.keyPath,
-        key,
-        keyDirectory,
-      );
-    } catch (error) {
-      // Preserve the published certificate: conditional pathname removal is not atomic.
-      throw error;
-    }
+    // Preserve the published certificate on key failure: conditional pathname removal is not atomic.
+    const keyPublication = await publishGeneratedTlsOutput(
+      stagedKeyPath,
+      params.keyPath,
+      key,
+      keyDirectory,
+    );
     keyPublication.degradationReasons.forEach((reason) => degradationReasons.add(reason));
     for (const reason of degradationReasons) {
       const degradation = gatewayTlsDegradation(reason);
