@@ -2,7 +2,7 @@
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "./errors.js";
-import { readSecretFile } from "./secret-file.js";
+import { readSecretFile } from "./fs-safe-advanced.js";
 
 /** Direct APNs provider authentication used to mint ES256 bearer tokens. */
 export type ApnsAuthConfig = {

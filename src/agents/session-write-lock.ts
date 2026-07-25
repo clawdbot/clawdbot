@@ -14,7 +14,6 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
-import { acquireFsSafeFileLock } from "../infra/file-lock.js";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
 import {
@@ -508,6 +507,7 @@ type LockInspectionDetails = Pick<
 >;
 
 const SESSION_LOCKS = createFileLockManager("openclaw.session-write-lock");
+const SESSION_LOCK_SWEEPS = createFileLockManager("openclaw.session-write-lock-sweep");
 
 function isFileLockError(error: unknown, code: string): boolean {
   return (error as { code?: unknown } | null)?.code === code;
@@ -1113,45 +1113,29 @@ async function shouldRetryStaleAcquireFailure(params: {
   }));
 }
 
-async function shouldRemoveLockDuringCleanup(
+async function reclaimSessionLockIfUnchanged(
   lockPath: string,
-  details: LockInspectionDetails,
   staleMs: number,
   nowMs: number,
+  ownerProcessArgsReader: SessionLockOwnerProcessArgsReader,
 ): Promise<boolean> {
-  if (!details.stale) {
-    return false;
-  }
-  return await shouldRemoveContendedLockFile(lockPath, details, staleMs, nowMs);
-}
-
-async function reclaimSessionLockIfUnchanged(params: {
-  lockPath: string;
-  staleMs: number;
-  nowMs: number;
-  readOwnerProcessArgs: SessionLockOwnerProcessArgsReader;
-}): Promise<boolean> {
   const shouldReclaim = async (payload: LockFilePayload | null) => {
     const inspected = inspectLockPayloadForSession({
       payload,
-      staleMs: params.staleMs,
-      nowMs: params.nowMs,
+      staleMs,
+      nowMs,
       heldByThisProcess: false,
       reclaimLockWithoutStarttime: false,
-      readOwnerProcessArgs: params.readOwnerProcessArgs,
+      readOwnerProcessArgs: ownerProcessArgsReader,
     });
-    return await shouldRemoveLockDuringCleanup(
-      params.lockPath,
-      inspected,
-      params.staleMs,
-      params.nowMs,
+    return (
+      inspected.stale && (await shouldRemoveContendedLockFile(lockPath, inspected, staleMs, nowMs))
     );
   };
   try {
-    const lock = await acquireFsSafeFileLock(params.lockPath, {
-      managerKey: "openclaw.session-write-lock-sweep",
-      lockPath: params.lockPath,
-      staleMs: params.staleMs,
+    const lock = await SESSION_LOCK_SWEEPS.acquire(lockPath, {
+      lockPath,
+      staleMs,
       timeoutMs: 0,
       retry: { retries: 0 },
       staleRecovery: "remove-if-unchanged",
@@ -1334,7 +1318,8 @@ export async function cleanStaleLockFiles(params: {
       reclaimLockWithoutStarttime: false,
       readOwnerProcessArgs: ownerProcessArgsReader,
     });
-    const removable = await shouldRemoveLockDuringCleanup(lockPath, inspected, staleMs, nowMs);
+    const removable =
+      inspected.stale && (await shouldRemoveContendedLockFile(lockPath, inspected, staleMs, nowMs));
     const lockInfo: SessionLockInspection = {
       lockPath,
       ...inspected,
@@ -1343,12 +1328,12 @@ export async function cleanStaleLockFiles(params: {
     };
 
     if (removeStale && removable) {
-      lockInfo.removed = await reclaimSessionLockIfUnchanged({
+      lockInfo.removed = await reclaimSessionLockIfUnchanged(
         lockPath,
         staleMs,
         nowMs,
-        readOwnerProcessArgs: ownerProcessArgsReader,
-      });
+        ownerProcessArgsReader,
+      );
       if (lockInfo.removed) {
         cleaned.push(lockInfo);
         params.log?.warn?.(

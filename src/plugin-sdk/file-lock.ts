@@ -80,6 +80,12 @@ function createCurrentProcessLockPayload(): Record<string, unknown> {
   return payload;
 }
 
+function asLockPayload(payload: unknown): Record<string, unknown> | null {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>)
+    : null;
+}
+
 function sameStatValue(left: number | bigint, right: number | bigint): boolean {
   return typeof left === typeof right ? left === right : BigInt(left) === BigInt(right);
 }
@@ -155,17 +161,17 @@ export async function acquireFileLock(
       payload: createCurrentProcessLockPayload,
       shouldReclaim: (params) =>
         staleRecovery === "fail-closed"
-          ? isLockOwnerDefinitelyStale({ payload: params.payload })
+          ? isLockOwnerDefinitelyStale({ payload: asLockPayload(params.payload) })
           : shouldRemoveDeadOwnerOrExpiredLock({
-              payload: params.payload,
+              payload: asLockPayload(params.payload),
               staleMs: params.staleMs,
               nowMs: params.nowMs,
             }),
       ...(staleRecovery === "remove-if-unchanged"
         ? {
-            shouldRemoveStaleLock: (snapshot: { payload: Record<string, unknown> | null }) =>
+            shouldRemoveStaleLock: (snapshot: { payload: unknown }) =>
               shouldRemoveDeadOwnerOrExpiredLock({
-                payload: snapshot.payload,
+                payload: asLockPayload(snapshot.payload),
                 staleMs: options.stale,
               }),
           }
@@ -199,8 +205,9 @@ export async function reclaimDefinitelyStaleFileLock(
 
   // Pin approval to the regular-file identity first observed. fs-safe then
   // rechecks that identity and raw payload immediately before path removal.
-  const ownerIsDefinitelyStale = async (payload: Record<string, unknown> | null) =>
-    (await isSameRegularFile(lockPath, observed)) && isLockOwnerDefinitelyStale({ payload });
+  const ownerIsDefinitelyStale = async (payload: unknown) =>
+    (await isSameRegularFile(lockPath, observed)) &&
+    isLockOwnerDefinitelyStale({ payload: asLockPayload(payload) });
   const targetPath = lockPath.endsWith(".lock") ? lockPath.slice(0, -".lock".length) : lockPath;
   try {
     const reclaimed = await acquireFsSafeFileLock(targetPath, {

@@ -1,11 +1,8 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
-  isHardlinkFallbackError,
   publishFileExclusive,
   syncDirectory,
   type DirectorySyncOutcome,
-  type PublishFileExclusiveResult,
 } from "@openclaw/fs-safe/durability";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
@@ -13,25 +10,13 @@ export {
   ensureDurableDirectory,
   isHardlinkFallbackError,
   pinDirectory,
-  publishFileExclusive,
   syncDirectory,
   syncDirectoryBestEffortSync,
   type DirectorySyncOutcome,
+  type DirectoryReceipt,
   type DurableDirectoryReceipt,
   type PinnedDirectory,
-  type PublishFileExclusiveResult,
-  type PublishFileExclusiveStrategy,
 } from "@openclaw/fs-safe/durability";
-
-export type FilePublicationOptions = {
-  strategy: "link-required" | "link-or-copy";
-  moveSource?: boolean;
-  durability: "fail-closed" | "degrade";
-};
-
-export type FilePublicationResult = PublishFileExclusiveResult & {
-  durability: "durable" | "degraded";
-};
 
 type DirectoryDurabilityOutcome = DirectorySyncOutcome | { status: "not-needed" };
 
@@ -58,8 +43,12 @@ export function requireDirectorySync(outcome: DirectoryDurabilityOutcome, label:
 export async function publishFileNoClobber(
   sourcePath: string,
   targetPath: string,
-  options: FilePublicationOptions,
-): Promise<FilePublicationResult> {
+  options: {
+    strategy: "link-required" | "link-or-copy";
+    moveSource?: boolean;
+    durability: "fail-closed" | "degrade";
+  },
+) {
   const sourceIdentity = await fs.lstat(sourcePath);
   const published = await publishFileExclusive({
     sourcePath,
@@ -67,13 +56,9 @@ export async function publishFileNoClobber(
     expectedSourceIdentity: sourceIdentity,
     strategy: options.strategy,
   });
-  const directorySync = await syncDirectory(path.dirname(targetPath), {
-    label: "file publication directory",
-  });
-  const result = { ...published, directorySync };
-  const degraded = directorySync.status === "unsupported";
+  const degraded = published.directorySync.status === "unsupported";
   if (options.durability === "fail-closed") {
-    requireDirectorySync(directorySync, "File publication directory");
+    requireDirectorySync(published.directorySync, "File publication directory");
   }
 
   if (options.moveSource) {
@@ -82,13 +67,9 @@ export async function publishFileNoClobber(
       throw new Error(`File publication source changed before removal: ${sourcePath}`);
     }
     await fs.unlink(sourcePath);
-    const currentTarget = await fs.lstat(targetPath);
-    if (!currentTarget.isFile() || !sameFileIdentity(currentTarget, result.identity)) {
-      throw new Error(`Published file changed after source removal: ${targetPath}`);
-    }
   }
 
-  return { ...result, durability: degraded ? "degraded" : "durable" };
+  return { ...published, durability: degraded ? "degraded" : "durable" };
 }
 
 /** Compatibility adapter for former best-effort call sites. */

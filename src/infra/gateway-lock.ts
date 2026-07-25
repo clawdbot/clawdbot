@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import {
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
@@ -15,10 +14,8 @@ import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../co
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
-import { acquireFsSafeFileLock } from "./file-lock.js";
+import { createFileLockManager } from "./file-lock-manager.js";
 import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { isSqliteLockError } from "./sqlite-transaction.js";
 import {
   readWindowsProcessArgsSync,
   readWindowsProcessStartTimeSync,
@@ -27,6 +24,7 @@ import {
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_MS = 30_000;
+const GATEWAY_LOCKS = createFileLockManager("openclaw.gateway-lock");
 
 type LockPayload = {
   pid: number;
@@ -110,44 +108,6 @@ export class GatewayLockError extends Error {
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
-
-type GatewayLockCoordinator = {
-  release: () => void;
-};
-
-function tryAcquireGatewayLockCoordinator(lockPath: string): GatewayLockCoordinator | null {
-  const coordinatorDb: DatabaseSync = openNodeSqliteDatabase(`${lockPath}.sqlite`);
-  try {
-    coordinatorDb.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
-  } catch (error) {
-    try {
-      coordinatorDb.close();
-    } catch {}
-    if (isSqliteLockError(error)) {
-      return null;
-    }
-    throw error;
-  }
-
-  return {
-    release: () => {
-      let releaseError: unknown;
-      try {
-        coordinatorDb.exec("ROLLBACK");
-      } catch (error) {
-        releaseError = error;
-      }
-      try {
-        coordinatorDb.close();
-      } catch (error) {
-        releaseError ??= error;
-      }
-      if (releaseError) {
-        throw new GatewayLockError("failed to release gateway lock coordinator", releaseError);
-      }
-    },
-  };
-}
 
 function readLinuxCmdline(pid: number): string[] | null {
   try {
@@ -308,40 +268,6 @@ async function shouldReclaimGatewayLock(params: {
   } catch {
     // An unreadable lock can still belong to a healthy gateway. Fail closed.
     return false;
-  }
-}
-
-async function reclaimGatewayLockIfUnchanged(params: {
-  lockPath: string;
-  staleMs: number;
-  now: () => number;
-  platform: NodeJS.Platform;
-  readProcessCmdline?: (pid: number) => string[] | null;
-  readProcessStartTime?: (pid: number) => number | null;
-}): Promise<boolean> {
-  const shouldReclaim = (payload: LockPayload | null) =>
-    shouldReclaimGatewayLock({ ...params, payload });
-  try {
-    const lock = await acquireFsSafeFileLock(params.lockPath, {
-      managerKey: "openclaw.gateway-lock-reclaim",
-      lockPath: params.lockPath,
-      staleMs: params.staleMs,
-      timeoutMs: 0,
-      retry: { retries: 0 },
-      staleRecovery: "remove-if-unchanged",
-      payload: () => ({ pid: process.pid, createdAt: new Date(params.now()).toISOString() }),
-      parsePayload: parseGatewayLockPayload,
-      shouldReclaim: ({ payload }) => shouldReclaim(payload as LockPayload | null),
-      shouldRemoveStaleLock: ({ payload }) => shouldReclaim(payload as LockPayload | null),
-    });
-    await lock.release();
-    return true;
-  } catch (error) {
-    const code = (error as { code?: unknown }).code;
-    if (code === "file_lock_timeout" || code === "file_lock_stale") {
-      return false;
-    }
-    throw error;
   }
 }
 
@@ -518,8 +444,6 @@ async function acquireLockFile(
   );
   const staleMs = resolveTimerTimeoutMs(opts.staleMs, DEFAULT_STALE_MS, 0);
   const platform = opts.platform ?? process.platform;
-  const port = opts.port;
-  const role = opts.role;
   const now = opts.now ?? Date.now;
   const sleep =
     opts.sleep ??
@@ -532,125 +456,67 @@ async function acquireLockFile(
 
   const startedAt = now();
   let lastPayload: LockPayload | null = null;
+  const buildPayload = (): LockPayload => {
+    const startTime = (opts.readProcessStartTime ?? ((pid) => readProcessStartTime(pid, platform)))(
+      process.pid,
+    );
+    return {
+      pid: process.pid,
+      ownerId: opts.ownerId,
+      createdAt: resolveTimestampMsToIsoString(now()),
+      configPath,
+      stateDir,
+      ...(typeof opts.port === "number" &&
+      Number.isInteger(opts.port) &&
+      opts.port > 0 &&
+      opts.port <= 65_535
+        ? { port: opts.port }
+        : {}),
+      ...(opts.role !== "gateway" ? { role: opts.role } : {}),
+      ...(typeof startTime === "number" && Number.isFinite(startTime) ? { startTime } : {}),
+    };
+  };
+  const shouldReclaim = (payload: LockPayload | null) =>
+    shouldReclaimGatewayLock({
+      lockPath,
+      payload,
+      staleMs,
+      now,
+      platform,
+      readProcessCmdline: opts.readProcessCmdline,
+      readProcessStartTime: opts.readProcessStartTime,
+    });
 
   while (now() - startedAt < timeoutMs) {
-    let coordinator: GatewayLockCoordinator | null;
     try {
-      coordinator = tryAcquireGatewayLockCoordinator(lockPath);
+      const lock = await GATEWAY_LOCKS.acquire(lockPath, {
+        lockPath,
+        staleMs,
+        timeoutMs: 0,
+        retry: { retries: 0 },
+        staleRecovery: "remove-if-unchanged",
+        payload: buildPayload,
+        parsePayload: parseGatewayLockPayload,
+        shouldReclaim: ({ payload }) => shouldReclaim(payload as LockPayload | null),
+        shouldRemoveStaleLock: ({ payload }) => shouldReclaim(payload as LockPayload | null),
+      });
+      return {
+        lockPath,
+        configPath,
+        release: async () => {
+          try {
+            await lock.release();
+          } catch (error) {
+            throw new GatewayLockError(`failed to release gateway lock at ${lockPath}`, error);
+          }
+        },
+      };
     } catch (error) {
-      throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, error);
-    }
-
-    if (!coordinator) {
+      const code = (error as { code?: unknown }).code;
+      if (code !== "file_lock_timeout" && code !== "file_lock_stale") {
+        throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, error);
+      }
       lastPayload = await readLockPayload(lockPath);
-    } else {
-      let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-      let acquisitionError: unknown;
-      let waitForOwner = false;
-      try {
-        while (!handle && !waitForOwner) {
-          let candidateHandle: Awaited<ReturnType<typeof fs.open>>;
-          try {
-            candidateHandle = await fs.open(lockPath, "wx");
-          } catch (error) {
-            const code = (error as { code?: unknown }).code;
-            if (code !== "EEXIST") {
-              throw error;
-            }
-
-            lastPayload = await readLockPayload(lockPath);
-            if (
-              await reclaimGatewayLockIfUnchanged({
-                lockPath,
-                staleMs,
-                now,
-                platform,
-                readProcessCmdline: opts.readProcessCmdline,
-                readProcessStartTime: opts.readProcessStartTime,
-              })
-            ) {
-              continue;
-            }
-            waitForOwner = true;
-            continue;
-          }
-
-          try {
-            const startTime = (
-              opts.readProcessStartTime ?? ((pid) => readProcessStartTime(pid, platform))
-            )(process.pid);
-            const payload: LockPayload = {
-              pid: process.pid,
-              ownerId: opts.ownerId,
-              createdAt: resolveTimestampMsToIsoString(now()),
-              configPath,
-              stateDir,
-            };
-            if (typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65_535) {
-              payload.port = port;
-            }
-            if (role !== "gateway") {
-              payload.role = role;
-            }
-            if (typeof startTime === "number" && Number.isFinite(startTime)) {
-              payload.startTime = startTime;
-            }
-            await candidateHandle.writeFile(JSON.stringify(payload), "utf8");
-            handle = candidateHandle;
-          } catch (error) {
-            // Acquisition owns both resources until the release callback exists.
-            // Unwind them if payload preparation fails before ownership transfers.
-            await candidateHandle.close().catch(() => undefined);
-            await fs.rm(lockPath, { force: true }).catch(() => undefined);
-            throw error;
-          }
-        }
-      } catch (error) {
-        acquisitionError = error;
-      }
-
-      if (handle) {
-        return {
-          lockPath,
-          configPath,
-          release: async () => {
-            let releaseError: unknown;
-            try {
-              await handle.close();
-            } catch (error) {
-              releaseError = error;
-            }
-            try {
-              await fs.rm(lockPath, { force: true });
-            } catch (error) {
-              releaseError ??= error;
-            }
-            try {
-              coordinator.release();
-            } catch (error) {
-              releaseError ??= error;
-            }
-            if (releaseError) {
-              throw new GatewayLockError(
-                `failed to release gateway lock at ${lockPath}`,
-                releaseError,
-              );
-            }
-          },
-        };
-      }
-
-      try {
-        coordinator.release();
-      } catch (error) {
-        acquisitionError ??= error;
-      }
-      if (acquisitionError) {
-        throw new GatewayLockError(
-          `failed to acquire gateway lock at ${lockPath}`,
-          acquisitionError,
-        );
-      }
     }
 
     const remainingMs = timeoutMs - (now() - startedAt);

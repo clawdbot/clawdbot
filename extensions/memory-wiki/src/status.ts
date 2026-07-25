@@ -8,7 +8,6 @@ import { filterMemoryWikiBridgeArtifacts, resolveMemoryWikiVaultAgentId } from "
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { toWikiPageSummary, type WikiPageKind } from "./markdown.js";
 import { probeObsidianCli } from "./obsidian.js";
-import { walkMemoryWikiDirectory } from "./walk.js";
 
 type MemoryWikiStatusWarning = {
   code:
@@ -93,12 +92,14 @@ async function collectVaultCounts(vaultPath: string): Promise<{
   const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
   for (const dir of dirs) {
     const dirPath = path.join(vaultPath, dir);
-    const { entries } = await walkMemoryWikiDirectory(dirPath);
+    const entries = await fs
+      .readdir(dirPath, { withFileTypes: true, recursive: true })
+      .catch(() => []);
     for (const entry of entries) {
-      if (entry.kind !== "file" || !entry.name.endsWith(".md") || entry.name === "index.md") {
+      if (!entry.isFile() || !entry.name.endsWith(".md") || entry.name === "index.md") {
         continue;
       }
-      const absolutePath = entry.path;
+      const absolutePath = path.join(entry.parentPath ?? dirPath, entry.name);
       const relativeToVault = path.relative(vaultPath, absolutePath).split(path.sep).join("/");
       const raw = await fs.readFile(absolutePath, "utf8").catch(() => null);
       if (raw === null) {

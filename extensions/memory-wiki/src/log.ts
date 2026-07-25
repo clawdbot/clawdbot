@@ -1,9 +1,9 @@
 // Memory Wiki plugin module implements log behavior.
 import { createHash, randomUUID } from "node:crypto";
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import { walkMemoryWikiDirectory } from "./walk.js";
 
 type MemoryWikiLogEntry = {
   type: "init" | "vault-generation" | "ingest" | "okf-import" | "compile" | "lint";
@@ -129,19 +129,22 @@ export async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string):
     await Promise.all(
       COMPILED_SOURCE_DIRECTORIES.map(async (relativeDir) => {
         const dirPath = path.join(vaultRoot, relativeDir);
-        const scan = await walkMemoryWikiDirectory(dirPath);
-        const failure = scan.failedDirs?.find(
-          ({ error }) => !(error instanceof Error && "code" in error && error.code === "ENOENT"),
-        );
-        if (failure) {
-          throw failure.error;
+        let entries: Dirent[];
+        try {
+          entries = await fs.readdir(dirPath, { withFileTypes: true, recursive: true });
+        } catch (error) {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+            return [];
+          }
+          throw error;
         }
-        return scan.entries
-          .filter((entry) => entry.kind === "file" && entry.name.endsWith(".md"))
+        return entries
+          .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
           .map((entry) => {
+            const absolutePath = path.join(entry.parentPath ?? dirPath, entry.name);
             return {
-              absolutePath: entry.path,
-              relativePath: path.posix.join(relativeDir, entry.relativePath),
+              absolutePath,
+              relativePath: path.relative(vaultRoot, absolutePath).split(path.sep).join("/"),
             };
           })
           .filter((entry) => path.basename(entry.relativePath) !== "index.md");
