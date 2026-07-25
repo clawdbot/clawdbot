@@ -787,7 +787,6 @@ src/gateway/server-methods/doctor.ts
 src/gateway/server-methods/models-auth-status.test.ts
 src/gateway/server-methods/models.test.ts
 src/gateway/server-methods/nodes.invoke-wake.test.ts
-src/gateway/server-methods/nodes.ts
 src/gateway/server-methods/send.test.ts
 src/gateway/server-methods/send.ts
 src/gateway/server-methods/server-methods.test.ts
