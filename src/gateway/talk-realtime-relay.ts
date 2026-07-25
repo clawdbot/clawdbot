@@ -126,6 +126,7 @@ type RelaySession = {
   bridge: RealtimeVoiceBridgeSession;
   harness: RealtimeVoiceSessionHarness;
   sessionKey?: string;
+  agentId?: string;
   expiresAtMs: number;
   cleanupTimer: ReturnType<typeof setTimeout>;
   activeAgentRuns: Map<string, string>;
@@ -187,9 +188,31 @@ function logRelayVoiceFailure(session: RelaySession, message: string, error: unk
   session.context.logGateway?.warn(`${message}: ${formatErrorMessage(error)}`);
 }
 
-function resolveRelayAgentId(session: RelaySession, sessionKey: string): string {
+function resolveRelayAgentIdFromCurrentConfig(session: RelaySession, sessionKey: string): string {
   const config = session.voiceConfig ?? session.context.getRuntimeConfig();
   return resolveAgentIdFromSessionKey(sessionKey, resolveDefaultAgentId(config));
+}
+
+function bindRelaySessionKey(session: RelaySession, sessionKey: string): void {
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    throw new Error("Realtime relay session key must be non-empty");
+  }
+  if (session.sessionKey && session.sessionKey !== normalizedSessionKey) {
+    throw new Error("Realtime relay session belongs to another agent session");
+  }
+  if (!session.sessionKey) {
+    session.sessionKey = normalizedSessionKey;
+    session.agentId = resolveRelayAgentIdFromCurrentConfig(session, normalizedSessionKey);
+  }
+}
+
+function resolveRelayAgentId(session: RelaySession, sessionKey: string): string {
+  bindRelaySessionKey(session, sessionKey);
+  if (!session.agentId) {
+    throw new Error("Realtime relay session has no pinned agent owner");
+  }
+  return session.agentId;
 }
 
 function ensureRelayVoiceSession(session: RelaySession): boolean {
@@ -296,10 +319,7 @@ export function ensureTalkRealtimeRelayVoiceSession(params: {
   sessionKey: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  if (session.sessionKey && session.sessionKey !== params.sessionKey) {
-    throw new Error("Realtime relay session belongs to another agent session");
-  }
-  session.sessionKey = params.sessionKey;
+  bindRelaySessionKey(session, params.sessionKey);
   if (!ensureRelayVoiceSession(session)) {
     throw new Error("Realtime relay voice session could not be created");
   }
@@ -998,13 +1018,22 @@ export function createTalkRealtimeRelaySession(
       );
     },
   });
+  const initialSessionKey = params.sessionKey?.trim() || undefined;
   const relay: RelaySession = {
     id: relaySessionId,
     connId: params.connId,
     context: params.context,
     bridge,
     harness,
-    sessionKey: params.sessionKey?.trim() || undefined,
+    sessionKey: initialSessionKey,
+    ...(initialSessionKey
+      ? {
+          agentId: resolveAgentIdFromSessionKey(
+            initialSessionKey,
+            resolveDefaultAgentId(params.cfg ?? params.context.getRuntimeConfig()),
+          ),
+        }
+      : {}),
     expiresAtMs,
     cleanupTimer: setTimeout(() => {
       const active = relaySessions.get(relaySessionId);
@@ -1486,19 +1515,23 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   callId?: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
+  if (!session.sessionKey) {
+    bindRelaySessionKey(session, params.sessionKey);
+  }
   session.activeAgentRuns.set(params.runId, params.sessionKey);
   if (params.callId?.trim()) {
     session.activeAgentToolCalls.set(params.callId.trim(), params.runId);
   }
-  if (!session.sessionKey) {
-    session.sessionKey = params.sessionKey;
-  }
   if (!ensureRelayVoiceSession(session)) {
     throw new Error("Realtime relay voice session could not be created for agent consult");
   }
+  const voiceSessionKey = session.sessionKey;
+  if (!voiceSessionKey) {
+    throw new Error("Realtime relay voice session has no pinned session key");
+  }
   registerClientVoiceConsultRun({
-    agentId: resolveRelayAgentId(session, params.sessionKey),
-    sessionKey: params.sessionKey,
+    agentId: resolveRelayAgentId(session, voiceSessionKey),
+    sessionKey: voiceSessionKey,
     voiceSessionId: session.id,
     runId: params.runId,
   });

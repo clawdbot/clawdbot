@@ -5,9 +5,11 @@ import {
   listSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
 import type { Logger } from "./service/state.js";
@@ -53,6 +55,7 @@ type ReaperResult = {
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
   agentId: string;
+  defaultAgentId: string;
   /** Resolved path to sessions.json — required. */
   sessionStorePath: string;
   nowMs?: number;
@@ -86,12 +89,31 @@ export async function sweepCronRunSessions(params: {
   let transcriptCleanupError: unknown;
   try {
     const cutoff = now - retentionMs;
+    const resolvedTarget = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: params.agentId,
+      defaultAgentId: params.defaultAgentId,
+    });
+    const sharedPhysicalOwner = resolvedTarget.shared
+      ? normalizeAgentId(resolvedTarget.agentId ?? params.defaultAgentId)
+      : undefined;
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
+    // The accessor keeps agentId logical for admission checks and resolves a shared
+    // store's physical database owner internally through its SQLite scope.
     for (const { sessionKey, entry } of listSessionEntries({
       agentId: params.agentId,
       storePath,
     })) {
+      const scopedOwner = parseAgentSessionKey(sessionKey)?.agentId;
+      const requestedOwner = normalizeAgentId(params.agentId);
+      if (
+        (scopedOwner && normalizeAgentId(scopedOwner) !== requestedOwner) ||
+        (!scopedOwner &&
+          sharedPhysicalOwner !== undefined &&
+          sharedPhysicalOwner !== requestedOwner)
+      ) {
+        continue;
+      }
       if (!isCronRunSessionKey(sessionKey)) {
         continue;
       }

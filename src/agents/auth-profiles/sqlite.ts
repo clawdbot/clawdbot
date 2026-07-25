@@ -37,8 +37,12 @@ type AuthProfileDatabase = Pick<
 const PRIMARY_ROW_KEY = "primary";
 
 function resolveAgentDir(agentDir?: string): string {
-  return agentDir
-    ? resolveUserPath(agentDir)
+  if (agentDir) {
+    return resolveUserPath(agentDir);
+  }
+  const configuredMainAgentDir = process.env.OPENCLAW_AGENT_DIR?.trim();
+  return configuredMainAgentDir
+    ? resolveUserPath(configuredMainAgentDir)
     : path.join(resolveStateDir(), "agents", "main", "agent");
 }
 

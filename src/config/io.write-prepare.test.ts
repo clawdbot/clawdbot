@@ -2349,6 +2349,60 @@ describe("config io write prepare", () => {
     ).toThrow("Config write would flatten $include-owned config at <root>");
   });
 
+  it("allows an explicit local leaf override beside a root include", () => {
+    const sourceConfig = {
+      agents: {
+        defaults: { workspace: "/srv/old" },
+        entries: { ops: { default: true } },
+      },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig: sourceConfig,
+        sourceConfig,
+        rootAuthoredConfig: { $include: "./agents.json5" },
+        nextConfig: sourceConfig,
+        explicitSetPaths: [["agents", "defaults", "workspace"]],
+        explicitSetValueSource: {
+          agents: { defaults: { workspace: "/srv/next" } },
+        },
+        allowIncludeAncestorExplicitSetPaths: true,
+      }),
+    ).toEqual({
+      $include: "./agents.json5",
+      agents: { defaults: { workspace: "/srv/next" } },
+    });
+  });
+
+  it("allows an explicit local leaf override below a nested include", () => {
+    const sourceConfig = {
+      agents: {
+        defaults: { workspace: "/srv/old" },
+        entries: { ops: { default: true } },
+      },
+    };
+
+    expect(
+      resolvePersistCandidateForWrite({
+        runtimeConfig: sourceConfig,
+        sourceConfig,
+        rootAuthoredConfig: { agents: { $include: "./agents.json5" } },
+        nextConfig: sourceConfig,
+        explicitSetPaths: [["agents", "defaults", "workspace"]],
+        explicitSetValueSource: {
+          agents: { defaults: { workspace: "/srv/next" } },
+        },
+        allowIncludeAncestorExplicitSetPaths: true,
+      }),
+    ).toEqual({
+      agents: {
+        $include: "./agents.json5",
+        defaults: { workspace: "/srv/next" },
+      },
+    });
+  });
+
   it("does not restore root $schema when the next config explicitly clears it", () => {
     const sourceConfig = {
       $schema: "https://openclaw.ai/config.json",

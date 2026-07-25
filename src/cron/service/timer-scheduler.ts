@@ -665,6 +665,7 @@ async function onAdmittedTimer(state: CronServiceState) {
         try {
           await sweepCronRunSessions({
             agentId,
+            defaultAgentId: sessionReaperDefaultAgentId!,
             cronConfig: state.deps.cronConfig,
             sessionStorePath: storePath,
             nowMs,

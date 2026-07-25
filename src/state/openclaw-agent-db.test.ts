@@ -86,6 +86,19 @@ const tempVolumeIsCaseInsensitive = (() => {
   }
 })();
 
+const tempVolumeIsNormalizationInsensitive = (() => {
+  const probeDir = fs.realpathSync(createTempStateDir());
+  const probePath = path.join(probeDir, "CaféProbe");
+  fs.writeFileSync(probePath, "probe");
+  try {
+    const probe = fs.lstatSync(probePath, { bigint: true });
+    const alias = fs.lstatSync(path.join(probeDir, "CaféProbe"), { bigint: true });
+    return probe.dev === alias.dev && probe.ino === alias.ino;
+  } catch {
+    return false;
+  }
+})();
+
 function downgradeCurrentAgentDatabaseToV13(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
@@ -1768,6 +1781,106 @@ describe("openclaw agent database", () => {
     },
   );
 
+  it.runIf(tempVolumeIsCaseInsensitive)(
+    "folds ASCII case while preserving identical non-ASCII suffix code units",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          path.join(stateDir, "éWorker.sqlite"),
+          path.join(stateDir, "éworker.sqlite"),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.runIf(tempVolumeIsCaseInsensitive)(
+    "matches nested missing aliases using exact component case semantics",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          path.join(stateDir, "Future", "Agent", "worker.sqlite"),
+          path.join(stateDir, "future", "agent", "worker.sqlite"),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.runIf(tempVolumeIsCaseInsensitive)(
+    "probes near-limit missing leaf aliases without lengthening the component",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      const upper = `${"A".repeat(220)}.sqlite`;
+      const lower = `${"a".repeat(220)}.sqlite`;
+      expect(
+        isSameOpenClawAgentDatabasePath(path.join(stateDir, upper), path.join(stateDir, lower)),
+      ).toBe(true);
+    },
+  );
+
+  it.runIf(tempVolumeIsNormalizationInsensitive)(
+    "matches missing database leaf aliases using normalization-insensitive volume semantics",
+    () => {
+      const stateDir = fs.realpathSync(createTempStateDir());
+      expect(
+        isSameOpenClawAgentDatabasePath(
+          path.join(stateDir, "café.sqlite"),
+          path.join(stateDir, "café.sqlite"),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("uses the candidate code points for missing-path normalization semantics", () => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    const leftName = "\u2329.sqlite";
+    const rightName = "\u3008.sqlite";
+    const leftPath = path.join(stateDir, leftName);
+    const rightPath = path.join(stateDir, rightName);
+    fs.writeFileSync(leftPath, "probe");
+    let aliases = false;
+    try {
+      const leftStat = fs.lstatSync(leftPath, { bigint: true });
+      const rightStat = fs.lstatSync(rightPath, { bigint: true });
+      aliases = leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    } finally {
+      fs.unlinkSync(leftPath);
+    }
+
+    expect(isSameOpenClawAgentDatabasePath(leftPath, rightPath)).toBe(aliases);
+  });
+
+  it("matches volume semantics for normalization-only missing directory components", () => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    const leftDir = path.join(stateDir, "é");
+    const rightDir = path.join(stateDir, "é");
+    fs.mkdirSync(leftDir);
+    let aliases = false;
+    try {
+      const leftStat = fs.lstatSync(leftDir, { bigint: true });
+      const rightStat = fs.lstatSync(rightDir, { bigint: true });
+      aliases = leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    } finally {
+      fs.rmdirSync(leftDir);
+    }
+
+    expect(
+      isSameOpenClawAgentDatabasePath(
+        path.join(leftDir, "openclaw-agent.sqlite"),
+        path.join(rightDir, "openclaw-agent.sqlite"),
+      ),
+    ).toBe(aliases);
+  });
+
   it.runIf(process.platform === "win32")(
     "matches drive-relative and absolute database paths without collapsing the suffix",
     () => {
@@ -1813,6 +1926,16 @@ describe("openclaw agent database", () => {
       ).toBe(false);
     },
   );
+
+  it("matches volume semantics for short nested missing path components", () => {
+    const stateDir = fs.realpathSync(createTempStateDir());
+    expect(
+      isSameOpenClawAgentDatabasePath(
+        path.join(stateDir, "a", "Foo.sqlite"),
+        path.join(stateDir, "a", "foo.sqlite"),
+      ),
+    ).toBe(tempVolumeIsCaseInsensitive);
+  });
 
   it("does not equate Unicode paths through JavaScript case folding", () => {
     const stateDir = fs.realpathSync(createTempStateDir());

@@ -904,6 +904,7 @@ function injectExplicitlySetPaths(params: {
   explicitSetPaths?: readonly (readonly string[])[];
   rootAuthoredConfig?: unknown;
   preserveDescendantIncludes?: boolean;
+  allowIncludeAncestorExplicitSetPaths?: boolean;
 }): unknown {
   if (!params.explicitSetPaths || params.explicitSetPaths.length === 0) {
     return params.persistedCandidate;
@@ -922,7 +923,12 @@ function injectExplicitlySetPaths(params: {
       params.preserveDescendantIncludes === true &&
       includeOwnedPath.length > path.length &&
       pathStartsWith(includeOwnedPath, path);
-    if (includeOwnedPath && !preserveDescendantInclude) {
+    const allowIncludeAncestorOverride =
+      includeOwnedPath !== undefined &&
+      includeOwnedPath.length < path.length &&
+      pathStartsWith(path, includeOwnedPath) &&
+      params.allowIncludeAncestorExplicitSetPaths === true;
+    if (includeOwnedPath && !preserveDescendantInclude && !allowIncludeAncestorOverride) {
       throw new Error(
         `Config write would flatten $include-owned config at ${formatConfigPath(
           includeOwnedPath,
@@ -1585,6 +1591,7 @@ export function resolvePersistCandidateForWrite(params: {
   unsetPaths?: readonly string[][];
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: unknown;
+  allowIncludeAncestorExplicitSetPaths?: boolean;
   modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
@@ -1658,6 +1665,7 @@ export function resolvePersistCandidateForWrite(params: {
     // This only postpones descendant include validation: the preservation pass below
     // compares next against source/runtime and still rejects every changed include subtree.
     preserveDescendantIncludes: persistCanonicalRoster,
+    allowIncludeAncestorExplicitSetPaths: params.allowIncludeAncestorExplicitSetPaths,
   });
   const withPreservedIncludes = persistCanonicalRoster
     ? preserveUntouchedIncludes({

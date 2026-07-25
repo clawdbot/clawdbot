@@ -33,7 +33,7 @@ type ExistingAgentSchemaMeta = {
   schemaVersion: number | null;
 };
 
-const OPENCLAW_AGENT_SCHEMA_COMPATIBILITY = {
+const AGENT_SCHEMA_COMPATIBILITY = {
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
@@ -50,7 +50,7 @@ export function assertOpenClawAgentSchemaContains(
   pathname: string,
   schemaSql: string,
 ): void {
-  assertSqliteSchemaContains(database, pathname, schemaSql, OPENCLAW_AGENT_SCHEMA_COMPATIBILITY);
+  assertSqliteSchemaContains(database, pathname, schemaSql, AGENT_SCHEMA_COMPATIBILITY);
 }
 
 export function assertOpenClawAgentCurrentRuntimeSchema(

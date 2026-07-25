@@ -165,10 +165,8 @@ export async function setupCommand(
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
-  const defaultEntryWorkspace = resolveAgentEntry(
-    resolvedConfig,
-    resolveDefaultAgentId(resolvedConfig),
-  )?.workspace?.trim();
+  const defaultEntry = resolveAgentEntry(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
+  const defaultEntryWorkspace = defaultEntry?.workspace?.trim();
   const configuredWorkspace = defaultEntryWorkspace || resolvedDefaults.workspace;
 
   const workspace =
@@ -178,6 +176,11 @@ export async function setupCommand(
   const shouldWriteWorkspace =
     !snapshot.exists || (desiredWorkspace !== undefined && configuredWorkspace !== workspace);
   const shouldWriteGatewayMode = resolvedConfig.gateway?.mode === undefined;
+  const writeInheritedWorkspaceOverride =
+    snapshot.exists &&
+    shouldWriteWorkspace &&
+    !defaultEntryWorkspace &&
+    configIncludeOwnsAgentRoster(snapshot);
 
   // Keep the candidate runtime-shaped. replaceConfigFile persists only its
   // diff against snapshot.parsed, never resolved include/env values wholesale.
@@ -190,24 +193,28 @@ export async function setupCommand(
     };
   }
   if (shouldWriteWorkspace) {
-    const roster = structuredClone(listAgentEntries(next));
-    for (const entry of roster) {
-      if (entry.default === true) {
-        // createAgent seeds an explicit workspace on the default entry;
-        // keep that higher-precedence value aligned with the default.
-        entry.workspace = workspace;
+    if (!writeInheritedWorkspaceOverride) {
+      const roster = structuredClone(listAgentEntries(next));
+      if (!snapshot.exists || Boolean(defaultEntryWorkspace)) {
+        for (const entry of roster) {
+          if (entry.default === true) {
+            // Fresh bootstrap and explicitly entry-owned workspaces stay aligned.
+            // Inherited defaults must not turn an include-owned roster into a roster write.
+            entry.workspace = workspace;
+          }
+        }
       }
+      const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
+      const { list: _legacyList, ...agents } = next.agents ?? {};
+      next = {
+        ...next,
+        agents: {
+          ...agents,
+          defaults: { ...agents.defaults, workspace },
+          ...(entries ? { entries } : {}),
+        },
+      };
     }
-    const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
-    const { list: _legacyList, ...agents } = next.agents ?? {};
-    next = {
-      ...next,
-      agents: {
-        ...agents,
-        defaults: { ...agents.defaults, workspace },
-        ...(entries ? { entries } : {}),
-      },
-    };
   }
   if (shouldWriteGatewayMode) {
     next = { ...next, gateway: { ...next.gateway, mode: "local" } };
@@ -232,6 +239,13 @@ export async function setupCommand(
           ? {
               explicitSetPaths: [["agents", "entries"]],
               explicitSetValueSource: cfg,
+            }
+          : {}),
+        ...(writeInheritedWorkspaceOverride
+          ? {
+              allowIncludeAncestorExplicitSetPaths: true,
+              explicitSetPaths: [["agents", "defaults", "workspace"]],
+              explicitSetValueSource: { agents: { defaults: { workspace } } },
             }
           : {}),
       },

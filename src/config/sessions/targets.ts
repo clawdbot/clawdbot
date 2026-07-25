@@ -146,6 +146,25 @@ export function listKnownSessionStoreAgentIds(
     for (const durableOwner of listDurableSqliteTargetOwnersForSessionStorePath(storePath)) {
       ids.add(normalizeAgentId(durableOwner));
     }
+    if (durableTarget.shared && durableTarget.agentId && fsSync.existsSync(durableTarget.path)) {
+      try {
+        const logicalOwners = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            readSqliteSessionEntryKeys(database).flatMap((sessionKey) => {
+              const parsed = parseAgentSessionKey(sessionKey);
+              return parsed ? [normalizeAgentId(parsed.agentId)] : [];
+            }),
+          { agentId: durableTarget.agentId, env, path: durableTarget.path },
+        );
+        if (logicalOwners.found) {
+          for (const logicalOwner of logicalOwners.value) {
+            ids.add(logicalOwner);
+          }
+        }
+      } catch {
+        // Best-effort discovery: unreadable stores remain owned by their normal diagnostics path.
+      }
+    }
   }
   for (const registered of listOpenClawRegisteredAgentDatabases({ env })) {
     const agentId = normalizeAgentId(registered.agentId);
@@ -409,29 +428,37 @@ export function resolveExistingAgentSessionStoreTargetsSync(
     if (!configuredTargets.some((target) => normalizeAgentId(target.agentId) === requested)) {
       configuredTargets.push(fixedTarget);
     }
-    const ownedTarget = dedupeSessionStoreTargetsBySqliteTarget(configuredTargets, {
-      defaultAgentId,
-      env,
-    }).find((target) => normalizeAgentId(target.agentId) === requested);
-    if (!ownedTarget) {
-      return [];
-    }
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(fixedTarget.storePath, {
+    const resolvedTarget = resolveSqliteTargetFromSessionStorePath(fixedTarget.storePath, {
       agentId: requested,
       defaultAgentId,
       env,
-    }).path;
+    });
+    if (
+      !resolvedTarget.shared &&
+      !dedupeSessionStoreTargetsBySqliteTarget(configuredTargets, {
+        defaultAgentId,
+        env,
+      }).some((target) => normalizeAgentId(target.agentId) === requested)
+    ) {
+      return [];
+    }
+    const sqlitePath = resolvedTarget.path;
     if (sqlitePath && fsSync.existsSync(sqlitePath)) {
       try {
+        const databaseAgentId = resolvedTarget.shared
+          ? normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId)
+          : requested;
         const result = withOpenClawAgentDatabaseReadOnly(
           (database) =>
             readSqliteSessionEntryKeys(database).some((sessionKey) => {
               const parsed = parseAgentSessionKey(sessionKey);
               // Unscoped keys belong to the validated database owner. Explicit agent keys must
               // match so a fixed store containing only another agent's rows proves nothing.
-              return !parsed || normalizeAgentId(parsed.agentId) === requested;
+              return parsed
+                ? normalizeAgentId(parsed.agentId) === requested
+                : databaseAgentId === requested;
             }),
-          { agentId: requested, env, path: sqlitePath },
+          { agentId: databaseAgentId, env, path: sqlitePath },
         );
         return result.found && result.value ? [fixedTarget] : [];
       } catch {
