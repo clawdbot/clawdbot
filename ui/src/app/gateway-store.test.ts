@@ -164,7 +164,9 @@ describe("createApplicationGateway connection phase", () => {
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/stale-refresh" },
       expiresAtMs: Date.now() + 60_000,
     });
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
 
     expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(
       "https://canvas.test/__openclaw__/cap/current",
