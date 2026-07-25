@@ -1541,8 +1541,13 @@ openclaw-chat-page {
   gap: 6px;
   width: calc(100% - 36px);
   max-width: var(--chat-thread-max-width, 48rem);
+  /* Completed phases stay visible while any child runs; bound large swarms so
+     their retained dots cannot displace the composer. */
+  max-height: clamp(160px, 32vh, 260px);
   margin: 0 auto;
-  padding: 0 0 8px;
+  padding: 0 2px 8px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .chat-swarm__group {
