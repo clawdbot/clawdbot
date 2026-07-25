@@ -44,7 +44,6 @@ describe("realtime voice provider resolver", () => {
         enabled: true,
         resolved: true,
       },
-      browserSessionBrokers: [],
     });
   });
 

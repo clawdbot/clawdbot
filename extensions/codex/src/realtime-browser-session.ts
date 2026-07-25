@@ -4,8 +4,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
-  RealtimeVoiceBrowserSessionBroker,
+  RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceProviderCapabilities,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
@@ -33,6 +34,15 @@ const CODEX_REALTIME_PROBE_COOLDOWN_MS = 1_000;
 type PendingOffer = {
   expiresAt: number;
   request: RealtimeVoiceBrowserSessionCreateRequest;
+};
+
+export type CodexRealtimeBrowserSessionFallback = {
+  capabilities: Partial<RealtimeVoiceProviderCapabilities>;
+  isConfigured: () => boolean;
+  createBrowserSession: (
+    request: RealtimeVoiceBrowserSessionCreateRequest,
+  ) => Promise<RealtimeVoiceBrowserSession>;
+  cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => void;
 };
 
 type ActiveSession = {
@@ -178,7 +188,7 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
   getConfig: () => OpenClawConfig | undefined;
   getPluginConfig: () => unknown;
 }): {
-  broker: RealtimeVoiceBrowserSessionBroker;
+  broker: CodexRealtimeBrowserSessionFallback;
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   warmup: () => Promise<void>;
   cleanup: () => Promise<void>;
@@ -304,9 +314,7 @@ export function createCodexRealtimeBrowserSessionBroker(params: {
     }
   };
 
-  const broker: RealtimeVoiceBrowserSessionBroker = {
-    id: "codex-oauth",
-    providerId: "openai",
+  const broker: CodexRealtimeBrowserSessionFallback = {
     capabilities: {
       transports: ["webrtc"],
       handlesAgentConsult: true,

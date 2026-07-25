@@ -1,7 +1,6 @@
 // Captures plugin registrations for controlled registry assembly.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { RealtimeVoiceBrowserSessionBroker } from "../talk/provider-types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -68,7 +67,6 @@ export type CapturedPluginRegistration = {
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
-  realtimeVoiceBrowserSessionBrokers: RealtimeVoiceBrowserSessionBroker[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   transcriptSourceProviders: TranscriptSourceProvider[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
@@ -110,7 +108,6 @@ export function createCapturedPluginRegistration(params?: {
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
-  const realtimeVoiceBrowserSessionBrokers: RealtimeVoiceBrowserSessionBroker[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const transcriptSourceProviders: TranscriptSourceProvider[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
@@ -155,7 +152,6 @@ export function createCapturedPluginRegistration(params?: {
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
-    realtimeVoiceBrowserSessionBrokers,
     mediaUnderstandingProviders,
     transcriptSourceProviders,
     imageGenerationProviders,
@@ -256,9 +252,6 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerRealtimeVoiceProvider(provider: RealtimeVoiceProviderPlugin) {
           realtimeVoiceProviders.push(provider);
-        },
-        registerRealtimeVoiceBrowserSessionBroker(broker: RealtimeVoiceBrowserSessionBroker) {
-          realtimeVoiceBrowserSessionBrokers.push(broker);
         },
         registerMediaUnderstandingProvider(provider: MediaUnderstandingProviderPlugin) {
           mediaUnderstandingProviders.push(provider);

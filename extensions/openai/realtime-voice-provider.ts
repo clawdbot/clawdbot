@@ -16,7 +16,6 @@ import type {
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionBroker,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,
@@ -94,7 +93,6 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
 };
 
 const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
-const OPENAI_CODEX_OAUTH_BROKER_MODE = "codex-oauth";
 const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   transports: ["webrtc", "gateway-relay"],
@@ -1496,29 +1494,48 @@ function resolveOpenAIRealtimeBrowserOfferHeaders(): Record<string, string> | un
   return Object.keys(browserHeaders).length > 0 ? browserHeaders : undefined;
 }
 
-const browserSessionBrokers = new WeakMap<
+type CodexRealtimeBrowserSessionFallback = NonNullable<
+  ReturnType<typeof readCodexRealtimeBrowserSessionFallback>
+>;
+
+type CodexRealtimeGlobalState = {
+  version: 1;
+  fallback?: {
+    capabilities: Partial<RealtimeVoiceProviderCapabilities>;
+    isConfigured: () => boolean;
+    createBrowserSession: (
+      request: RealtimeVoiceBrowserSessionCreateRequest,
+    ) => Promise<RealtimeVoiceBrowserSession>;
+    cancelBrowserSession: (session: RealtimeVoiceBrowserSession) => void;
+  };
+};
+
+const CODEX_REALTIME_GLOBAL_STATE = Symbol.for("openclaw.codex.realtime-voice.v1");
+
+function readCodexRealtimeBrowserSessionFallback() {
+  const state = (
+    globalThis as typeof globalThis & {
+      [CODEX_REALTIME_GLOBAL_STATE]?: CodexRealtimeGlobalState;
+    }
+  )[CODEX_REALTIME_GLOBAL_STATE];
+  return state?.version === 1 ? state.fallback : undefined;
+}
+
+const codexFallbackBySession = new WeakMap<
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionBroker
+  CodexRealtimeBrowserSessionFallback
 >();
 
-function resolveConfiguredCodexRealtimeBroker(params: {
-  cfg?: RealtimeVoiceBrowserSessionCreateRequest["cfg"];
-  providerConfig: RealtimeVoiceProviderConfig;
-  browserSessionBrokers?: readonly RealtimeVoiceBrowserSessionBroker[];
-}): RealtimeVoiceBrowserSessionBroker | undefined {
-  const broker = params.browserSessionBrokers?.find(
-    (entry) => entry.id === OPENAI_CODEX_OAUTH_BROKER_MODE,
-  );
-  return broker?.isConfigured({
-    cfg: params.cfg,
-    providerConfig: params.providerConfig,
-  }) === true
-    ? broker
-    : undefined;
+function resolveConfiguredCodexRealtimeFallback(
+  resolveFallback: () => CodexRealtimeBrowserSessionFallback | undefined,
+): CodexRealtimeBrowserSessionFallback | undefined {
+  const fallback = resolveFallback();
+  return fallback?.isConfigured() === true ? fallback : undefined;
 }
 
 async function createOpenAIRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
+  resolveCodexFallback: () => CodexRealtimeBrowserSessionFallback | undefined,
 ): Promise<RealtimeVoiceBrowserSession> {
   const config = normalizeProviderConfig(req.providerConfig);
   if (config.azureEndpoint || config.azureDeployment) {
@@ -1538,10 +1555,10 @@ async function createOpenAIRealtimeBrowserSession(
         cfg: req.cfg,
       })
     ) {
-      const broker = resolveConfiguredCodexRealtimeBroker(req);
-      if (broker) {
-        const session = await broker.createBrowserSession(req);
-        browserSessionBrokers.set(session, broker);
+      const fallback = resolveConfiguredCodexRealtimeFallback(resolveCodexFallback);
+      if (fallback) {
+        const session = await fallback.createBrowserSession(req);
+        codexFallbackBySession.set(session, fallback);
         return session;
       }
     }
@@ -1612,24 +1629,25 @@ async function cancelOpenAIRealtimeBrowserSession(
   _req: RealtimeVoiceBrowserSessionCreateRequest,
   session: RealtimeVoiceBrowserSession,
 ): Promise<void> {
-  const broker = browserSessionBrokers.get(session);
-  browserSessionBrokers.delete(session);
-  await broker?.cancelBrowserSession?.(session);
+  const fallback = codexFallbackBySession.get(session);
+  codexFallbackBySession.delete(session);
+  await fallback?.cancelBrowserSession?.(session);
 }
 
-export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
+export function buildOpenAIRealtimeVoiceProvider(options?: {
+  resolveCodexRealtimeBrowserSessionFallback?: () =>
+    | CodexRealtimeBrowserSessionFallback
+    | undefined;
+}): RealtimeVoiceProviderPlugin {
+  const resolveCodexFallback =
+    options?.resolveCodexRealtimeBrowserSessionFallback ?? readCodexRealtimeBrowserSessionFallback;
   return {
     id: "openai",
     label: "OpenAI Realtime Voice",
     defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
-    resolveCapabilities: ({
-      cfg,
-      providerConfig,
-      surface,
-      browserSessionBrokers: sessionBrokers,
-    }) => {
+    resolveCapabilities: ({ cfg, providerConfig, surface }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (
         config.azureEndpoint ||
@@ -1644,12 +1662,8 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       if (surface !== "browser-session") {
         return OPENAI_REALTIME_CAPABILITIES;
       }
-      const broker = resolveConfiguredCodexRealtimeBroker({
-        cfg,
-        providerConfig,
-        browserSessionBrokers: sessionBrokers,
-      });
-      if (!broker) {
+      const fallback = resolveConfiguredCodexRealtimeFallback(resolveCodexFallback);
+      if (!fallback) {
         return OPENAI_REALTIME_CAPABILITIES;
       }
       return {
@@ -1657,11 +1671,11 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         handlesAgentConsult: true,
         supportsToolCalls: false,
         supportsVideoFrames: false,
-        ...broker?.capabilities,
+        ...fallback.capabilities,
       };
     },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ cfg, providerConfig, surface, browserSessionBrokers: sessionBrokers }) => {
+    isConfigured: ({ cfg, providerConfig, surface }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
@@ -1676,11 +1690,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       }
       return (
         surface === "browser-session" &&
-        resolveConfiguredCodexRealtimeBroker({
-          cfg,
-          providerConfig,
-          browserSessionBrokers: sessionBrokers,
-        }) !== undefined
+        resolveConfiguredCodexRealtimeFallback(resolveCodexFallback) !== undefined
       );
     },
     createBridge: (req) => {
@@ -1706,7 +1716,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         azureApiVersion: config.azureApiVersion,
       });
     },
-    createBrowserSession: createOpenAIRealtimeBrowserSession,
+    createBrowserSession: (req) => createOpenAIRealtimeBrowserSession(req, resolveCodexFallback),
     cancelBrowserSession: cancelOpenAIRealtimeBrowserSession,
   };
 }

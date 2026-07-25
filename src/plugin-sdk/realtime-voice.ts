@@ -9,7 +9,6 @@ export type {
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionBroker,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,

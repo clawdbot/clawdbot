@@ -109,8 +109,6 @@ export type RealtimeVoiceProviderConfiguredContext = {
   providerConfig: RealtimeVoiceProviderConfig;
   /** Runtime surface being selected; browser-only routes must not make gateway bridges eligible. */
   surface?: "browser-session" | "bridge";
-  /** Host-selected alternate browser-session routes registered for this provider. */
-  browserSessionBrokers?: readonly RealtimeVoiceBrowserSessionBroker[];
 };
 
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
@@ -129,8 +127,6 @@ export type RealtimeVoiceBrowserSessionCreateRequest = {
   agentId?: string;
   workspaceDir?: string;
   providerConfig: RealtimeVoiceProviderConfig;
-  /** Host-selected alternate browser-session routes registered for this provider. */
-  browserSessionBrokers?: readonly RealtimeVoiceBrowserSessionBroker[];
   instructions?: string;
   initialItems?: Array<{
     role: RealtimeVoiceInitialItemRole;
@@ -201,19 +197,6 @@ export type RealtimeVoiceBrowserSession =
   | RealtimeVoiceBrowserJsonPcmWebSocketSession
   | RealtimeVoiceBrowserGatewayRelaySession
   | RealtimeVoiceBrowserManagedRoomSession;
-
-/** Provider-owned alternate browser-session route selected by the provider. */
-export type RealtimeVoiceBrowserSessionBroker = {
-  id: string;
-  providerId: RealtimeVoiceProviderId;
-  /** Route-specific capability overrides owned by the alternate session broker. */
-  capabilities?: Partial<RealtimeVoiceProviderCapabilities>;
-  isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
-  createBrowserSession: (
-    req: RealtimeVoiceBrowserSessionCreateRequest,
-  ) => Promise<RealtimeVoiceBrowserSession>;
-  cancelBrowserSession?: (session: RealtimeVoiceBrowserSession) => Promise<void> | void;
-};
 
 export type RealtimeVoiceBridge = {
   supportsToolResultContinuation?: boolean;

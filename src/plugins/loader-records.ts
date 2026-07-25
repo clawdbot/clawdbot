@@ -76,7 +76,6 @@ export function createPluginRecord(params: {
     speechProviderIds: [...(params.contracts?.speechProviders ?? [])],
     realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
     realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],
-    realtimeVoiceBrowserSessionBrokerIds: [],
     mediaUnderstandingProviderIds: [...(params.contracts?.mediaUnderstandingProviders ?? [])],
     transcriptSourceProviderIds: [...(params.contracts?.transcriptSourceProviders ?? [])],
     imageGenerationProviderIds: [...(params.contracts?.imageGenerationProviders ?? [])],

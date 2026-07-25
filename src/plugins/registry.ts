@@ -88,7 +88,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerSpeechProvider: registrars.registerSpeechProvider,
     registerRealtimeTranscriptionProvider: registrars.registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider: registrars.registerRealtimeVoiceProvider,
-    registerRealtimeVoiceBrowserSessionBroker: registrars.registerRealtimeVoiceBrowserSessionBroker,
     registerMediaUnderstandingProvider: registrars.registerMediaUnderstandingProvider,
     registerTranscriptSourceProvider: registrars.registerTranscriptSourceProvider,
     registerImageGenerationProvider: registrars.registerImageGenerationProvider,

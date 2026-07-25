@@ -14,6 +14,10 @@ import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  CODEX_REALTIME_OFFER_PATH,
+  configureCodexRealtimeBrowserSession,
+} from "./realtime-voice-api.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -33,10 +37,6 @@ import {
   resumeCodexCliSessionOnNode,
   resolveCodexCliSessionForBindingOnNode,
 } from "./src/node-cli-sessions.js";
-import {
-  CODEX_REALTIME_OFFER_PATH,
-  createCodexRealtimeBrowserSessionBroker,
-} from "./src/realtime-browser-session.js";
 import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
@@ -90,11 +90,10 @@ export default definePluginEntry({
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     if (api.registrationMode === "full") {
-      const realtimeBrowserSession = createCodexRealtimeBrowserSessionBroker({
+      const realtimeBrowserSession = configureCodexRealtimeBrowserSession({
         getConfig: resolveCurrentConfig,
         getPluginConfig: resolveCurrentPluginConfig,
       });
-      api.registerRealtimeVoiceBrowserSessionBroker(realtimeBrowserSession.broker);
       api.registerHttpRoute({
         path: CODEX_REALTIME_OFFER_PATH,
         auth: "plugin",
@@ -117,10 +116,9 @@ export default definePluginEntry({
         id: "codex-oauth-realtime-browser-session",
         description: "Release Codex OAuth realtime browser sessions when the plugin stops",
         cleanup: async ({ reason }) => {
-          // Runtime lifecycle cleanup also runs for session resets/deletes and
-          // registry refresh. This broker is process-scoped; process exit owns
-          // shutdown, so only an explicit plugin disable tears it down in-place.
-          if (reason !== "disable") {
+          // Session cleanup must not release the process runtime. Registry
+          // restart and plugin disable release this registration's lease.
+          if (reason === "reset" || reason === "delete") {
             return;
           }
           await realtimeBrowserSession.cleanup();

@@ -5,7 +5,6 @@ import type { ContextEngineFactory } from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
-import type { RealtimeVoiceBrowserSessionBroker } from "../talk/provider-types.js";
 import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
 import type {
   AgentToolResultMiddleware,
@@ -282,11 +281,6 @@ export type OpenClawPluginApi = {
   registerRealtimeTranscriptionProvider: (provider: RealtimeTranscriptionProviderPlugin) => void;
   /** Register a realtime voice provider (duplex voice capability). */
   registerRealtimeVoiceProvider: (provider: RealtimeVoiceProviderPlugin) => void;
-  /**
-   * Register a plugin-owned browser-session route for an existing realtime voice provider.
-   * The host supplies matching brokers to that provider only on browser-session calls.
-   */
-  registerRealtimeVoiceBrowserSessionBroker: (broker: RealtimeVoiceBrowserSessionBroker) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register a transcripts source provider (live or imported meeting transcript capability). */

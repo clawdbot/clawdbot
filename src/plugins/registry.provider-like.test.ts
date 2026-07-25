@@ -30,53 +30,6 @@ function createCatalogModel(id: string, name: string) {
 }
 
 describe("plugin registry provider-like registrations", () => {
-  it("owns realtime browser-session brokers and rejects duplicate provider keys", () => {
-    const pluginRegistry = createTestRegistry();
-    const firstRecord = createPluginRecord({
-      id: "codex",
-      source: "/tmp/codex/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    const secondRecord = createPluginRecord({
-      id: "duplicate",
-      source: "/tmp/duplicate/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    const broker = {
-      id: " Codex-OAuth ",
-      providerId: " OpenAI ",
-      isConfigured: () => true,
-      createBrowserSession: async () => ({
-        provider: "openai",
-        transport: "webrtc" as const,
-        clientSecret: "test",
-      }),
-    };
-
-    pluginRegistry.registerRealtimeVoiceBrowserSessionBroker(firstRecord, broker);
-    pluginRegistry.registerRealtimeVoiceBrowserSessionBroker(secondRecord, broker);
-
-    expect(pluginRegistry.registry.realtimeVoiceBrowserSessionBrokers).toMatchObject([
-      {
-        pluginId: "codex",
-        broker: { id: "codex-oauth", providerId: "openai" },
-      },
-    ]);
-    expect(firstRecord.realtimeVoiceBrowserSessionBrokerIds).toEqual(["openai:codex-oauth"]);
-    expect(pluginRegistry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "duplicate",
-        message:
-          "realtime voice browser-session broker already registered: openai:codex-oauth (codex)",
-      }),
-    );
-  });
-
   it("captures unified model catalog provider registrations", () => {
     const pluginRegistry = createTestRegistry();
     const record = createPluginRecord({
