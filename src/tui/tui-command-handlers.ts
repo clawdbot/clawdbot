@@ -179,6 +179,17 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const hasUnsafeSessionRollover = () =>
     hasTrackedAbortTarget() || state.activityStatus === "finishing context";
 
+  const rejectUnsafeSessionRollover = (command: "new" | "reset") => {
+    if (!hasUnsafeSessionRollover()) {
+      return false;
+    }
+    // Reset interrupts admitted Gateway work, so both rollover commands must
+    // reject active, queued, and finishing runs before mutating the session.
+    chatLog.addSystem(`abort the current run before /${command}`);
+    tui.requestRender();
+    return true;
+  };
+
   const currentSessionPatchTarget = () => ({
     key: state.currentSessionKey,
     ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
@@ -736,9 +747,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       }
       case "new":
-        if (hasUnsafeSessionRollover()) {
-          chatLog.addSystem("abort the current run before /new");
-          tui.requestRender();
+        if (rejectUnsafeSessionRollover("new")) {
           break;
         }
         sessionCreationInFlight = true;
@@ -769,6 +778,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "reset":
+        if (rejectUnsafeSessionRollover("reset")) {
+          break;
+        }
         try {
           // Clear token counts immediately to avoid stale display (#1523)
           state.sessionInfo.inputTokens = null;

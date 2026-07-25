@@ -285,8 +285,15 @@ suite("Codex native session catalog", () => {
       // Counts only render while a section is collapsed.
       expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
 
-      const groupingToggle = section.locator('[data-session-catalog-grouping-toggle="codex"]');
-      await groupingToggle.click();
+      // Header actions are hover-revealed; hover the head so the button
+      // regains pointer events before the click, mirroring the Threads menus.
+      const catalogHead = section.locator(".sidebar-recent-sessions__head");
+      const viewMenuButton = section.locator('[data-session-catalog-view-menu="codex"]');
+      await catalogHead.hover();
+      await viewMenuButton.click();
+      await page
+        .getByRole("menuitemradio", { name: "None" })
+        .evaluate((element) => (element as HTMLElement).click());
       await expect.poll(() => projectHeads.count()).toBe(0);
       expect(await section.locator("[data-session-key]").count()).toBe(4);
       expect(
@@ -300,7 +307,11 @@ suite("Codex native session catalog", () => {
         });
       }
 
-      await groupingToggle.click();
+      await catalogHead.hover();
+      await viewMenuButton.click();
+      await page
+        .getByRole("menuitemradio", { name: "Project" })
+        .evaluate((element) => (element as HTMLElement).click());
       await expect.poll(() => projectHeads.count()).toBe(2);
       expect(
         await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),

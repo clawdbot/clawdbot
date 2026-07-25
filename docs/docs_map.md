@@ -2761,6 +2761,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: /model in chat
   - H2: CLI
   - H2: Models registry (models.json)
+  - H3: Hosted catalog updates
   - H2: Related
 
 ## concepts/multi-agent.md

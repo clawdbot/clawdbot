@@ -674,6 +674,11 @@ export function createCopilotController({
       if (entry?.sessionKey !== sessionKey || !subscribedKeys.has(sessionKey)) {
         continue;
       }
+      // A session stays subscribed across turns; only its persisted active run
+      // may stream or unlock the panel after a delayed earlier Gateway event.
+      if (event.event === "chat" && event.payload?.runId !== entry.activeRunId) {
+        continue;
+      }
       for (const port of ports) {
         post(port, { type: "panel.event", event });
       }

@@ -7,6 +7,7 @@ import {
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
   readConfiguredProviderCatalogEntries,
+  readManifestProviderDefaultModelRef,
   supportsNativeStreamingUsageCompat,
 } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig } from "./provider-model-shared.js";
@@ -298,6 +299,7 @@ describe("provider-catalog-shared manifest provider configs", () => {
     const catalog: ModelCatalogProvider = {
       baseUrl: "https://api.example.test/v1",
       api: "openai-completions",
+      defaultModel: " example-model ",
       headers: { "x-provider": "example" },
       models: [
         {
@@ -368,6 +370,12 @@ describe("provider-catalog-shared manifest provider configs", () => {
         },
       ],
     });
+    expect(
+      readManifestProviderDefaultModelRef(
+        { modelCatalog: { providers: { example: catalog } } },
+        "example",
+      ),
+    ).toBe("example/example-model");
   });
 
   it("normalizes retired nested Gemini ids before emitting manifest provider config", () => {

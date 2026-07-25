@@ -40,6 +40,13 @@ describe("zai onboard", () => {
     ).not.toHaveProperty("baseUrl");
   });
 
+  it("uses the manifest default and alias for a fresh general endpoint setup", () => {
+    expect(resolveAgentModelPrimaryValue(defaultCfg.agents?.defaults?.model)).toBe("zai/glm-5.1");
+    expect(defaultCfg.agents?.defaults?.models).toEqual({
+      "zai/glm-5.1": { alias: "GLM" },
+    });
+  });
+
   it("resolves GLM-5.2 through the selected Coding Plan or custom endpoint", async () => {
     for (const [name, cfg, expectedBaseUrl] of [
       ["coding-cn", applyZaiConfig({}, { endpoint: "coding-cn" }), ZAI_CODING_CN_BASE_URL],

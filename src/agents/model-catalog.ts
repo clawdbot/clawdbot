@@ -10,7 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -366,8 +366,9 @@ export function loadManifestModelCatalog(params: {
         config: params.config,
       }),
   );
-  const plan = planManifestModelCatalogRows({
+  const plan = planEffectiveModelCatalogRows({
     registry: { plugins: eligiblePlugins },
+    config: params.config,
   });
   const rows = plan.rows.map((row) => {
     const entry: ModelCatalogEntry = {

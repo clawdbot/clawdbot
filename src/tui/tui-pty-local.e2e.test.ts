@@ -67,6 +67,14 @@ const GATEWAY_SCENARIOS = {
     holdFirstResponse: true,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
+  reset: {
+    agentId: "tui-pty-reset",
+    modelId: "tui-pty-reset",
+    toolsProfile: "minimal",
+    replyText: "FIRST_RUN_ACTIVE",
+    holdFirstResponse: true,
+    followupReplyText: "FOLLOWUP_RUN_COMPLETE",
+  },
   emptyReply: {
     agentId: "tui-pty-empty-reply",
     modelId: "tui-pty-empty-reply",
@@ -1118,6 +1126,50 @@ describe("TUI PTY real backends", () => {
         const freshRequest = JSON.stringify(fixture.mockModel.requests()[1]?.body);
         expect(freshRequest).toContain("send after gateway new");
         expect(freshRequest).not.toContain("seed gateway session");
+
+        await fixture.run.write("/exit\r", { delay: false });
+        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  registerGatewayTest(
+    "preserves a running session when /reset is typed against the real Gateway",
+    async ({ onTestFinished }) => {
+      const fixture = await startGatewayModeTui("reset", onTestFinished);
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("keep the active Gateway turn\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 1 ? true : null),
+          onTimeout: () =>
+            new Error(`active Gateway turn did not reach the model\n${fixture.run.output()}`),
+        });
+
+        await fixture.run.write("/reset\r", { delay: false });
+        await fixture.run.waitForOutput("abort the current run before /reset", 5_000);
+        expect(fixture.mockModel.requests()).toHaveLength(1);
+
+        fixture.mockModel.releaseFirstResponse();
+        await fixture.run.waitForOutput("FIRST_RUN_ACTIVE");
+
+        await fixture.run.write("continue the preserved Gateway session\r");
+        await waitFor({
+          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+          read: () => (fixture.mockModel.requests().length === 2 ? true : null),
+          onTimeout: () =>
+            new Error(
+              `preserved Gateway session did not accept its next turn\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
+            ),
+        });
+        const preservedRequest = JSON.stringify(fixture.mockModel.requests()[1]?.body);
+        expect(preservedRequest).toContain("keep the active Gateway turn");
+        expect(preservedRequest).toContain("continue the preserved Gateway session");
+        await fixture.run.waitForOutput("FOLLOWUP_RUN_COMPLETE");
 
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);

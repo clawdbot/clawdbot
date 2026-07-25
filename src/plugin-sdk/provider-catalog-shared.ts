@@ -1,6 +1,7 @@
 // Provider catalog helpers normalize, hash, and expose model catalogs for provider plugins.
 import { createHash } from "node:crypto";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   ModelCatalogCost,
   ModelCatalogMediaInputConfig,
@@ -12,6 +13,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "../../packages/normalization-core/src/number-coercion.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
@@ -123,6 +125,19 @@ function countRawManifestCatalogModels(catalog: unknown): number | undefined {
   }
   const models = (catalog as { models?: unknown }).models;
   return Array.isArray(models) ? models.length : undefined;
+}
+
+/** Reads a provider's normalized manifest default as a fully qualified model ref. */
+export function readManifestProviderDefaultModelRef(
+  manifest: unknown,
+  providerId: string,
+): string | undefined {
+  const catalog = (manifest as { modelCatalog?: { providers?: Record<string, unknown> } })
+    ?.modelCatalog?.providers?.[providerId];
+  const defaultModel = normalizeOptionalString(
+    (catalog as { defaultModel?: unknown })?.defaultModel,
+  );
+  return defaultModel ? buildModelCatalogRef(providerId, defaultModel) : undefined;
 }
 
 function cloneManifestCatalogTieredCost(

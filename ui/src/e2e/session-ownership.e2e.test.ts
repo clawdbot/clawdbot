@@ -244,7 +244,8 @@ describeControlUiE2e("Control UI session ownership", () => {
     });
 
     await currentPage.goto(`${server?.baseUrl ?? ""}new`);
-    const draftToggle = currentPage.getByLabel("Start as draft");
+    // Playwright check()/isChecked() support role="switch" buttons via aria-checked.
+    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
     await draftToggle.waitFor();
     await captureUiProof(currentPage, "02-create-draft-available.png");
     await draftToggle.check();
@@ -326,7 +327,7 @@ describeControlUiE2e("Control UI session ownership", () => {
     });
 
     await currentPage.goto(`${server?.baseUrl ?? ""}new`);
-    const draftToggle = currentPage.getByLabel("Start as draft");
+    const draftToggle = currentPage.getByRole("switch", { name: "Draft", exact: true });
     await draftToggle.check();
     await gateway.setSessionSharingPolicy({
       allowedSessionVisibilities: ["shared"],
@@ -356,6 +357,6 @@ describeControlUiE2e("Control UI session ownership", () => {
 
     await currentPage.goto(`${server?.baseUrl ?? ""}new`);
     await currentPage.locator(".new-session-page__message").waitFor();
-    expect(await currentPage.getByLabel("Start as draft").count()).toBe(0);
+    expect(await currentPage.getByRole("switch", { name: "Draft", exact: true }).count()).toBe(0);
   });
 });

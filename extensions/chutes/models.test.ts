@@ -2,14 +2,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CHUTES_DEFAULT_MODEL_ID } from "./api.js";
 import {
   buildChutesModelDefinition,
-  CHUTES_DEFAULT_MODEL_ID,
-  CHUTES_DEFAULT_MODEL_REF,
   CHUTES_MODEL_CATALOG,
   discoverChutesModels,
 } from "./models.js";
-import { applyChutesConfig } from "./onboard.js";
+import { applyChutesConfig, CHUTES_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const EXPECTED_STATIC_MODEL_IDS = [
@@ -136,7 +135,8 @@ describe("chutes-models", () => {
     const runtimeIds = CHUTES_MODEL_CATALOG.map((model) => model.id);
     expect(manifestIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
     expect(runtimeIds).toEqual(EXPECTED_STATIC_MODEL_IDS);
-    expect(CHUTES_DEFAULT_MODEL_ID).toBe("zai-org/GLM-5.2-TEE");
+    expect(CHUTES_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.chutes.defaultModel);
+    expect(manifest.modelCatalog.providers.chutes.defaultModel).toBe("zai-org/GLM-5.2-TEE");
     expect(
       manifest.modelCatalog.providers.chutes.models
         .filter((model) => "status" in model && model.status === "deprecated")
@@ -170,6 +170,13 @@ describe("chutes-models", () => {
     );
     expect(cfg.agents?.defaults?.models?.["chutes-vision"]?.alias).toBe(
       "chutes/moonshotai/Kimi-K2.6-TEE",
+    );
+    expect(Object.keys(cfg.agents?.defaults?.models ?? {}).toSorted()).toEqual(
+      [
+        ...EXPECTED_STATIC_MODEL_IDS.map((id) => `chutes/${id}`),
+        "chutes-pro",
+        "chutes-vision",
+      ].toSorted(),
     );
     const catalogBackedTargets = [
       CHUTES_DEFAULT_MODEL_REF,

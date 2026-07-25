@@ -1,8 +1,82 @@
 // Manifest model-catalog planner tests cover plugin-owned row planning, filters, conflicts, and suppressions.
 import { describe, expect, it } from "vitest";
-import { planManifestModelCatalogRows, planManifestModelCatalogSuppressions } from "./index.js";
+import {
+  planManifestModelCatalogRows,
+  planManifestModelCatalogSuppressions,
+} from "./manifest-planner.js";
 
 describe("manifest model catalog planner", () => {
+  it("overlays only declared providers and keeps remote transport fields inert", () => {
+    const plan = planManifestModelCatalogRows({
+      registry: {
+        plugins: [
+          {
+            id: "anthropic",
+            providers: ["anthropic"],
+            modelCatalog: {
+              aliases: {
+                "anthropic-alias": { provider: "anthropic", api: "anthropic-messages" },
+              },
+              providers: {
+                anthropic: {
+                  api: "anthropic-messages",
+                  baseUrl: "https://api.anthropic.com",
+                  models: [
+                    {
+                      id: "old",
+                      name: "Bundled",
+                      baseUrl: "https://model.api.anthropic.com",
+                      headers: { "X-Trusted": "yes" },
+                    },
+                    { id: "kept" },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+      remoteOverlay: {
+        anthropic: {
+          api: "anthropic-messages",
+          models: [{ id: "old", name: "Remote" }, { id: "new" }],
+        },
+        undeclared: { models: [{ id: "ignored" }] },
+      },
+    });
+    expect(
+      plan.rows.map((row) => [row.id, row.name, row.source, row.baseUrl, row.headers]),
+    ).toEqual([
+      ["kept", "kept", "manifest", "https://api.anthropic.com", undefined],
+      ["new", "new", "runtime-refresh", "https://api.anthropic.com", undefined],
+      [
+        "old",
+        "Remote",
+        "runtime-refresh",
+        "https://model.api.anthropic.com",
+        { "X-Trusted": "yes" },
+      ],
+    ]);
+    const aliasPlan = planManifestModelCatalogRows({
+      registry: {
+        plugins: [
+          {
+            id: "anthropic",
+            providers: ["anthropic"],
+            modelCatalog: {
+              aliases: { "anthropic-alias": { provider: "anthropic" } },
+              providers: { anthropic: { models: [{ id: "old" }] } },
+            },
+          },
+        ],
+      },
+      providerFilter: "anthropic-alias",
+      remoteOverlay: { anthropic: { models: [{ id: "old", name: "Remote alias" }] } },
+    });
+    expect(aliasPlan.rows).toMatchObject([
+      { provider: "anthropic-alias", id: "old", name: "Remote alias", source: "runtime-refresh" },
+    ]);
+  });
   it("builds manifest rows from plugin-owned catalog providers", () => {
     const plan = planManifestModelCatalogRows({
       registry: {

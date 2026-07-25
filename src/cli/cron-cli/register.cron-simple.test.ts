@@ -31,6 +31,23 @@ async function runCronToggle(command: "enable" | "disable"): Promise<void> {
   await program.parseAsync([command, "job-1"], { from: "user" });
 }
 
+function mockCronShowPages(readPage: (params: { offset?: number }) => unknown): void {
+  callGatewayFromCli.mockImplementation(
+    async (method: string, _opts: unknown, params?: { id?: string; offset?: number }) => {
+      if (method === "cron.get") {
+        throw Object.assign(new Error(`cron job not found: ${params?.id ?? ""}`), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        });
+      }
+      if (method === "cron.list") {
+        return readPage(params ?? {});
+      }
+      throw new Error(`unexpected cron method: ${method}`);
+    },
+  );
+}
+
 function setStderrIsTTY(value: boolean): void {
   Object.defineProperty(process.stderr, "isTTY", {
     value,
@@ -60,48 +77,88 @@ describe("cron show pagination guard (regression for #83856)", () => {
   });
 
   it("throws when nextOffset fails to advance", async () => {
-    callGatewayFromCli.mockResolvedValue({
+    mockCronShowPages(() => ({
       jobs: [],
+      snapshotRevision: "test-stable-cron-inventory",
+      total: 1,
+      offset: 0,
+      limit: 200,
       hasMore: true,
       nextOffset: 0,
-    });
+    }));
     await expect(runCronShow("missing")).rejects.toThrow("exit 1");
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("pagination did not advance"),
     );
-    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(
+      1,
+    );
   });
 
   it("throws when pagination exceeds the max page count", async () => {
-    let nextOffset = 0;
-    callGatewayFromCli.mockImplementation(async () => {
-      nextOffset += 1;
-      return { jobs: [], hasMore: true, nextOffset };
+    mockCronShowPages(({ offset = 0 }) => {
+      return {
+        jobs: [{ id: `page-${offset}`, name: `Page ${offset}` }],
+        snapshotRevision: "test-stable-cron-inventory",
+        total: 51,
+        offset,
+        limit: 200,
+        hasMore: true,
+        nextOffset: offset + 1,
+      };
     });
     await expect(runCronShow("missing")).rejects.toThrow("exit 1");
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("pagination exceeded maximum pages"),
     );
-    expect(callGatewayFromCli.mock.calls.length).toBeGreaterThan(1);
-    expect(callGatewayFromCli.mock.calls.length).toBeLessThanOrEqual(50);
+    const listCalls = callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list");
+    expect(listCalls.length).toBeGreaterThan(1);
+    expect(listCalls.length).toBeLessThanOrEqual(50);
   });
 
   it("returns the job when found on a later page", async () => {
     const job: CronJob = { id: "abc", name: "wanted" } as unknown as CronJob;
-    callGatewayFromCli
-      .mockResolvedValueOnce({ jobs: [], hasMore: true, nextOffset: 200 })
-      .mockResolvedValueOnce({ jobs: [job], hasMore: false, nextOffset: null });
+    mockCronShowPages(({ offset }) =>
+      offset
+        ? {
+            jobs: [job],
+            snapshotRevision: "test-stable-cron-inventory",
+            total: 201,
+            offset,
+            limit: 200,
+            hasMore: false,
+            nextOffset: null,
+          }
+        : {
+            jobs: Array.from({ length: 200 }, (_, index) => ({
+              id: `page-${index}`,
+              name: `Page ${index}`,
+            })),
+            snapshotRevision: "test-stable-cron-inventory",
+            total: 201,
+            offset: 0,
+            limit: 200,
+            hasMore: true,
+            nextOffset: 200,
+          },
+    );
     await runCronShow("wanted");
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ id: "abc" }));
-    expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
+    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(
+      2,
+    );
   });
 
   it("returns empty result when pagination terminates without a match", async () => {
-    callGatewayFromCli.mockResolvedValueOnce({
+    mockCronShowPages(() => ({
       jobs: [],
+      snapshotRevision: "test-empty-cron-inventory",
+      total: 0,
+      offset: 0,
+      limit: 200,
       hasMore: false,
       nextOffset: null,
-    });
+    }));
     await expect(runCronShow("missing")).rejects.toThrow("exit 1");
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("cron job not found: missing"),

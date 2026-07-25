@@ -401,17 +401,9 @@ export async function handleAgentExecutionError(params: {
     turn.replyOperation?.recordActivity();
     return { kind: "retry" };
   }
-  if (providerRequestError) {
-    takePendingLifecycleTerminal()?.emit("error", err);
-    turn.replyOperation?.fail("run_failed", err);
-    await params.modelPatch.fail(err);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
-    };
-  }
   if (
     isTransientHttp &&
+    (!providerRequestError || providerRequestError.allowTransientHttpRetry) &&
     !params.overloadRetryState.unsafeToReplay &&
     params.consumeTransientHttpRetry()
   ) {
@@ -425,6 +417,15 @@ export async function handleAgentExecutionError(params: {
       return abortAction;
     }
     return { kind: "retry" };
+  }
+  if (providerRequestError) {
+    takePendingLifecycleTerminal()?.emit("error", err);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    return {
+      kind: "final",
+      payload: markAgentRunFailureReplyPayload({ text: providerRequestError.userMessage }),
+    };
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
   const isPureTransientSummary = isFallbackSummary ? isPureTransientRateLimitSummary(err) : false;

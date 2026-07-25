@@ -272,6 +272,41 @@ describe("renderAgents", () => {
     );
   });
 
+  it.each([
+    { name: "a string primary", model: "openai/gpt-5.4" },
+    { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
+  ])("does not display inherited fallback chips for $name", ({ model }) => {
+    const container = document.createElement("div");
+    const fallback = "anthropic/claude-sonnet-4-6";
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: {
+              agents: {
+                defaults: {
+                  model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
+                },
+                list: [{ id: "alpha" }, { id: "beta", model }],
+              },
+            },
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelectorAll(".agent-chip-input .chip")).toHaveLength(0);
+    expect(container.querySelector<HTMLInputElement>(".agent-chip-input input")?.placeholder).toBe(
+      "provider/model",
+    );
+  });
+
   it("remounts overview model controls when switching selected agents", async () => {
     const container = document.createElement("div");
     const configForm = {

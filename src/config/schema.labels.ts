@@ -501,6 +501,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.mode": "Model Catalog Mode",
   "models.pricing": "Model Pricing",
   "models.pricing.enabled": "Model Pricing Enabled",
+  "models.catalogRefresh": "Model Catalog Refresh",
+  "models.catalogRefresh.enabled": "Model Catalog Refresh Enabled",
+  "models.catalogRefresh.url": "Model Catalog Refresh URL",
   "models.providers": "Model Providers",
   "models.providers.*.baseUrl": "Model Provider Base URL",
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret

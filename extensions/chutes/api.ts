@@ -1,11 +1,6 @@
-/**
- * Public Chutes provider plugin API exports.
- */
 export {
   buildChutesModelDefinition,
   CHUTES_BASE_URL,
-  CHUTES_DEFAULT_MODEL_ID,
-  CHUTES_DEFAULT_MODEL_REF,
   CHUTES_MODEL_CATALOG,
   discoverChutesModels,
 } from "./models.js";
@@ -14,4 +9,6 @@ export {
   applyChutesApiKeyConfig,
   applyChutesConfig,
   applyChutesProviderConfig,
+  CHUTES_DEFAULT_MODEL_ID,
+  CHUTES_DEFAULT_MODEL_REF,
 } from "./onboard.js";
