@@ -1,3 +1,5 @@
+import { normalizeSidebarLayout, type SidebarLayout } from "../../pages/chat/sidebar-layout.ts";
+
 export type BoardFace = "chat" | "dashboard";
 export type BoardVisibleChatDock = "bottom" | "left" | "right";
 
@@ -9,7 +11,10 @@ export type BoardSessionView = {
 
 export type BoardSessionViews = Record<string, BoardSessionView>;
 
+export type SidebarSessionLayouts = Record<string, SidebarLayout>;
+
 const MAX_BOARD_SESSION_VIEWS = 50;
+const MAX_SIDEBAR_SESSION_LAYOUTS = 50;
 
 export function normalizeBoardSessionViews(value: unknown): BoardSessionViews {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -64,4 +69,34 @@ export function updateBoardSessionView(
     ...patch,
   };
   return Object.fromEntries(Object.entries(views).slice(-MAX_BOARD_SESSION_VIEWS));
+}
+
+export function normalizeSidebarSessionLayouts(value: unknown): SidebarSessionLayouts {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const layouts: SidebarSessionLayouts = {};
+  for (const [sessionKey, rawLayout] of Object.entries(value).slice(-MAX_SIDEBAR_SESSION_LAYOUTS)) {
+    const key = sessionKey.trim();
+    if (!key) {
+      continue;
+    }
+    layouts[key] = normalizeSidebarLayout(rawLayout);
+  }
+  return layouts;
+}
+
+export function updateSidebarSessionLayout(
+  current: SidebarSessionLayouts | undefined,
+  sessionKey: string,
+  layout: SidebarLayout,
+): SidebarSessionLayouts {
+  const key = sessionKey.trim();
+  const layouts = normalizeSidebarSessionLayouts(current);
+  if (!key) {
+    return layouts;
+  }
+  delete layouts[key];
+  layouts[key] = normalizeSidebarLayout(layout);
+  return Object.fromEntries(Object.entries(layouts).slice(-MAX_SIDEBAR_SESSION_LAYOUTS));
 }
