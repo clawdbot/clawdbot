@@ -56,7 +56,7 @@ function buildCompactionResultSessionTarget(params: {
   ) {
     throw new Error("Legacy context-engine successor identity is inconsistent");
   }
-  const sessionId = targetSessionId ?? suppliedSessionId ?? marker?.sessionId;
+  const sessionId = targetSessionId ?? marker?.sessionId ?? suppliedSessionId;
   if (!sessionId) {
     return undefined;
   }

@@ -57,6 +57,7 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
 }): void {
   const { sessionPromptState, sessionFileUsed, sessionIdUsed } = params;
   const previousSessionId = sessionPromptState.sessionId;
+  let adoptedSessionId = sessionIdUsed;
   const sessionFileChanged = Boolean(
     sessionFileUsed && sessionFileUsed !== sessionPromptState.sessionFile,
   );
@@ -65,12 +66,13 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
     const marker = parseSqliteSessionFileMarker(sessionFileUsed);
     if (marker) {
       if (
-        marker.sessionId !== sessionIdUsed ||
+        (marker.sessionId !== sessionIdUsed && sessionIdUsed !== previousSessionId) ||
         !sessionPromptState.sessionTarget?.sessionKey ||
         marker.agentId !== sessionPromptState.sessionTarget.agentId
       ) {
         throw new Error("Legacy context-engine successor identity is inconsistent");
       }
+      adoptedSessionId = marker.sessionId;
       nextSessionTarget = {
         ...marker,
         sessionKey: sessionPromptState.sessionTarget.sessionKey,
@@ -103,10 +105,10 @@ export function applyEmbeddedAttemptSessionIdentity(params: {
       ? { ...sessionPromptState.sessionTarget, sessionId: sessionIdUsed }
       : undefined;
   }
-  sessionPromptState.adoptSessionId(sessionIdUsed);
+  sessionPromptState.adoptSessionId(adoptedSessionId);
   if (sessionFileUsed && sessionFileChanged) {
     sessionPromptState.sessionFile = sessionFileUsed;
-  } else if (sessionIdUsed !== previousSessionId && nextSessionTarget) {
+  } else if (adoptedSessionId !== previousSessionId && nextSessionTarget) {
     const marker = parseSqliteSessionFileMarker(sessionPromptState.sessionFile);
     if (marker) {
       sessionPromptState.sessionFile = formatSqliteSessionFileMarker({
