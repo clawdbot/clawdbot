@@ -192,6 +192,55 @@ describe("assistant commentary grouping", () => {
     resetChatThreadState(paneId);
   });
 
+  it("keeps an active stream above a future queued user turn when it becomes stable", () => {
+    const paneId = "clock-skew-stream-queue-transition";
+    const activeUser = {
+      role: "user",
+      content: "Active prompt",
+      timestamp: 2_000,
+      __openclaw: { idempotencyKey: "run-active:user" },
+    };
+    const activeSend = {
+      id: "active-send",
+      text: "Active prompt",
+      createdAt: 2_000,
+      sendRunId: "run-active",
+      sendSubmittedAtMs: 10,
+      sendState: "waiting-model" as const,
+    };
+    const futureSend = {
+      id: "future-send",
+      text: "Future prompt",
+      createdAt: 3_000,
+      sendAttempts: 1,
+      sendState: "waiting-reconnect" as const,
+    };
+    const liveItems = buildCachedChatItems(
+      createProps({
+        paneId,
+        queue: [activeSend, futureSend],
+        stream: "Current partial reply",
+        streamStartedAt: 1_000,
+      }),
+    );
+    const stableItems = buildCachedChatItems(
+      createProps({
+        paneId,
+        messages: [
+          activeUser,
+          { role: "assistant", content: "Current partial reply", timestamp: 1_000 },
+        ],
+        queue: [futureSend],
+      }),
+    );
+    const visibleKinds = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.map((item) => (item.kind === "group" ? item.role : item.kind));
+
+    expect(visibleKinds(liveItems)).toEqual(["user", "stream", "user"]);
+    expect(visibleKinds(stableItems)).toEqual(["user", "assistant", "user"]);
+    resetChatThreadState(paneId);
+  });
+
   it("keeps keyed commentary separate from the terminal assistant reply", () => {
     const groups = messageGroups({
       messages: [

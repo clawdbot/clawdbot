@@ -170,11 +170,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const threadQueuedSends = queuedSends.filter(
     (queued) => !chatMessagesContainQueuedSend(history, queued, true),
   );
-  const activeRunQueuedSends = threadQueuedSends.filter(
-    (queued) => queued.sendState === "waiting-model",
+  const currentRunQueuedSends = threadQueuedSends.filter(
+    (queued) => queued.sendState === "sending" || queued.sendState === "waiting-model",
   );
   const futureQueuedSends = threadQueuedSends.filter(
-    (queued) => queued.sendState !== "waiting-model",
+    (queued) => !currentRunQueuedSends.includes(queued),
   );
   const futureQueuedTimestamp = futureQueuedSends.reduce<number | null>(
     (earliest, queued) =>
@@ -210,7 +210,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       message,
     });
   };
-  for (const queued of activeRunQueuedSends) {
+  for (const queued of currentRunQueuedSends) {
     appendQueuedSend(queued);
   }
   for (const liftedCanvasSource of liftedCanvasSources) {
@@ -355,12 +355,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         : false;
     }) + 1;
   insertChatItemsByTimestamp(items, toolStreamItems, currentTurnStartIndex, toolStreamPredecessors);
-  // Future queued turns are a causal ceiling for current-run activity. Append
-  // them only after live rows so neither clock skew nor materialization can
-  // move the current tool/stream work across the next user prompt.
-  for (const queued of futureQueuedSends) {
-    appendQueuedSend(queued);
-  }
 
   // Working spark contract: whenever the agent works with nothing visibly
   // streaming (pre-first-token, or a queued send in flight), the thread shows
@@ -440,6 +434,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       questionId: prompt.id,
       startedAt: prompt.createdAtMs,
     });
+  }
+
+  // Future queued turns are a causal ceiling for every current-run projection.
+  // Append them after tools, streams, progress, and prompts so none can cross the
+  // next user turn when a live item becomes stable transcript history.
+  for (const queued of futureQueuedSends) {
+    appendQueuedSend(queued);
   }
 
   return annotateToolTurnOutcome(

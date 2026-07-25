@@ -519,21 +519,23 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, { historyMessages: [] });
     const prompt = "verify clock-skewed chat order";
+    const partial = "The Gateway is replying from an earlier clock.";
     const reply = "The Gateway reply stayed below its prompt.";
-    const visibleOrder = () =>
+    const appearsBefore = (lowerSelector: string, lowerText: string) =>
       page.locator(".chat-thread-inner").evaluate(
-        (thread: Element, texts: { prompt: string; reply: string }) =>
-          Array.from(thread.querySelectorAll(".chat-group")).flatMap((group: Element) => {
-            const text = group.textContent ?? "";
-            if (text.includes(texts.prompt)) {
-              return ["user"];
-            }
-            if (text.includes(texts.reply)) {
-              return ["assistant"];
-            }
-            return [];
-          }),
-        { prompt, reply },
+        (thread: Element, texts: { lowerSelector: string; lowerText: string; prompt: string }) => {
+          const findByText = (selector: string, text: string) =>
+            Array.from(thread.querySelectorAll(selector)).find((row) =>
+              (row.textContent ?? "").includes(text),
+            );
+          const promptRow = findByText(".chat-group.user", texts.prompt);
+          const lowerRow = findByText(texts.lowerSelector, texts.lowerText);
+          if (!promptRow || !lowerRow) {
+            return false;
+          }
+          return promptRow.getBoundingClientRect().top < lowerRow.getBoundingClientRect().top;
+        },
+        { lowerSelector, lowerText, prompt },
       );
 
     try {
@@ -549,6 +551,22 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const browserTimestamp = await page.evaluate(() => Date.now());
       const gatewayTimestamp = browserTimestamp - 60_000;
       await gateway.emitGatewayEvent("chat", {
+        deltaText: partial,
+        message: {
+          content: [{ text: partial, type: "text" }],
+          role: "assistant",
+          timestamp: gatewayTimestamp,
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({
+        timeout: 10_000,
+      });
+      expect(await appearsBefore(".chat-bubble.streaming", partial)).toBe(true);
+
+      await gateway.emitGatewayEvent("chat", {
         message: {
           content: [{ text: reply, type: "text" }],
           role: "assistant",
@@ -561,7 +579,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor({
         timeout: 10_000,
       });
-      expect(await visibleOrder()).toEqual(["user", "assistant"]);
+      expect(await appearsBefore(".chat-group.assistant", reply)).toBe(true);
     } finally {
       await closeBrowserContext(context);
     }
