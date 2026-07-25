@@ -4,6 +4,7 @@ import {
   handleAgentEvent,
   handleSessionOperationEvent,
   reconcileWaitingApprovalsFromSnapshot,
+  resolveChatProjectionRunId,
   resetToolStream,
   type FallbackStatus,
   type PlanStatus,
@@ -25,6 +26,38 @@ type MutableHost = ToolStreamHost & {
   requestUpdate?: () => void;
 };
 const TOOL_STREAM_TEST_NOW = new Date("2026-05-09T00:00:00.000Z").getTime();
+
+describe("resolveChatProjectionRunId", () => {
+  it("restores only an active run proven by the reconnecting outbox", () => {
+    const reconnecting = {
+      id: "reconnecting",
+      text: "Current prompt",
+      createdAt: 1,
+      sendRunId: "run-restored",
+      sendState: "waiting-reconnect" as const,
+    };
+
+    expect(
+      resolveChatProjectionRunId({
+        activeRunIds: ["run-restored"],
+        queue: [reconnecting],
+      }),
+    ).toBe("run-restored");
+    expect(
+      resolveChatProjectionRunId({
+        activeRunIds: ["run-stale"],
+        queue: [reconnecting],
+      }),
+    ).toBeNull();
+    expect(
+      resolveChatProjectionRunId({
+        localRunId: "run-local",
+        activeRunIds: ["run-restored"],
+        queue: [reconnecting],
+      }),
+    ).toBe("run-local");
+  });
+});
 
 function createHost(overrides?: Partial<MutableHost>): MutableHost {
   const modelOverrides: Record<string, string | null> = {};

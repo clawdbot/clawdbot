@@ -16,6 +16,7 @@ import {
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import { resolveChatProjectionRunId } from "./tool-stream.ts";
 
 describe("assistantGroupCanOwnActiveRunStatus", () => {
   const group = (message: Record<string, unknown>): MessageGroup => ({
@@ -372,6 +373,42 @@ describe("assistant commentary grouping", () => {
       "stream",
     ]);
     resetChatThreadState(paneId);
+  });
+
+  it("keeps a restored reconnect prompt above its active server tool projection", () => {
+    const reconnectingSend = {
+      id: "reconnecting-send",
+      text: "Current prompt",
+      createdAt: 2_000,
+      sendAttempts: 1,
+      sendRunId: "run-restored",
+      sendState: "waiting-reconnect" as const,
+    };
+    const runId = resolveChatProjectionRunId({
+      activeRunIds: ["run-restored"],
+      queue: [reconnectingSend],
+    });
+    const items = buildCachedChatItems(
+      createProps({
+        runId,
+        queue: [reconnectingSend],
+        toolMessages: [
+          {
+            role: "toolResult",
+            runId: "run-restored",
+            toolCallId: "call-restored",
+            toolName: "shell",
+            content: "Restored tool output",
+            timestamp: 1_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "tool",
+    ]);
   });
 
   it("keeps a queued current prompt before a terminal delivered ahead of its ACK", () => {

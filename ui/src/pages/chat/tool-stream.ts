@@ -1,7 +1,7 @@
 // Control UI module implements app tool stream behavior.
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
@@ -382,6 +382,27 @@ export function resolveActiveRunOutputTokens(params: {
     }
   }
   return null;
+}
+
+export function resolveChatProjectionRunId(params: {
+  localRunId?: string | null;
+  activeRunIds?: readonly string[];
+  queue?: readonly ChatQueueItem[];
+}): string | null {
+  if (params.localRunId) {
+    return params.localRunId;
+  }
+  const activeRunIds = new Set(params.activeRunIds ?? []);
+  // A session row can lag local completion. Restore its run identity only when
+  // the durable outbox independently proves that the same send is reconnecting.
+  return (
+    params.queue?.find(
+      (item) =>
+        item.sendState === "waiting-reconnect" &&
+        typeof item.sendRunId === "string" &&
+        activeRunIds.has(item.sendRunId),
+    )?.sendRunId ?? null
+  );
 }
 
 type WaitingApprovalSnapshotHost = Pick<
