@@ -82,8 +82,9 @@ quiet instead of rehashing stale conversation context.
 Proactive heartbeat behavior is opt-in:
 
 - **Recurring checks**: create [scheduled jobs](/automation/cron-jobs) for inbox
-  review, calendar sweeps, or queued follow-ups. Due jobs add their task context
-  to the heartbeat run; when nothing is due, no recurring task is inferred.
+  review, calendar sweeps, or queued follow-ups. Each job executes its configured
+  payload on its own schedule; the default heartbeat does not infer recurring
+  work from prior chats.
 - **Human check-in**: create a scheduled job if you want an occasional
   lightweight "anything you need?" message, and constrain its schedule to avoid
   night-time pings in your configured local timezone (see
