@@ -769,9 +769,10 @@ const UNTRUSTED_CONTEXT_HEADER_RE = /^Untrusted context \(metadata/m;
 
 /**
  * Matches JSON blobs that look like OpenClaw transport envelope metadata.
- * Allows `{` on its own line so pretty-printed JSON (the `JSON.stringify(..., null, 2)`
- * output produced by `formatUntrustedJsonBlock` in core) is also caught when it
- * leaks outside its ```json fence. Key list mirrors envelope identifiers used
+ * Core's `formatUntrustedJsonBlock` now emits compact single-line JSON; the
+ * optional-newline branch keeps catching legacy pretty-printed blocks from
+ * older transcripts when either leaks outside its ```json fence. Key list
+ * mirrors envelope identifiers used
  * by `buildInboundUserContextPrefix` and stays narrow to avoid false-positives
  * on legitimate user JSON with bare keys like "conversation" or "sender".
  */

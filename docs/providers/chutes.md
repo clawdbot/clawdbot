@@ -51,7 +51,7 @@ the Chutes catalog.
     <Steps>
       <Step title="Get an API key">
         Create a key at
-        [chutes.ai/settings/api-keys](https://chutes.ai/settings/api-keys).
+        [chutes.ai/app/settings/api-keys](https://chutes.ai/app/settings/api-keys).
       </Step>
       <Step title="Run the API key onboarding flow">
         ```bash
@@ -146,7 +146,7 @@ Run `openclaw models list --all --provider chutes` for the full list.
   <Card title="Chutes" href="https://chutes.ai" icon="arrow-up-right-from-square">
     Chutes dashboard and API docs.
   </Card>
-  <Card title="Chutes API keys" href="https://chutes.ai/settings/api-keys" icon="key">
+  <Card title="Chutes API keys" href="https://chutes.ai/app/settings/api-keys" icon="key">
     Create and manage Chutes API keys.
   </Card>
 </CardGroup>
