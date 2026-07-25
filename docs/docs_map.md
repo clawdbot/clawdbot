@@ -1340,7 +1340,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: If the command is missing
   - H2: Profiles
   - H2: Tabs
-  - H2: Snapshot / screenshot / actions
+  - H2: Extract / snapshot / screenshot / actions
   - H2: State and storage
   - H2: Debugging
   - H2: Existing Chrome via MCP
