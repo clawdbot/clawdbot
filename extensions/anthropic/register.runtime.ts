@@ -64,7 +64,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
 import { createClaudeSessionNodeInvokePolicies } from "./session-catalog-node-commands.js";
 import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
-import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
+import { isAnthropicOAuthApiKey, wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
 type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
@@ -132,6 +132,19 @@ function buildAnthropicCatalogProvider() {
     providerId: PROVIDER_ID,
     catalog: manifest.modelCatalog.providers.anthropic,
   });
+}
+
+/**
+ * Discovery credentials arrive as either an API key or a Claude subscription
+ * OAuth access token. Anthropic rejects an OAuth token sent as `x-api-key`, and
+ * rejects the request outright when both auth headers are present, so the two
+ * shapes must select mutually exclusive headers.
+ */
+function buildAnthropicDiscoveryAuthHeaders(key: string | undefined): Record<string, string> {
+  if (!key) {
+    return {};
+  }
+  return isAnthropicOAuthApiKey(key) ? { authorization: `Bearer ${key}` } : { "x-api-key": key };
 }
 
 function resolveAnthropicSonnet5Cost(nowMs: number = Date.now()) {
@@ -944,13 +957,10 @@ export function buildAnthropicProvider(): ProviderPlugin {
           buildProvider: buildAnthropicCatalogProvider,
           modelDiscovery: {
             endpointPath: "v1/models",
-            buildRequestHeaders: ({ apiKey, discoveryApiKey }) => {
-              const key = discoveryApiKey ?? apiKey;
-              return {
-                "anthropic-version": "2023-06-01",
-                ...(key ? { "x-api-key": key } : {}),
-              };
-            },
+            buildRequestHeaders: ({ apiKey, discoveryApiKey }) => ({
+              "anthropic-version": "2023-06-01",
+              ...buildAnthropicDiscoveryAuthHeaders(discoveryApiKey ?? apiKey),
+            }),
             acceptUnknownModel: acceptsAnthropicLiveModelContract,
           },
         }),
