@@ -1,5 +1,10 @@
 import { stableStringify } from "../stable-stringify.js";
 import { normalizeToolName } from "../tool-policy.js";
+import {
+  renderCodexNativeHookNoopResponse,
+  renderCodexNativeHookPermissionResponse,
+  renderCodexNativeHookPreToolUseBlockResponse,
+} from "./native-hook-relay-response.js";
 import type {
   JsonValue,
   NativeHookRelayInvocation,
@@ -27,22 +32,9 @@ const nativeHookRelayProviderAdapters: Record<
     normalizeMetadata: normalizeCodexHookMetadata,
     readToolInput: readCodexToolInput,
     readToolResponse: readCodexToolResponse,
-    renderNoopResponse: () => {
-      // Codex treats empty stdout plus exit 0 as no decision/no additional context.
-      return { stdout: "", stderr: "", exitCode: 0 };
-    },
-    renderPreToolUseBlockResponse: (reason, failureDisposition) => ({
-      stdout: `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: reason,
-        },
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-      ...(failureDisposition ? { failureDisposition } : {}),
-    }),
+    renderNoopResponse: () => renderCodexNativeHookNoopResponse(),
+    renderPreToolUseBlockResponse: (reason, failureDisposition) =>
+      renderCodexNativeHookPreToolUseBlockResponse(reason, failureDisposition),
     renderBeforeAgentFinalizeReviseResponse: (reason) => ({
       stdout: `${JSON.stringify({
         decision: "block",
@@ -59,22 +51,8 @@ const nativeHookRelayProviderAdapters: Record<
       stderr: "",
       exitCode: 0,
     }),
-    renderPermissionDecisionResponse: (decision, message) => ({
-      stdout: `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision:
-            decision === "allow"
-              ? { behavior: "allow" }
-              : {
-                  behavior: "deny",
-                  message: message?.trim() || "Denied by OpenClaw",
-                },
-        },
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-    }),
+    renderPermissionDecisionResponse: (decision, message) =>
+      renderCodexNativeHookPermissionResponse(decision, message),
   },
 };
 

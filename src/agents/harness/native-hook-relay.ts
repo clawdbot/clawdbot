@@ -4,11 +4,16 @@
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type {
   BeforeToolCallFailureDisposition,
   requestDeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
+import {
+  isNativeHookRelayAdmissionOverloadedError,
+  NativeHookRelayAdmissionController,
+} from "./native-hook-relay-admission.js";
 import {
   clearNativeHookRelayBridgesForTests,
   NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
@@ -36,6 +41,7 @@ import {
 } from "./native-hook-relay-events.js";
 import {
   clearNativeHookRelayPermissionsForTests,
+  buildNativeHookRelayPermissionAdmissionKey,
   formatPermissionApprovalDescriptionForTests as formatPermissionApprovalDescriptionForTestsImpl,
   permissionRequestContentFingerprintForTests as permissionRequestContentFingerprintForTestsImpl,
   permissionRequestToolInputKeyFingerprintForTests as permissionRequestToolInputKeyFingerprintForTestsImpl,
@@ -46,6 +52,7 @@ import {
   setNativeHookRelayDeferredToolApprovalRequesterForTests as setNativeHookRelayDeferredToolApprovalRequesterForTestsImpl,
   setNativeHookRelayPermissionApprovalRequesterForTests as setNativeHookRelayPermissionApprovalRequesterForTestsImpl,
 } from "./native-hook-relay-permissions.js";
+import { renderCodexNativeHookUnavailableResponse } from "./native-hook-relay-response.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import type {
   ActiveNativeHookRelayRegistration,
@@ -129,7 +136,7 @@ const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
 const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
-const { relays, relayBridges, invocations } = nativeHookRelayState;
+const { relays, relayBridges, admissions, invocations } = nativeHookRelayState;
 
 function resolveNativeHookRelayExpiresAtMs(ttlMs: number | undefined): number | undefined {
   return resolveExpiresAtMsFromDurationMs(normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS));
@@ -153,6 +160,7 @@ export function registerNativeHookRelay(
   unregisterNativeHookRelay(relayId, undefined, {
     deferBridgeRecordRemovalMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   });
+  admissions.set(relayId, new NativeHookRelayAdmissionController());
   const registration: ActiveNativeHookRelayRegistration = {
     relayId,
     provider: params.provider,
@@ -184,6 +192,7 @@ export function registerNativeHookRelay(
         provider: params.provider,
         relayId,
         stateDbPath,
+        stateSchemaVersion: OPENCLAW_STATE_SCHEMA_VERSION,
         generation: registration.generation,
         event,
         preToolUseUnavailable:
@@ -239,6 +248,13 @@ function unregisterNativeHookRelay(
 ): void {
   if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
     return;
+  }
+  const admission = admissions.get(relayId);
+  if (admission) {
+    const snapshot = admission.snapshot();
+    admission.close();
+    admissions.delete(relayId);
+    log.debug("native hook relay admission summary", { relayId, ...snapshot });
   }
   unregisterNativeHookRelayBridge(relayId, options);
   relays.delete(relayId);
@@ -307,31 +323,77 @@ export async function invokeNativeHookRelay(
     throw new Error("native hook relay payload must be JSON-compatible");
   }
 
+  const adapter = getNativeHookRelayProviderAdapter(provider);
   const normalized = normalizeNativeHookInvocation({
     registration,
     event,
     rawPayload: params.rawPayload,
   });
-  recordNativeHookRelayInvocation(normalized);
-  const startedAt = Date.now();
-  const response = await processNativeHookRelayInvocation({
-    registration,
-    invocation: normalized,
-    adapter: getNativeHookRelayProviderAdapter(provider),
-  });
-  if (
-    normalized.toolUseId &&
-    response.failureDisposition &&
-    readNativeHookRelayApprovalMode(normalized.rawPayload) !== "report"
-  ) {
-    projectNativeHookRelayPreToolUseFailure(registration, {
-      toolName: normalizeNativeHookToolName(normalized.toolName),
-      toolCallId: normalized.toolUseId,
-      disposition: response.failureDisposition,
-      durationMs: Date.now() - startedAt,
+  const admissionKey =
+    event === "permission_request"
+      ? `permission:${buildNativeHookRelayPermissionAdmissionKey({
+          registration,
+          invocation: normalized,
+          adapter,
+        })}`
+      : undefined;
+  const directSignal =
+    params.admissionSignal && registration.signal
+      ? AbortSignal.any([params.admissionSignal, registration.signal])
+      : (params.admissionSignal ?? registration.signal);
+  const execute = async (operationSignal: AbortSignal | undefined = directSignal) => {
+    const signal =
+      operationSignal && registration.signal && operationSignal !== registration.signal
+        ? AbortSignal.any([operationSignal, registration.signal])
+        : (operationSignal ?? registration.signal);
+    signal?.throwIfAborted();
+    recordNativeHookRelayInvocation(normalized);
+    const startedAt = Date.now();
+    const response = await processNativeHookRelayInvocation({
+      registration,
+      invocation: normalized,
+      adapter,
+      signal,
+    });
+    signal?.throwIfAborted();
+    if (
+      normalized.toolUseId &&
+      response.failureDisposition &&
+      readNativeHookRelayApprovalMode(normalized.rawPayload) !== "report"
+    ) {
+      projectNativeHookRelayPreToolUseFailure(registration, {
+        toolName: normalizeNativeHookToolName(normalized.toolName),
+        toolCallId: normalized.toolUseId,
+        disposition: response.failureDisposition,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    return response;
+  };
+  const admission = admissions.get(relayId);
+  if (params.admissionReserved || !admission) {
+    return execute(directSignal);
+  }
+  try {
+    return await admission.run(execute, {
+      ...(directSignal ? { signal: directSignal } : {}),
+      ...(admissionKey ? { key: admissionKey } : {}),
+    });
+  } catch (error) {
+    if (!isNativeHookRelayAdmissionOverloadedError(error)) {
+      throw error;
+    }
+    log.warn("native hook relay admission rejected overloaded invocation", {
+      relayId,
+      runId: registration.runId,
+      event,
+      ...admission.snapshot(),
+    });
+    return renderCodexNativeHookUnavailableResponse({
+      event,
+      message: "Native hook relay overloaded",
     });
   }
-  return response;
 }
 
 function projectNativeHookRelayPreToolUseFailure(
@@ -401,23 +463,14 @@ export function renderNativeHookRelayUnavailableResponse(params: {
   preToolUseUnavailable?: unknown;
   message?: string;
 }): NativeHookRelayProcessResponse {
-  const provider = readNativeHookRelayProvider(params.provider);
+  readNativeHookRelayProvider(params.provider);
   const event = readNativeHookRelayEvent(params.event);
-  const adapter = getNativeHookRelayProviderAdapter(provider);
   const message = params.message?.trim() || "Native hook relay unavailable";
-  if (event === "pre_tool_use") {
-    // The standalone CLI cannot reconstruct the originating registration after
-    // relay lookup fails, so unavailable PreToolUse must fail closed unless the
-    // generated command explicitly recorded that no before-tool policy existed.
-    if (params.preToolUseUnavailable === "noop") {
-      return adapter.renderNoopResponse(event);
-    }
-    return adapter.renderPreToolUseBlockResponse(message);
-  }
-  if (event === "permission_request") {
-    return adapter.renderPermissionDecisionResponse("deny", message);
-  }
-  return adapter.renderNoopResponse(event);
+  return renderCodexNativeHookUnavailableResponse({
+    event,
+    ...(params.preToolUseUnavailable === "noop" ? { preToolUseUnavailable: "noop" } : {}),
+    message,
+  });
 }
 
 function recordNativeHookRelayInvocation(invocation: NativeHookRelayInvocation): void {
@@ -473,6 +526,10 @@ function normalizeAllowedEvents(
 export const testing = {
   clearNativeHookRelaysForTests(): void {
     clearNativeHookRelayBridgesForTests();
+    for (const admission of admissions.values()) {
+      admission.close();
+    }
+    admissions.clear();
     relays.clear();
     invocations.length = 0;
     clearNativeHookRelayPermissionsForTests();

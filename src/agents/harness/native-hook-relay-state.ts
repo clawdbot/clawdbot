@@ -9,6 +9,7 @@ function getNativeHookRelaySharedState(): NativeHookRelaySharedState {
   globalRecord[NATIVE_HOOK_RELAY_STATE_SYMBOL] ??= {
     relays: new Map(),
     relayBridges: new Map(),
+    admissions: new Map(),
     invocations: [],
     pendingPermissionApprovals: new Map(),
     pendingPreToolUseApprovals: new Map(),

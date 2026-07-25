@@ -3285,8 +3285,8 @@ describe("native hook relay registry", () => {
         rawPayload: {
           hook_event_name: "PermissionRequest",
           tool_name: "Bash",
-          tool_use_id: "successor-call",
-          tool_input: { command: "git status" },
+          tool_use_id: "disconnected-call",
+          tool_input: { command: "git push" },
         },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
@@ -3395,7 +3395,7 @@ describe("native hook relay registry", () => {
     });
   });
 
-  it("deduplicates pending PermissionRequest approvals by relay, run, and tool call", async () => {
+  it("deduplicates only pending PermissionRequest approvals by relay, run, and tool call", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       sessionId: "session-1",
@@ -3438,7 +3438,7 @@ describe("native hook relay registry", () => {
       rawPayload: payload,
     });
 
-    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    expect(approvalRequester).toHaveBeenCalledTimes(2);
     expect([...responses, settledDuplicate].map((response) => JSON.parse(response.stdout))).toEqual(
       [
         {

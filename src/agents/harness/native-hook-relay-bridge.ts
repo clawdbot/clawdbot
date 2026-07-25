@@ -7,6 +7,12 @@ import {
 } from "node:http";
 import { toErrorObject } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  isNativeHookRelayAdmissionOverloadedError,
+  NativeHookRelayAdmissionCancelledError,
+  NativeHookRelayAdmissionClosedError,
+  NativeHookRelayAdmissionOverloadedError,
+} from "./native-hook-relay-admission.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-command.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import {
@@ -42,7 +48,7 @@ export const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
   "native hook relay bridge stale registration";
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
-const { relays, relayBridges } = nativeHookRelayState;
+const { relays, relayBridges, admissions } = nativeHookRelayState;
 
 type InvokeNativeHookRelay = (
   params: InvokeNativeHookRelayParams,
@@ -215,46 +221,87 @@ async function handleNativeHookRelayBridgeRequest(
   res: ServerResponse,
   auth: NativeHookRelayBridgeRequestAuth,
 ): Promise<void> {
+  if (req.method !== "POST" || req.url !== "/invoke") {
+    writeNativeHookRelayBridgeJson(res, 404, { ok: false, error: "not found" });
+    return;
+  }
+  if (req.headers.authorization !== `Bearer ${auth.token}`) {
+    writeNativeHookRelayBridgeJson(res, 403, { ok: false, error: "forbidden" });
+    return;
+  }
+  if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
+    writeNativeHookRelayBridgeJson(res, 410, {
+      ok: false,
+      error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+    });
+    return;
+  }
+  const admission = admissions.get(auth.relayId);
+  if (!admission) {
+    writeNativeHookRelayBridgeJson(res, 410, {
+      ok: false,
+      error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
+    });
+    return;
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  req.once("aborted", abort);
+  res.once("close", abort);
   try {
-    if (req.method !== "POST" || req.url !== "/invoke") {
-      writeNativeHookRelayBridgeJson(res, 404, { ok: false, error: "not found" });
-      return;
-    }
-    if (req.headers.authorization !== `Bearer ${auth.token}`) {
-      writeNativeHookRelayBridgeJson(res, 403, { ok: false, error: "forbidden" });
-      return;
-    }
-    if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
-      writeNativeHookRelayBridgeJson(res, 410, {
-        ok: false,
-        error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
-      });
-      return;
-    }
-    const body = await readNativeHookRelayBridgeBody(req);
-    const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
-    if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
-      writeNativeHookRelayBridgeJson(res, 403, {
-        ok: false,
-        error: "native hook relay bridge target mismatch",
-      });
-      return;
-    }
-    if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
-      writeNativeHookRelayBridgeJson(res, 410, {
-        ok: false,
-        error: NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
-      });
-      return;
-    }
-    const result = await auth.invokeRelay({ ...payload, requireGeneration: true });
+    const result = await admission.run(
+      async (signal) => {
+        if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
+          throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
+        }
+        const body = await readNativeHookRelayBridgeBody(req);
+        const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
+        if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
+          throw new Error("native hook relay bridge target mismatch");
+        }
+        if (!isCurrentNativeHookRelayBridgeRequest(auth)) {
+          throw new Error(NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
+        }
+        return auth.invokeRelay({
+          ...payload,
+          requireGeneration: true,
+          admissionReserved: true,
+          ...(signal ? { admissionSignal: signal } : {}),
+        });
+      },
+      { signal: controller.signal },
+    );
     writeNativeHookRelayBridgeJson(res, 200, { ok: true, result });
   } catch (error) {
-    writeNativeHookRelayBridgeJson(
-      res,
-      isNativeHookRelayBridgeStaleRegistrationError(error) ? 410 : 500,
-      { ok: false, error: error instanceof Error ? error.message : String(error) },
-    );
+    if (error instanceof NativeHookRelayAdmissionCancelledError) {
+      return;
+    }
+    if (isNativeHookRelayAdmissionOverloadedError(error)) {
+      log.warn("native hook relay bridge rejected overloaded invocation", {
+        relayId: auth.relayId,
+        ...admission.snapshot(),
+      });
+      writeNativeHookRelayBridgeJson(res, 429, {
+        ok: false,
+        code: "overloaded",
+        error: "native hook relay overloaded",
+      });
+      return;
+    }
+    const stale =
+      isNativeHookRelayBridgeStaleRegistrationError(error) ||
+      error instanceof NativeHookRelayAdmissionClosedError;
+    writeNativeHookRelayBridgeJson(res, stale ? 410 : 500, {
+      ok: false,
+      error: stale
+        ? NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR
+        : error instanceof Error
+          ? error.message
+          : String(error),
+    });
+  } finally {
+    req.off("aborted", abort);
+    res.off("close", abort);
   }
 }
 
@@ -296,6 +343,9 @@ function writeNativeHookRelayBridgeJson(
   statusCode: number,
   payload: unknown,
 ): void {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
   const body = JSON.stringify(payload);
   res.writeHead(statusCode, {
     "content-type": "application/json",
@@ -434,9 +484,13 @@ function postNativeHookRelayBridgeRecord(params: {
           try {
             const parsed = JSON.parse(responseText) as
               | { ok: true; result: NativeHookRelayProcessResponse }
-              | { ok: false; error?: string };
+              | { ok: false; code?: string; error?: string };
             if (parsed.ok) {
               resolveOnce(parsed.result);
+              return;
+            }
+            if (parsed.code === "overloaded") {
+              rejectOnce(new NativeHookRelayAdmissionOverloadedError());
               return;
             }
             rejectOnce(new Error(parsed.error || "native hook relay bridge failed"));

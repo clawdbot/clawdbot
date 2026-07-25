@@ -64,6 +64,7 @@ export async function processNativeHookRelayInvocation(params: {
   registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
+  signal?: AbortSignal;
 }): Promise<NativeHookRelayProcessResponse> {
   if (params.invocation.event === "pre_tool_use") {
     return runNativeHookRelayPreToolUse(params);
@@ -81,6 +82,7 @@ async function runNativeHookRelayPreToolUse(params: {
   registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
+  signal?: AbortSignal;
 }): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
@@ -91,7 +93,7 @@ async function runNativeHookRelayPreToolUse(params: {
     params: toolInput,
     ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
     ...(approvalMode === "report" ? { approvalMode: "defer" } : {}),
-    signal: params.registration.signal,
+    signal: params.signal,
     ctx: {
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
       sessionId: params.registration.sessionId,
@@ -143,7 +145,9 @@ async function runNativeHookRelayPostToolUse(params: {
   registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
+  signal?: AbortSignal;
 }): Promise<NativeHookRelayProcessResponse> {
+  params.signal?.throwIfAborted();
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolCallId =
     params.invocation.toolUseId ?? `${params.invocation.event}:${params.invocation.receivedAt}`;
@@ -180,6 +184,7 @@ async function runNativeHookRelayPostToolUse(params: {
     startArgs,
     result,
   });
+  params.signal?.throwIfAborted();
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
@@ -187,7 +192,9 @@ async function runNativeHookRelayBeforeAgentFinalize(params: {
   registration: NativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
+  signal?: AbortSignal;
 }): Promise<NativeHookRelayProcessResponse> {
+  params.signal?.throwIfAborted();
   const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
     event: {
       runId: params.registration.runId,
@@ -215,6 +222,7 @@ async function runNativeHookRelayBeforeAgentFinalize(params: {
       ...(params.invocation.model ? { modelId: params.invocation.model } : {}),
     },
   });
+  params.signal?.throwIfAborted();
   if (outcome.action === "revise") {
     return params.adapter.renderBeforeAgentFinalizeReviseResponse(outcome.reason);
   }

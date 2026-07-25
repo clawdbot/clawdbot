@@ -5,6 +5,7 @@ import type {
   BeforeToolCallFailureDisposition,
   DeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
+import type { NativeHookRelayAdmissionController } from "./native-hook-relay-admission.js";
 
 export type JsonValue =
   | null
@@ -128,6 +129,8 @@ export type InvokeNativeHookRelayParams = {
   event: unknown;
   rawPayload: unknown;
   requireGeneration?: boolean;
+  admissionReserved?: boolean;
+  admissionSignal?: AbortSignal;
 };
 
 export type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
@@ -175,6 +178,11 @@ export type NativeHookRelayPermissionApprovalResult =
   | NativeHookRelayPermissionDecision
   | "allow-always"
   | "defer";
+export type NativeHookRelayPendingPermissionApproval = {
+  abortController: AbortController;
+  promise: Promise<NativeHookRelayPermissionApprovalResult>;
+  waiters: number;
+};
 
 export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
@@ -232,8 +240,9 @@ export type NativeHookRelayBridgeRegistration = {
 export type NativeHookRelaySharedState = {
   relays: Map<string, ActiveNativeHookRelayRegistration>;
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
+  admissions: Map<string, NativeHookRelayAdmissionController>;
   invocations: NativeHookRelayInvocation[];
-  pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
+  pendingPermissionApprovals: Map<string, NativeHookRelayPendingPermissionApproval>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
   permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;

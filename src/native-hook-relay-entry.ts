@@ -2,7 +2,6 @@
 // Minimal native-hook transport. Policy remains in the long-lived Gateway.
 import { request as httpRequest } from "node:http";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import {
@@ -10,6 +9,7 @@ import {
   type NativeHookRelayResponseEvent,
   type NativeHookRelayWireResponse,
 } from "./agents/harness/native-hook-relay-response.js";
+import { openNodeSqliteDatabase } from "./infra/node-sqlite.js";
 
 const MAX_STDIN_BYTES = 1024 * 1024;
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
@@ -235,7 +235,7 @@ async function invokeFastRelay(
 }
 
 function readFastRelayRecord(options: FastRelayOptions): FastRelayRecord {
-  const db = new DatabaseSync(path.resolve(options.stateDb), {
+  const db = openNodeSqliteDatabase(path.resolve(options.stateDb), {
     readOnly: true,
   });
   try {

@@ -9,6 +9,7 @@ import {
 } from "./native-hook-relay-utils.js";
 
 export const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
+const NATIVE_HOOK_RELAY_MAX_OLD_SPACE_MIB = 64;
 
 function resolveNativeHookRelayNicePrefix(value: number | false | undefined): string[] {
   if (process.platform === "win32" || value === false || value === undefined) {
@@ -54,6 +55,7 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
   provider: NativeHookRelayProvider;
   relayId: string;
   stateDbPath?: string;
+  stateSchemaVersion?: number;
   generation?: string;
   event: NativeHookRelayEvent;
   preToolUseUnavailable?: "noop";
@@ -63,22 +65,35 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
   nodeExecutable?: string;
 }): string {
   const timeoutMs = normalizePositiveInteger(params.timeoutMs, DEFAULT_RELAY_TIMEOUT_MS);
-  const executable = params.executable ?? resolveOpenClawCliExecutable();
-  const argv =
-    executable === "openclaw"
+  const cliPathOverride = process.env.OPENCLAW_CLI_PATH?.trim();
+  const fastExecutable =
+    params.executable === undefined && !cliPathOverride && params.stateDbPath
+      ? resolveOpenClawNativeHookRelayExecutable()
+      : undefined;
+  const executable = fastExecutable ?? params.executable ?? resolveOpenClawCliExecutable();
+  const argv = fastExecutable
+    ? [
+        params.nodeExecutable ?? process.execPath,
+        `--max-old-space-size=${NATIVE_HOOK_RELAY_MAX_OLD_SPACE_MIB}`,
+        "--disable-warning=ExperimentalWarning",
+        fastExecutable,
+      ]
+    : executable === "openclaw"
       ? ["openclaw"]
       : [params.nodeExecutable ?? process.execPath, executable];
   const nicePrefix = resolveNativeHookRelayNicePrefix(params.nice);
   const command = shellQuoteArgs([
     ...nicePrefix,
     ...argv,
-    "hooks",
-    "relay",
+    ...(fastExecutable ? [] : ["hooks", "relay"]),
     "--provider",
     params.provider,
     "--relay-id",
     params.relayId,
     ...(params.stateDbPath ? ["--state-db", params.stateDbPath] : []),
+    ...(fastExecutable && params.stateSchemaVersion !== undefined
+      ? ["--state-schema-version", String(params.stateSchemaVersion)]
+      : []),
     ...(params.generation ? ["--generation", params.generation] : []),
     "--event",
     params.event,
@@ -91,6 +106,19 @@ export function buildNativeHookRelayCommandWithStateDatabase(params: {
   // Codex kills the shell process when a hook times out. Replace that shell so
   // the timeout targets this relay instead of leaving its Node child behind.
   return process.platform === "win32" ? command : `exec ${command}`;
+}
+
+function resolveOpenClawNativeHookRelayExecutable(): string | undefined {
+  const packageRoot = resolveOpenClawPackageRootSync({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
+  if (!packageRoot) {
+    return undefined;
+  }
+  const candidate = path.join(packageRoot, "dist", "native-hook-relay-entry.js");
+  return existsSync(candidate) ? candidate : undefined;
 }
 
 function resolveOpenClawCliExecutable(): string {

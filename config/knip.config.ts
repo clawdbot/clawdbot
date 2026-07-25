@@ -100,6 +100,8 @@ const rootEntries = [
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Built as a standalone hook subprocess entry and invoked by generated path.
+  "src/native-hook-relay-entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.

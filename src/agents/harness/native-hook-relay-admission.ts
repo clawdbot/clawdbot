@@ -1,7 +1,7 @@
 const DEFAULT_MAX_ACTIVE = 4;
 const DEFAULT_MAX_QUEUED = 32;
 
-export type NativeHookRelayAdmissionSnapshot = {
+type NativeHookRelayAdmissionSnapshot = {
   active: number;
   queued: number;
   accepted: number;
