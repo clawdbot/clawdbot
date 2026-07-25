@@ -232,15 +232,18 @@ describe("createPinnedDispatcher", () => {
     });
   });
 
-  it("replaces the pinned lookup when a dispatcher override hostname is provided", () => {
+  it("replaces the pinned lookup when a dispatcher override hostname is provided", async () => {
     const originalLookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const lookup = createDispatcherWithPinnedOverride(originalLookup);
 
     expect(lookup).toBeTypeOf("function");
-    const callback = vi.fn();
-    lookup?.("api.telegram.org", callback);
+    const result = await new Promise<[unknown, string, number]>((resolve) => {
+      lookup?.("api.telegram.org", (err, address, family) => {
+        resolve([err, address as string, family as number]);
+      });
+    });
 
-    expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
+    expect(result).toEqual([null, "149.154.167.220", 4]);
     expect(originalLookup).not.toHaveBeenCalled();
   });
 
