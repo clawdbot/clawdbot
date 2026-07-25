@@ -750,7 +750,11 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
   };
 }
 
-function expectNoncanonicalAuditSchemaRejected(stateDir: string, databasePath: string): void {
+function expectNoncanonicalAuditSchemaRejected(
+  stateDir: string,
+  databasePath: string,
+  doctorWarning = "cannot be repaired automatically",
+): void {
   const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
   expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
     { kind: "audit-events-v2", path: databasePath },
@@ -758,7 +762,7 @@ function expectNoncanonicalAuditSchemaRejected(stateDir: string, databasePath: s
   expect(() => openOpenClawStateDatabase(options)).toThrow(/noncanonical audit event schema/);
   expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
     changes: [],
-    warnings: [expect.stringContaining("cannot be repaired automatically")],
+    warnings: [expect.stringContaining(doctorWarning)],
   });
 }
 
@@ -1810,6 +1814,10 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     drifted.close();
 
     expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table auth_profile_stores/iu);
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("missing table auth_profile_stores")],
+    });
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -1872,13 +1880,27 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         PRIMARY KEY (scope, event_key)
       ) STRICT;
       CREATE INDEX idx_diagnostic_events_scope_sequence
-        ON diagnostic_events(scope, sequence, event_key);
+        ON diagnostic_events(event_key);
     `);
     drifted.close();
 
     expect(() => openOpenClawStateDatabase(options)).toThrow(
       /unexpected unique index on diagnostic_events/iu,
     );
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_diagnostic_events_scope_sequence'",
+          )
+          .get(),
+      ).toEqual({
+        sql: "CREATE INDEX idx_diagnostic_events_scope_sequence\n        ON diagnostic_events(event_key)",
+      });
+    } finally {
+      after.close();
+    }
   });
 
   it("rejects primary-key collation drift in a current-schema table", () => {
@@ -2264,7 +2286,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     malformed.exec("DROP TABLE audit_events");
     malformed.close();
 
-    expectNoncanonicalAuditSchemaRejected(stateDir, databasePath);
+    expectNoncanonicalAuditSchemaRejected(stateDir, databasePath, "missing table audit_events");
 
     const preserved = new DatabaseSync(databasePath, { readOnly: true });
     try {

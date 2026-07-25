@@ -99,7 +99,17 @@ export function migrateOpenClawAgentDatabaseForMaintenance(options: {
       return;
     }
     if (hasCurrentVersion) {
-      repairCanonicalSqliteIndexes(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+      repairCanonicalSqliteIndexes(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
+        validateAfterRepair: () =>
+          assertOpenClawAgentDatabaseForMaintenance(database, {
+            agentId,
+            pathname: options.pathname,
+          }),
+      });
+      assertOpenClawAgentDatabaseForMaintenance(database, {
+        agentId,
+        pathname: options.pathname,
+      });
       return;
     }
     ensureOpenClawAgentDatabaseSchema(database, {

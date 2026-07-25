@@ -43,6 +43,7 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   inspectOpenClawAgentDatabaseOwner,
   listOpenClawRegisteredAgentDatabases,
+  migrateOpenClawAgentDatabaseForMaintenance,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -2847,6 +2848,12 @@ describe("openclaw agent database", () => {
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       /missing table auth_profile_store/iu,
     );
+    expect(() =>
+      migrateOpenClawAgentDatabaseForMaintenance({
+        agentId: "worker-1",
+        pathname: databasePath,
+      }),
+    ).toThrow(/missing table auth_profile_store/iu);
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -2943,8 +2950,7 @@ describe("openclaw agent database", () => {
         PRIMARY KEY (scope, key)
       ) STRICT;
       CREATE INDEX idx_agent_cache_expiry
-        ON cache_entries(scope, expires_at, key)
-        WHERE expires_at IS NOT NULL;
+        ON cache_entries(key);
       CREATE INDEX idx_agent_cache_updated
         ON cache_entries(scope, updated_at DESC, key);
     `);
@@ -2953,6 +2959,20 @@ describe("openclaw agent database", () => {
     expect(() => openOpenClawAgentDatabase({ agentId: "worker-1", env })).toThrow(
       /unexpected unique index on cache_entries/iu,
     );
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_cache_expiry'",
+          )
+          .get(),
+      ).toEqual({
+        sql: "CREATE INDEX idx_agent_cache_expiry\n        ON cache_entries(key)",
+      });
+    } finally {
+      after.close();
+    }
   });
 
   it("rejects primary-key collation drift in a current-schema table", () => {

@@ -473,6 +473,8 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
     userVersion === OPENCLAW_AGENT_SCHEMA_VERSION
       ? repairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
           allowMissingColumns: true,
+          validateAfterRepair: () =>
+            assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
         })
       : [];
   if (rebuiltIndexes.length === 0) {
