@@ -11,6 +11,7 @@ import {
 import {
   asObjectRecord,
   defineChannelAliasMigration,
+  defineKeyMoveMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelAccounts,
   stripRetiredChannelKeys,
@@ -70,21 +71,11 @@ function hasLegacyTtsProviderKeys(value: unknown): boolean {
   return LEGACY_TTS_PROVIDER_KEYS.some((key) => Object.hasOwn(tts, key));
 }
 
-function hasLegacyDiscordGuildChannelAllowAlias(value: unknown): boolean {
-  const guilds = asObjectRecord(asObjectRecord(value)?.guilds);
-  if (!guilds) {
-    return false;
-  }
-  return Object.values(guilds).some((guildValue) => {
-    const channels = asObjectRecord(asObjectRecord(guildValue)?.channels);
-    if (!channels) {
-      return false;
-    }
-    return Object.values(channels).some((channel) =>
-      Object.hasOwn(asObjectRecord(channel) ?? {}, "allow"),
-    );
-  });
-}
+const guildChannelAllowMigration = defineKeyMoveMigration({
+  scope: ["guilds", "*", "channels", "*"],
+  from: ["allow"],
+  to: ["enabled"],
+});
 
 function hasLegacyDiscordGuildChannelAgentId(value: unknown): boolean {
   const guilds = asObjectRecord(asObjectRecord(value)?.guilds);
@@ -275,58 +266,6 @@ function normalizeUnsupportedRealtimeWakeNames(
   };
 }
 
-function normalizeDiscordGuildChannelAllowAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): { entry: Record<string, unknown>; changed: boolean } {
-  const guilds = asObjectRecord(params.entry.guilds);
-  if (!guilds) {
-    return { entry: params.entry, changed: false };
-  }
-
-  let changed = false;
-  const nextGuilds = { ...guilds };
-  for (const [guildId, guildValue] of Object.entries(guilds)) {
-    const guild = asObjectRecord(guildValue);
-    const channels = asObjectRecord(guild?.channels);
-    if (!guild || !channels) {
-      continue;
-    }
-    let channelsChanged = false;
-    const nextChannels = { ...channels };
-    for (const [channelId, channelValue] of Object.entries(channels)) {
-      const channel = asObjectRecord(channelValue);
-      if (!channel || !Object.hasOwn(channel, "allow")) {
-        continue;
-      }
-      const nextChannel = { ...channel };
-      if (nextChannel.enabled === undefined) {
-        nextChannel.enabled = channel.allow;
-        params.changes.push(
-          `Moved ${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.allow → ${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.enabled.`,
-        );
-      } else {
-        params.changes.push(
-          `Removed ${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.allow (${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.enabled already set).`,
-        );
-      }
-      delete nextChannel.allow;
-      nextChannels[channelId] = nextChannel;
-      channelsChanged = true;
-    }
-    if (!channelsChanged) {
-      continue;
-    }
-    nextGuilds[guildId] = { ...guild, channels: nextChannels };
-    changed = true;
-  }
-
-  return changed
-    ? { entry: { ...params.entry, guilds: nextGuilds }, changed: true }
-    : { entry: params.entry, changed: false };
-}
-
 function isDiscordChannelAgentBinding(
   value: unknown,
   match: { accountId?: string; guildId: string; channelId: string },
@@ -450,14 +389,13 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "discord"],
     message:
       'channels.discord.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: hasLegacyDiscordGuildChannelAllowAlias,
+    match: guildChannelAllowMigration.hasLegacy,
   },
   {
     path: ["channels", "discord", "accounts"],
     message:
       'channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: (value) =>
-      hasLegacyAccountStreamingAliases(value, hasLegacyDiscordGuildChannelAllowAlias),
+    match: (value) => hasLegacyAccountStreamingAliases(value, guildChannelAllowMigration.hasLegacy),
   },
   {
     path: ["channels", "discord"],
@@ -514,7 +452,7 @@ export function normalizeCompatibilityConfig({
     changes.push("Removed retired Discord tuning knobs.");
   }
 
-  const guildAliases = normalizeDiscordGuildChannelAllowAliases({
+  const guildAliases = guildChannelAllowMigration.normalize({
     entry: updated,
     pathPrefix: "channels.discord",
     changes,
@@ -537,7 +475,7 @@ export function normalizeCompatibilityConfig({
     pathPrefix: "channels.discord",
     changes,
     normalizeAccount: ({ account, accountId, pathPrefix, changes: accountChanges }) => {
-      const guilds = normalizeDiscordGuildChannelAllowAliases({
+      const guilds = guildChannelAllowMigration.normalize({
         entry: account,
         pathPrefix,
         changes: accountChanges,

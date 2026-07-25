@@ -271,7 +271,7 @@ describe("explicit model visibility policy", () => {
     };
 
     const research = createPolicy(cfg, "research");
-    expect(research.allowConfigPath).toBe("agents.list[].modelPolicy.allow");
+    expect(research.allowConfigPath).toBe("agents.entries.*.modelPolicy.allow");
     expect(research.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(true);
     expect(research.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(false);
 

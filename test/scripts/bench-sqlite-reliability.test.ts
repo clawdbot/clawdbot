@@ -158,6 +158,7 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_CRASH_RECOVERY=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_PUBLICATION_INTERRUPTION=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_RESTORE_INTERRUPTION=verified");
+    expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_REPOSITORY_INTERRUPTION=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_VACUUM_INTERRUPTION=verified");
     expect(firstResult.stdout).toContain("SQLITE_RELIABILITY_POST_COMPACT_RESTORE=verified");
     const firstReport = JSON.parse(fs.readFileSync(firstOutput, "utf8")) as ReliabilityReport;
@@ -226,6 +227,69 @@ describe("scripts/bench-sqlite-reliability", () => {
     );
     expect(firstReport.maintenanceProof.vacuumInterruption.stateAfterRecovery).toEqual(
       firstReport.maintenanceProof.vacuumInterruption.stateBeforeKill,
+    );
+    expect(firstReport.maintenanceProof.repositoryInterruption.beforePending).toMatchObject({
+      crashSnapshotVerifiedAfterCrash: false,
+      crashSnapshotVisibleAfterCrash: false,
+      incompleteEntries: 1,
+      repositoryVerified: true,
+      retryCreated: true,
+      sourcePayloadPreserved: true,
+      sourceStatePreserved: true,
+      visibleSnapshotsAfterCrash: 1,
+    });
+    expect(
+      firstReport.maintenanceProof.repositoryInterruption.beforePending.stagingEntries,
+    ).toBeGreaterThan(0);
+    expect(
+      firstReport.maintenanceProof.repositoryInterruption.beforePending.exit.code !== null ||
+        firstReport.maintenanceProof.repositoryInterruption.beforePending.exit.signal !== null,
+    ).toBe(true);
+    expect(firstReport.maintenanceProof.repositoryInterruption.pending).toMatchObject({
+      crashSnapshotVerifiedAfterCrash: false,
+      crashSnapshotVisibleAfterCrash: false,
+      incompleteEntries: 1,
+      repositoryVerified: true,
+      retryCreated: true,
+      sourcePayloadPreserved: true,
+      sourceStatePreserved: true,
+      visibleSnapshotsAfterCrash: 2,
+    });
+    expect(
+      firstReport.maintenanceProof.repositoryInterruption.pending.stagingEntries,
+    ).toBeGreaterThan(0);
+    expect(
+      firstReport.maintenanceProof.repositoryInterruption.pending.exit.code !== null ||
+        firstReport.maintenanceProof.repositoryInterruption.pending.exit.signal !== null,
+    ).toBe(true);
+    expect(firstReport.maintenanceProof.repositoryInterruption.afterCommit).toMatchObject({
+      crashSnapshotVerifiedAfterCrash: true,
+      crashSnapshotVisibleAfterCrash: true,
+      incompleteEntries: 0,
+      repositoryVerified: true,
+      retryCreated: true,
+      sourcePayloadPreserved: true,
+      sourceStatePreserved: true,
+      visibleSnapshotsAfterCrash: 4,
+    });
+    expect(
+      firstReport.maintenanceProof.repositoryInterruption.afterCommit.stagingEntries,
+    ).toBeGreaterThan(0);
+    expect(
+      firstReport.maintenanceProof.repositoryInterruption.afterCommit.exit.code !== null ||
+        firstReport.maintenanceProof.repositoryInterruption.afterCommit.exit.signal !== null,
+    ).toBe(true);
+    expect(firstReport.maintenanceProof.repositoryInterruption.beforePending.state).toEqual(
+      firstReport.maintenanceProof.repositoryInterruption.pending.state,
+    );
+    expect(firstReport.maintenanceProof.repositoryInterruption.pending.state).toEqual(
+      firstReport.maintenanceProof.repositoryInterruption.afterCommit.state,
+    );
+    expect(firstReport.maintenanceProof.repositoryInterruption.beforePending.payload).toEqual(
+      firstReport.maintenanceProof.repositoryInterruption.pending.payload,
+    );
+    expect(firstReport.maintenanceProof.repositoryInterruption.pending.payload).toEqual(
+      firstReport.maintenanceProof.repositoryInterruption.afterCommit.payload,
     );
     expect(firstReport.maintenanceProof.restoreInterruption.snapshotBytes).toBeGreaterThan(
       64 * 1024 * 1024,

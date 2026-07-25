@@ -70,7 +70,7 @@ describe("sandbox/tool-policy", () => {
     expect(resolved.allow).toContain("tts");
     expect(resolved.sources.allow).toEqual({
       source: "agent",
-      key: "agents.list[].tools.sandbox.tools.alsoAllow",
+      key: "agents.entries.*.tools.sandbox.tools.alsoAllow",
     });
   });
 

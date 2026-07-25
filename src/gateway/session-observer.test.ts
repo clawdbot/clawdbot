@@ -44,6 +44,333 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
+  it("publishes safe preambles immediately without a model call", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const harness = createHarness();
+    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: {
+          kind: "preamble",
+          phase: "update",
+          progressText: "**Checking** the [gateway](https://example.com) [[reply_to_current]]",
+        },
+      }),
+    );
+    await flushObserver();
+
+    expect(harness.completeModel).not.toHaveBeenCalled();
+    expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
+    expect(harness.broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
+      headline: "Checking the gateway",
+      health: "on-track",
+      revision: 1,
+      runId: "run-1",
+    });
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    harness.observer.dispose();
+  });
+
+  it("publishes preambles to visible session-list subscribers without a utility model", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const harness = createHarness({
+      subscribe: false,
+      broadSubscribe: true,
+      utilityModelRef: null,
+    });
+
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Inspecting mobile rows" },
+      }),
+    );
+    await flushObserver();
+
+    expect(harness.prepareModel).not.toHaveBeenCalled();
+    expect(harness.completeModel).not.toHaveBeenCalled();
+    expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
+      "session.observer",
+      expect.objectContaining({ headline: "Inspecting mobile rows", health: "on-track" }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    harness.observer.dispose();
+  });
+
+  it("terminalizes a preamble-only digest without a utility model", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const harness = createHarness({
+      subscribe: false,
+      broadSubscribe: true,
+      utilityModelRef: null,
+    });
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Running tests" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Wrapping up" },
+      }),
+    );
+    harness.observer.handleEvent(
+      event({
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 0, endedAt: 40_000 },
+      }),
+    );
+    await flushObserver();
+
+    expect(harness.completeModel).not.toHaveBeenCalled();
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Wrapping up",
+      health: "done",
+      revision: 3,
+    });
+    const terminalCount = harness.broadcastToConnIds.mock.calls.length;
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Late preamble" },
+      }),
+    );
+    harness.observer.handleEvent(
+      event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_001 } }),
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(terminalCount);
+    harness.observer.dispose();
+  });
+
+  it("synthesizes terminal health when the final model request becomes stale", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let utilityModelRef: string | undefined = "openai/gpt-a";
+    let resolveModel: ((value: ReturnType<typeof modelMessage>) => void) | undefined;
+    const harness = createHarness({
+      completeModel: vi.fn(
+        () =>
+          new Promise<ReturnType<typeof modelMessage>>((resolve) => {
+            resolveModel = resolve;
+          }),
+      ),
+      resolveUtilityModelRef: vi.fn(() => utilityModelRef),
+    });
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Running tests" },
+      }),
+    );
+    harness.observer.handleEvent(
+      event({
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 0, endedAt: 40_000 },
+      }),
+    );
+    await flushObserver();
+    expect(harness.completeModel).toHaveBeenCalledOnce();
+
+    utilityModelRef = "openai/gpt-b";
+    resolveModel?.(modelMessage({ headline: "Stale final model", health: "done" }));
+    await flushObserver();
+
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Running tests",
+      health: "done",
+      revision: 2,
+    });
+    harness.observer.dispose();
+  });
+
+  it("does not cap model-free preamble headlines at six sessions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const harness = createHarness({
+      subscribe: false,
+      broadSubscribe: true,
+      utilityModelRef: null,
+    });
+
+    for (let index = 0; index < 7; index += 1) {
+      harness.observer.handleEvent(
+        event({
+          runId: `run-${index}`,
+          sessionKey: `agent:main:session-${index}`,
+          stream: "item",
+          data: { kind: "preamble", phase: "update", progressText: `Session ${index}` },
+        }),
+      );
+    }
+
+    expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(7);
+    harness.observer.dispose();
+  });
+
+  it("coalesces incremental preamble snapshots behind a trailing update", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const harness = createHarness();
+    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+
+    for (const progressText of ["Checking", "Checking the gateway", "Running tests"]) {
+      harness.observer.handleEvent(
+        event({
+          stream: "item",
+          data: { kind: "preamble", phase: "update", progressText },
+        }),
+      );
+    }
+
+    expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Running tests",
+      revision: 2,
+    });
+    harness.observer.dispose();
+  });
+
+  it("does not let an older model result overwrite a newer preamble", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let resolveModel: ((value: ReturnType<typeof modelMessage>) => void) | undefined;
+    const completeModel = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof modelMessage>>((resolve) => {
+          resolveModel = resolve;
+        }),
+    );
+    const harness = createHarness({ completeModel });
+    startAndAddToolNotes(harness.observer);
+    await vi.advanceTimersByTimeAsync(11_500);
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Checking files" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    expect(completeModel).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(100);
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Running focused tests" },
+      }),
+    );
+    resolveModel?.(modelMessage({ headline: "Stale model summary", health: "on-track" }));
+    await flushObserver();
+    expect(
+      harness.broadcastToConnIds.mock.calls.some(
+        (call) => (call[1] as SessionObserverDigest).headline === "Stale model summary",
+      ),
+    ).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Running focused tests",
+    });
+    harness.observer.dispose();
+  });
+
+  it("aborts a live assessment when the run becomes terminal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let firstCall = true;
+    const completeModel = vi.fn(async (params: { options: { signal: AbortSignal } }) => {
+      if (firstCall) {
+        firstCall = false;
+        return await new Promise<ReturnType<typeof modelMessage>>((_resolve, reject) => {
+          params.options.signal.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      }
+      return modelMessage({ headline: "Run completed", health: "done" });
+    });
+    const harness = createHarness({ completeModel });
+    startAndAddToolNotes(harness.observer);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(completeModel).toHaveBeenCalledOnce();
+
+    harness.observer.handleEvent(
+      event({
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 0, endedAt: 40_000 },
+      }),
+    );
+    await flushObserver();
+
+    expect(completeModel).toHaveBeenCalledTimes(2);
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Run completed",
+      health: "done",
+    });
+    harness.observer.dispose();
+  });
+
+  it("retires a queued preamble when a richer digest is accepted", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let resolveModel: ((value: ReturnType<typeof modelMessage>) => void) | undefined;
+    const completeModel = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof modelMessage>>((resolve) => {
+          resolveModel = resolve;
+        }),
+    );
+    const harness = createHarness({ completeModel });
+    harness.observer.handleEvent(event({ stream: "lifecycle", data: { phase: "start" } }));
+    await vi.advanceTimersByTimeAsync(12_000);
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Checking files" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Running tests" },
+      }),
+    );
+    for (let index = 0; index < 3; index += 1) {
+      harness.observer.handleEvent(
+        event({ stream: "tool", data: { phase: "start", name: "read", args: { index } } }),
+      );
+    }
+    await flushObserver();
+    expect(completeModel).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Running tests",
+    });
+
+    resolveModel?.(modelMessage({ headline: "Reviewing test results", health: "on-track" }));
+    await flushObserver();
+    const acceptedCount = harness.broadcastToConnIds.mock.calls.length;
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Reviewing test results",
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(acceptedCount);
+    harness.observer.dispose();
+  });
+
   it("never includes tool results or command output and redacts tool arguments", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -221,7 +548,7 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
-  it("disables a run after two consecutive model failures", async () => {
+  it("disables only model work after two consecutive failures", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const completeModel = vi.fn(async () => {
@@ -241,6 +568,15 @@ describe("session observer", () => {
     }
     await vi.advanceTimersByTimeAsync(24_000);
     expect(completeModel).toHaveBeenCalledTimes(2);
+    harness.observer.handleEvent(
+      event({
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Continuing without model" },
+      }),
+    );
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      headline: "Continuing without model",
+    });
     harness.observer.dispose();
   });
 
@@ -349,6 +685,40 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
+  it("rejects an in-flight result after utility-model replacement", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let utilityModelRef: string | undefined = "openai/gpt-a";
+    let resolveModel: ((value: ReturnType<typeof modelMessage>) => void) | undefined;
+    const completeModel = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof modelMessage>>((resolve) => {
+          resolveModel = resolve;
+        }),
+    );
+    const harness = createHarness({
+      completeModel,
+      resolveUtilityModelRef: vi.fn(() => utilityModelRef),
+    });
+    startAndAddToolNotes(harness.observer);
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(completeModel).toHaveBeenCalledOnce();
+
+    utilityModelRef = "openai/gpt-b";
+    harness.observer.handleEvent(
+      event({ stream: "tool", data: { phase: "start", name: "read", args: { path: "next" } } }),
+    );
+    resolveModel?.(modelMessage({ headline: "Stale model A", health: "on-track" }));
+    await flushObserver();
+
+    expect(
+      harness.broadcastToConnIds.mock.calls.some(
+        (call) => (call[1] as SessionObserverDigest).headline === "Stale model A",
+      ),
+    ).toBe(false);
+    harness.observer.dispose();
+  });
+
   it("drops scheduled work when the utility model is disabled", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -383,7 +753,7 @@ describe("session observer", () => {
     harness.observer.dispose();
   });
 
-  it("evicts the least recently active session at the concurrency cap", async () => {
+  it("demotes the least recently active model while retaining preamble state", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const harness = createHarness();
@@ -405,10 +775,32 @@ describe("session observer", () => {
     );
     expect(sessions).toHaveLength(6);
     expect(sessions).not.toContain("agent:main:session-0");
+
+    const beforePreamble = harness.broadcastToConnIds.mock.calls.length;
+    harness.observer.handleEvent(
+      event({
+        runId: "run-0",
+        sessionKey: "agent:main:session-0",
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Checking files" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    harness.observer.handleEvent(
+      event({
+        runId: "run-0",
+        sessionKey: "agent:main:session-0",
+        stream: "item",
+        data: { kind: "preamble", phase: "update", progressText: "Running tests" },
+      }),
+    );
+    expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(beforePreamble + 1);
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(harness.broadcastToConnIds).toHaveBeenCalledTimes(beforePreamble + 2);
     harness.observer.dispose();
   });
 
-  it("preserves revision continuity when an observed run is evicted", async () => {
+  it("preserves revision continuity when a run's model is demoted", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const harness = createHarness();

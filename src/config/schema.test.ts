@@ -588,10 +588,10 @@ describe("config schema", () => {
     const res = buildConfigSchema(heartbeatChannelInput);
 
     const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
-    const listHint = res.uiHints["agents.list.*.heartbeat.target"];
+    const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
     expect(defaultsHint?.help).toContain("imessage");
     expect(defaultsHint?.help).toContain("last");
-    expect(listHint?.help).toContain("imessage");
+    expect(entryHint?.help).toContain("imessage");
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {
@@ -622,12 +622,15 @@ describe("config schema", () => {
     );
   });
 
-  it("covers core config paths with derived tags", () => {
-    for (const [key, hint] of Object.entries(baseSchema.uiHints)) {
-      if (key.includes(".")) {
-        expect(hint.tags?.length ?? 0, `expected tags for ${key}`).toBeGreaterThan(0);
-      }
-    }
+  it("only derives the advanced tag from an explicit advanced hint", () => {
+    const tagged = applyDerivedTags({
+      "update.channel": { advanced: false },
+      "update.auto.enabled": { advanced: false },
+      "update.auto.interval": { advanced: true },
+    });
+    expect(tagged["update.channel"]?.tags).toEqual([]);
+    expect(tagged["update.auto.enabled"]?.tags).toEqual([]);
+    expect(tagged["update.auto.interval"]?.tags).toEqual(["performance", "advanced"]);
   });
 
   it("rejects removed Firecrawl config from the core web fetch schema", () => {

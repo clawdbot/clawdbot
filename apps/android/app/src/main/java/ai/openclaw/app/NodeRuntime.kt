@@ -1603,6 +1603,14 @@ class NodeRuntime private constructor(
     } catch (err: Throwable) {
       Log.d("OpenClawRuntime", "sessions.subscribe failed: ${err.message ?: err::class.java.simpleName}")
     }
+    try {
+      operatorSession.request("sessions.observer.visibility", """{"visible":true}""")
+    } catch (err: Throwable) {
+      Log.d(
+        "OpenClawRuntime",
+        "sessions.observer.visibility failed: ${err.message ?: err::class.java.simpleName}",
+      )
+    }
   }
 
   private val nodeSession =

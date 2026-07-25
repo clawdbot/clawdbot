@@ -149,6 +149,7 @@
   "browser-config",
   "boolean-param",
   "channel-contract-testing",
+  "channel-dm-policy",
   "dangerous-name-runtime",
   "command-auth",
   "command-auth-native",

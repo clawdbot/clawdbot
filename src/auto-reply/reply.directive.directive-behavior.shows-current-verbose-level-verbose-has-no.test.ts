@@ -167,12 +167,12 @@ describe("directive behavior", () => {
       elevatedAllowed: false,
       elevatedFailures: [
         {
-          gate: "agents.list[].tools.elevated.enabled",
-          key: "agents.list.restricted.tools.elevated.enabled",
+          gate: "agents.entries.*.tools.elevated.enabled",
+          key: "agents.entries.restricted.tools.elevated.enabled",
         },
       ],
     });
-    expect(deniedText).toContain("agents.list[].tools.elevated.enabled");
+    expect(deniedText).toContain("agents.entries.*.tools.elevated.enabled");
 
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
@@ -183,12 +183,12 @@ describe("directive behavior", () => {
       elevatedAllowed: false,
       elevatedFailures: [
         {
-          gate: "agents.list[].tools.elevated.allowFrom.whatsapp",
-          key: "agents.list.work.tools.elevated.allowFrom.whatsapp",
+          gate: "agents.entries.*.tools.elevated.allowFrom.whatsapp",
+          key: "agents.entries.work.tools.elevated.allowFrom.whatsapp",
         },
       ],
     });
-    expect(deniedText).toContain("agents.list[].tools.elevated.allowFrom.whatsapp");
+    expect(deniedText).toContain("agents.entries.*.tools.elevated.allowFrom.whatsapp");
 
     const { text: allowedText } = await runDirectiveStatus("/elevated on", {
       sessionKey: "agent:work:main",

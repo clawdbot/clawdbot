@@ -5,6 +5,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type {
   ChatItem,
@@ -1011,10 +1012,6 @@ function prefersNativeChatSurface(message: unknown): boolean {
   }
   const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
   return (role === "user" || role === "assistant") && !(normalized.senderLabel ?? "").trim();
-}
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function stripSenderLabelPrefix(text: string, senderLabel: string): string {
