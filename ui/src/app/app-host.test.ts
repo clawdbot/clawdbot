@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
+import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewayAgentRow } from "../api/types.ts";
+import type { RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -14,7 +16,7 @@ import {
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import "./app-host.ts";
+import { selectShellRouteState } from "./app-host.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -228,6 +230,29 @@ type ShellEpochState = {
   disconnectedCallback: () => void;
 };
 
+type ShellRouteCommitState = {
+  runtime: { context: ApplicationContext };
+  activeSessionKey: string;
+  didConsiderNativeRouteRestore: boolean;
+  updateRouteState: (state: ReturnType<typeof selectShellRouteState>) => void;
+};
+
+function committedRouterState(
+  routeId: RouteId,
+  pathname: string,
+  data?: unknown,
+): RouterState<RouteId> {
+  const location = { pathname, search: "", hash: "" } satisfies RouteLocation;
+  return {
+    location,
+    resolvedLocation: location,
+    status: "success",
+    matches: [{ routeId, location, data }],
+    pendingMatches: [],
+    cachedMatches: [],
+  } as unknown as RouterState<RouteId>;
+}
+
 describe("OpenClaw app lifecycle", () => {
   it("hides revealed login credentials when the app connection epoch ends", () => {
     const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
@@ -343,6 +368,37 @@ describe("OpenClaw shell source initialization", () => {
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+  });
+});
+
+describe("OpenClaw shell route session commits", () => {
+  it("adopts a resolved chat session after path navigation from Tasks", () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    const setSessionKey = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellRouteCommitState;
+    shell.runtime = {
+      context: {
+        gateway: {
+          snapshot: { phase: "stopped", client: null, sessionKey: "agent:main:session-a" },
+          setSessionKey,
+        },
+      } as unknown as ApplicationContext,
+    };
+    shell.activeSessionKey = "agent:main:session-a";
+    shell.didConsiderNativeRouteRestore = true;
+
+    shell.updateRouteState(selectShellRouteState(committedRouterState("tasks", "/tasks")));
+    shell.updateRouteState(
+      selectShellRouteState(
+        committedRouterState("chat", "/chat/main/session-b-12345678", {
+          kind: "session",
+          sessionKey: "agent:main:session-b",
+        }),
+      ),
+    );
+
+    expect(shell.activeSessionKey).toBe("agent:main:session-b");
+    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith("agent:main:session-b");
   });
 });
 

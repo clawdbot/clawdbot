@@ -127,6 +127,7 @@ type ShellRouteState = {
   location?: RouteLocation;
   committedRouteId?: RouteId;
   committedLocation?: RouteLocation;
+  committedSessionKey?: string;
 };
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -180,14 +181,28 @@ function diffAgentRoster(
   return { invalidatedIds, changedIds };
 }
 
-function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
+function sessionKeyFromRouteData(routeId: RouteId, data: unknown): string | undefined {
+  if (!isSessionRouteId(routeId) || !data || typeof data !== "object") {
+    return undefined;
+  }
+  const record = data as { kind?: unknown; sessionKey?: unknown };
+  return record.kind === "session" && typeof record.sessionKey === "string"
+    ? record.sessionKey.trim() || undefined
+    : undefined;
+}
+
+export function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
   const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
   const committedMatch = routerState.matches[0];
+  const committedSessionKey = committedMatch
+    ? sessionKeyFromRouteData(committedMatch.routeId, committedMatch.data)
+    : undefined;
   return {
     ...(match ? { routeId: match.routeId, location: match.location } : {}),
     ...(committedMatch
       ? { committedRouteId: committedMatch.routeId, committedLocation: committedMatch.location }
       : {}),
+    ...(committedSessionKey ? { committedSessionKey } : {}),
   };
 }
 
@@ -200,7 +215,8 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
     previous.committedRouteId === next.committedRouteId &&
     previous.committedLocation?.pathname === next.committedLocation?.pathname &&
     previous.committedLocation?.search === next.committedLocation?.search &&
-    previous.committedLocation?.hash === next.committedLocation?.hash
+    previous.committedLocation?.hash === next.committedLocation?.hash &&
+    previous.committedSessionKey === next.committedSessionKey
   );
 }
 
@@ -1621,6 +1637,11 @@ class OpenClawShell extends OpenClawLightDomElement {
       }
       if (!pendingDiffers) {
         persistRoute(committedRouteId, committedPathname, committedSearch);
+        const committedSessionKey = routeState.committedSessionKey;
+        if (committedSessionKey) {
+          this.activeSessionKey = committedSessionKey;
+          routeContext.gateway.setSessionKey(committedSessionKey);
+        }
       }
     }
     const context = this.context;

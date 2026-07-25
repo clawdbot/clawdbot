@@ -180,15 +180,11 @@ async function querySessionPrefixPages(
       return session ? { kind: "unique", session } : { kind: "not-found" };
     }
     if (page === SESSION_REF_SEARCH_MAX_PAGES - 1) {
-      return sessions.length === 0
-        ? { kind: "not-found" }
-        : { kind: "ambiguous", sessions, truncated: true };
+      return { kind: "ambiguous", sessions, truncated: true };
     }
     const nextOffset = result.nextOffset ?? offset + result.sessions.length;
     if (nextOffset <= offset) {
-      return sessions.length === 0
-        ? { kind: "not-found" }
-        : { kind: "ambiguous", sessions, truncated: true };
+      return { kind: "ambiguous", sessions, truncated: true };
     }
     offset = nextOffset;
   }

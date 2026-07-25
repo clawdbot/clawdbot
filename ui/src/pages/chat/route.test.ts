@@ -225,6 +225,34 @@ describe("loadChatRoute", () => {
     ]);
   });
 
+  it("does not reinterpret a bounded incomplete search with zero matches as literal", async () => {
+    const { context, list } = contextFor(result([]));
+    for (let page = 0; page < 5; page += 1) {
+      list.mockResolvedValueOnce(
+        result([], {
+          hasMore: true,
+          nextOffset: (page + 1) * 20,
+          offset: page * 20,
+        }),
+      );
+    }
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({
+      kind: "ambiguous",
+      shortId: "deadbeef",
+      candidates: [],
+      truncated: true,
+      face: "chat",
+    });
+    expect(list).toHaveBeenCalledTimes(5);
+  });
+
   it("builds distinct working links for ambiguous prefixes", async () => {
     const rows = [
       row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" }),
