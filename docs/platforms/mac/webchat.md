@@ -41,6 +41,15 @@ capabilities and Talk Mode. Additional Gateway windows are operator-only, so a
 second Gateway cannot silently retarget global microphone or device controls.
 Listen/TTS and normal chat actions use the window's own Gateway connection.
 
+### Gateway picker
+
+The dashboard header shows a Gateway picker when the Mac app has at least two
+configured Gateways. Choose a Gateway to replace the current dashboard in the
+same window, or Option-click it to open a separate dashboard window. **Set as
+primary…** makes the viewed token-authenticated profile the Mac app's primary
+Gateway after confirmation; this resets Talk Mode, canvas, and chat
+connections. Password-only profiles can be viewed but cannot be made primary.
+
 ## Quick Chat bar
 
 Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Change the global shortcut with the recorder in **Settings → General → Quick Chat shortcut**.
