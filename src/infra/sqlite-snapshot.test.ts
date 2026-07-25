@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -76,6 +77,78 @@ function createUnsafeIndexDrift(sqlitePath: string): void {
   } finally {
     database.close();
   }
+}
+
+function createHotRollbackJournal(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      PRAGMA journal_mode = DELETE;
+      PRAGMA synchronous = FULL;
+      CREATE TABLE records (
+        id INTEGER PRIMARY KEY,
+        value TEXT NOT NULL,
+        payload BLOB NOT NULL
+      );
+      WITH RECURSIVE rows(id) AS (
+        SELECT 1
+        UNION ALL
+        SELECT id + 1 FROM rows WHERE id < 256
+      )
+      INSERT INTO records (id, value, payload)
+      SELECT id, 'committed', zeroblob(8192) FROM rows;
+    `);
+  } finally {
+    database.close();
+  }
+  const crashed = spawnSync(
+    process.execPath,
+    [
+      "--no-warnings",
+      "--input-type=module",
+      "-e",
+      `
+        import { DatabaseSync } from "node:sqlite";
+        const database = new DatabaseSync(process.env.OPENCLAW_HOT_JOURNAL_PATH);
+        database.exec(
+          "PRAGMA journal_mode = DELETE; " +
+          "PRAGMA synchronous = FULL; " +
+          "PRAGMA cache_size = 2; " +
+          "PRAGMA cache_spill = ON; " +
+          "BEGIN IMMEDIATE; " +
+          "UPDATE records SET value = 'uncommitted';"
+        );
+        process.kill(process.pid, "SIGKILL");
+      `,
+    ],
+    {
+      env: { ...process.env, OPENCLAW_HOT_JOURNAL_PATH: sqlitePath },
+      encoding: "utf8",
+    },
+  );
+  if (crashed.signal !== "SIGKILL") {
+    throw new Error(
+      `hot rollback writer did not exit with SIGKILL: code=${String(crashed.status)} stderr=${crashed.stderr}`,
+    );
+  }
+  if (!fsSync.existsSync(`${sqlitePath}-journal`)) {
+    throw new Error("hot rollback writer did not leave a journal");
+  }
+}
+
+function appendSuperJournalPointer(journalPath: string, superJournalPath: string): void {
+  const name = Buffer.from(superJournalPath, "utf8");
+  const trailer = Buffer.alloc(4 + name.length + 4 + 4 + 8);
+  name.copy(trailer, 4);
+  trailer.writeUInt32BE(name.length, 4 + name.length);
+  let checksum = 0;
+  for (const byte of name) {
+    checksum = (checksum + byte) >>> 0;
+  }
+  trailer.writeUInt32BE(checksum, 8 + name.length);
+  Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]).copy(trailer, 12 + name.length);
+  fsSync.appendFileSync(journalPath, trailer);
 }
 
 function createEmptySqliteDatabase(
@@ -184,6 +257,127 @@ describe("createVerifiedSqliteSnapshot", () => {
     } finally {
       source.close();
     }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "snapshots committed state from a hot rollback journal without recovering the source",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      createHotRollbackJournal(sourcePath);
+      const sourceBefore = await fs.readFile(sourcePath);
+      const journalBefore = await fs.readFile(`${sourcePath}-journal`);
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+        path: targetPath,
+        userVersion: 0,
+      });
+
+      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
+      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      const sqlite = requireNodeSqlite();
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(
+          snapshot.prepare("SELECT COUNT(*) AS count FROM records WHERE value = 'committed'").get(),
+        ).toEqual({ count: 256 });
+        expect(
+          snapshot
+            .prepare("SELECT COUNT(*) AS count FROM records WHERE value = 'uncommitted'")
+            .get(),
+        ).toEqual({ count: 0 });
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
+        });
+      } finally {
+        snapshot.close();
+      }
+      await expect(fs.access(`${targetPath}-journal`)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rechecks for a hot rollback journal after the direct source open fails",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      createHotRollbackJournal(sourcePath);
+      const journalPath = `${sourcePath}-journal`;
+      const lstatSync = fsSync.lstatSync.bind(fsSync);
+      let hidJournal = false;
+      vi.spyOn(fsSync, "lstatSync").mockImplementation(((pathname, options) => {
+        if (!hidJournal && path.resolve(String(pathname)) === path.resolve(journalPath)) {
+          hidJournal = true;
+          const error = new Error("missing");
+          (error as NodeJS.ErrnoException).code = "ENOENT";
+          throw error;
+        }
+        return lstatSync(pathname, options as never);
+      }) as typeof fsSync.lstatSync);
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+        path: targetPath,
+        userVersion: 0,
+      });
+      expect(hidJournal).toBe(true);
+      const sqlite = requireNodeSqlite();
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      expect(
+        snapshot.prepare("SELECT COUNT(*) AS count FROM records WHERE value = 'committed'").get(),
+      ).toEqual({ count: 256 });
+      snapshot.close();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses private recovery when a hot journal depends on a super-journal",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      const superJournalPath = path.join(tempDir, "source-mj000000900");
+      createHotRollbackJournal(sourcePath);
+      await fs.writeFile(superJournalPath, "super-journal");
+      appendSuperJournalPointer(`${sourcePath}-journal`, superJournalPath);
+      const sourceBefore = await fs.readFile(sourcePath);
+      const journalBefore = await fs.readFile(`${sourcePath}-journal`);
+      const superJournalBefore = await fs.readFile(superJournalPath);
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /super-journal.*cannot be recovered privately/iu,
+      );
+
+      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
+      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      await expect(fs.readFile(superJournalPath)).resolves.toEqual(superJournalBefore);
+      await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("ignores a stale rollback journal without changing the source family", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    const source = new sqlite.DatabaseSync(sourcePath);
+    source.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
+    source.close();
+    const staleJournal = Buffer.alloc(4096, 0x5a);
+    await fs.writeFile(`${sourcePath}-journal`, staleJournal);
+    const sourceBefore = await fs.readFile(sourcePath);
+
+    await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+      path: targetPath,
+      userVersion: 0,
+    });
+
+    await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
+    await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(staleJournal);
+    const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+    expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
+    snapshot.close();
   });
 
   it("uses online backup before compacting the private copy", async () => {

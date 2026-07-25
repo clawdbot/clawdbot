@@ -2706,7 +2706,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
   });
 
   it.skipIf(process.platform === "win32")(
-    "refuses a hot rollback journal read-only before writable recovery",
+    "recovers a hot rollback journal privately before writable recovery",
     () => {
       const result = runHotRollbackJournalRecoveryProbe({
         moduleUrl: new URL("./openclaw-state-db.ts", import.meta.url).href,
@@ -2714,9 +2714,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       });
 
       expect(result.readOnly).toEqual({
-        error: expect.stringMatching(/readonly|read-only|rollback/iu),
-        opened: false,
-        uncommittedRows: null,
+        error: null,
+        opened: true,
+        uncommittedRows: 0,
       });
       expect(result).toMatchObject({
         committedRowsAfterRecovery: 256,

@@ -16,6 +16,7 @@ import {
 } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { withSqliteSnapshotSource } from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
@@ -655,21 +656,24 @@ export async function createVerifiedSqliteSnapshot(
   const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
-    const source = openNodeSqliteDatabase(options.sourcePath, {
-      allowExtension: true,
-      readOnly: true,
+    await withSqliteSnapshotSource(options.sourcePath, async (snapshotSourcePath) => {
+      await fs.rm(stagedPath, { force: true });
+      const source = openNodeSqliteDatabase(snapshotSourcePath, {
+        allowExtension: true,
+        readOnly: true,
+      });
+      try {
+        source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
+        await loadSqliteVecExtension({ db: source });
+        assertSqliteIntegrity(source, options.sourcePath);
+        options.validate?.(source, options.sourcePath);
+        // Copy in incremental steps so concurrent writers are blocked only while
+        // each batch is read. Compaction happens after releasing the live source.
+        await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
+      } finally {
+        source.close();
+      }
     });
-    try {
-      source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
-      await loadSqliteVecExtension({ db: source });
-      assertSqliteIntegrity(source, options.sourcePath);
-      options.validate?.(source, options.sourcePath);
-      // Copy in incremental steps so concurrent writers are blocked only while
-      // each batch is read. Compaction happens after releasing the live source.
-      await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
-    } finally {
-      source.close();
-    }
 
     await fs.chmod(stagedPath, 0o600);
     const snapshot = openNodeSqliteDatabase(stagedPath, {
