@@ -380,10 +380,17 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
             ? { planProgress: state.planProgress ?? modelDigest.planProgress }
             : {}),
         };
+        const previous = state.previousDigest?.health;
+        const next = digest.health;
+        const criticalTransition =
+          (next === "stuck" || next === "waiting-on-user") && previous !== next;
         state.previousDigest = digest;
-        deps.broadcastToConnIds("session.observer", digest, audience.recipients(state.sessionKey), {
-          dropIfSlow: true,
-        });
+        // The existing gateway.controlUi.sessionObserver=false gate prevents this
+        // run entirely, so the wider critical announce inherits the same opt-out.
+        const recipients = criticalTransition
+          ? audience.criticalRecipients(state.sessionKey)
+          : audience.recipients(state.sessionKey);
+        deps.broadcastToConnIds("session.observer", digest, recipients, { dropIfSlow: true });
         await persistAcceptedDigest(state, digest, final);
         if (final) {
           dormantRuns.delete(state.runId);

@@ -67,10 +67,13 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiKnownSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
-import "../lib/toast.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import {
+  CriticalObserverNoticeTracker,
+  showCriticalSessionObserverNotice,
+} from "../pages/chat/critical-observer-notice.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
@@ -559,6 +562,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
   >();
+  private readonly observerNoticeTracker = new CriticalObserverNoticeTracker();
   private readonly subscriptions = new SubscriptionsController(this);
 
   private get context(): ApplicationContext<RouteId> | undefined {
@@ -787,6 +791,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.navDrawerTrigger = null;
     this.lastWorkspaceLocation = null;
     this.activeSessionKey = "";
+    this.observerNoticeTracker.clear();
     this.settingsSearchQuery = "";
     this.commandPaletteTarget = undefined;
     this.agentsListClient = null;
@@ -808,6 +813,22 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   private readonly handleGatewayEvent = (event: GatewayEventFrame) => {
     this.sidebarWorkboardRuntime?.handleGatewayEvent(event.event);
+    if (event.event === "session.observer") {
+      const context = this.context;
+      if (context) {
+        showCriticalSessionObserverNotice({
+          payload: event.payload,
+          selectedSessionKey: this.activeSessionKey,
+          sessions: context.sessions.state.result?.sessions ?? [],
+          tracker: this.observerNoticeTracker,
+          onOpen: (sessionKey) => {
+            context.gateway.setSessionKey(sessionKey);
+            this.navigate("chat", { search: searchForSession(sessionKey) });
+          },
+        });
+      }
+      return;
+    }
     if (event.event === "config.changed") {
       // Another writer (agent-approved config_set, other device, CLI) changed
       // openclaw.json; refresh the snapshot so ui.prefs reconcile live. A
