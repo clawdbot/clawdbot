@@ -2105,6 +2105,28 @@ describe("memory index", () => {
     ]);
   });
 
+  it("retries failed provider retirement before fallback initialization", async () => {
+    const cfg = createCfg({ fallback: "fallback-provider" });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    providerCloseFailuresRemaining = 1;
+    const fields = manager as unknown as {
+      activateFallbackProvider: (reason: string) => Promise<boolean>;
+    };
+    const callsBeforeFallback = providerCalls.length;
+
+    await expect(fields.activateFallbackProvider("provider failed")).rejects.toThrow(
+      "provider close failed",
+    );
+    expect(providerCalls).toHaveLength(callsBeforeFallback);
+
+    await expect(fields.activateFallbackProvider("provider failed")).resolves.toBe(true);
+    expect(providerCloseCalls).toBe(2);
+    expect(providerCalls.slice(callsBeforeFallback).map((call) => call.provider)).toEqual([
+      "fallback-provider",
+    ]);
+  });
+
   it("waits for provider shutdown before retry initialization", async () => {
     const cfg = createCfg({ provider: "openai" });
     const manager = await getPersistentManager(cfg);

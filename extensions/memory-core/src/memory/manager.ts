@@ -310,6 +310,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
   private providerRetirementPromise: Promise<void> = Promise.resolve();
+  private providersPendingRetirement = new Set<EmbeddingProvider>();
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
   protected providerUnavailableReason?: string;
@@ -644,20 +645,35 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   protected override retireCurrentProvider(): Promise<void> {
     const provider = this.provider;
-    if (!provider) {
+    if (provider) {
+      this.provider = null;
+      this.providerRuntime = undefined;
+      this.providersPendingRetirement.add(provider);
+    }
+    if (this.providersPendingRetirement.size === 0) {
       return this.providerRetirementPromise;
     }
-    this.provider = null;
-    this.providerRuntime = undefined;
     // Provider replacement must wait for the previous worker to exit; otherwise
     // repeated retries can accumulate local workers on constrained hosts.
-    const retirement = this.providerRetirementPromise.then(async () => {
-      await provider.close?.();
+    const retirement = this.providerRetirementPromise.catch(() => {}).then(async () => {
+      let firstError: unknown;
+      for (const pendingProvider of this.providersPendingRetirement) {
+        try {
+          await pendingProvider.close?.();
+          this.providersPendingRetirement.delete(pendingProvider);
+        } catch (err) {
+          firstError ??= err;
+        }
+      }
+      if (firstError) {
+        throw toLintErrorObject(firstError, "Embedding provider retirement failed");
+      }
     });
-    this.providerRetirementPromise = retirement.catch((err: unknown) => {
+    this.providerRetirementPromise = retirement;
+    void retirement.catch((err: unknown) => {
       log.warn(`memory embeddings: failed to close previous provider: ${formatErrorMessage(err)}`);
     });
-    return this.providerRetirementPromise;
+    return retirement;
   }
 
   protected isRequiredProviderUnavailable(): boolean {
@@ -1675,6 +1691,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
     await awaitPendingManagerWork({
       pendingProviderInit: this.providerRetirementPromise,
+      onError: reportPendingWorkError,
+    });
+    await awaitPendingManagerWork({
+      pendingProviderInit: this.retireCurrentProvider(),
       onError: reportPendingWorkError,
     });
     rememberCurrentProvider();
