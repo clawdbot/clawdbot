@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/file-access-runtime";
 
 export function useReefTempDirs(registerCleanup: (cleanup: () => void) => unknown): {
   make(prefix: string): string;
@@ -14,7 +14,7 @@ export function useReefTempDirs(registerCleanup: (cleanup: () => void) => unknow
   });
   return {
     make(prefix: string): string {
-      const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+      const directory = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
       directories.add(directory);
       return directory;
     },

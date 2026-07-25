@@ -4,13 +4,9 @@ export {
   ensureDurableDirectory,
   pinDirectory,
   syncDirectory,
-  syncDirectoryBestEffort,
   syncDirectoryBestEffortSync,
-  syncDirectorySync,
-  type DirectoryReceipt,
   type DirectorySyncOutcome,
   type DurableDirectoryReceipt,
-  type EnsureDurableDirectoryOptions,
   type PinnedDirectory,
 } from "@openclaw/fs-safe/durability";
 
