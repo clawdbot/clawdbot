@@ -181,6 +181,8 @@ export async function sendGatewayConversationMessage(params: {
         ...(params.conversation.threadId ? { threadId: params.conversation.threadId } : {}),
         idempotencyKey: params.operationId,
       },
+      // The registry binding is host-derived authority, not caller input. Keep it
+      // outside `params` so explicit-account validation cannot reject a valid binding.
       defaultAccountId: params.conversation.accountId,
       agentId: params.context.agentId,
       sessionKey: params.context.sourceSessionKey,
