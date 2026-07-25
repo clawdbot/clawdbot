@@ -699,9 +699,7 @@ describe("action label/data surrogate-safe truncation", () => {
       text: "Link unavailable: URL exceeds LINE's limit.",
     });
 
-    const card = createActionCard("Title", "Body", [
-      { label: "Open", action: oversizedPostback },
-    ]);
+    const card = createActionCard("Title", "Body", [{ label: "Open", action: oversizedPostback }]);
     const button = (card.footer as { contents: Array<{ action: Action }> }).contents[0];
     expect(button?.action).toEqual({
       type: "message",
@@ -716,6 +714,28 @@ describe("action label/data surrogate-safe truncation", () => {
     const labeledButton = (labeledCard.footer as { contents: Array<{ action: Action }> })
       .contents[0];
     expect(labeledButton?.action.label).toBe(validLongLabel);
+
+    const list = createListCard("List", [{ title: "Item", action: oversizedPostback }]);
+    const listBody = (list.body as { contents: unknown[] }).contents;
+    const listBox = listBody[2] as {
+      contents: Array<{ action?: Action }>;
+    };
+    expect(listBox.contents[0]?.action).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    });
+
+    const event = createEventCard({
+      title: "Event",
+      date: "Today",
+      action: oversizedUri,
+    });
+    expect((event.body as { action?: Action }).action).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+    });
   });
 
   it("media control cards visibly disable overlong opaque callbacks", () => {

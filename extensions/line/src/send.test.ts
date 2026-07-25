@@ -165,12 +165,12 @@ describe("LINE send helpers", () => {
     expect(quickReply.items).toHaveLength(13);
   });
 
-  it("truncates quick reply labels without leaving lone surrogates", () => {
+  it("counts quick reply labels in grapheme clusters", () => {
     const label = "1234567890123456789😀";
     const quickReply = sendModule.createQuickReplyItems([label]);
     const item = quickReply.items?.[0] as { action: { label: string; text: string } } | undefined;
 
-    expect(item?.action.label).toBe("1234567890123456789");
+    expect(item?.action.label).toBe(label);
     expect(item?.action.text).toBe(label);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
   });

@@ -39,10 +39,7 @@ function unavailableAction(kind: "Action" | "Link", reason: string): Action {
   };
 }
 
-export function normalizeLineAction(
-  action: Action,
-  labelLimit = LINE_ACTION_LABEL_LIMIT,
-): Action {
+export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LABEL_LIMIT): Action {
   const label =
     action.label === undefined ? undefined : truncateLineActionLabel(action.label, labelLimit);
 
@@ -61,8 +58,7 @@ export function normalizeLineAction(
   }
 
   if (action.type === "postback") {
-    const data =
-      action.data === undefined ? undefined : truncateLineActionData(action.data);
+    const data = action.data === undefined ? undefined : truncateLineActionData(action.data);
     if (data !== action.data) {
       // Callback data is opaque and echoed back by LINE. Never dispatch a value
       // whose identity changed merely to satisfy the transport cap.
@@ -88,8 +84,7 @@ export function normalizeLineAction(
   }
 
   if (action.type === "datetimepicker") {
-    const data =
-      action.data === undefined ? undefined : truncateLineActionData(action.data);
+    const data = action.data === undefined ? undefined : truncateLineActionData(action.data);
     if (data !== action.data) {
       return unavailableAction("Action", "callback data exceeds LINE's limit.");
     }
@@ -109,8 +104,7 @@ export function normalizeLineAction(
 
   if (action.type === "clipboard") {
     if (
-      truncateUtf16Safe(action.clipboardText, LINE_CLIPBOARD_TEXT_LIMIT) !==
-      action.clipboardText
+      truncateUtf16Safe(action.clipboardText, LINE_CLIPBOARD_TEXT_LIMIT) !== action.clipboardText
     ) {
       return unavailableAction("Action", "clipboard text exceeds LINE's limit.");
     }
@@ -118,8 +112,7 @@ export function normalizeLineAction(
   }
 
   if (action.type === "richmenuswitch") {
-    const data =
-      action.data === undefined ? undefined : truncateLineActionData(action.data);
+    const data = action.data === undefined ? undefined : truncateLineActionData(action.data);
     const aliasTooLong =
       action.richMenuAliasId !== undefined &&
       truncateUtf16Safe(action.richMenuAliasId, LINE_RICH_MENU_ALIAS_LIMIT) !==

@@ -140,9 +140,7 @@ export function createButtonTemplate(
     imageSize: options?.imageSize ?? "cover",
     imageBackgroundColor: options?.imageBackgroundColor,
     defaultAction:
-      options?.defaultAction === undefined
-        ? undefined
-        : normalizeLineAction(options.defaultAction),
+      options?.defaultAction === undefined ? undefined : normalizeLineAction(options.defaultAction),
   };
 
   return {
@@ -171,9 +169,7 @@ export function createTemplateCarousel(
       ...column,
       actions: column.actions.map((action) => normalizeLineAction(action)),
       defaultAction:
-        column.defaultAction === undefined
-          ? undefined
-          : normalizeLineAction(column.defaultAction),
+        column.defaultAction === undefined ? undefined : normalizeLineAction(column.defaultAction),
     })), // LINE limit: max 10 columns
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
     imageSize: options?.imageSize ?? "cover",
@@ -209,9 +205,7 @@ export function createCarouselColumn(params: {
     thumbnailImageUrl: params.thumbnailImageUrl,
     imageBackgroundColor: params.imageBackgroundColor,
     defaultAction:
-      params.defaultAction === undefined
-        ? undefined
-        : normalizeLineAction(params.defaultAction),
+      params.defaultAction === undefined ? undefined : normalizeLineAction(params.defaultAction),
   };
 }
 
