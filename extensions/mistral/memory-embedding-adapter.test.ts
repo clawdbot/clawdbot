@@ -5,10 +5,15 @@ vi.mock("./embedding-provider.js", async (importOriginal) => {
   return { ...actual, createMistralEmbeddingProvider: vi.fn() };
 });
 
-import { createMistralEmbeddingProvider, DEFAULT_MISTRAL_BASE_URL } from "./embedding-provider.js";
+import { createMistralEmbeddingProvider } from "./embedding-provider.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 const mockCreate = vi.mocked(createMistralEmbeddingProvider);
+
+// Spelled out rather than imported from the module under test: the
+// default-endpoint case asserts that the shipped cache identity is unchanged, so
+// it has to mean the same thing with and without this patch applied.
+const SHIPPED_MISTRAL_BASE_URL = "https://api.mistral.ai/v1";
 
 function stubClient(client: {
   baseUrl: string;
@@ -23,6 +28,9 @@ function stubClient(client: {
 
 async function cacheKeyData(): Promise<Record<string, unknown>> {
   const result = await mistralMemoryEmbeddingProviderAdapter.create({} as never);
+  if (!result.runtime) {
+    throw new Error("expected the adapter to expose an embedding runtime");
+  }
   return result.runtime.cacheKeyData as Record<string, unknown>;
 }
 
@@ -31,7 +39,7 @@ describe("mistralMemoryEmbeddingProviderAdapter cache identity", () => {
 
   it("keeps the shipped default identity (no baseUrl) for the default endpoint", async () => {
     stubClient({
-      baseUrl: DEFAULT_MISTRAL_BASE_URL,
+      baseUrl: SHIPPED_MISTRAL_BASE_URL,
       headers: { Authorization: "Bearer redacted" }, // pragma: allowlist secret
       model: "mistral-embed",
     });
@@ -53,7 +61,7 @@ describe("mistralMemoryEmbeddingProviderAdapter cache identity", () => {
 
   it("hashes custom header identity without leaking raw values", async () => {
     stubClient({
-      baseUrl: DEFAULT_MISTRAL_BASE_URL,
+      baseUrl: SHIPPED_MISTRAL_BASE_URL,
       headers: {
         Authorization: "Bearer redacted", // pragma: allowlist secret
         "X-Tenant": "tenant-a",

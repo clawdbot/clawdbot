@@ -143,6 +143,9 @@ describe("DeepInfra generic embedding adapter", () => {
         client,
       });
       const result = await deepinfraEmbeddingProviderAdapter.create({} as never);
+      if (!result.runtime) {
+        throw new Error("expected the adapter to expose an embedding runtime");
+      }
       return result.runtime.cacheKeyData as Record<string, unknown>;
     }
 
