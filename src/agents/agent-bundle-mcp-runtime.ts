@@ -512,31 +512,14 @@ export function createSessionMcpRuntime(params: {
     return true;
   };
 
-  const getCatalog = async (): Promise<McpToolCatalog> => {
+  const loadCatalog = async (retryBaseCatalog?: McpToolCatalog): Promise<McpToolCatalog> => {
     failIfDisposed();
-    const cachedCatalog = catalogRetryIsDue() ? null : catalog;
-    if (cachedCatalog) {
-      return cachedCatalog;
-    }
-    if (catalog) {
-      // Keep healthy siblings available while one failed server is retried. Clearing
-      // the snapshot only long enough to enter the canonical loader preserves its
-      // in-flight dedupe without making the triggering turn await slow reconnects.
-      const staleCatalog = catalog;
-      catalog = null;
-      catalogRetryAfterMs = undefined;
-      const refresh = getCatalog();
-      catalog = staleCatalog;
-      void refresh.catch(() => {
-        if (!disposed && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
-          catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
-        }
-      });
-      return staleCatalog;
-    }
     if (catalogInFlight) {
       return catalogInFlight;
     }
+    const retryServerNames = retryBaseCatalog
+      ? new Set(retryBaseCatalog.diagnostics?.map((diagnostic) => diagnostic.serverName))
+      : undefined;
     const catalogGeneration = catalogInvalidationGeneration;
     const inFlight = (async () => {
       if (Object.keys(loaded.mcpServers).length === 0) {
@@ -548,8 +531,10 @@ export function createSessionMcpRuntime(params: {
         };
       }
 
-      const servers: Record<string, McpServerCatalog> = {};
-      const tools: McpCatalogTool[] = [];
+      // A cooldown retry replaces only diagnostic-bearing servers. Healthy clients
+      // keep their SDK tool-metadata snapshot and remain callable during recovery.
+      const servers: Record<string, McpServerCatalog> = { ...(retryBaseCatalog?.servers ?? {}) };
+      const tools: McpCatalogTool[] = [...(retryBaseCatalog?.tools ?? [])];
       const diagnostics: McpToolCatalogDiagnostic[] = [];
       // Prefer session-wide precomputed assignments; fall back only for isolated runtimes.
       const safeServerNamesByServer =
@@ -569,6 +554,9 @@ export function createSessionMcpRuntime(params: {
         }> = [];
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
+          if (retryServerNames && !retryServerNames.has(serverName)) {
+            continue;
+          }
           const override = params.connectionOverrides?.get(serverName);
           // Overrides supply per-requester transport only; never write them back to config.
           const transportSource = override
@@ -870,6 +858,25 @@ export function createSessionMcpRuntime(params: {
         catalogInFlight = undefined;
       }
     }
+  };
+
+  const getCatalog = async (): Promise<McpToolCatalog> => {
+    failIfDisposed();
+    if (catalog && !catalogRetryIsDue()) {
+      return catalog;
+    }
+    if (!catalog) {
+      return loadCatalog();
+    }
+
+    const staleCatalog = catalog;
+    catalogRetryAfterMs = undefined;
+    void loadCatalog(staleCatalog).catch(() => {
+      if (!disposed && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
+        catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
+      }
+    });
+    return staleCatalog;
   };
 
   return {

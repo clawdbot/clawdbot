@@ -1145,6 +1145,8 @@ describe("session MCP runtime", () => {
         "slow_tool",
         "scoped_tool",
       ]);
+      expect((await fs.readFile(healthyLogPath, "utf8")).match(/recv tools\/list/g)).toHaveLength(1);
+      expect((await fs.readFile(retryLogPath, "utf8")).match(/recv tools\/list/g)).toHaveLength(2);
     } finally {
       nowSpy.mockRestore();
       await runtime.dispose();
