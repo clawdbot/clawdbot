@@ -432,6 +432,8 @@ export const SessionsAbortParamsSchema = closedObject({
   key: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
+  /** Also discard followup and lane queues for a key-only non-global session abort. */
+  clearQueued: Type.Optional(Type.Boolean()),
 });
 
 /** Mutable per-session preferences and routing metadata. */

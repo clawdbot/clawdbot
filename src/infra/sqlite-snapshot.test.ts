@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { createPrivateSqliteDirectory, createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
+import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
+import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const tempDirs: string[] = [];
 
@@ -154,11 +155,44 @@ describe("createVerifiedSqliteSnapshot", () => {
         expect(snapshot.prepare("SELECT value FROM records").all()).toEqual([
           { value: "survivor" },
         ]);
+        expect(snapshot.prepare("PRAGMA journal_mode;").get()).toEqual({
+          journal_mode: "delete",
+        });
+      } finally {
+        snapshot.close();
+      }
+      await expect(fs.access(`${targetPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      source.close();
+    }
+  });
+
+  it("uses online backup before compacting the private copy", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    const source = new sqlite.DatabaseSync(sourcePath);
+    source.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
+    source.close();
+    const backupSpy = vi.spyOn(sqlite, "backup");
+    const prepareSpy = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
+
+    try {
+      await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
+
+      expect(backupSpy).toHaveBeenCalledTimes(1);
+      expect(prepareSpy.mock.calls.some(([sql]) => /\bVACUUM\s+INTO\b/iu.test(sql))).toBe(false);
+      const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      try {
+        expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
       } finally {
         snapshot.close();
       }
     } finally {
-      source.close();
+      prepareSpy.mockRestore();
+      backupSpy.mockRestore();
     }
   });
 

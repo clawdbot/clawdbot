@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { createPrivateSqliteDirectory } from "../infra/sqlite-snapshot.js";
+import { createPrivateSqliteDirectory } from "../infra/sqlite-private-directory.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 import { SNAPSHOT_SQLITE_FILENAME } from "./snapshot-provider.js";
 

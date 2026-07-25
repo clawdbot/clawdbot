@@ -16,7 +16,6 @@ import {
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
-  requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
 import {
@@ -32,6 +31,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor";
 import {
   ensureOpenClawAgentDatabaseSchema,
+  openNodeSqliteDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -988,8 +988,7 @@ async function migrateLegacyMemorySidecarSource(params: {
   warnings: string[];
 }): Promise<{ archiveReady: boolean }> {
   await fs.mkdir(path.dirname(params.source.agentDatabasePath), { recursive: true });
-  const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(params.source.agentDatabasePath, { allowExtension: true });
+  const db = openNodeSqliteDatabase(params.source.agentDatabasePath, { allowExtension: true });
   try {
     const migrationEnv = {
       ...params.env,
