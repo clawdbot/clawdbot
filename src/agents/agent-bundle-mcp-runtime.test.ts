@@ -1042,57 +1042,99 @@ describe("session MCP runtime", () => {
     }
   });
 
-  it("retries a failed MCP catalog after a short cooldown", async () => {
+  it("retries a failed MCP catalog without stalling healthy siblings", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-catalog-retry-"));
-    const serverPath = path.join(tempDir, "retry-list-tools.mjs");
-    const logPath = path.join(tempDir, "server.log");
+    const retryServerPath = path.join(tempDir, "retry-list-tools.mjs");
+    const retryLogPath = path.join(tempDir, "retry-server.log");
+    const healthyServerPath = path.join(tempDir, "healthy-list-tools.mjs");
+    const healthyLogPath = path.join(tempDir, "healthy-server.log");
     let nowMs = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    await writeListToolsMcpServer({
-      filePath: serverPath,
-      logPath,
-      inputSchema: { type: "array", items: { type: "number" } },
-    });
+    await Promise.all([
+      writeListToolsMcpServer({
+        filePath: retryServerPath,
+        logPath: retryLogPath,
+        inputSchema: { type: "array", items: { type: "number" } },
+      }),
+      writeListToolsMcpServer({
+        filePath: healthyServerPath,
+        logPath: healthyLogPath,
+        tools: [
+          {
+            name: "healthy_tool",
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
+      }),
+    ]);
 
-    const failedRuntime = await getOrCreateSessionMcpRuntime({
+    const staticRuntime = await getOrCreateSessionMcpRuntime({
       sessionId: "session-catalog-retry",
       sessionKey: "agent:test:session-catalog-retry",
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
           servers: {
+            healthyServer: {
+              command: process.execPath,
+              args: [healthyServerPath],
+              connectionTimeoutMs: 2_000,
+            },
             retryServer: {
               command: process.execPath,
-              args: [serverPath],
+              args: [retryServerPath],
+              connectionTimeoutMs: 2_000,
             },
           },
         },
       },
     });
-    const healthyRuntime = makeRuntime(
-      [{ toolName: "healthy_tool", description: "Always available" }],
-      "healthyServer",
+    const scopedRuntime = makeRuntime(
+      [{ toolName: "scoped_tool", description: "Requester-scoped tool" }],
+      "scopedServer",
     );
-    const healthyCatalog = await healthyRuntime.getCatalog();
-    healthyRuntime.getCatalog = async () => healthyCatalog;
-    healthyRuntime.peekCatalog = () => healthyCatalog;
+    const scopedCatalog = await scopedRuntime.getCatalog();
+    scopedRuntime.getCatalog = async () => scopedCatalog;
+    scopedRuntime.peekCatalog = () => scopedCatalog;
     const runtime = createCombinedSessionMcpRuntime({
       sessionId: "session-catalog-retry",
       workspaceDir: "/workspace",
-      parts: [failedRuntime, healthyRuntime],
+      parts: [staticRuntime, scopedRuntime],
     });
 
     try {
       const failedCatalog = await runtime.getCatalog();
-      expect(Object.keys(failedCatalog.servers)).toEqual(["healthyServer"]);
-      expect(failedCatalog.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool"]);
+      expect(Object.keys(failedCatalog.servers)).toEqual(["healthyServer", "scopedServer"]);
+      expect(failedCatalog.tools.map((tool) => tool.toolName)).toEqual([
+        "healthy_tool",
+        "scoped_tool",
+      ]);
       expect(failedCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
 
-      await writeListToolsMcpServer({ filePath: serverPath, logPath });
+      await writeListToolsMcpServer({
+        filePath: retryServerPath,
+        logPath: retryLogPath,
+        initializeDelayMs: 500,
+      });
       await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
 
       nowMs += 5_001;
       expect(runtime.peekCatalog()).toBeNull();
+      const staleCatalog = await withTestTimeout(
+        runtime.getCatalog(),
+        300,
+        "catalog retry blocked the triggering turn",
+      );
+      expect(staleCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
+      await expect(runtime.callTool("healthyServer", "healthy_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
+
+      await waitForPredicate(
+        () => staticRuntime.peekCatalog()?.servers.retryServer !== undefined,
+        "background catalog recovery",
+        LIST_TOOLS_TEST_DEADLINE_MS,
+      );
       const recoveredCatalog = await runtime.getCatalog();
 
       expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
@@ -1100,6 +1142,7 @@ describe("session MCP runtime", () => {
       expect(recoveredCatalog.tools.map((tool) => tool.toolName)).toEqual([
         "healthy_tool",
         "slow_tool",
+        "scoped_tool",
       ]);
     } finally {
       nowSpy.mockRestore();

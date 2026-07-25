@@ -420,15 +420,8 @@ export function createSessionMcpRuntime(params: {
   let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   let catalogInvalidationGeneration = 0;
-  const readCachedCatalog = (): McpToolCatalog | null => {
-    if (catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs) {
-      // Combined runtimes compare part snapshots through peekCatalog(). Expiry
-      // must invalidate that snapshot too, or their merged cache hides the retry.
-      catalog = null;
-      catalogRetryAfterMs = undefined;
-    }
-    return catalog;
-  };
+  const peekCurrentCatalog = (): McpToolCatalog | null =>
+    catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs ? null : catalog;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
   const recordServerToolFailure = (serverName: string, nowMs: number) => {
@@ -521,9 +514,25 @@ export function createSessionMcpRuntime(params: {
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
     failIfDisposed();
-    const cachedCatalog = readCachedCatalog();
+    const cachedCatalog = peekCurrentCatalog();
     if (cachedCatalog) {
       return cachedCatalog;
+    }
+    if (catalog) {
+      // Keep healthy siblings available while one failed server is retried. Clearing
+      // the snapshot only long enough to enter the canonical loader preserves its
+      // in-flight dedupe without making the triggering turn await slow reconnects.
+      const staleCatalog = catalog;
+      catalog = null;
+      catalogRetryAfterMs = undefined;
+      const refresh = getCatalog();
+      catalog = staleCatalog;
+      void refresh.catch(() => {
+        if (!disposed && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
+          catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
+        }
+      });
+      return staleCatalog;
     }
     if (catalogInFlight) {
       return catalogInFlight;
@@ -895,7 +904,7 @@ export function createSessionMcpRuntime(params: {
     getCatalog,
     /** Synchronous catalog snapshot only; must not connect transports or issue tools/list. */
     peekCatalog() {
-      return readCachedCatalog();
+      return peekCurrentCatalog();
     },
     markUsed() {
       lastUsedAt = Date.now();
