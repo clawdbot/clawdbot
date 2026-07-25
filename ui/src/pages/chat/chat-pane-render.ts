@@ -666,6 +666,7 @@ export class ChatPaneRender extends ChatPaneHeaderRender {
       .panelTemplates=${panelTemplates}
       .panelOpenUrls=${{ discussion: discussion?.openUrl ?? null }}
       .callbacks=${sidebarCallbacks}
+      .sessionKey=${state.sessionKey}
       .focusPanelId=${state.sidebarFocusPanelId}
       .focusVersion=${state.sidebarFocusVersion}
       .narrow=${this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX}

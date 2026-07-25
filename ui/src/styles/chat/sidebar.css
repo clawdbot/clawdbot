@@ -326,15 +326,30 @@ openclaw-chat-sidebar-region {
 }
 
 .sidebar-region--narrow {
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(200px, 1fr) minmax(160px, 1fr);
 }
 
 .sidebar-region--narrow .sidebar-region__primary {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
   min-height: 200px;
 }
 
+.sidebar-column__panel--narrow {
+  z-index: 1;
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+  margin-top: 42px;
+}
+
 .sidebar-column--collapsed {
+  z-index: 0;
+  grid-column: 1;
+  grid-row: 2;
   width: 100%;
   min-width: 0;
   min-height: 160px;

@@ -191,4 +191,53 @@ describe("chat sidebar region", () => {
 
     expect(region.querySelector('[data-panel="detail"]')).toBe(detailNode);
   });
+
+  it("preserves a panel DOM node while crossing the responsive breakpoint", async () => {
+    const region = await createRegion(false);
+    const detailNode = region.querySelector('[data-panel="detail"]');
+
+    region.narrow = true;
+    region.availableWidth = 620;
+    await region.updateComplete;
+
+    expect(region.querySelector('[data-panel="detail"]')).toBe(detailNode);
+  });
+
+  it("restores the persisted active tab when the session changes", async () => {
+    const region = await createRegion(true);
+    const chat = region.layout.columns[0]!.panels[0]!;
+    const discussion = region.layout.columns[2]!.panels[0]!;
+    let merged = mergePanelIntoColumn(
+      region.layout,
+      discussion.id,
+      region.layout.columns[0]!.id,
+      1,
+    );
+    const detail = merged.columns[1]!.panels[0]!;
+    merged = mergePanelIntoColumn(merged, detail.id, merged.columns[0]!.id, 1);
+    merged.columns[0]!.activePanelId = chat.id;
+    region.layout = merged;
+    region.sessionKey = "session-a";
+    await region.updateComplete;
+    merged = { ...merged, columns: merged.columns.map((column) => ({ ...column })) };
+    merged.columns[0]!.activePanelId = discussion.id;
+
+    region.layout = merged;
+    region.sessionKey = "session-b";
+    await region.updateComplete;
+
+    expect(region.querySelector('[data-panel="discussion"]')?.parentElement?.hidden).toBe(false);
+  });
+
+  it("gives a simultaneous explicit focus request precedence on session change", async () => {
+    const region = await createRegion(true);
+    const detail = region.layout.columns[1]!.panels[0]!;
+
+    region.sessionKey = "session-b";
+    region.focusPanelId = detail.id;
+    region.focusVersion += 1;
+    await region.updateComplete;
+
+    expect(region.querySelector('[data-panel="detail"]')?.parentElement?.hidden).toBe(false);
+  });
 });
