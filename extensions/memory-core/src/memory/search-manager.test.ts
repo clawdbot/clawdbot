@@ -791,7 +791,7 @@ describe("getMemorySearchManager caching", () => {
     expect(firstPrimary.close).toHaveBeenCalledTimes(1);
   });
 
-  it("retires the cached qmd manager before a replacement attempt", async () => {
+  it("keeps the existing cached full qmd manager when replacement creation fails", async () => {
     const agentId = "cached-qmd-failed-replacement";
     const firstCfg = createQmdCfg(agentId, "/tmp/workspace-a");
     const secondCfg = createQmdCfg(agentId, "/tmp/workspace-b");
@@ -814,14 +814,38 @@ describe("getMemorySearchManager caching", () => {
     const replacementAttempt = await getMemorySearchManager({ cfg: secondCfg, agentId });
 
     expect(replacementAttempt.manager).toBe(fallbackManager);
-    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
-    await expect(firstManager.search("hello")).rejects.toThrow(
-      "memory search manager was replaced by a newer qmd manager",
-    );
+    expect(firstPrimary.close).not.toHaveBeenCalled();
+    await expect(firstManager.search("hello")).resolves.toStrictEqual([]);
 
     const firstAgain = await getMemorySearchManager({ cfg: firstCfg, agentId });
-    expect(firstAgain.manager).not.toBe(firstManager);
-    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(firstAgain.manager).toBe(firstManager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains an unused qmd candidate when both replacement closes fail", async () => {
+    const agentId = "cached-qmd-double-close-failure";
+    const firstCfg = createQmdCfg(agentId, "/tmp/workspace-a");
+    const secondCfg = createQmdCfg(agentId, "/tmp/workspace-b");
+    const firstPrimary = createQmdManagerInstanceMock();
+    const secondPrimary = createQmdManagerInstanceMock();
+    const thirdPrimary = createQmdManagerInstanceMock();
+    firstPrimary.close.mockRejectedValueOnce(new Error("old close failed"));
+    secondPrimary.close.mockRejectedValueOnce(new Error("candidate close failed"));
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary)
+      .mockImplementationOnce(async () => secondPrimary)
+      .mockImplementationOnce(async () => thirdPrimary);
+
+    await getMemorySearchManager({ cfg: firstCfg, agentId });
+    await expect(getMemorySearchManager({ cfg: secondCfg, agentId })).rejects.toThrow(
+      "old close failed",
+    );
+    expect(secondPrimary.close).toHaveBeenCalledTimes(1);
+
+    const replacement = await getMemorySearchManager({ cfg: secondCfg, agentId });
+    expect(replacement.manager).toBeDefined();
+    expect(secondPrimary.close).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(3);
   });
 
   it("dedupes concurrent full qmd manager creation for the same agent", async () => {

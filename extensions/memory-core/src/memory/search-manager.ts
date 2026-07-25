@@ -84,6 +84,7 @@ type MemorySearchManagerCacheStore = {
   qmdManagerCache: Map<string, CachedQmdManagerEntry>;
   pendingQmdManagerCreates: Map<string, PendingQmdManagerCreate>;
   qmdManagerOpenFailures: Map<string, QmdManagerOpenFailure>;
+  retainedQmdManagers: Map<string, Set<MemorySearchManager>>;
   scopeLifecycleTails: Map<string, Promise<void>>;
   globalClosePromise: Promise<void> | null;
 };
@@ -95,6 +96,7 @@ function createMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
     qmdManagerCache: new Map<string, CachedQmdManagerEntry>(),
     pendingQmdManagerCreates: new Map<string, PendingQmdManagerCreate>(),
     qmdManagerOpenFailures: new Map<string, QmdManagerOpenFailure>(),
+    retainedQmdManagers: new Map<string, Set<MemorySearchManager>>(),
     scopeLifecycleTails: new Map<string, Promise<void>>(),
     globalClosePromise: null,
   };
@@ -119,6 +121,9 @@ function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
     if (!(cacheStore.scopeLifecycleTails instanceof Map)) {
       cacheStore.scopeLifecycleTails = new Map<string, Promise<void>>();
     }
+    if (!(cacheStore.retainedQmdManagers instanceof Map)) {
+      cacheStore.retainedQmdManagers = new Map<string, Set<MemorySearchManager>>();
+    }
     if (
       cacheStore.globalClosePromise !== null &&
       !(cacheStore.globalClosePromise instanceof Promise)
@@ -140,6 +145,49 @@ const {
   qmdManagerOpenFailures: QMD_MANAGER_OPEN_FAILURES,
 } = MEMORY_SEARCH_MANAGER_CACHE_STORE;
 
+function retainQmdManagerForCleanup(scopeKey: string, manager: MemorySearchManager): void {
+  const retained = MEMORY_SEARCH_MANAGER_CACHE_STORE.retainedQmdManagers.get(scopeKey) ?? new Set();
+  retained.add(manager);
+  MEMORY_SEARCH_MANAGER_CACHE_STORE.retainedQmdManagers.set(scopeKey, retained);
+}
+
+function releaseRetainedQmdManager(scopeKey: string, manager: MemorySearchManager): void {
+  const retained = MEMORY_SEARCH_MANAGER_CACHE_STORE.retainedQmdManagers.get(scopeKey);
+  if (!retained) {
+    return;
+  }
+  retained.delete(manager);
+  if (retained.size === 0) {
+    MEMORY_SEARCH_MANAGER_CACHE_STORE.retainedQmdManagers.delete(scopeKey);
+  }
+}
+
+async function drainRetainedQmdManagers(scopeKey: string): Promise<void> {
+  const retained = MEMORY_SEARCH_MANAGER_CACHE_STORE.retainedQmdManagers.get(scopeKey);
+  if (!retained) {
+    return;
+  }
+  let firstError: unknown;
+  let closeFailed = false;
+  for (const manager of retained) {
+    try {
+      await manager.close?.();
+      retained.delete(manager);
+    } catch (err) {
+      if (!closeFailed) {
+        firstError = err;
+      }
+      closeFailed = true;
+    }
+  }
+  if (retained.size === 0) {
+    MEMORY_SEARCH_MANAGER_CACHE_STORE.retainedQmdManagers.delete(scopeKey);
+  }
+  if (closeFailed) {
+    throw firstError;
+  }
+}
+
 async function runMemorySearchManagerScopeOperation<T>(
   scopeKey: string,
   operation: () => Promise<T>,
@@ -156,7 +204,11 @@ async function runMemorySearchManagerScopeOperation<T>(
   }
   const previous =
     MEMORY_SEARCH_MANAGER_CACHE_STORE.scopeLifecycleTails.get(scopeKey) ?? Promise.resolve();
-  const result = previous.then(operation, operation);
+  const run = async () => {
+    await drainRetainedQmdManagers(scopeKey);
+    return await operation();
+  };
+  const result = previous.then(run, run);
   const tail = result.then(
     () => undefined,
     () => undefined,
@@ -475,14 +527,27 @@ async function getMemorySearchManagerWithinLifecycle(
     const pendingCreate: PendingQmdManagerCreate = {
       identityKey,
       promise: (async () => {
-        if (cached) {
-          await closeQmdManagerForReplacement(cached.manager);
-        }
         const created = await createFullQmdManager(identityKey);
         if (!created.entry) {
           pendingFailureReason = created.failureReason ?? "qmd memory unavailable";
           recordQmdManagerOpenFailure(scopeKey, identityKey, pendingFailureReason);
           return null;
+        }
+        if (cached) {
+          try {
+            await closeQmdManagerForReplacement(cached.manager);
+          } catch (err) {
+            retainQmdManagerForCleanup(scopeKey, created.entry.manager);
+            try {
+              await created.entry.manager.close?.();
+              releaseRetainedQmdManager(scopeKey, created.entry.manager);
+            } catch (closeErr) {
+              log.warn(
+                `failed to close unused qmd memory manager: ${formatErrorMessage(closeErr)}`,
+              );
+            }
+            throw err;
+          }
         }
         QMD_MANAGER_CACHE.set(scopeKey, created.entry);
         return created.entry.manager;
@@ -614,6 +679,16 @@ async function closeAllMemorySearchManagersWithinLifecycle(): Promise<void> {
   QMD_MANAGER_OPEN_FAILURES.clear();
   let firstError: unknown;
   let closeFailed = false;
+  for (const scopeKey of Array.from(MEMORY_SEARCH_MANAGER_CACHE_STORE.retainedQmdManagers.keys())) {
+    try {
+      await drainRetainedQmdManagers(scopeKey);
+    } catch (err) {
+      if (!closeFailed) {
+        firstError = err;
+      }
+      closeFailed = true;
+    }
+  }
   for (const [scopeKey, entry] of entries) {
     try {
       await entry.manager.close?.();
