@@ -575,29 +575,46 @@ public enum OpenClawChatSessionListOrganizer {
 }
 
 public enum OpenClawChatChildSessionPager {
+    private static let maxCollectedSessions = 100_000
+    private static let maxPageRequests = 100
+
     public static func collect(
         fetchPage: (Int) async throws -> OpenClawChatSessionsListResponse) async throws
         -> [OpenClawChatSessionEntry]
     {
         var rowsByKey: [String: OpenClawChatSessionEntry] = [:]
+        var remainingPageRequests = Self.maxPageRequests
         for _ in 0..<4 {
             let rowsBeforePass = rowsByKey.count
             var expectedTotal: Int?
             var seenOffsets = Set<Int>()
             var offset = 0
-            while seenOffsets.insert(offset).inserted {
+            while remainingPageRequests > 0,
+                  rowsByKey.count < Self.maxCollectedSessions,
+                  seenOffsets.insert(offset).inserted
+            {
+                remainingPageRequests -= 1
                 let page = try await fetchPage(offset)
                 expectedTotal = page.totalCount
                 for row in page.sessions {
                     rowsByKey[row.key] = row
+                    if rowsByKey.count >= Self.maxCollectedSessions {
+                        break
+                    }
+                }
+                if rowsByKey.count >= Self.maxCollectedSessions {
+                    return Array(rowsByKey.values)
                 }
                 let hasMore = page.hasMore ?? expectedTotal.map { offset + page.sessions.count < $0 } ?? false
                 let nextOffset = page.nextOffset ?? (offset + page.sessions.count)
-                guard hasMore, nextOffset > offset else { break }
+                guard hasMore, !page.sessions.isEmpty, nextOffset > offset else { break }
                 offset = nextOffset
             }
             let added = rowsByKey.count - rowsBeforePass
-            if added == 0 || expectedTotal.map({ rowsByKey.count >= $0 }) != false {
+            if remainingPageRequests == 0 ||
+                added == 0 ||
+                expectedTotal.map({ rowsByKey.count >= $0 }) != false
+            {
                 break
             }
         }

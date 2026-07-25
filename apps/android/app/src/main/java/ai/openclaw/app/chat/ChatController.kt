@@ -290,6 +290,20 @@ class ChatController internal constructor(
 
   private val _swarmGroups = MutableStateFlow<List<ChatSwarmGroup>>(emptyList())
   val swarmGroups: StateFlow<List<ChatSwarmGroup>> = _swarmGroups.asStateFlow()
+
+  private data class SwarmRefreshLease(
+    val parentKey: String,
+    val cacheScope: ChatCacheScope,
+    val requestSequence: Long,
+  )
+
+  private data class SwarmProjectionSnapshot(
+    val parentKey: String,
+    val cacheScope: ChatCacheScope,
+    val requestSequence: Long,
+    val sessions: List<ChatSessionEntry>,
+  )
+
   private val swarmActivityTracker = ChatSwarmActivityTracker()
   private val swarmLock = Any()
   private var swarmSessions: List<ChatSessionEntry> = emptyList()
@@ -3362,7 +3376,7 @@ class ChatController internal constructor(
       }
 
       if (isSwarmEnabled()) {
-        fetchSwarmSessions(sessionKey, attempt = 0)
+        refreshSwarmSessions()
       }
       if (!ownsReconnectRecovery) {
         pollHealthIfNeeded(force = forceHealth)
@@ -3900,10 +3914,10 @@ class ChatController internal constructor(
   }
 
   private fun resetSwarmProgress(sessionKey: String = _sessionKey.value) {
-    swarmRefreshJob?.cancel()
-    swarmRefreshJob = null
-    swarmRequestSequence.incrementAndGet()
     synchronized(swarmLock) {
+      swarmRefreshJob?.cancel()
+      swarmRefreshJob = null
+      swarmRequestSequence.incrementAndGet()
       swarmSessionKey = sessionKey
       swarmActivityTracker.clear()
       swarmSessions = emptyList()
@@ -3919,7 +3933,8 @@ class ChatController internal constructor(
     if (!chatSwarmEventBelongsToParent(payload) { candidate -> sameOutboxSession(candidate, parentKey) }) return false
     val observed = synchronized(swarmLock) { swarmActivityTracker.observe(payload) }
     if (!observed) return false
-    val kind = payload["kind"].asStringOrNull()?.trim()
+    val source = payload["session"].asObjectOrNull() ?: payload
+    val kind = (if ("kind" in payload) payload["kind"] else source["kind"]).asStringOrNull()?.trim()
     if (kind == "phase" || kind == "log") {
       publishSwarmGroups()
     } else {
@@ -3928,51 +3943,89 @@ class ChatController internal constructor(
     return true
   }
 
-  private fun publishSwarmGroups() {
-    val parentKey = _sessionKey.value
-    val decorated = synchronized(swarmLock) { swarmActivityTracker.decorate(swarmSessions) }
-    _swarmGroups.value =
-      buildChatSwarmGroups(decorated) { candidate -> sameOutboxSession(candidate, parentKey) }
+  private fun publishSwarmGroups(expectedLease: SwarmRefreshLease? = null) {
+    val snapshot =
+      synchronized(swarmLock) {
+        if (expectedLease != null && !isSwarmRefreshLeaseCurrentLocked(expectedLease)) return
+        val projectionCacheScope = expectedLease?.cacheScope ?: currentCacheScope() ?: return
+        SwarmProjectionSnapshot(
+          parentKey = _sessionKey.value,
+          cacheScope = projectionCacheScope,
+          requestSequence = swarmRequestSequence.get(),
+          sessions = swarmActivityTracker.decorate(swarmSessions),
+        )
+      }
+    val groups =
+      buildChatSwarmGroups(snapshot.sessions) { candidate -> sameOutboxSession(candidate, snapshot.parentKey) }
+    synchronized(swarmLock) {
+      if (
+        !swarmEnabled ||
+        snapshot.cacheScope != currentCacheScope() ||
+        snapshot.requestSequence != swarmRequestSequence.get() ||
+        !sameOutboxSession(snapshot.parentKey, _sessionKey.value)
+      ) {
+        return
+      }
+      _swarmGroups.value = groups
+    }
   }
 
   private fun scheduleSwarmRefresh() {
-    if (!isSwarmEnabled()) return
-    val parentKey = _sessionKey.value
-    swarmRefreshJob?.cancel()
-    swarmRefreshJob =
-      scope.launch {
-        delay(250)
-        fetchSwarmSessions(parentKey, attempt = 0)
-      }
+    scheduleSwarmRefresh(delayMs = 250)
   }
 
   private fun refreshSwarmSessions() {
-    if (!isSwarmEnabled()) return
-    val parentKey = _sessionKey.value
-    scope.launch { fetchSwarmSessions(parentKey, attempt = 0) }
+    scheduleSwarmRefresh(delayMs = 0)
   }
 
+  private fun scheduleSwarmRefresh(delayMs: Long) {
+    synchronized(swarmLock) {
+      if (!swarmEnabled) return
+      val requestCacheScope = currentCacheScope() ?: return
+      val lease =
+        SwarmRefreshLease(
+          parentKey = _sessionKey.value,
+          cacheScope = requestCacheScope,
+          requestSequence = swarmRequestSequence.incrementAndGet(),
+        )
+      swarmRefreshJob?.cancel()
+      swarmRefreshJob =
+        scope.launch {
+          if (delayMs > 0) delay(delayMs)
+          fetchSwarmSessions(lease, attempt = 0)
+        }
+    }
+  }
+
+  private fun isSwarmRefreshLeaseCurrent(lease: SwarmRefreshLease): Boolean = synchronized(swarmLock) { isSwarmRefreshLeaseCurrentLocked(lease) }
+
+  private fun isSwarmRefreshLeaseCurrentLocked(lease: SwarmRefreshLease): Boolean =
+    swarmEnabled &&
+      lease.requestSequence == swarmRequestSequence.get() &&
+      lease.cacheScope == currentCacheScope() &&
+      sameOutboxSession(lease.parentKey, _sessionKey.value)
+
   private suspend fun fetchSwarmSessions(
-    parentKey: String,
+    lease: SwarmRefreshLease,
     attempt: Int,
   ) {
-    val requestCacheScope = currentCacheScope() ?: return
-    val requestSequence = swarmRequestSequence.incrementAndGet()
+    if (!isSwarmRefreshLeaseCurrent(lease)) return
     val rows =
       try {
         collectChatSwarmChildSessions { offset ->
+          if (!isSwarmRefreshLeaseCurrent(lease)) throw CancellationException()
           val params =
             buildJsonObject {
               put("includeGlobal", JsonPrimitive(false))
               put("includeUnknown", JsonPrimitive(false))
               put("configuredAgentsOnly", JsonPrimitive(true))
-              put("spawnedBy", JsonPrimitive(parentKey))
+              put("spawnedBy", JsonPrimitive(lease.parentKey))
               put("limit", JsonPrimitive(10_000))
               put("offset", JsonPrimitive(offset))
             }
           val root =
             json
-              .parseToJsonElement(requestGatewayBound(requestCacheScope.gatewayId, "sessions.list", params.toString()))
+              .parseToJsonElement(requestGatewayBound(lease.cacheScope.gatewayId, "sessions.list", params.toString()))
               .asObjectOrNull()
               ?: throw IllegalStateException("invalid sessions.list response")
           ChatSwarmSessionPage(
@@ -3985,52 +4038,36 @@ class ChatController internal constructor(
       } catch (err: CancellationException) {
         throw err
       } catch (_: Throwable) {
-        if (
-          requestSequence == swarmRequestSequence.get() &&
-          requestCacheScope == currentCacheScope() &&
-          sameOutboxSession(parentKey, _sessionKey.value) &&
-          isSwarmEnabled()
-        ) {
-          scheduleSwarmRetry(parentKey, requestCacheScope, attempt)
+        if (isSwarmRefreshLeaseCurrent(lease)) {
+          scheduleSwarmRetry(lease, attempt)
         }
         return
       }
-    if (
-      requestSequence != swarmRequestSequence.get() ||
-      requestCacheScope != currentCacheScope() ||
-      !sameOutboxSession(parentKey, _sessionKey.value) ||
-      !isSwarmEnabled()
-    ) {
-      return
-    }
     synchronized(swarmLock) {
-      if (swarmSessionKey != parentKey) {
-        swarmSessionKey = parentKey
+      if (!isSwarmRefreshLeaseCurrentLocked(lease)) return
+      if (swarmSessionKey != lease.parentKey) {
+        swarmSessionKey = lease.parentKey
         swarmActivityTracker.clear()
       }
       swarmSessions = swarmActivityTracker.decorate(rows)
     }
-    publishSwarmGroups()
+    publishSwarmGroups(lease)
   }
 
   private fun scheduleSwarmRetry(
-    parentKey: String,
-    requestCacheScope: ChatCacheScope,
+    lease: SwarmRefreshLease,
     attempt: Int,
   ) {
     val delayMs = SWARM_REFRESH_RETRY_DELAYS_MS.getOrNull(attempt) ?: return
-    swarmRefreshJob?.cancel()
-    swarmRefreshJob =
-      scope.launch {
-        delay(delayMs)
-        if (
-          requestCacheScope == currentCacheScope() &&
-          sameOutboxSession(parentKey, _sessionKey.value) &&
-          isSwarmEnabled()
-        ) {
-          fetchSwarmSessions(parentKey, attempt = attempt + 1)
+    synchronized(swarmLock) {
+      if (!isSwarmRefreshLeaseCurrentLocked(lease)) return
+      swarmRefreshJob?.cancel()
+      swarmRefreshJob =
+        scope.launch {
+          delay(delayMs)
+          fetchSwarmSessions(lease, attempt = attempt + 1)
         }
-      }
+    }
   }
 
   private fun currentSessionWindowLimit(): Int = _sessions.value.size.takeIf { it > 0 } ?: 100

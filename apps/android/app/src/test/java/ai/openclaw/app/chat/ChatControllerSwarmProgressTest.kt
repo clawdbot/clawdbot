@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -99,6 +100,56 @@ class ChatControllerSwarmProgressTest {
           .single()
           .status,
       )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun delayedSwarmRefreshCannotDispatchOnAReplacementGateway() =
+    runTest {
+      val listGateways = mutableListOf<String>()
+      var currentScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { _, _ -> "{}" },
+          requestGatewayForGateway = { gatewayId, method, _ ->
+            when (method) {
+              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "sessions.list" -> {
+                listGateways += gatewayId
+                """{"sessions":[],"totalCount":0,"hasMore":false}"""
+              }
+              else -> "{}"
+            }
+          },
+          cacheScope = { currentScope },
+        )
+
+      controller.refreshCommands()
+      advanceUntilIdle()
+      listGateways.clear()
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """
+        {
+          "reason":"create",
+          "session":{
+            "key":"agent:main:child",
+            "parentSessionKey":"main",
+            "swarmGroupId":"swarm:main:turn-1",
+            "status":"running"
+          }
+        }
+        """.trimIndent(),
+      )
+      runCurrent()
+      currentScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      advanceTimeBy(250)
+      runCurrent()
+
+      assertTrue(listGateways.isEmpty())
     }
 
   @Test

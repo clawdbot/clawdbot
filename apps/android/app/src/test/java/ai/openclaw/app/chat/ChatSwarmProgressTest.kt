@@ -171,6 +171,25 @@ class ChatSwarmProgressTest {
     }
 
   @Test
+  fun childPagerBoundsAdvancingMalformedPagination() =
+    kotlinx.coroutines.test.runTest {
+      var call = 0
+      val rows =
+        collectChatSwarmChildSessions { offset ->
+          call += 1
+          ChatSwarmSessionPage(
+            sessions = listOf(session("child", "running", "swarm:agent:main:parent:paged")),
+            totalCount = Int.MAX_VALUE,
+            nextOffset = offset + 1,
+            hasMore = true,
+          )
+        }
+
+      assertEquals(listOf("child"), rows.map(ChatSessionEntry::key))
+      assertEquals(100, call)
+    }
+
+  @Test
   fun swarmEventsIgnoreOtherParents() {
     val current = "agent:main:parent"
     val other = "agent:main:other"

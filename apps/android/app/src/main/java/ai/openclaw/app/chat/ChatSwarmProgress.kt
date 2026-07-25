@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 
 private const val MAX_TRACKED_SWARM_GROUPS = 10_000
 private const val MAX_TRACKED_SWARM_CHILDREN = 100_000
+private const val MAX_SWARM_PAGE_REQUESTS = 100
 private const val MAX_RENDERED_SWARM_DOTS_PER_PHASE = 256
 
 enum class ChatSwarmDotStatus {
@@ -53,22 +54,38 @@ internal suspend fun collectChatSwarmChildSessions(
   fetchPage: suspend (Int) -> ChatSwarmSessionPage,
 ): List<ChatSessionEntry> {
   val rowsByKey = linkedMapOf<String, ChatSessionEntry>()
+  var remainingPageRequests = MAX_SWARM_PAGE_REQUESTS
   repeat(4) {
     val rowsBeforePass = rowsByKey.size
     var expectedTotal: Int? = null
     val seenOffsets = mutableSetOf<Int>()
     var offset = 0
-    while (seenOffsets.add(offset)) {
+    while (
+      remainingPageRequests > 0 &&
+      rowsByKey.size < MAX_TRACKED_SWARM_CHILDREN &&
+      seenOffsets.add(offset)
+    ) {
+      remainingPageRequests -= 1
       val page = fetchPage(offset)
       expectedTotal = page.totalCount
-      page.sessions.forEach { row -> rowsByKey[row.key] = row }
+      for (row in page.sessions) {
+        rowsByKey[row.key] = row
+        if (rowsByKey.size >= MAX_TRACKED_SWARM_CHILDREN) break
+      }
+      if (rowsByKey.size >= MAX_TRACKED_SWARM_CHILDREN) return rowsByKey.values.toList()
       val hasMore = page.hasMore ?: expectedTotal?.let { offset + page.sessions.size < it } ?: false
       val nextOffset = page.nextOffset ?: (offset + page.sessions.size)
-      if (!hasMore || nextOffset <= offset) break
+      if (!hasMore || page.sessions.isEmpty() || nextOffset <= offset) break
       offset = nextOffset
     }
     val added = rowsByKey.size - rowsBeforePass
-    if (added == 0 || expectedTotal?.let { rowsByKey.size >= it } != false) return rowsByKey.values.toList()
+    if (
+      remainingPageRequests == 0 ||
+      added == 0 ||
+      expectedTotal?.let { rowsByKey.size >= it } != false
+    ) {
+      return rowsByKey.values.toList()
+    }
   }
   return rowsByKey.values.toList()
 }

@@ -534,8 +534,21 @@ public enum OpenClawChatRunObservation: Sendable, Equatable {
 public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
     public let swarmEnabled: Bool
 
+    private enum CodingKeys: String, CodingKey {
+        case swarmEnabled
+    }
+
     public init(swarmEnabled: Bool) {
         self.swarmEnabled = swarmEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.swarmEnabled = if container.contains(.swarmEnabled) {
+            try container.decode(Bool.self, forKey: .swarmEnabled)
+        } else {
+            false
+        }
     }
 }
 

@@ -119,6 +119,42 @@ struct ChatSwarmProgressTests {
         #expect(call == 4)
     }
 
+    @Test func `child pager bounds advancing malformed pagination`() async throws {
+        var call = 0
+        let rows = try await OpenClawChatChildSessionPager.collect { offset in
+            call += 1
+            return OpenClawChatSessionsListResponse(
+                ts: 1,
+                path: nil,
+                count: 1,
+                totalCount: .max,
+                offset: offset,
+                nextOffset: offset + 1,
+                hasMore: true,
+                defaults: nil,
+                sessions: [self.session(
+                    key: "child",
+                    status: "running",
+                    groupID: "swarm:agent:main:parent:paged")])
+        }
+
+        #expect(rows.map(\.key) == ["child"])
+        #expect(call == 100)
+    }
+
+    @Test func `metadata capability defaults missing Swarm support to disabled`() throws {
+        let capabilities = try JSONDecoder().decode(
+            OpenClawChatMetadataCapabilities.self,
+            from: Data("{}".utf8))
+        #expect(!capabilities.swarmEnabled)
+
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(
+                OpenClawChatMetadataCapabilities.self,
+                from: Data(#"{"swarmEnabled":"yes"}"#.utf8))
+        }
+    }
+
     @Test func `Swarm events ignore other parents`() {
         let current = "agent:main:parent"
         let ownChild = OpenClawChatSessionsChangedEvent(
