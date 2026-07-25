@@ -188,7 +188,9 @@ describe("cron view list pane", () => {
       HTMLElement,
     ) as HTMLElement & { checked: boolean };
     expect(active.checked).toBe(true);
-    expect(active.closest("wa-radio-group")?.getAttribute("label")).toBe("Automation status");
+    expect(active.closest("wa-radio-group")?.querySelector('[slot="label"]')?.textContent).toBe(
+      "Automation status",
+    );
 
     selectSegmented(getElement(container, '[data-test-id="cron-tab-disabled"]', HTMLElement));
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
