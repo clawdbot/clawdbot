@@ -104,7 +104,7 @@ describe("postbackAction", () => {
     const unavailable = postbackAction("Test", "x".repeat(400));
     expect(unavailable).toEqual({
       type: "message",
-      label: "Action unavailable",
+      label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",
     });
 

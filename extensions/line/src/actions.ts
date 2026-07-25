@@ -16,11 +16,10 @@ function truncateLineActionData(data: string): string {
 }
 
 function unavailableAction(kind: "Action" | "Link", reason: string): Action {
-  const label = `${kind} unavailable`;
   return {
     type: "message",
-    label,
-    text: `${label}: ${reason}`,
+    label: "Unavailable",
+    text: `${kind} unavailable: ${reason}`,
   };
 }
 

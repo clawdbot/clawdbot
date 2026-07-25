@@ -471,7 +471,7 @@ describe("parseLineDirectives", () => {
       expect(flexMessage.altText).toContain("living_room");
       expect(action).toEqual({
         type: "message",
-        label: "Action unavailable",
+        label: "Unavailable",
         text: "Action unavailable: callback data exceeds LINE's limit.",
       });
     });

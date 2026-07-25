@@ -234,6 +234,27 @@ describe("carousel column limits", () => {
     expect(template.altText).toBe("x".repeat(399));
     expect(loneHighSurrogate.test(template.altText)).toBe(false);
   });
+
+  it("keeps unavailable action labels within the image-carousel cap", () => {
+    const template = createImageCarousel([
+      createImageCarouselColumn(
+        "https://example.com/0.jpg",
+        uriAction("Open", `https://example.com/?q=${"x".repeat(1200)}`),
+      ),
+    ]);
+    const column = (
+      template.template as {
+        columns: Array<{ action: { label?: string; text?: string; type: string } }>;
+      }
+    ).columns[0];
+
+    expect(column?.action).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+    });
+    expect(column?.action.label).toHaveLength(11);
+  });
 });
 
 describe("createProductCarousel", () => {
@@ -386,7 +407,7 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(exact.data).toBe(exactData);
     expect(unavailable).toEqual({
       type: "message",
-      label: "Action unavailable",
+      label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",
     });
   });
@@ -417,7 +438,7 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(exact.data).toBe(exactData);
     expect(unavailable).toEqual({
       type: "message",
-      label: "Action unavailable",
+      label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",
     });
   });
@@ -454,7 +475,7 @@ describe("action label/data surrogate-safe truncation", () => {
 
     expect(action).toEqual({
       type: "message",
-      label: "Action unavailable",
+      label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",
     });
   });
@@ -512,7 +533,7 @@ describe("action label/data surrogate-safe truncation", () => {
     expect(validAction).toMatchObject({ type: "uri", uri: validUri });
     expect(overlongAction).toEqual({
       type: "message",
-      label: "Link unavailable",
+      label: "Unavailable",
       text: "Link unavailable: URL exceeds LINE's limit.",
     });
   });
@@ -533,7 +554,7 @@ describe("action label/data surrogate-safe truncation", () => {
     );
     expect(uriTemplateAction).toEqual({
       type: "message",
-      label: "Link unavailable",
+      label: "Unavailable",
       text: "Link unavailable: URL exceeds LINE's limit.",
     });
   });
@@ -550,7 +571,7 @@ describe("action label/data surrogate-safe truncation", () => {
 
     expect(buttonsTemplate.actions[0]).toEqual({
       type: "message",
-      label: "Action unavailable",
+      label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",
     });
   });
@@ -582,7 +603,7 @@ describe("action label/data surrogate-safe truncation", () => {
     for (const action of actions) {
       expect(action).toEqual({
         type: "message",
-        label: "Action unavailable",
+        label: "Unavailable",
         text: "Action unavailable: callback data exceeds LINE's limit.",
       });
     }
@@ -606,7 +627,7 @@ describe("action label/data surrogate-safe truncation", () => {
 
     expect(action).toEqual({
       type: "message",
-      label: "Action unavailable",
+      label: "Unavailable",
       text: "Action unavailable: callback data exceeds LINE's limit.",
     });
   });
@@ -645,7 +666,7 @@ describe("action label/data surrogate-safe truncation", () => {
     for (const action of actions) {
       expect(action).toEqual({
         type: "message",
-        label: "Action unavailable",
+        label: "Unavailable",
         text: "Action unavailable: callback data exceeds LINE's limit.",
       });
     }
