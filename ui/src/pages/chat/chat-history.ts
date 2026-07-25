@@ -15,11 +15,7 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
-import {
-  extractText,
-  hasTranscriptMediaFacts,
-  isEmptyUserTextOnlyMessage,
-} from "../../lib/chat/message-extract.ts";
+import { extractText, isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
 import {
   retirePendingChatSideQuestion,
   type ChatSideResult,
